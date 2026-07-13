@@ -92,12 +92,12 @@ public static class MergeServiceGuardProbe
             // A's on-disk FormID-keyed assets: the facegen pair, one voiced .fuz, the shipped .seq.
             foreach (var (_, rel) in FaceGenPath.Both(aNpc))
             {
-                var p = Path.Combine(aDir, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+                var p = BethesdaPath.Under(aDir, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!);
                 File.WriteAllBytes(p, new byte[] { 0xFA, 0xCE });
             }
             var aVoiceRel = Path.Combine("Sound", "Voice", aKey.FileName.String, "MaleEvenToned", "HcQ_HcT_00000A11_1.fuz");
-            Directory.CreateDirectory(Path.GetDirectoryName(Path.Combine(aDir, aVoiceRel))!);
-            File.WriteAllBytes(Path.Combine(aDir, aVoiceRel), new byte[] { 0xF0, 0x02 });
+            Directory.CreateDirectory(Path.GetDirectoryName(BethesdaPath.Under(aDir, aVoiceRel))!);
+            File.WriteAllBytes(BethesdaPath.Under(aDir, aVoiceRel), new byte[] { 0xF0, 0x02 });
             Directory.CreateDirectory(Path.Combine(aDir, "SEQ"));
             File.WriteAllBytes(Path.Combine(aDir, "SEQ", "HcMgA.seq"), new byte[] { 0x30, 0x0A, 0x00, 0x00 });
 
@@ -250,7 +250,7 @@ public static class MergeServiceGuardProbe
                 // ASSETS: facegen pair + voice under the MERGED plugin-name folders; .seq regenerated (A shipped one).
                 var outDir = Path.GetDirectoryName(o.OutputPath)!;
                 var newFace = FaceGenPath.Both(new FormKey(mergedKey, 0xA20)).ToList();
-                bool faceOk = newFace.Count == 2 && newFace.All(x => File.Exists(Path.Combine(outDir, x.Item2)));
+                bool faceOk = newFace.Count == 2 && newFace.All(x => File.Exists(BethesdaPath.Under(outDir, x.Item2)));
                 bool voiceOk = File.Exists(Path.Combine(outDir, "Sound", "Voice", mergedKey.FileName.String, "MaleEvenToned", "HcQ_HcT_00000A11_1.fuz"));
                 bool seqOk = o.SeqRegen is { Written: true } && File.Exists(Path.Combine(outDir, "SEQ", "HcMgMerged.seq"));
                 Check(faceOk && o.AssetRename?.FacegenFilesCarried == 2, $"ASSETS facegen pair carried to the merged-name folder (files {o.AssetRename?.FacegenFilesCarried})");

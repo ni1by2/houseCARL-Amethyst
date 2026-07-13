@@ -133,8 +133,8 @@ internal static class PlaceAssetProbe
                 AtomicFile.WriteAllBytes(over, nb);
                 Check(File.ReadAllBytes(over).SequenceEqual(nb), "an overwrite place writes the NEW bytes byte-exact");
                 Check(!File.Exists(over + ".houseCARL-tmp"), "no staging temp is left after an overwrite place");
-                if (tunnelingMasks)
-                    Console.WriteLine("  SKIP  creation-time preserved — UNPROVABLE on a tunneling host (Q3, not a pass)");
+                if (!OperatingSystem.IsWindows() || tunnelingMasks)
+                    Console.WriteLine("  SKIP  creation-time preservation is a Windows-only filesystem signal");
                 else
                     Check(File.GetCreationTimeUtc(over) == oldCreate,
                           "overwrite preserves the destination's creation time — File.Replace, not File.Move  [RED arm]");
@@ -167,10 +167,10 @@ internal static class PlaceAssetProbe
                 var r0 = outcome.Results[0];
                 Check(r0.Placed && outcome.ModFolder is not null, $"the asset placed into a fresh houseCARL mod folder — {(r0.Placed ? Path.GetFileName(outcome.ModFolder!) : r0.Error)}");
                 Check(r0.CurrentWinner == "WrongFace (loose)", $"the placement reports the CURRENT winner to sort above — {r0.CurrentWinner}");
-                var placedFile = outcome.ModFolder is null ? null : Path.Combine(outcome.ModFolder, FacegenRel);
+                var placedFile = outcome.ModFolder is null ? null : BethesdaPath.Under(outcome.ModFolder, FacegenRel);
                 Check(placedFile is not null && File.Exists(placedFile) && File.ReadAllBytes(placedFile).SequenceEqual(correctBytes),
                       "the placed file holds the SOURCE bytes byte-exact");
-                Check(File.ReadAllBytes(correctSrc).SequenceEqual(correctBytes) && File.ReadAllBytes(Path.Combine(wrong, FacegenRel)).SequenceEqual(new byte[] { 0xBA, 0xD0 }),
+                Check(File.ReadAllBytes(correctSrc).SequenceEqual(correctBytes) && File.ReadAllBytes(BethesdaPath.Under(wrong, FacegenRel)).SequenceEqual(new byte[] { 0xBA, 0xD0 }),
                       "originals untouched — the source AND the prior winner are unchanged");
 
                 // enable the placed mod ON TOP, then re-resolve: it must WIN (the end-to-end fix)
@@ -201,7 +201,7 @@ internal static class PlaceAssetProbe
                 var outcome = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, fixA) }, patchName: null, into: null);
                 var r0 = outcome.Results[0];
                 Check(r0.Placed, $"a .bsa source places (entry derived from the destination) — {(r0.Placed ? "ok" : r0.Error)}");
-                var placedFile = outcome.ModFolder is null ? null : Path.Combine(outcome.ModFolder, FacegenRel);
+                var placedFile = outcome.ModFolder is null ? null : BethesdaPath.Under(outcome.ModFolder, FacegenRel);
                 Check(placedFile is not null && File.Exists(placedFile) && File.ReadAllBytes(placedFile).SequenceEqual(expect),
                       "the placed bytes equal the natively-extracted BSA entry, byte-exact");
 
@@ -210,7 +210,7 @@ internal static class PlaceAssetProbe
                 // on the un-trimmed string: the loose branch would place File.ReadAllBytes(wholeArchive) != the entry.
                 var outcomeQ = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, "\"" + fixA + "\"") }, patchName: null, into: null);
                 var rQ = outcomeQ.Results[0];
-                var placedQ = outcomeQ.ModFolder is null ? null : Path.Combine(outcomeQ.ModFolder, FacegenRel);
+                var placedQ = outcomeQ.ModFolder is null ? null : BethesdaPath.Under(outcomeQ.ModFolder, FacegenRel);
                 Check(rQ.Placed && placedQ is not null && File.ReadAllBytes(placedQ).SequenceEqual(expect),
                       "a QUOTED .bsa source extracts the ENTRY (placed bytes == the entry, NOT the whole archive read as loose)  [RED arm]");
             }
@@ -287,7 +287,7 @@ internal static class PlaceAssetProbe
                     new PlaceRequest(FacegenRel, null),                  // ok (sole provider)
                     new PlaceRequest(@"meshes\absent\y.nif", null),      // fails (absent)
                 }, "GKeepFolder", null);
-                Check(partial.ModFolder is not null && File.Exists(Path.Combine(partial.ModFolder!, FacegenRel)),
+                Check(partial.ModFolder is not null && File.Exists(BethesdaPath.Under(partial.ModFolder!, FacegenRel)),
                       "a PARTIAL batch keeps the folder with the good file present");
 
                 // drive-rooted / '..' destination → per-asset named error (Q3)
@@ -346,7 +346,7 @@ internal static class PlaceAssetProbe
                 Check(first.Results[0].Placed && first.ModFolder is not null, "first place into a fresh folder succeeds");
                 if (first.ModFolder is { } mf)
                 {
-                    var dest = Path.Combine(mf, FacegenRel);
+                    var dest = BethesdaPath.Under(mf, FacegenRel);
                     var oldCreate = new DateTime(2019, 6, 6, 0, 0, 0, DateTimeKind.Utc);
 
                     // tunneling control (same dir, a File.Move on a throwaway): is the creation-time signal valid here?
@@ -360,8 +360,8 @@ internal static class PlaceAssetProbe
                     Check(second.Results[0].Placed, $"second place into= the existing folder succeeds — {(second.Results[0].Placed ? "ok" : second.Results[0].Error)}");
                     Check(File.Exists(dest) && File.ReadAllBytes(dest).SequenceEqual(v2),
                           "overwrite via the SERVICE yields the NEW bytes byte-exact, not the stale prior (provenance — no false success)");
-                    if (tunnelingMasks)
-                        Console.WriteLine("  SKIP  service place creation-time preserved — UNPROVABLE on a tunneling host (Q3, not a pass)");
+                    if (!OperatingSystem.IsWindows() || tunnelingMasks)
+                        Console.WriteLine("  SKIP  service creation-time preservation is a Windows-only filesystem signal");
                     else
                         Check(File.GetCreationTimeUtc(dest) == oldCreate,
                               "the service place preserves the dest creation time — routes through AtomicFile (File.Replace), not File.Move  [RED arm]");
@@ -412,7 +412,7 @@ internal static class PlaceAssetProbe
 
     static void WriteLoose(string baseDir, string rel, byte[] bytes)
     {
-        var p = Path.Combine(baseDir, rel);
+        var p = BethesdaPath.Under(baseDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }

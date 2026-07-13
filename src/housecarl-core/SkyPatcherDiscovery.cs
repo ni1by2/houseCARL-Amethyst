@@ -178,7 +178,7 @@ public static class SkyPatcherDiscovery
     /// extension list — <see cref="PluginFile.Extensions"/>).</summary>
     public static string? GatePluginOf(string relPath)
     {
-        var stem = Path.GetFileNameWithoutExtension(relPath);   // strips the '.ini'
+        var stem = Path.GetFileNameWithoutExtension(BethesdaPath.FileName(relPath));
         var ext = Path.GetExtension(stem);
         return PluginFile.Extensions.Any(e => ext.Equals(e, StringComparison.OrdinalIgnoreCase)) ? stem : null;
     }

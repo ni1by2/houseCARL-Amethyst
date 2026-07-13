@@ -163,7 +163,9 @@ public static class NpcAppearanceAssets
         /// <summary>Read a Data-relative path from the donor's own disk (loose first, then its root BSAs). Null = absent.</summary>
         public (byte[]? Bytes, string? From) Read(string relPath)
         {
-            var loose = Path.Combine(Folder, relPath);
+            var loose = BethesdaPath.TryResolveExisting(Folder, relPath, out var resolved)
+                ? resolved
+                : BethesdaPath.Under(Folder, relPath);
             if (File.Exists(loose))
             {
                 try { return (File.ReadAllBytes(loose), $"donor folder (loose)"); }
@@ -314,7 +316,7 @@ public static class NpcAppearanceAssets
     {
         try
         {
-            var final = Path.Combine(outDir, relPath);
+            var final = BethesdaPath.Under(outDir, relPath);
             Directory.CreateDirectory(Path.GetDirectoryName(final)!);
             AtomicFile.WriteAllBytes(final, bytes);
             return true;

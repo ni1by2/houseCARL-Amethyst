@@ -2174,7 +2174,7 @@ public static class NestedCreateGuardProbe
                 var expLip = VoicePath.For(o.Created[0].FormKey, "HcNcGdVoice", "HcNcGdQuest", "HcNcGdTopic", 1, VoiceFile.Lip);
                 foreach (var rel in new[] { exp, expLip })   // plant BOTH the .fuz and the .lip — exercise both legs of CheckInfo
                 {
-                    var full = Path.Combine(dataDir, rel);
+                    var full = BethesdaPath.Under(dataDir, rel);
                     Directory.CreateDirectory(Path.GetDirectoryName(full)!);
                     File.WriteAllBytes(full, new byte[] { 0, 1, 2 });
                 }
@@ -2270,7 +2270,7 @@ public static class NestedCreateGuardProbe
             if (o.Success)
             {
                 exp = VoicePath.For(infoFk, "HcScVoice", "HcNcGdQuest", "HcNcGdTopic", 1, VoiceFile.Fuz);
-                var full = Path.Combine(dataDir, exp);
+                var full = BethesdaPath.Under(dataDir, exp);
                 Directory.CreateDirectory(Path.GetDirectoryName(full)!);
                 File.WriteAllBytes(full, new byte[] { 0, 1, 2 });
             }
@@ -2358,7 +2358,7 @@ public static class NestedCreateGuardProbe
             var f = BuildScriptFixture("HcScNoFrag", info =>
                 info.VirtualMachineAdapter = new DialogResponsesAdapter { ScriptFragments = new ScriptFragments { FileName = "HcScNoFragClass" } });
             var dataDir = Path.Combine(tmpDir, "script-nofrag-data"); Directory.CreateDirectory(dataDir);
-            var planted = Path.Combine(dataDir, @"Scripts\HcScNoFragClass.pex");
+            var planted = BethesdaPath.Under(dataDir, @"Scripts\HcScNoFragClass.pex");
             Directory.CreateDirectory(Path.GetDirectoryName(planted)!); File.WriteAllBytes(planted, new byte[] { 0, 1, 2 });
             using var assets = AssetResolver.Build("", "", dataDir, Array.Empty<string>(), Array.Empty<ActiveArchive>());
             var report = f.ok ? DialogueScriptCheck.Run(f.path, AsCreated("HcScNoFrag", f.infoFk), assets) : ScriptBindingReport.Empty;
@@ -2391,7 +2391,7 @@ public static class NestedCreateGuardProbe
             var dataDir = Path.Combine(tmpDir, "script-bound-data");
             if (f.ok)
             {
-                var planted = Path.Combine(dataDir, @"Scripts\HcScBoundClass.pex");
+                var planted = BethesdaPath.Under(dataDir, @"Scripts\HcScBoundClass.pex");
                 Directory.CreateDirectory(Path.GetDirectoryName(planted)!); File.WriteAllBytes(planted, new byte[] { 0, 1, 2 });
             }
             else Directory.CreateDirectory(dataDir);
@@ -2414,7 +2414,7 @@ public static class NestedCreateGuardProbe
             var dataDir = Path.Combine(tmpDir, "script-attached-data");
             if (f.ok)
             {
-                var planted = Path.Combine(dataDir, @"Scripts\HcScAttachedClass.pex");
+                var planted = BethesdaPath.Under(dataDir, @"Scripts\HcScAttachedClass.pex");
                 Directory.CreateDirectory(Path.GetDirectoryName(planted)!); File.WriteAllBytes(planted, new byte[] { 0, 1, 2 });
             }
             else Directory.CreateDirectory(dataDir);
@@ -2440,7 +2440,7 @@ public static class NestedCreateGuardProbe
             var dataDir = Path.Combine(tmpDir, "script-ns-data");
             if (f.ok)
             {
-                var planted = Path.Combine(dataDir, @"Scripts\HcScNsSpace\HcScNsClass.pex");   // namespace -> subfolder
+                var planted = BethesdaPath.Under(dataDir, @"Scripts\HcScNsSpace\HcScNsClass.pex");
                 Directory.CreateDirectory(Path.GetDirectoryName(planted)!); File.WriteAllBytes(planted, new byte[] { 0, 1, 2 });
             }
             else Directory.CreateDirectory(dataDir);

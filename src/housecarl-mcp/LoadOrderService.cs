@@ -299,10 +299,10 @@ public sealed class LoadOrderService : IDisposable
                 else note = "provided ONLY inside a BSA — the SKSE loader scans loose Data\\SKSE\\Plugins only, so this DLL will not load";
                 if (group.Length > 0 && note is null)
                     note = $"in subfolder '{group}' — NOT on SKSE's loader path (scans SKSE\\Plugins\\*.dll top-level only); a bundled/parent-loaded DLL, not a plugin SKSE loads";
-                dlls.Add(new SkseFileEntry(rel, Path.GetFileName(rel), group, providers, info, note));
+                dlls.Add(new SkseFileEntry(rel, BethesdaPath.FileName(rel), group, providers, info, note));
             }
             else
-                configs.Add(new SkseFileEntry(rel, Path.GetFileName(rel), group, providers, null, null));
+                configs.Add(new SkseFileEntry(rel, BethesdaPath.FileName(rel), group, providers, null, null));
         }
         return new SkseInventoryData(dlls, configs, otherFiles, view.BsaFailures, view.ReadIncomplete, warnings, profileName);
     }
@@ -758,7 +758,7 @@ public sealed class LoadOrderService : IDisposable
             try { rf = ResolvePatchModFolder(patchName, into, "houseCARL_NifEdit"); }
             catch (InvalidOperationException ex) { return NifSetResult.Fail(ex.Message, providers, profileName); }
 
-            var dest = Path.Combine(rf.OutputDir, rel);
+            var dest = BethesdaPath.Under(rf.OutputDir, rel);
             try { Directory.CreateDirectory(Path.GetDirectoryName(dest)!); AtomicFile.WriteAllBytes(dest, editedBytes); }
             catch (Exception ex)
             {
@@ -895,7 +895,7 @@ public sealed class LoadOrderService : IDisposable
         }
 
         // ---- crash-atomic place under the owned folder (originals untouched; same-volume staging done in core) ----
-        var dest = Path.Combine(outDir, rel);
+        var dest = BethesdaPath.Under(outDir, rel);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
@@ -2401,7 +2401,7 @@ public sealed class LoadOrderService : IDisposable
             // The gate is the VFS answer whenever the view resolved — even if a LATER carry threw, a carry failure must NOT
             // downgrade a good gate result (re-review). Only when the view never resolved (seqGate still null — the asset layer
             // couldn't be built) fall back to the loose-only check (degraded, never worse than the pre-fix behavior).
-            bool sourceHadSeq = seqGate ?? File.Exists(Path.Combine(Path.GetDirectoryName(srcPath)!, srcSeqRel));
+            bool sourceHadSeq = seqGate ?? File.Exists(BethesdaPath.Under(Path.GetDirectoryName(srcPath)!, srcSeqRel));
 
             // 7c. REFRESH the start-game-enabled-quest .seq from the RENUMBERED plugin when the source SHIPPED one (the VFS
             //     gate above). A renumber shifts every SGE quest's master-relative on-disk FormID, so a shipped .seq is now

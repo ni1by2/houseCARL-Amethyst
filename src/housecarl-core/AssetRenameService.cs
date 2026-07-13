@@ -205,7 +205,7 @@ public static class AssetRenameService
         var items = new List<CarryItem>();
         foreach (var oldRel in files)
         {
-            var fname = Path.GetFileName(oldRel);
+            var fname = BethesdaPath.FileName(oldRel);
             var m = VoiceIdRx.Match(fname);
             if (!m.Success) continue;                                      // not an INFO-keyed voice file — nothing to remap
             uint full;
@@ -215,9 +215,9 @@ public static class AssetRenameService
 
             var newId = "00" + newLocal.ToString("X6");
             var newFname = fname.Substring(0, m.Groups[1].Index) + newId + fname.Substring(m.Groups[1].Index + m.Groups[1].Length);
-            var dir = Path.GetDirectoryName(oldRel) ?? "";                 // same voice-type folder; the PLUGIN segment swaps on a merge
+            var dir = BethesdaPath.DirectoryName(oldRel);                  // same voice-type folder; the PLUGIN segment swaps on a merge
             var newDir = dir.Length >= srcPrefix.Length ? tgtPrefix + dir.Substring(srcPrefix.Length) : dir;
-            var newRel = newDir.Length == 0 ? newFname : Path.Combine(newDir, newFname);
+            var newRel = newDir.Length == 0 ? newFname : newDir + "\\" + newFname;
             items.Add(new CarryItem(oldRel, newRel, new FormKey(modKey, newLocal), $"{oldLocal:X6}→{newLocal:X6} {fname}"));
         }
 
@@ -309,7 +309,7 @@ public static class AssetRenameService
             var (bytes, err) = ReadWinner(res.Sources[0]);                 // the copy that currently displays/plays in-game
             if (err is not null) { failures.Add($"{it.Label}: {err}"); continue; }
 
-            var final = Path.Combine(outDir, it.NewPath);
+            var final = BethesdaPath.Under(outDir, it.NewPath);
             var staged = final + ".houseCARL-tmp";                         // sibling temp — distinct from every old read path
             try
             {

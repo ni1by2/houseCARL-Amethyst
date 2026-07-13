@@ -58,12 +58,12 @@ public static class FacegenCarryProbe
                     var modRoot = Path.GetDirectoryName(o.OutputPath)!;
                     if (npcNew is { } nk)
                     {
-                        var newMesh = Path.Combine(modRoot, FaceGenPath.For(nk, FaceGenSlot.Mesh));
-                        var newTint = Path.Combine(modRoot, FaceGenPath.For(nk, FaceGenSlot.Tint));
+                        var newMesh = BethesdaPath.Under(modRoot, FaceGenPath.For(nk, FaceGenSlot.Mesh));
+                        var newTint = BethesdaPath.Under(modRoot, FaceGenPath.For(nk, FaceGenSlot.Tint));
                         meshOk = File.Exists(newMesh) && File.ReadAllBytes(newMesh).SequenceEqual(meshBytes);
                         tintOk = File.Exists(newTint) && File.ReadAllBytes(newTint).SequenceEqual(tintBytes);
                     }
-                    var oldMesh = Path.Combine(mods, "FaceMod", FaceGenPath.For(npcOld, FaceGenSlot.Mesh));
+                    var oldMesh = BethesdaPath.Under(Path.Combine(mods, "FaceMod"), FaceGenPath.For(npcOld, FaceGenSlot.Mesh));
                     oldUntouched = File.Exists(oldMesh) && File.ReadAllBytes(oldMesh).SequenceEqual(meshBytes);
                 }
                 var ar = o.AssetRename;
@@ -96,11 +96,11 @@ public static class FacegenCarryProbe
                         npcNew = pp.Npcs.FirstOrDefault(n => n.EditorID == "HcIpNpc")?.FormKey;
                     if (npcNew is { } nk)
                     {
-                        var newMesh = Path.Combine(mods, "FaceIp", FaceGenPath.For(nk, FaceGenSlot.Mesh));
+                        var newMesh = BethesdaPath.Under(Path.Combine(mods, "FaceIp"), FaceGenPath.For(nk, FaceGenSlot.Mesh));
                         meshOk = File.Exists(newMesh) && File.ReadAllBytes(newMesh).SequenceEqual(meshBytes);
                     }
                     // the OLD-FormID facegen remains as a harmless orphan (non-destructive — never auto-deleted)
-                    oldOrphan = File.Exists(Path.Combine(mods, "FaceIp", FaceGenPath.For(npcOld, FaceGenSlot.Mesh)));
+                    oldOrphan = File.Exists(BethesdaPath.Under(Path.Combine(mods, "FaceIp"), FaceGenPath.For(npcOld, FaceGenSlot.Mesh)));
                 }
                 var ar = o.AssetRename;
                 Check(o.Success && o.InPlace && meshOk && ar is { FacegenFilesCarried: 2, FacegenNpcsCarried: 1 },
@@ -145,8 +145,8 @@ public static class FacegenCarryProbe
                         qNew = pp.Npcs.FirstOrDefault(n => n.EditorID == "NpcQ")?.FormKey;
                     }
                     var modRoot = Path.GetDirectoryName(o.OutputPath)!;
-                    if (pNew is { } pk) pOk = File.ReadAllBytes(Path.Combine(modRoot, FaceGenPath.For(pk, FaceGenSlot.Mesh))).SequenceEqual(meshP);
-                    if (qNew is { } qk) qOk = File.ReadAllBytes(Path.Combine(modRoot, FaceGenPath.For(qk, FaceGenSlot.Mesh))).SequenceEqual(meshQ);
+                    if (pNew is { } pk) pOk = File.ReadAllBytes(BethesdaPath.Under(modRoot, FaceGenPath.For(pk, FaceGenSlot.Mesh))).SequenceEqual(meshP);
+                    if (qNew is { } qk) qOk = File.ReadAllBytes(BethesdaPath.Under(modRoot, FaceGenPath.For(qk, FaceGenSlot.Mesh))).SequenceEqual(meshQ);
                 }
                 Check(o.Success && pOk && qOk,
                       $"IN-PLACE ALIASING each NPC keeps its OWN face across overlapping old/new IDs (P {pOk}, Q {qOk}{(o.Success ? "" : "; ERR " + o.Error)})");
@@ -213,7 +213,7 @@ public static class FacegenCarryProbe
 
     static void WriteLoose(string baseDir, string rel, byte[] bytes)
     {
-        var p = Path.Combine(baseDir, rel);
+        var p = BethesdaPath.Under(baseDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }

@@ -54,7 +54,7 @@ internal static class AssetResolverProbe
             var low = Path.Combine(mods, "LowMod");        // lower MO2 priority
             foreach (var d in new[] { overwrite, high, low, data }) Directory.CreateDirectory(d);
 
-            void WriteLoose(string baseDir) { var p = Path.Combine(baseDir, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, "x"); }
+            void WriteLoose(string baseDir) { var p = BethesdaPath.Under(baseDir, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, "x"); }
 
             // ---- 1: full loose stack → overwrite wins, all 4 providers, ambiguous ----
             Console.WriteLine("--- 1-4: loose resolution (self-contained) ---");
@@ -73,7 +73,7 @@ internal static class AssetResolverProbe
             }
 
             // ---- 2: remove overwrite copy → highest enabled mod wins ----
-            File.Delete(Path.Combine(overwrite, rel));
+            File.Delete(BethesdaPath.Under(overwrite, rel));
             using (var r = AssetResolver.Build(overwrite, mods, data, enabled, Array.Empty<ActiveArchive>()))
             {
                 var hit = r.Resolve(rel);
@@ -83,7 +83,7 @@ internal static class AssetResolverProbe
             // ---- healthy boundary: a single-source asset is Exists, ONE provider, NOT ambiguous ----
             {
                 var soloRel = @"meshes\solo\unique.nif";
-                var sp = Path.Combine(data, soloRel); Directory.CreateDirectory(Path.GetDirectoryName(sp)!); File.WriteAllText(sp, "x");
+                var sp = BethesdaPath.Under(data, soloRel); Directory.CreateDirectory(Path.GetDirectoryName(sp)!); File.WriteAllText(sp, "x");
                 using var r = AssetResolver.Build(overwrite, mods, data, enabled, Array.Empty<ActiveArchive>());
                 var hit = r.Resolve(soloRel);
                 Check(hit.Exists && hit.Providers.Count == 1 && !hit.Ambiguous && hit.Winner is { Source: "Data", Kind: AssetKind.Loose },
@@ -99,7 +99,7 @@ internal static class AssetResolverProbe
                 // ---- 4: loose cache — a file added into a WARMED subtree is picked up by RefreshIfStale (dir mtime) ----
                 var freshRel = @"meshes\foo\fresh.nif";
                 Check(!r.Resolve(freshRel).Exists, "fresh path absent before it's written (warms meshes\\foo empty)");
-                var fp = Path.Combine(high, freshRel); Directory.CreateDirectory(Path.GetDirectoryName(fp)!); File.WriteAllText(fp, "x");
+                var fp = BethesdaPath.Under(high, freshRel); Directory.CreateDirectory(Path.GetDirectoryName(fp)!); File.WriteAllText(fp, "x");
                 Check(!r.Resolve(freshRel).Exists, "still absent from the warmed cache before a refresh (cache holds the empty warm)");
                 Check(r.RefreshIfStale(), "RefreshIfStale sees the new loose dir (the subtree went absent→present)");
                 Check(r.Resolve(freshRel).Winner is { Source: "HighMod" }, "after the refresh the new loose file resolves");
@@ -128,19 +128,29 @@ internal static class AssetResolverProbe
                       "a captured view resolves + reports its (empty) failure list from one build");
             }
 
-            // ---- normalize: slash form / leading separator / case all resolve to the SAME winner; bad paths rejected ----
+            // ---- normalize: slash form / case resolve identically; absolute and escaping paths are rejected ----
             Console.WriteLine();
             Console.WriteLine("--- normalize: query-path forms equivalent + drive-rooted/.. rejected ---");
             using (var r = AssetResolver.Build(overwrite, mods, data, enabled, Array.Empty<ActiveArchive>()))
             {
                 // overwrite's copy was deleted in arm 2; HighMod/LowMod/Data still hold `rel`, so the winner is HighMod.
                 var fwd = r.Resolve(rel.Replace('\\', '/'));               // forward slashes
-                var lead = r.Resolve("\\" + rel);                         // leading separator
                 var upper = r.Resolve(rel.ToUpperInvariant());            // different case
-                Check(fwd.Winner is { Source: "HighMod" } && lead.Winner is { Source: "HighMod" } && upper.Winner is { Source: "HighMod" },
-                      $"slash/leading-sep/case forms resolve to the same winner — {fwd.Winner?.Source}/{lead.Winner?.Source}/{upper.Winner?.Source}");
+                Check(fwd.Winner is { Source: "HighMod" } && upper.Winner is { Source: "HighMod" },
+                      $"slash/case forms resolve to the same winner — {fwd.Winner?.Source}/{upper.Winner?.Source}");
+                Check(Throws<ArgumentException>(() => { r.Resolve("\\" + rel); }), "a root-prefixed query path is rejected loud");
                 Check(Throws<ArgumentException>(() => { r.Resolve(@"C:\Windows\evil.nif"); }), "a drive-rooted query path is rejected loud");
                 Check(Throws<ArgumentException>(() => { r.Resolve(@"..\..\escape.nif"); }), "a parent-escaping ('..') query path is rejected loud");
+                Check(Throws<ArgumentException>(() => { r.Resolve(@"meshes\\empty.nif"); }), "an empty path segment is rejected loud");
+                Check(Throws<ArgumentException>(() => { r.Resolve("meshes\\bad\0name.nif"); }), "a NUL-containing path is rejected loud");
+
+                const string unicode = @"Meshes\Deep Folder\深い\Ässet.NIF";
+                var unicodePath = BethesdaPath.Under(data, unicode);
+                Directory.CreateDirectory(Path.GetDirectoryName(unicodePath)!);
+                File.WriteAllText(unicodePath, "unicode");
+                using var unicodeResolver = AssetResolver.Build(overwrite, mods, data, enabled, Array.Empty<ActiveArchive>());
+                Check(unicodeResolver.Resolve(@"meshes/deep folder/深い/ässet.nif").Winner is { Source: "Data" },
+                      "spaces, Unicode, mixed separators, and mixed casing resolve on a case-sensitive filesystem");
             }
 
             // ---- dedup: the SAME .bsa bound by two plugins is read ONCE (no double-count → no false Ambiguous) ----
@@ -192,7 +202,7 @@ internal static class AssetResolverProbe
                           $"a BSA-packed asset resolves via the native reader — winner={bhit.Winner?.Source ?? "(none)"}/{bhit.Winner?.Kind}");
 
                     // 6: loose beats BSA — drop a loose copy, refresh; then DELETE it + refresh so later arms see the BSA winner (critic-4)
-                    var lp = Path.Combine(high, bsaRel); Directory.CreateDirectory(Path.GetDirectoryName(lp)!); File.WriteAllText(lp, "loose");
+                    var lp = BethesdaPath.Under(high, bsaRel); Directory.CreateDirectory(Path.GetDirectoryName(lp)!); File.WriteAllText(lp, "loose");
                     r.RefreshIfStale();                            // the loose subtree under HighMod went absent→present
                     var beat = r.Resolve(bsaRel);
                     Check(beat.Winner is { Source: "HighMod", Kind: AssetKind.Loose }, $"a loose copy beats the BSA copy — winner={beat.Winner?.Source ?? "(none)"}/{beat.Winner?.Kind}");
@@ -272,7 +282,7 @@ internal static class AssetResolverProbe
                 {
                     using var r = AssetResolver.Build(overwrite, mods, data, enabled, new[] { new ActiveArchive(bsaA, "P.esp", 1) });
                     Check(!r.Resolve(addedRel).Exists, "the to-be-added path is absent before the repack");
-                    var ap = Path.Combine(srcA, addedRel); Directory.CreateDirectory(Path.GetDirectoryName(ap)!); File.WriteAllText(ap, "A2");
+                    var ap = BethesdaPath.Under(srcA, addedRel); Directory.CreateDirectory(Path.GetDirectoryName(ap)!); File.WriteAllText(ap, "A2");
                     var repack = BsaArchive.Pack(bsarch, srcA, bsaA, BsaArchive.TryFormatFlag("sse")!, compress: false);
                     Check(repack.Success, $"BSArch repacks the archive — {(repack.Success ? "ok" : repack.RunError ?? "see output")}");   // BSArch PRESENT but pack failed = FAIL, never a silent skip
                     if (repack.Success)

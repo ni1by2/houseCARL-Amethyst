@@ -119,8 +119,9 @@ public sealed class AssetResolver : IDisposable
     internal sealed class LooseSubtree
     {
         public readonly DateTime[] DirMtimes;                         // parallel to _looseRoots (length == root count)
-        public readonly (int RootIndex, HashSet<string> Files)[] Present;   // roots that have the dir + ≥1 file, precedence order
-        public LooseSubtree(DateTime[] dirMtimes, (int, HashSet<string>)[] present) { DirMtimes = dirMtimes; Present = present; }
+        public readonly (int RootIndex, string Directory, Dictionary<string, string> Files)[] Present;
+        public LooseSubtree(DateTime[] dirMtimes, (int, string, Dictionary<string, string>)[] present)
+        { DirMtimes = dirMtimes; Present = present; }
     }
 
     volatile Snapshot _snap;
@@ -213,7 +214,7 @@ public sealed class AssetResolver : IDisposable
     /// .bsa stays renamable/deletable while the resolver is alive). NOTE — IArchiveReader is NOT IDisposable in Mutagen
     /// 0.53.1, so the cast in the finally is INERT (it disposes nothing); it is kept belt-and-braces in case a future
     /// Mutagen makes the reader disposable, NOT as the release mechanism (the absence of a held handle is). Paths are
-    /// normalized (backslash, no leading slash) for OrdinalIgnoreCase matching.</summary>
+    /// normalized to canonical backslashes for OrdinalIgnoreCase matching.</summary>
     static HashSet<string> ReadArchiveTable(string archivePath)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -221,7 +222,7 @@ public sealed class AssetResolver : IDisposable
         try
         {
             foreach (var file in reader.Files)
-                set.Add(Normalize(file.Path));
+                set.Add(BethesdaPath.NormalizeArchiveEntry(file.Path));
         }
         finally { (reader as IDisposable)?.Dispose(); }           // INERT in 0.53.1 (reader isn't IDisposable) — see the summary
         return set;
@@ -232,12 +233,12 @@ public sealed class AssetResolver : IDisposable
     /// byte[] (<c>IArchiveFile.GetBytes</c> allocates a new array — nothing to dispose), and holds ZERO handle at rest:
     /// the reader isn't IDisposable in 0.53.1 and nothing keeps the archive mapped after this returns, so the .bsa stays
     /// renamable/deletable (the cornerstone the place guard's at-rest arm proves on the EXTRACTION path, not just the
-    /// table read). <paramref name="entryPath"/> is matched <see cref="Normalize"/>'d (backslash, OrdinalIgnoreCase)
+    /// table read). <paramref name="entryPath"/> is matched as a canonical Bethesda path (backslash, OrdinalIgnoreCase)
     /// against the archive table. Returns null if the entry isn't in the archive; lets an archive that can't be opened/read
     /// THROW (loud, Q3) so the caller reports it — never a silent empty result.</summary>
     public static byte[]? TryReadArchiveEntry(string archivePath, string entryPath)
     {
-        var want = Normalize(entryPath);
+        var want = BethesdaPath.Normalize(entryPath);
         var reader = Archive.CreateReader(GameRelease.SkyrimSE, archivePath);
         try
         {
@@ -245,7 +246,7 @@ public sealed class AssetResolver : IDisposable
                 // OrdinalIgnoreCase — BSA tables store paths lowercased, so an ordinal (case-sensitive) compare against a
                 // mixed-case query (e.g. "Dawnguard.esm\0001A51A.nif") would MISS the entry; matches ReadArchiveTable's
                 // case-insensitive table (Q3: a case mismatch must never read as "entry absent").
-                if (string.Equals(Normalize(file.Path), want, StringComparison.OrdinalIgnoreCase))
+                if (string.Equals(BethesdaPath.NormalizeArchiveEntry(file.Path), want, StringComparison.OrdinalIgnoreCase))
                     return file.GetBytes();                        // fresh array; no held handle (see the summary)
             return null;                                           // archive read fine, entry simply not present
         }
@@ -301,14 +302,14 @@ public sealed class AssetResolver : IDisposable
     List<PlacementSource> ResolveProviders(string rel, Snapshot snap)
     {
         // ---- loose, in MO2 precedence order — via the per-subtree cache (warmed on first touch) ----
-        var subtreeDir = Normalize(Path.GetDirectoryName(rel) ?? "");
-        var fname = Path.GetFileName(rel);
+        var subtreeDir = BethesdaPath.DirectoryName(rel);
+        var fname = BethesdaPath.FileName(rel);
         var st = snap.LooseCache.GetOrAdd(subtreeDir, WarmSubtree);
         var loose = new List<PlacementSource>();
-        foreach (var (rootIndex, files) in st.Present)               // Present is already in precedence order
-            if (files.Contains(fname))
+        foreach (var (rootIndex, directory, files) in st.Present)    // Present is already in precedence order
+            if (files.TryGetValue(fname, out var rawName))
                 loose.Add(new PlacementSource(_looseRoots[rootIndex].Name, AssetKind.Loose,
-                    LooseFilePath: Path.Combine(_looseRoots[rootIndex].Dir, rel), ArchivePath: null, EntryPath: rel));
+                    LooseFilePath: Path.Combine(directory, rawName), ArchivePath: null, EntryPath: rel));
 
         // ---- BSA, highest plugin rank first ----
         var bsa = new List<(PlacementSource source, int rank)>();
@@ -371,12 +372,11 @@ public sealed class AssetResolver : IDisposable
         // loose: recurse each root's copy of the prefix dir (set-UNION across roots — the per-path winner is decided later).
         foreach (var (_, rootDir) in _looseRoots)
         {
-            var baseDir = Path.Combine(rootDir, pre);
-            if (!Directory.Exists(baseDir)) continue;
+            if (!BethesdaPath.TryResolveExisting(rootDir, pre, out var baseDir) || !Directory.Exists(baseDir)) continue;
             try
             {
                 foreach (var f in Directory.EnumerateFiles(baseDir, "*", SearchOption.AllDirectories))
-                    found.Add(Normalize(f.Substring(rootDir.Length)));       // f starts with rootDir → the remainder is Data-relative
+                    found.Add(BethesdaPath.FromHostRelative(Path.GetRelativePath(rootDir, f)));
             }
             catch { /* a root that won't enumerate contributes nothing; not silently trusted (see the summary) */ }
         }
@@ -457,7 +457,7 @@ public sealed class AssetResolver : IDisposable
         var roots = _looseRoots;
         for (int i = 0; i < roots.Count; i++)
         {
-            var dir = subtreeDir.Length == 0 ? roots[i].Dir : Path.Combine(roots[i].Dir, subtreeDir);
+            var dir = ResolveSubtree(roots[i].Dir, subtreeDir);
             if (SafeMtime(dir) != st.DirMtimes[i]) return true;
         }
         return false;
@@ -471,58 +471,40 @@ public sealed class AssetResolver : IDisposable
     {
         var roots = _looseRoots;
         var mtimes = new DateTime[roots.Count];
-        var present = new List<(int, HashSet<string>)>();
+        var present = new List<(int, string, Dictionary<string, string>)>();
         for (int i = 0; i < roots.Count; i++)
         {
-            var dir = subtreeDir.Length == 0 ? roots[i].Dir : Path.Combine(roots[i].Dir, subtreeDir);
+            var dir = ResolveSubtree(roots[i].Dir, subtreeDir);
             mtimes[i] = SafeMtime(dir);                              // MinValue if absent — baseline for an appear/disappear
             var files = SafeListFilenames(dir);
-            if (files is { Count: > 0 }) present.Add((i, files));
+            if (files is { Count: > 0 }) present.Add((i, dir, files));
         }
         return new LooseSubtree(mtimes, present.ToArray());
     }
 
     /// <summary>The top-level filenames in a directory (OrdinalIgnoreCase), or null if it doesn't exist / can't be read.
     /// Top-level only — a "subtree" here is the immediate parent dir of the queried asset, not a recursive tree.</summary>
-    static HashSet<string>? SafeListFilenames(string dir)
+    static Dictionary<string, string>? SafeListFilenames(string dir)
     {
         try
         {
             if (!Directory.Exists(dir)) return null;
-            var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var f in Directory.EnumerateFiles(dir)) set.Add(Path.GetFileName(f));
+            var set = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+            foreach (var f in Directory.EnumerateFiles(dir)) set.TryAdd(Path.GetFileName(f), Path.GetFileName(f));
             return set;
         }
         catch { return null; }
     }
 
-    /// <summary>Normalize an asset path for matching: forward slashes → backslashes, drop a leading separator. Matching is
-    /// OrdinalIgnoreCase (Windows + BSA tables are case-insensitive), so case is left as-is and compared case-insensitively.
-    /// Lenient — applied to BSA-table entries (already archive-relative), so it never throws.</summary>
-    static string Normalize(string p) => (p ?? "").Replace('/', '\\').TrimStart('\\');
-
-    /// <summary>Public, reusable gate: normalize + VALIDATE a Data-relative path, REJECTING a drive-rooted or
-    /// parent-escaping one — the SAME check <see cref="Resolve"/> applies (it delegates to <see cref="NormalizeQueryPath"/>),
-    /// exposed so the place path validates a destination through this ONE validator rather than a divergent copy
-    /// (place_asset writes to Path.Combine(modRoot, rel), so the same escape would write OUTSIDE the owned folder — Q3).
-    /// Throws ArgumentException naming the bad input; returns the normalized (backslash, no leading sep) path.</summary>
+    /// <summary>Apply the shared canonical Data-path validation used by resolution and placement.</summary>
     public static string ValidateRelPath(string relPath) => NormalizeQueryPath(relPath);
 
-    /// <summary>Normalize AND validate a Data-relative QUERY path. After the lenient <see cref="Normalize"/>, REJECT a
-    /// drive-rooted path ("C:\…") or one carrying a ".." segment — both make <c>Path.Combine(root, rel)</c> ESCAPE the
-    /// loose roots and resolve a file OUTSIDE the load order, a silently-wrong answer. The resolver API is documented
-    /// general-purpose, so a caller can hand it a bad path; we fail LOUD naming it (Q3) rather than resolve the wrong
-    /// file. (UNC inputs aren't drive-rooted after the leading-separator trim and aren't a real caller shape here.)</summary>
-    static string NormalizeQueryPath(string relPath)
-    {
-        var rel = Normalize(relPath);
-        if (Path.IsPathRooted(rel))
-            throw new ArgumentException($"expected a Data-relative asset path, got a drive-rooted path: '{relPath}'", nameof(relPath));
-        foreach (var seg in rel.Split('\\'))
-            if (seg == "..")
-                throw new ArgumentException($"expected a Data-relative asset path, got a parent-escaping ('..') path: '{relPath}'", nameof(relPath));
-        return rel;
-    }
+    /// <summary>Reject any path that is not safely relative to Data.</summary>
+    static string NormalizeQueryPath(string relPath) => BethesdaPath.Normalize(relPath);
+
+    static string ResolveSubtree(string root, string subtree) => subtree.Length == 0
+        ? root
+        : BethesdaPath.TryResolveExisting(root, subtree, out var resolved) ? resolved : BethesdaPath.Under(root, subtree);
 
     static DateTime SafeMtime(string path)
     {

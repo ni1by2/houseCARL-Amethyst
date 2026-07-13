@@ -90,7 +90,7 @@ internal static class AssetStatusProbe
                 var bArc = arc.Where(x => x.OwningPlugin == "PluginB.esp").ToList();
 
                 Check(arc.Count == 4, $"4 active archives discovered (1 base + 2 for PluginA + 1 for PluginB) — got {arc.Count}");
-                Check(baseA.Count == 1 && baseA[0].Path.Replace('/', '\\').StartsWith(data, StringComparison.OrdinalIgnoreCase),
+                Check(baseA.Count == 1 && string.Equals(Path.GetDirectoryName(baseA[0].Path), data, StringComparison.OrdinalIgnoreCase),
                       "the Skyrim.ini base archive is discovered, from the Data folder");
                 Check(aArc.Count == 2 && aArc.Any(x => x.Path.EndsWith("PluginA.bsa", StringComparison.OrdinalIgnoreCase))
                       && aArc.Any(x => x.Path.EndsWith("PluginA - Textures.bsa", StringComparison.OrdinalIgnoreCase)),
@@ -120,7 +120,7 @@ internal static class AssetStatusProbe
 
                 var res = ArchiveDiscovery.Discover(prof, mods, data, "", Path.Combine(b, "game"));
                 var pa = res.Archives.Single(x => x.OwningPlugin == "PluginA.esp");
-                Check(pa.Path.Replace('/', '\\').StartsWith(hi, StringComparison.OrdinalIgnoreCase),
+                Check(string.Equals(Path.GetDirectoryName(pa.Path), hi, StringComparison.OrdinalIgnoreCase),
                       "the higher-priority mod's copy of 'PluginA.bsa' is the discovered winning path (VFS, not look-beside-the-esp)");
             }
 
@@ -360,7 +360,7 @@ internal static class AssetStatusProbe
 
     static void WriteLoose(string baseDir, string rel)
     {
-        var p = Path.Combine(baseDir, rel);
+        var p = BethesdaPath.Under(baseDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllText(p, "x");
     }

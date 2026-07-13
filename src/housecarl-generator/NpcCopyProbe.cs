@@ -296,13 +296,13 @@ public static class NpcCopyProbe
                     }
 
                     var outDir = Path.GetDirectoryName(o.OutPath!)!;
-                    Check(File.Exists(Path.Combine(outDir, $@"meshes\actors\character\facegendata\facegeom\MyFollower.esp\00000800.nif")),
+                    Check(File.Exists(BethesdaPath.Under(outDir, $@"meshes\actors\character\facegendata\facegeom\MyFollower.esp\00000800.nif")),
                         "assets: facegeom RENAMED to the TARGET's FormKey path (folder = the target's defining plugin)");
-                    Check(File.Exists(Path.Combine(outDir, $@"textures\actors\character\facegendata\facetint\MyFollower.esp\00000800.dds")),
+                    Check(File.Exists(BethesdaPath.Under(outDir, $@"textures\actors\character\facegendata\facetint\MyFollower.esp\00000800.dds")),
                         "assets: facetint renamed alongside");
-                    Check(File.Exists(Path.Combine(outDir, skinRel)),
+                    Check(File.Exists(BethesdaPath.Under(outDir, skinRel)),
                         "assets: the geom's EMBEDDED texture (byte-scraped) carried from the disabled donor's folder");
-                    Check(File.Exists(Path.Combine(outDir, hairRel)),
+                    Check(BethesdaPath.TryResolveExisting(outDir, hairRel, out var carriedHair) && File.Exists(carriedHair),
                         "assets: the record-referenced model carried from the disabled donor's folder");
                     Check(o.Assets is { } aa && aa.Missing.Any(m => m.Contains("FemaleHead.tri", StringComparison.OrdinalIgnoreCase)),
                         "assets: an unresolvable referenced path is a NAMED miss (Q3), never silent");
@@ -335,7 +335,7 @@ public static class NpcCopyProbe
                     }
                     var outDir = Path.GetDirectoryName(o.OutPath!)!;
                     var newId = "00" + o.NewNpcKey.ID.ToString("X6");
-                    Check(File.Exists(Path.Combine(outDir, $@"meshes\actors\character\facegendata\facegeom\VivCloneP.esp\{newId}.nif")),
+                    Check(File.Exists(BethesdaPath.Under(outDir, $@"meshes\actors\character\facegendata\facegeom\VivCloneP.esp\{newId}.nif")),
                         "clone: facegeom renamed to the CLONE's FormKey path (folder = the patch)");
                 }
             }
@@ -428,9 +428,9 @@ public static class NpcCopyProbe
                     // the DEFINING plugin's folder, which the named override patch's folder does not contain.
                     var outDir = Path.GetDirectoryName(o.OutPath!)!;
                     Check(o.Assets is { FaceGenMeshCarried: true } &&
-                          File.Exists(Path.Combine(outDir, $@"meshes\actors\character\facegendata\facegeom\MyFollower.esp\00000800.nif")),
+                          File.Exists(BethesdaPath.Under(outDir, $@"meshes\actors\character\facegendata\facegeom\MyFollower.esp\00000800.nif")),
                         "widen assets: the facegen pair is carried from the DEFINING plugin's folder (not the named patch's)");
-                    Check(File.Exists(Path.Combine(outDir, hairRel)),
+                    Check(BethesdaPath.TryResolveExisting(outDir, hairRel, out var widenedHair) && File.Exists(widenedHair),
                         "widen assets: the record-referenced model carries from the defining plugin's folder");
                 }
             }
@@ -563,7 +563,7 @@ public static class NpcCopyProbe
 
     static void WriteFixture(string modDir, string relPath, byte[] bytes)
     {
-        var p = Path.Combine(modDir, relPath);
+        var p = BethesdaPath.Under(modDir, relPath);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }

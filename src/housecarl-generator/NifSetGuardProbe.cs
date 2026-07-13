@@ -206,10 +206,10 @@ internal static class NifSetGuardProbe
 
                 var res = svc.NifSet(MeshRel, new[] { new NifSetOp(NifSetOpKind.SetFlags, "GuardShape", Flags: 0x800000E) }, null, "FaceFix", null, inPlace: false, acknowledge: false);
                 Check(res.Error is null && res.OutputModFolder is not null, $"new-folder lane writes a verified mesh into a fresh houseCARL folder — {res.Error ?? "ok"}");
-                var placed = res.OutputModFolder is null ? null : Path.Combine(res.OutputModFolder, MeshRel);
+                var placed = res.OutputModFolder is null ? null : BethesdaPath.Under(res.OutputModFolder, MeshRel);
                 Check(placed is not null && File.Exists(placed), "the edited mesh lands at the SAME rel path in the new folder");
                 Check(ShapeOf(placed is null ? null : File.ReadAllBytes(placed), "GuardShape") is { Flags: 0x800000E }, "the placed mesh reads the new flags");
-                Check(File.ReadAllBytes(Path.Combine(mod, MeshRel)).SequenceEqual(seBytes), "the ORIGINAL loose mesh is untouched (non-destructive default)");
+                Check(File.ReadAllBytes(BethesdaPath.Under(mod, MeshRel)).SequenceEqual(seBytes), "the ORIGINAL loose mesh is untouched (non-destructive default)");
                 Check(res.CurrentWinner is { } w && w.Contains("FaceMod"), $"reports the current winner to sort above — {res.CurrentWinner}");
             }
 
@@ -222,7 +222,7 @@ internal static class NifSetGuardProbe
                 File.WriteAllText(Path.Combine(mod, "Dummy.esp"), "x");
                 WriteProfile(prof, new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, new[] { "+FaceMod" });
                 WriteSkyrimIni(prof);
-                var loosePath = Path.Combine(mod, MeshRel);
+                var loosePath = BethesdaPath.Under(mod, MeshRel);
                 using var svc = HousecarlMcp.LoadOrderService.WithInstance(inst, 0, new UserConfigStore(Path.Combine(svcRoot, "u-ip.json")));
 
                 var r1 = svc.NifSet(MeshRel, new[] { new NifSetOp(NifSetOpKind.SetFlags, "GuardShape", Flags: 0x800000E) }, null, null, null, inPlace: true, acknowledge: false);
@@ -406,7 +406,7 @@ internal static class NifSetGuardProbe
 
     static void WriteLoose(string baseDir, string rel, byte[] bytes)
     {
-        var p = Path.Combine(baseDir, rel);
+        var p = BethesdaPath.Under(baseDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }

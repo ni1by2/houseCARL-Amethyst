@@ -69,12 +69,12 @@ public static class VoiceCarryProbe
                     var modRoot = Path.GetDirectoryName(o.OutputPath)!;
                     if (infoNew is { } ik)
                     {
-                        var newFuz = Path.Combine(modRoot, VoicePath.For(ik, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz));
-                        var newLip = Path.Combine(modRoot, VoicePath.For(ik, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Lip));
+                        var newFuz = BethesdaPath.Under(modRoot, VoicePath.For(ik, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz));
+                        var newLip = BethesdaPath.Under(modRoot, VoicePath.For(ik, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Lip));
                         fuzOk = File.Exists(newFuz) && File.ReadAllBytes(newFuz).SequenceEqual(fuzBytes);
                         lipOk = File.Exists(newLip) && File.ReadAllBytes(newLip).SequenceEqual(lipBytes);
                     }
-                    var oldFuz = Path.Combine(mods, "VoiceNf", VoicePath.For(infoOld, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz));
+                    var oldFuz = BethesdaPath.Under(Path.Combine(mods, "VoiceNf"), VoicePath.For(infoOld, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz));
                     oldUntouched = File.Exists(oldFuz) && File.ReadAllBytes(oldFuz).SequenceEqual(fuzBytes);
                 }
                 var vr = o.VoiceRename;
@@ -106,11 +106,11 @@ public static class VoiceCarryProbe
                     infoNew = ReadInfoKey(o.OutputPath, "HcVoiceTopic");
                     if (infoNew is { } ik)
                     {
-                        var newFuz = Path.Combine(mods, "VoiceIp", VoicePath.For(ik, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz));
+                        var newFuz = BethesdaPath.Under(Path.Combine(mods, "VoiceIp"), VoicePath.For(ik, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz));
                         fuzOk = File.Exists(newFuz) && File.ReadAllBytes(newFuz).SequenceEqual(fuzBytes);
                     }
                     // the OLD-FormID voice remains as a harmless orphan (non-destructive — never auto-deleted)
-                    oldOrphan = File.Exists(Path.Combine(mods, "VoiceIp", VoicePath.For(infoOld, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz)));
+                    oldOrphan = File.Exists(BethesdaPath.Under(Path.Combine(mods, "VoiceIp"), VoicePath.For(infoOld, VoiceType, "", "HcVoiceTopic", RespNum, VoiceFile.Fuz)));
                 }
                 var vr = o.VoiceRename;
                 Check(o.Success && o.InPlace && fuzOk && vr is { FilesCarried: 1, LinesCarried: 1 },
@@ -143,8 +143,8 @@ public static class VoiceCarryProbe
                 {
                     var iaNew = ReadInfoKey(o.OutputPath, "HcTopicA");
                     var ibNew = ReadInfoKey(o.OutputPath, "HcTopicB");
-                    if (iaNew is { } ak) aOk = File.ReadAllBytes(Path.Combine(mods, "VoiceMl", VoicePath.For(ak, VoiceType, "", "HcTopicA", RespNum, VoiceFile.Fuz))).SequenceEqual(fuzA);
-                    if (ibNew is { } bk) bOk = File.ReadAllBytes(Path.Combine(mods, "VoiceMl", VoicePath.For(bk, VoiceType, "", "HcTopicB", RespNum, VoiceFile.Fuz))).SequenceEqual(fuzB);
+                    if (iaNew is { } ak) aOk = File.ReadAllBytes(BethesdaPath.Under(Path.Combine(mods, "VoiceMl"), VoicePath.For(ak, VoiceType, "", "HcTopicA", RespNum, VoiceFile.Fuz))).SequenceEqual(fuzA);
+                    if (ibNew is { } bk) bOk = File.ReadAllBytes(BethesdaPath.Under(Path.Combine(mods, "VoiceMl"), VoicePath.For(bk, VoiceType, "", "HcTopicB", RespNum, VoiceFile.Fuz))).SequenceEqual(fuzB);
                 }
                 var vr = o.VoiceRename;
                 Check(o.Success && aOk && bOk && vr is { FilesCarried: 2, LinesCarried: 2 },
@@ -232,7 +232,7 @@ public static class VoiceCarryProbe
 
     static void WriteLoose(string baseDir, string rel, byte[] bytes)
     {
-        var p = Path.Combine(baseDir, rel);
+        var p = BethesdaPath.Under(baseDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }
