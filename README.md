@@ -1,4 +1,4 @@
-# houseCARL
+# houseCARL - Amethyst - Agentic Skyrim modding for Linux. WIP - DO NOT USE 
 
 **Comprehensive, data-layer access to your Skyrim Special Edition load order — in plain English, through Claude or Codex.**
 
