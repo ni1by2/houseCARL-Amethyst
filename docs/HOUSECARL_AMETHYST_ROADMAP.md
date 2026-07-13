@@ -259,7 +259,8 @@ manual release gate.
   approval.
 - Exact next action: finish GitHub authorization, commit/push both products, run
   the connector in a real Amethyst install, then begin `AmethystLayout`.
-- Commits: none yet.
+- Commits: `804ac0d` (roadmap/baseline), `8ab7af3` (native Linux path
+  boundary). Connector commit is pending in its separate repository.
 
 ## Session update template
 
