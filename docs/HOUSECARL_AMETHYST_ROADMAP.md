@@ -257,11 +257,13 @@ manual release gate.
   adapter at import time without changing Amethyst source. This seam requires a
   real-install smoke test. GitHub device authorization is still awaiting user
   approval.
-- Exact next action: finish GitHub authorization, commit/push both products, run
-  the connector in a real Amethyst install, then begin `AmethystLayout`.
-- Commits: `804ac0d` (roadmap/baseline), `8ab7af3` (native Linux path
-  boundary), `3fd97c8` (milestone record); connector `1f682b3` in its separate
+- Exact next action: run the connector in a real Amethyst install, record the
+  smoke-test result, then begin `AmethystLayout`.
+- Commits: `2e39b5d` (roadmap/baseline), `4e2d27a` (native Linux path
+  boundary), `f010b7c` (milestone record); connector `6fcee5d` in its separate
   repository.
+- Published repositories: `ni1by2/houseCARL-Amethyst` on default branch
+  `amethyst-main`; `ni1by2/housecarl-amethyst-connector` on `main`.
 
 ## Session update template
 
