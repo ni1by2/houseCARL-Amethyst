@@ -10,7 +10,10 @@ complete only when its exit gate is supported by recorded evidence.
 - Platform: Linux x86_64, distributed as a self-contained bundle.
 - AI hosts: Codex and Claude Code over MCP stdio.
 - Manager: Amethyst only; the public MO2/Windows surface will be removed.
-- Connector: required and shipped as a separate Amethyst external plugin.
+- Connection setup: required, but it must not depend on an Amethyst-side Python
+  plugin. A sparse Linux setup command will validate Amethyst state and write
+  the versioned manifest. The existing connector repository remains the
+  migration source until that command is shipped.
 - Profiles: shared and profile-specific staging are both required.
 - Deployment: hardlinks are the v1 release gate. Symlink and copy modes receive
   smoke coverage when this adds no production branching. Amethyst has no VFS
@@ -26,6 +29,8 @@ complete only when its exit gate is supported by recorded evidence.
 
 - houseCARL: `3fb962b87137c1ff25db0a191c7e27a4a5215da2`
 - Amethyst Mod Manager: `30f4efb5349e95f04968fca9b809130a34f6032a`
+- Audited houseCARL sync target: `248e69b` (`v1.8.1`, 2026-07-16)
+- Audited Amethyst target: `40a96c0` (`v2.0.4-beta.1`, Testing, 2026-07-16)
 - Fork directory: `houseCARL-Amethyst/`
 - Companion directory: `housecarl-amethyst-connector/` (created in Session 2)
 
@@ -33,7 +38,7 @@ complete only when its exit gate is supported by recorded evidence.
 
 ### Connection manifest
 
-The required connector writes
+The required connection setup writes
 `<profile-root>/.housecarl-amethyst/connection.json` atomically. Schema v1:
 
 ```json
@@ -117,17 +122,47 @@ Exit gate: baseline build/probe evidence and complete assumption ownership.
 Exit gate: Linux build and probes pass; nested asset tests pass; startup makes
 no Windows registry or drive assumptions.
 
-### Session 2 — Required Amethyst connector
+### Session 2 — Amethyst connection bootstrap
 
 - [x] Create the separate connector product/repository.
 - [x] Implement the `skyrim_se` external wizard plugin.
 - [x] Validate and atomically export the v1 manifest.
 - [x] Package native/AppImage and Flatpak plugin installers plus uninstall.
-- [ ] Test a real Amethyst smoke install; synthetic shared/profile-specific
-  layouts pass five dependency-free unit tests.
+- [x] Confirm Amethyst's v2.0.4 `Refresh Plugins` action only refreshes LOOT
+  metadata for Skyrim plugins and is unrelated to external Python plugins.
+- [ ] Move validation and atomic manifest export into a standalone Linux setup
+  command owned by houseCARL-Amethyst.
+- [ ] Add native/AppImage and Flatpak `paths.json` discovery plus an explicit
+  path override; require confirmation when discovery is ambiguous.
+- [ ] Deprecate the Amethyst Python wizard and plugin-directory installers after
+  the standalone command passes equivalent synthetic and real-install tests.
 
-Exit gate: a connector-generated manifest remains usable across restarts and
-invalid state produces actionable diagnostics.
+Exit gate: setup requires no Amethyst extension, its manifest remains usable
+across restarts, and invalid or ambiguous state produces actionable diagnostics.
+
+### Session 2A — Deliberate upstream v1.8.1 integration — queued prerequisite
+
+- [x] Audit upstream `3fb962b..248e69b`: 66 commits, 60 changed files, 6,493
+  insertions and 255 deletions.
+- [x] Prove the synthetic merge has no textual conflicts and builds
+  `housecarl-core`, `housecarl-mcp`, and `housecarl-setup` on Linux.
+- [ ] Merge `v1.8.1` in one focused upstream-integration commit before further
+  Amethyst adapter work.
+- [ ] Preserve the manager-neutral additions: bulk resolve/query/diff/read JSON,
+  `CopyFrom`, composed list writes, flag-bit safety, presence predicates,
+  off-order finishing, patch-name collision protection, and SkyPatcher fixes.
+- [ ] Rebase new filesystem reads onto `BethesdaPath` and the future
+  `IModManagerLayout`; rerun the case-sensitive Linux path probes.
+- [ ] Adapt off-order plugin discovery to the Amethyst snapshot instead of
+  MO2 folder scanning.
+- [ ] Replace the MO2 `meta.ini` update-cache reader with an Amethyst metadata
+  adapter or disable only that local-cache tool until its contract is proven.
+- [ ] Run the full CI-safe probe set and compare failures with the recorded
+  76/85 Linux baseline before marking the sync complete.
+
+Exit gate: upstream v1.8.1 capabilities are retained except for explicitly
+documented MO2-only behavior, Linux path guards remain green, and no public MO2
+contract leaks into the Amethyst product surface.
 
 ### Session 3 — Amethyst profile and load-order adapter
 
@@ -222,7 +257,7 @@ patch, redeploy and guarded in-place workflows.
 - Exclusions, strip prefixes, mixed case, spaces, Unicode and mounted paths.
 - Loose/BSA conflicts, generated ownership and cleanup.
 - In-place hardlink identity before/after atomic replacement and redeploy.
-- Native/AppImage and Flatpak connector paths.
+- Native/AppImage and Flatpak connection-setup paths.
 - Codex and Claude installation and startup.
 
 CI fixtures contain no copyrighted Skyrim data. Real-game validation is a
@@ -230,11 +265,11 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 2 — required Amethyst connector, after the initial
-  hosted commits.
-- Last completed checkpoint: connector core, Qt external wizard, installers,
-  atomic manifest export, and synthetic tests implemented in the separate
-  `housecarl-amethyst-connector/` repository.
+- Active milestone: Session 2A — deliberate upstream v1.8.1 integration, before
+  replacing the external connector with standalone connection setup.
+- Last completed checkpoint: audited houseCARL `v1.8.1` and Amethyst
+  `v2.0.4-beta.1`; confirmed Amethyst's new Refresh Plugins button is a LOOT
+  metadata action and does not manage external Python plugins.
 - Verification performed: .NET SDK 9.0.315 / runtime 9.0.17; generator and all
   referenced product projects build in Release with no errors; focused guards
   pass for asset resolution/status, nested creation, placement, NIF, facegen,
@@ -242,23 +277,30 @@ manual release gate.
   result is 76/85 passing in 0.24 minutes, up from the 67/85 baseline.
   Startup inspection confirms GameFinder/registry probing remains lazy behind
   external-tool requests and is not executed during MCP server construction.
+  The synthetic `v1.8.1` merge reports no textual conflicts; core, MCP, and
+  setup build on Linux. The generator restore graph still exits without a
+  diagnostic in the disposable worktree, so the full probe suite remains an
+  integration exit gate rather than claimed evidence.
 - Files/components changed: `BethesdaPath`, asset/appearance/rename resolution,
   MCP placement paths, SkyPatcher gate extraction, Linux probe fixtures,
   `docs/PATH_MODEL.md`, and this roadmap.
 - Decisions made: Bethesda paths are validated canonical strings; host I/O uses
   native segments; logical lookup is case-insensitive and returns raw host
-  casing. Linux probes do not assert Windows creation-time semantics.
+  casing. Linux probes do not assert Windows creation-time semantics. Upstream
+  `v1.8.1` must land before new adapter work. The manifest stays, but its writer
+  moves out of Amethyst into a standalone houseCARL-Amethyst setup command.
 - Known failures or residual risks: Windows file-lock, creation-time, `.exe`, and
   installer assumptions remain assigned to later milestones. The independent
   `skypatcher-conflicts` duplicate-reporting failure remains unrelated to this
   port. Session 1 does not replace MO2 startup/configuration; that public boundary
-  is Session 3. Amethyst's current Qt app discards external plugins'
-  `dialog_class_path`; the connector therefore registers a narrow generic Qt
-  adapter at import time without changing Amethyst source. This seam requires a
-  real-install smoke test. GitHub device authorization is still awaiting user
-  approval.
-- Exact next action: run the connector in a real Amethyst install, record the
-  smoke-test result, then begin `AmethystLayout`.
+  is Session 3. Amethyst's Qt external-wizard seam remains fragile and is now
+  scheduled for removal. Upstream's `housecarl_update_status` reads MO2-specific
+  metadata, and its off-order plugin lookup scans MO2 folders; neither may enter
+  the fork unchanged. The synthetic merge compiles the product projects but has
+  not passed the full generator probe suite.
+- Exact next action: merge upstream `v1.8.1` as a focused integration, adapt or
+  gate the two MO2-specific surfaces, and run the Linux probes. Then move the
+  connector core into standalone connection setup before `AmethystLayout`.
 - Commits: `2e39b5d` (roadmap/baseline), `4e2d27a` (native Linux path
   boundary), `f010b7c` (milestone record); connector `6fcee5d` in its separate
   repository.
