@@ -10,8 +10,31 @@ namespace HousecarlCore;
 /// <summary>One field read off a record: a round-trippable <see cref="Token"/> when <see cref="HasValue"/> is
 /// true, else a <see cref="Note"/> explaining why there is no value (absent optional, no such field, a non-leaf
 /// container, or an isolated read fault). The public, structured form of the internal <c>LeafRead</c> — what the
-/// MCP server's read tools emit.</summary>
-public sealed record FieldValue(string Path, bool HasValue, string? Token, string? Note);
+/// MCP server's read tools emit.
+///
+/// <para><see cref="Display"/> is a DISPLAY-ONLY annotation the render layer appends in parentheses after the
+/// value — NOT part of the round-trip token (the write surface reads <see cref="Token"/>, the round-trip oracle
+/// drives the internal <c>LeafRead</c>, and <c>FieldsDiff</c> compares Token/Note), so it is invisible to write,
+/// read-proof, and diff. Used to decode a value that is correct but opaque — a biped-slot bitmask into its slot
+/// numbers (HCBR-2026-07-12) — without disturbing the token that must round-trip. Null on every leaf that needs
+/// no annotation.</para>
+///
+/// <para><see cref="Link"/> is the resolve_names annotation (Wave 2 / P7): when a leaf's <see cref="Token"/> is a
+/// form reference (a token that round-trips to a FormKey), the SERVICE layer resolves its target's identity
+/// (editorid/name) against the load order and hangs it here. Like <see cref="Display"/> it is DISPLAY-ONLY — never
+/// part of the round-trip <see cref="Token"/>, so it is invisible to write, read-proof, and diff. Populated by the
+/// service (which holds the resolver), never by the core read (which reads one record's bytes and cannot resolve a
+/// target). Null unless resolve_names was requested and the leaf carries a resolvable FormKey.</para></summary>
+public sealed record FieldValue(string Path, bool HasValue, string? Token, string? Note, string? Display = null, ResolvedRef? Link = null);
+
+/// <summary>The resolved identity of a form reference — the shared contract behind housecarl_resolve (P3, a full
+/// row) and the resolve_names field annotation (P7). <see cref="Resolved"/> false ⇒ the FormKey is valid but not
+/// present in the active order (a dangling target — named, never dropped or guessed, Q3). <see cref="Error"/> is set
+/// only on the housecarl_resolve path when the INPUT string is not a legal FormID at all. When used for the P7
+/// annotation it is DISPLAY-ONLY: it never replaces the leaf's round-trip <see cref="FieldValue.Token"/>.</summary>
+public sealed record ResolvedRef(
+    string Token, bool Resolved, string? Type = null, string? EditorId = null,
+    string? Name = null, string? Winner = null, string? Error = null);
 
 /// <summary>A located record read out as structured fields — the public (params)->(result) result the MCP
 /// server's read tools return (the §8.4 read cleave). Identity (<see cref="Type"/> / <see cref="FormKey"/> /
@@ -54,11 +77,17 @@ public static class ReadEngine
     /// numerically WITHOUT tripping over the name/number rendering split that <c>[Flags].ToString()</c> produces
     /// (named bits → "Body"; an unnamed modder slot → "8388608"). The <see cref="Token"/> is unchanged — the
     /// round-trip oracle still drives the same display token — so this is invisible to read/write/diff.</para></summary>
-    internal readonly record struct LeafRead(bool HasValue, string Token, string? Note, FlagBits? Flags = null)
+    internal readonly record struct LeafRead(bool HasValue, string Token, string? Note, FlagBits? Flags = null, int? ContainerCount = null)
     {
         public static LeafRead Value(string token) => new(true, token, null);
         public static LeafRead FlagsValue(string token, FlagBits bits) => new(true, token, null, bits);
         public static LeafRead None(string note) => new(false, "", note);
+        /// <summary>A no-value CONTAINER/substruct summary carrying its element <paramref name="count"/>: null for a
+        /// substruct (present by being non-null — no element count), a number for a list/dict (0 = present-but-EMPTY).
+        /// The count is additive metadata for the presence predicate (<c>exists</c>/<c>missing</c>), which must tell
+        /// an EMPTY list from a carried one WITHOUT re-parsing the display note. The Token is empty and the oracle
+        /// never drives a no-value read, so this is invisible to read/write/diff, exactly like <see cref="Flags"/>.</summary>
+        public static LeafRead Container(string note, int? count) => new(false, "", note, null, count);
         public override string ToString() => HasValue ? Token : Note ?? "(none)";
     }
 
@@ -132,9 +161,17 @@ public static class ReadEngine
         var depth = int.TryParse(f.GetValueOrDefault("depth"), out var dN) && dN > 0 ? dN : 1;
         var rf = ReadFields(target, paths.Count > 0 ? paths : null, depth);
         foreach (var fv in rf.Fields)
-            Console.WriteLine($"  {fv.Path} = {(fv.HasValue ? fv.Token : fv.Note)}");
+            Console.WriteLine($"  {fv.Path} = {(fv.HasValue ? fv.Token : fv.Note)}{(fv.Display is null ? "" : $"   ({fv.Display})")}");
         return 0;
     }
+
+    /// <summary>The depth-1 container hint (HCBR-2026-07-12): appended to an unexpanded container/substruct summary so
+    /// an agent turns the depth= knob instead of inventing a param or hand-rolling a parser. It names <c>depth=2</c>,
+    /// which is only honest on a surface that HAS a depth= parameter (read_record / batch_record_detail /
+    /// read_plugin_file / the CLI) — a caller whose surface has no depth= passes its own redirect via
+    /// <c>containerHint</c> (cross_plugin_query names the batch-read hop) or null to suppress (write read-backs,
+    /// where the count IS the confirmation and there is no knob to turn).</summary>
+    public const string DepthExpandHint = " — pass depth=2 to expand";
 
     /// <summary>Read a located record's fields as round-trippable tokens — the public, structured entry the MCP
     /// server consumes (the §8.4 read cleave; <c>RunRead</c> is the CLI sibling). With <paramref name="paths"/>:
@@ -142,7 +179,8 @@ public static class ReadEngine
     /// proven internal <see cref="ReadLeaf"/> (the round-trip oracle drives it), so the server's reads inherit the
     /// read-proof by construction. Per-leaf fault isolation (Q3): an unreadable field names itself in its
     /// <see cref="FieldValue.Note"/>, never throws out of the record read.</summary>
-    public static RecordFields ReadFields(IMajorRecordGetter record, IReadOnlyList<string>? paths = null, int depth = 1)
+    public static RecordFields ReadFields(IMajorRecordGetter record, IReadOnlyList<string>? paths = null, int depth = 1,
+                                          string? containerHint = DepthExpandHint)
     {
         var typeName = RecordNaming.StripGetterInterface(WriteEngine.PrimaryGetter(record.GetType())?.Name ?? "I?Getter");
         var targets = paths is { Count: > 0 } ? (IEnumerable<string>)paths : ModeledFieldNames(typeName, record.GetType());
@@ -156,7 +194,16 @@ public static class ReadEngine
             {
                 var seg = p.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
                 var r = ReadLeaf(record, seg);
-                fields.Add(new FieldValue(p, r.HasValue, r.HasValue ? r.Token : null, r.HasValue ? null : r.Note));
+                string? note = r.HasValue ? null : r.Note;
+                // An UNEXPANDED container / substruct leaf self-documents the lever that opens it: at the depth-1
+                // default it renders as a count/summary ("[list: 2 item(s)]", "[BodyTemplate]"), and an agent that
+                // doesn't know to raise depth= invents a param and hand-rolls a parser instead of turning the knob
+                // (HCBR-2026-07-12). No-value NOTES are parenthesized ("(absent)", "(null link)"), so the leading-'['
+                // test targets exactly the container/substruct summaries. Depth-1 only (this branch) — the deep read
+                // FieldsDiff runs never sees the hint (it reads at expansion depth, a different summary path).
+                // The hint text is the caller's (containerHint): depth=2 is only a real knob on some surfaces.
+                if (note is { Length: > 0 } && note[0] == '[' && !string.IsNullOrEmpty(containerHint)) note += containerHint;
+                fields.Add(new FieldValue(p, r.HasValue, r.HasValue ? r.Token : null, note, FlagSlotDisplay(r)));
             }
         }
         else
@@ -291,7 +338,7 @@ public static class ReadEngine
     {
         if (budget < 0) return;
         var leaf = EmitToken(val, declaredType, parent);
-        if (leaf.HasValue) { Emit(sink, ref budget, new FieldValue(path, true, leaf.Token, null)); return; }
+        if (leaf.HasValue) { Emit(sink, ref budget, new FieldValue(path, true, leaf.Token, null, FlagSlotDisplay(leaf))); return; }
         if (val is null) { Emit(sink, ref budget, new FieldValue(path, false, null, leaf.Note)); return; }
         // a link (incl. a null FormKey, or an FLOI) is a note, not an openable container/substruct.
         if (val is IFormLinkGetter || WriteEngine.IsFormLinkOrIndex(Nullable.GetUnderlyingType(declaredType) ?? declaredType))
@@ -486,7 +533,33 @@ public static class ReadEngine
             var s = iv switch { null => null, string str => str, IFormLinkGetter fl => fl.FormKey.ToString(), _ => iv.ToString() };
             if (!string.IsNullOrEmpty(s)) return $"[{typeName}] {idName}={s}";
         }
+        // No Name/EditorID/Title identity. If the struct carries EXACTLY ONE FormLink field, that link IS its
+        // identity (PerkPlacement.Perk, and any other single-link struct) — surface it so a depth=2 element line
+        // reveals which record it points at, the way a Name= identity does, instead of a bare [Type] that reads as
+        // "the FormID isn't surfaced" one level longer than the depth contract implies (#198). Exactly one link
+        // only — 2+ are ambiguous and we don't guess which is the identity (Q3).
+        if (LoneFormLinkIdentity(val, t) is { } linkId) return $"[{typeName}] {linkId}";
         return $"[{typeName}]";
+    }
+
+    /// <summary>The <c>Field=FormKey</c> identity of a struct element that has EXACTLY ONE FormLink property and no
+    /// Name/EditorID/Title identity — e.g. PerkPlacement → <c>Perk=03AF81:Skyrim.esm</c>. Null when the struct has no
+    /// FormLink or MORE THAN ONE (ambiguous — don't guess which is the identity, #198). A present-but-null link still
+    /// counts: it names the field and shows the null FormKey, the exact signal a reader chasing a dangling ref wants.
+    /// Display-only, best-effort — any reflection fault yields null (falls back to the bare <c>[Type]</c>).</summary>
+    static string? LoneFormLinkIdentity(object val, Type t)
+    {
+        PropertyInfo? only = null;
+        foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
+        {
+            if (p.GetIndexParameters().Length != 0) continue;
+            if (!typeof(IFormLinkGetter).IsAssignableFrom(p.PropertyType)) continue;
+            if (only is not null) return null;   // 2+ FormLink fields — ambiguous, don't guess
+            only = p;
+        }
+        if (only is null) return null;
+        try { return only.GetValue(val) is IFormLinkGetter fl ? $"{only.Name}={fl.FormKey}" : null; }
+        catch { return null; }
     }
 
     /// <summary>Public-instance modeled field names off a runtime type (Loqui infra filtered) — the reflection
@@ -594,16 +667,20 @@ public static class ReadEngine
 
         // Not a single-token VALUE leaf: a substruct / collection / arm container. The oracle never
         // drives these AS leaves — their sub-leaves are driven individually (exactly like write-proof).
-        // Summarise for the read display, with the same dict-vs-list marker the depth walk renders.
-        return LeafRead.None(SummariseContainer(val,
-            WriteEngine.ClosedInterface(val.GetType(), typeof(IDictionary<,>)) is not null
-            || WriteEngine.ClosedInterface(val.GetType(), typeof(IReadOnlyDictionary<,>)) is not null));
+        // Summarise for the read display, with the same dict-vs-list marker the depth walk renders, and carry the
+        // element count STRUCTURALLY (Container) so the presence predicate tells an empty list from a carried one
+        // without re-parsing the display note.
+        bool isDict = WriteEngine.ClosedInterface(val.GetType(), typeof(IDictionary<,>)) is not null
+                   || WriteEngine.ClosedInterface(val.GetType(), typeof(IReadOnlyDictionary<,>)) is not null;
+        var summary = SummariseContainer(val, isDict, out var count);
+        return LeafRead.Container(summary, count);
     }
 
     /// <summary>The unsigned bit pattern of a boxed enum value, robust across every underlying integer type
-    /// (signed or unsigned) — the bits a <c>has</c> predicate ANDs against. Read through the declared underlying
-    /// type so a high-bit-set signed enum yields its two's-complement pattern rather than overflowing.</summary>
-    static bool TryEnumBits(object val, Type enumType, out ulong bits)
+    /// (signed or unsigned) — the bits a <c>has</c> predicate ANDs against, and the write engine's flags
+    /// Add/Remove OR/AND-NOT operand. Read through the declared underlying type so a high-bit-set signed enum
+    /// yields its two's-complement pattern rather than overflowing.</summary>
+    internal static bool TryEnumBits(object val, Type enumType, out ulong bits)
     {
         bits = 0;
         try
@@ -635,6 +712,24 @@ public static class ReadEngine
         bits = 0;
         try { return TryEnumBits(Enum.Parse(enumType, name.Trim(), ignoreCase: true), enumType, out bits); }
         catch { return false; }
+    }
+
+    /// <summary>The DISPLAY-ONLY biped-slot decode for a <c>BodyTemplate.FirstPersonFlags</c> leaf (enum
+    /// <c>BipedObjectFlag</c>): the equipped SLOT NUMBERS ("slots 32, 34, 53") derived from the bit pattern
+    /// (slot = 30 + bit index). Armor/slot analysis wants the slot numbers, but <c>[Flags].ToString()</c> gives
+    /// enum NAMES when every set bit is named ("Body") and falls back to a bare decimal the moment an unnamed
+    /// modder slot is set (e.g. <c>8388980</c> for a slot-53 addon) — neither is the slot list the modder reasons
+    /// in (HCBR-2026-07-12). This annotation rides <see cref="FieldValue.Display"/>, so the round-trip
+    /// <see cref="LeafRead.Token"/> is untouched (write/read-proof/diff never see it). Gated to BipedObjectFlag by
+    /// name — the slot=30+bit mapping is meaningless for any other <c>[Flags]</c> enum. Null for every non-biped
+    /// leaf, an unset mask, or a non-flags value.</summary>
+    internal static string? FlagSlotDisplay(LeafRead leaf)
+    {
+        if (!leaf.HasValue || leaf.Flags is not { } fb || fb.EnumType.Name != "BipedObjectFlag") return null;
+        var slots = new List<int>();
+        for (int i = 0; i < 32; i++) if ((fb.Bits & (1UL << i)) != 0) slots.Add(30 + i);
+        if (slots.Count == 0) return null;
+        return (slots.Count == 1 ? "slot " : "slots ") + string.Join(", ", slots);
     }
 
     // -- primitive family (mirror TryPrimitive) --------------------------------
@@ -833,16 +928,28 @@ public static class ReadEngine
     }
 
     /// <summary>A short, non-round-trippable description of a container leaf (substruct / list / dict /
-    /// arm) for the read display. Its sub-leaves are the round-trippable surface. A dict renders
-    /// "N pair(s)" (vs a list's "N item(s)") — display-informative, and the in-band marker FieldsDiff
-    /// uses to keep numeric-keyed dicts out of positional-list comparison (PR #28 review).</summary>
-    static string SummariseContainer(object val, bool isDict = false)
+    /// arm) for the read display. Its sub-leaves are the round-trippable surface. A collection renders as a
+    /// clean <c>[list: N item(s)]</c> / <c>[dict: N pair(s)]</c> — the Mutagen overlay class name
+    /// (<c>BinaryOverlayListByStartIndex`1</c>) is container plumbing, NOT the element type, so it is pure noise
+    /// to the reader and is dropped (HCBR-2026-07-12). The <c>item(s)</c>/<c>pair(s)</c> marker is LOAD-BEARING —
+    /// <c>FieldsDiff</c> splits numeric-keyed dicts (Package.Data) out of positional-list comparison on the
+    /// exact <c>" pair(s)]"</c> substring (PR #28 review) — so it is kept verbatim. A substruct keeps its
+    /// <c>[TypeName]</c> (e.g. <c>[BodyTemplate]</c>): there the type name IS informative.</summary>
+    static string SummariseContainer(object val, bool isDict = false) => SummariseContainer(val, isDict, out _);
+
+    /// <summary>Overload that also yields the element <paramref name="count"/>: a number for a list/dict (0 = empty),
+    /// null for a substruct (no element count — present by being non-null). The presence predicate reads this to
+    /// tell a carried list from an empty one; every display caller keeps the count-free overload above. One
+    /// enumeration, one format source (the <c>item(s)</c>/<c>pair(s)</c> marker stays load-bearing for FieldsDiff).</summary>
+    static string SummariseContainer(object val, bool isDict, out int? count)
     {
+        count = null;
         if (val is System.Collections.IEnumerable en and not string)
         {
             int n = 0;
             foreach (var _ in en) n++;
-            return $"[{RecordNaming.StripGetterInterface(val.GetType().Name)}: {n} {(isDict ? "pair(s)" : "item(s)")}]";
+            count = n;
+            return $"[{(isDict ? "dict" : "list")}: {n} {(isDict ? "pair(s)" : "item(s)")}]";
         }
         return $"[{RecordNaming.StripGetterInterface(val.GetType().Name)}]";
     }

@@ -1,4 +1,5 @@
 using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Plugins.Aspects;
 using Mutagen.Bethesda.Plugins.Records;
 using Mutagen.Bethesda.Skyrim;
 
@@ -1014,6 +1015,59 @@ public sealed class LoadOrderService : IDisposable
             comp, warnings, view.PluginCount, _maxPlugins, profileChanged, profileDir, profileName, instanceDir, view.ExcludedPlugins);
     }
 
+    /// <summary>Read MO2's OWN local Nexus update cache — the modid / version / newestVersion / ignoredVersion /
+    /// lastNexusUpdate fields in every managed mod's meta.ini — with NO network (MO2 already paid the API cost). The
+    /// cheap local pre-filter for update triage: it names which mods MO2 already learned a newer version for, plus the
+    /// raw fields so the caller can verify online. Enabled/disabled comes from the ACTIVE profile. Config-gated and uses
+    /// the same lazy path derivation as the other reads; a missing mods folder is NAMED, never a silent empty (Q3).
+    /// Only Nexus-linked mods (a real modid) become entries; hand-installed mods / separators are counted, not listed.</summary>
+    public UpdateCacheData UpdateCache()
+    {
+        string modsDir, profileDir; string? instanceDir;
+        lock (_gate)
+        {
+            if (!_configured) throw NotConfigured();               // fresh install → the tool surfaces the trained prompt
+            EnsurePathsDerived();                                  // instance mode: derive _modsDir/_profileDir from the ini (throws Q3 if unusable)
+            modsDir = _modsDir; profileDir = _profileDir; instanceDir = _instanceDir;
+        }
+
+        if (string.IsNullOrEmpty(modsDir) || !Directory.Exists(modsDir))
+            return new UpdateCacheData(modsDir, instanceDir, Array.Empty<ModUpdateEntry>(), new[] { $"the mods folder is missing: '{modsDir}'" }, 0);
+
+        // Enabled/disabled from the active profile (cheap text read, OUTSIDE the gate; explicit-paths mode may have no
+        // profile → every mod's state is 'unknown', which the render states rather than guessing).
+        var enabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var disabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        if (!string.IsNullOrEmpty(profileDir) && Directory.Exists(profileDir))
+        {
+            var comp = Mo2LoadOrder.ReadComposition(profileDir);
+            foreach (var e in comp.EnabledMods) enabled.Add(e);
+            foreach (var d in comp.DisabledMods) disabled.Add(d);
+        }
+
+        IEnumerable<string> dirs;
+        try { dirs = Directory.EnumerateDirectories(modsDir); }
+        catch (Exception ex)
+        { return new UpdateCacheData(modsDir, instanceDir, Array.Empty<ModUpdateEntry>(), new[] { $"cannot list the mods folder '{modsDir}': {ex.Message}" }, 0); }
+
+        var entries = new List<ModUpdateEntry>();
+        int untracked = 0;
+        foreach (var dir in dirs)
+        {
+            var folder = Path.GetFileName(dir);
+            var metaPath = Path.Combine(dir, "meta.ini");
+            if (!File.Exists(metaPath)) { untracked++; continue; }     // separators / hand-installed mods carry no meta.ini
+            var meta = Mo2ModMeta.Read(metaPath);
+            if (meta is null || meta.ModId == 0) { untracked++; continue; }   // not a Nexus-linked mod → not update-checkable
+            bool? state = enabled.Contains(folder) ? true : disabled.Contains(folder) ? false : (bool?)null;
+            entries.Add(new ModUpdateEntry(
+                folder, state, meta.ModId, meta.Version, meta.NewestVersion, meta.IgnoredVersion, meta.LastNexusUpdate,
+                meta.InstalledFileIds));
+        }
+        entries.Sort((a, b) => string.Compare(a.Folder, b.Folder, StringComparison.OrdinalIgnoreCase));
+        return new UpdateCacheData(modsDir, instanceDir, entries, Array.Empty<string>(), untracked);
+    }
+
     /// <summary>Inspect a NAMED profile's enabled/disabled composition WITHOUT switching to it (9.2: "can't inspect an
     /// inactive profile") — INSTANCE MODE ONLY. The profiles root is the PARENT of the active profile's dir, so MO2's
     /// base_directory redirect is honored by construction (the active ProfileDir already incorporates it) and a stale
@@ -1320,10 +1374,12 @@ public sealed class LoadOrderService : IDisposable
     /// named <paramref name="plugin"/>'s version; with <paramref name="conflictTree"/> also returns the ordered
     /// touching-plugin list. Honest, recoverable errors (Q3): not-in-order, plugin-doesn't-touch, fetch
     /// inconsistency — never a silent empty result.</summary>
-    public ReadOutcome ResolveRead(FormKey fk, string? plugin, IReadOnlyList<string>? fields, bool conflictTree, int depth = 1)
+    public ReadOutcome ResolveRead(FormKey fk, string? plugin, IReadOnlyList<string>? fields, bool conflictTree, int depth = 1,
+                                   bool resolveNames = false, Dictionary<FormKey, ResolvedRef>? linkMemo = null,
+                                   string? containerHint = ReadEngine.DepthExpandHint)
     {
         var resolver = Resolver;
-        return ResolveRead(resolver, resolver.Capture(), fk, plugin, fields, conflictTree, depth);
+        return ResolveRead(resolver, resolver.Capture(), fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo, containerHint);
     }
 
     /// <summary>Layer B unit C2 — the on-demand whole-topic dialogue-graph validator (housecarl_validate_dialogue):
@@ -1346,7 +1402,9 @@ public sealed class LoadOrderService : IDisposable
     /// call with its own capture, so one rendered response can still pair this read's build with an adjacent build's
     /// diff — same low-severity class, named for the next wave rather than threaded through the render API here.)</summary>
     ReadOutcome ResolveRead(LoadOrderResolver resolver, LoadOrderResolver.IndexView view,
-                            FormKey fk, string? plugin, IReadOnlyList<string>? fields, bool conflictTree, int depth)
+                            FormKey fk, string? plugin, IReadOnlyList<string>? fields, bool conflictTree, int depth,
+                            bool resolveNames = false, Dictionary<FormKey, ResolvedRef>? linkMemo = null,
+                            string? containerHint = ReadEngine.DepthExpandHint)
     {
         // An explicitly-requested plugin that was EXCLUDED this session (unparseable/unopenable) → say so (Q3),
         // rather than fall through to a misleading "does not define this record".
@@ -1386,9 +1444,34 @@ public sealed class LoadOrderService : IDisposable
                 ? $"Winner '{winner.Value.WinnerPlugin}' did not yield {fk} on fetch — a load-order inconsistency."
                 : $"Plugin '{plugin}' does not define {fk} (it does not touch this record). The winner is '{winner.Value.WinnerPlugin}'.");
 
-        var record = ReadEngine.ReadFields(rec, fields, depth);           // materialise while the session (overlay) is open
+        var record = ReadEngine.ReadFields(rec, fields, depth, containerHint);   // materialise while the session (overlay) is open
+        if (resolveNames) record = AnnotateLinks(record, view, session, linkMemo ?? new());   // P7: identity of every FormLink token, DISPLAY-ONLY (same open session)
         var touching = conflictTree ? view.TouchingPlugins(fk) : null;
         return new ReadOutcome(fk, record, source, winner.Value.WinnerPlugin, winner.Value.OverrideDepth, touching, null);
+    }
+
+    /// <summary>resolve_names (P7): annotate every field whose <see cref="FieldValue.Token"/> is a form reference (a
+    /// token that round-trips to a FormKey) with its target's load-order identity, hung on <see cref="FieldValue.Link"/>
+    /// — DISPLAY-ONLY, never touching the round-trip Token. Type-agnostic: a token that parses as a FormKey IS a form
+    /// reference (FormLinks and condition-target FLOIs both emit a bare FormKey token; scalars never do), so this
+    /// inherits coverage from the read surface with no per-type wiring. Resolution rides the SAME captured view +
+    /// open session the read used, memoised so a keyword that recurs across a whole record (or batch) resolves once.
+    /// An unresolvable target is a NAMED unresolved <see cref="ResolvedRef"/> (Resolved=false), never dropped (Q3).
+    /// Copy-on-first-write: a record with no form-reference leaves returns the SAME instance.</summary>
+    static RecordFields AnnotateLinks(RecordFields rf, LoadOrderResolver.IndexView view,
+                                      LoadOrderResolver.OverlaySession session, Dictionary<FormKey, ResolvedRef> memo)
+    {
+        List<FieldValue>? rebuilt = null;
+        for (int i = 0; i < rf.Fields.Count; i++)
+        {
+            var f = rf.Fields[i];
+            if (f.HasValue && f.Token is { } tok && FormKey.TryFactory(tok, out var fk) && !fk.IsNull)
+            {
+                rebuilt ??= new List<FieldValue>(rf.Fields);
+                rebuilt[i] = f with { Link = ResolveRefOne(view, session, fk, memo) };
+            }
+        }
+        return rebuilt is null ? rf : rf with { Fields = rebuilt };
     }
 
     /// <summary>How deep the conflict diff reads each touching body. The diff must compare CONTENT, not the
@@ -1432,22 +1515,170 @@ public sealed class LoadOrderService : IDisposable
                                  w.Value.WinnerPlugin, w.Value.OverrideDepth, null);
     }
 
+    /// <summary>The best-effort display Name of a record body — reflection-generic via Mutagen's <c>INamedGetter</c>
+    /// aspect, so it inherits coverage from the model (no per-record-type wiring): every named record answers, a
+    /// type with no Name (KYWD, most references) returns null. A translated Name resolves to its default-language
+    /// string. Used by housecarl_resolve (P3) and the resolve_names annotation (P7).</summary>
+    static string? ReadDisplayName(IMajorRecordGetter body) =>
+        body is INamedGetter named && !string.IsNullOrEmpty(named.Name) ? named.Name : null;
+
+    /// <summary>Resolve ONE FormKey to its load-order identity (type/editorid/name/winner) off a captured view + open
+    /// session, memoised so a target that recurs across a batch (the SAME keyword on 500 items) resolves once. A
+    /// FormKey not in the order is a NAMED unresolved result (Resolved=false), never dropped or guessed (Q3). Shared
+    /// by housecarl_resolve (P3) and the resolve_names field annotation (P7).</summary>
+    static ResolvedRef ResolveRefOne(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session,
+                                     FormKey fk, Dictionary<FormKey, ResolvedRef> memo)
+    {
+        if (memo.TryGetValue(fk, out var hit)) return hit;
+        ResolvedRef result;
+        var w = view.ResolveWinner(fk);
+        if (w is null)
+            result = new ResolvedRef(fk.ToString(), Resolved: false);   // valid FormKey, but no active plugin defines it (a dangling target)
+        else
+        {
+            var body = view.GetRecord(session, w.Value.WinnerPlugin, fk);
+            result = body is null
+                ? new ResolvedRef(fk.ToString(), Resolved: false, Winner: w.Value.WinnerPlugin)   // winner named but the fetch didn't yield it
+                : new ResolvedRef(fk.ToString(), Resolved: true, Type: RecordNaming.StripOverlay(body.GetType().Name),
+                                  EditorId: body.EditorID, Name: ReadDisplayName(body), Winner: w.Value.WinnerPlugin);
+        }
+        memo[fk] = result;
+        return result;
+    }
+
+    /// <summary>Bulk name resolution (housecarl_resolve — P3): turn a list of FormIDs into their load-order identity
+    /// (type/editorid/name/winner) in ONE call over ONE captured view, memoised across the batch. A bad/absent FormID
+    /// yields a per-item result carrying its reason (Error for a malformed string, Resolved=false for a valid-but-absent
+    /// FormKey) without failing the whole batch (Q3, the batch_record_detail convention). Deliberately minimal — no
+    /// fields/depth/conflict_tree; anything richer is housecarl_batch_record_detail's job.</summary>
+    public IReadOnlyList<ResolvedRef> ResolveRefs(IReadOnlyList<string> formids)
+    {
+        var resolver = Resolver;
+        var view = resolver.Capture();                  // ONE build for the whole batch (HCBR-2026-06-11-02)
+        using var session = resolver.OpenSession();
+        var memo = new Dictionary<FormKey, ResolvedRef>();
+        var results = new List<ResolvedRef>(formids.Count);
+        foreach (var raw in formids)
+        {
+            var t = raw?.Trim() ?? "";
+            FormKey fk;
+            try { fk = FormKey.Factory(t); }
+            catch (Exception ex) { results.Add(new ResolvedRef(t, Resolved: false, Error: $"bad FormID: {ex.Message}. Expected 'XXXXXX:Plugin.esp'.")); continue; }
+            results.Add(ResolveRefOne(view, session, fk, memo));
+        }
+        return results;
+    }
+
+    // ---- pairwise record diff (housecarl_diff_record — P8c) --------------------------------------------
+
+    /// <summary>P8c — field-level diff between TWO named plugins' versions of ONE record (housecarl_diff_record). Each
+    /// pole resolves ACTIVE-order (<see cref="LoadOrderResolver.IndexView.GetRecord"/>) OR OFF-ORDER (a plugin file on
+    /// disk not in the load order — the report's case diffs a DISABLED old patch against the mod that supersedes it, via
+    /// the shared <see cref="LocatePluginFileOnDisk"/>). Both sides are deep-read (<see cref="ConflictDiffDepth"/>) with
+    /// the SAME fields= so line sets correspond, then compared by <see cref="FieldsDiff.Compare"/> — the SAME
+    /// order-insensitive, truncation-honest engine the conflict tree uses, with plugin_b as the reference label. A bad
+    /// FormID, an unresolvable pole, or a plugin that doesn't define the record is a NAMED refusal (Q3).</summary>
+    public DiffRecordOutcome DiffRecord(string formid, string pluginA, string pluginB, IReadOnlyList<string>? fields,
+                                        string? modA = null, string? modB = null)
+    {
+        var fidLabel = formid?.Trim() ?? "";
+        if (string.IsNullOrWhiteSpace(pluginA) || string.IsNullOrWhiteSpace(pluginB))
+            return DiffRecordOutcome.Fail(fidLabel, "diff_record needs BOTH plugin_a and plugin_b — the two plugins whose versions of the record to compare.");
+        FormKey fk;
+        try { fk = FormKey.Factory(fidLabel); }
+        catch (Exception ex) { return DiffRecordOutcome.Fail(fidLabel, $"bad FormID '{formid}': {ex.Message}. Expected 'XXXXXX:Plugin.esp'."); }
+
+        var resolver = Resolver;
+        var view = resolver.Capture();
+        using var session = resolver.OpenSession();
+
+        var a = ResolveDiffPole(view, session, fk, pluginA.Trim(), modA, fields);
+        if (a.Error is not null) return DiffRecordOutcome.Fail(fidLabel, $"plugin_a: {a.Error}");
+        var b = ResolveDiffPole(view, session, fk, pluginB.Trim(), modB, fields);
+        if (b.Error is not null) return DiffRecordOutcome.Fail(fidLabel, $"plugin_b: {b.Error}");
+
+        var diff = FieldsDiff.Compare(a.Fields!, b.Fields!, referenceLabel: pluginB.Trim());
+        return new DiffRecordOutcome(fidLabel, a.Pole!, b.Pole!, diff, null);
+    }
+
+    /// <summary>Resolve ONE diff pole: the named plugin's version of <paramref name="fk"/> + its deep-read fields. An
+    /// ACTIVE-order plugin reads through the captured view; a plugin NOT in the order is looked up on disk (the shared
+    /// <see cref="LocatePluginFileOnDisk"/> + <see cref="LoadOrderResolver.OpenOverlay"/>, materialised then DISPOSED —
+    /// the RecordFields is a value snapshot, so no handle is held). A named error (never a silent miss) if the plugin
+    /// isn't found, is excluded, or doesn't define/override the record.</summary>
+    (RecordFields? Fields, DiffPole? Pole, string? Error) ResolveDiffPole(
+        LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, FormKey fk,
+        string plugin, string? mod, IReadOnlyList<string>? fields)
+    {
+        if (view.ContainsPlugin(plugin))
+        {
+            if (view.ExcludedPlugins.TryGetValue(plugin, out var why))
+                return (null, null, $"'{plugin}' was excluded from this session ({why}) — its records aren't resolvable.");
+            var body = view.GetRecord(session, plugin, fk);
+            if (body is null)
+                return (null, null, $"'{plugin}' is in the load order but does NOT define or override {fk} — it has no version to diff.");
+            return (ReadEngine.ReadFields(body, fields, ConflictDiffDepth),
+                    new DiffPole(plugin, "active order", true, RecordNaming.StripOverlay(body.GetType().Name), body.EditorID), null);
+        }
+
+        // OFF-ORDER: a plugin file on disk that isn't in the active order (the shared locate — cheap, no index build).
+        string modsDir, dataDir, overwriteDir, profileDir;
+        try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
+        catch (Exception ex) { return (null, null, $"'{plugin}' is not in the load order and the MO2 roots couldn't be derived to find it on disk: {ex.Message}"); }
+        var comp = Mo2LoadOrder.ReadComposition(profileDir);
+        var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, plugin, mod);
+        if (loc.Error is not null) return (null, null, $"'{plugin}' is not in the load order and {loc.Error}");
+        if (loc.Ambiguous is not null) return (null, null, $"'{plugin}' matches several mod folders on disk — pass an exact path to disambiguate.");
+        ISkyrimModGetter ov;
+        try { ov = LoadOrderResolver.OpenOverlay(loc.Path!, string.IsNullOrEmpty(dataDir) ? null : dataDir); }
+        catch (Exception ex) { return (null, null, $"could not open '{loc.Path}' as a Skyrim plugin: {ex.Message}"); }
+        try
+        {
+            IMajorRecordGetter? rec;
+            try { rec = ov.EnumerateMajorRecords().FirstOrDefault(r => r.FormKey == fk); }
+            catch (Exception ex) { return (null, null, $"file '{plugin}' could not be read ({ex.Message})."); }
+            if (rec is null)
+                return (null, null, $"file '{plugin}' (OUT-OF-LOAD-ORDER, {loc.Where}) does not define or override {fk} — no version to diff.");
+            return (ReadEngine.ReadFields(rec, fields, ConflictDiffDepth),   // materialised here → the overlay can close
+                    new DiffPole(plugin, $"OUT-OF-LOAD-ORDER ({loc.Where}{(loc.Enabled ? "" : ", disabled")})", false,
+                                 RecordNaming.StripOverlay(rec.GetType().Name), rec.EditorID), null);
+        }
+        finally { (ov as IDisposable)?.Dispose(); }
+    }
+
+    /// <summary>One side of a housecarl_diff_record comparison: the plugin named, WHERE its version was found (active
+    /// order, or OUT-OF-LOAD-ORDER on disk), whether it's in the active order, and the record identity it carries.</summary>
+    public sealed record DiffPole(string Plugin, string Where, bool InOrder, string? RecordType, string? EditorId);
+
+    /// <summary>The outcome of a housecarl_diff_record call. <see cref="Error"/> non-null ⇒ refused (a bad FormID, an
+    /// unresolvable pole, or a plugin that doesn't define the record) with no diff. Otherwise <see cref="Diff"/> is the
+    /// field-level delta of <see cref="A"/> vs <see cref="B"/> (B the reference side), truncation-honest via Complete.</summary>
+    public sealed record DiffRecordOutcome(string Formid, DiffPole? A, DiffPole? B, FieldsDiff.Result? Diff, string? Error)
+    {
+        public static DiffRecordOutcome Fail(string formid, string error) => new(formid, null, null, null, error);
+    }
+
     // ---- batch (Q4.9) -----------------------------------------------------------------------------------
 
     /// <summary>Resolve+read many records in one call (housecarl_batch_record_detail). Each formid runs the same
     /// <see cref="ResolveRead"/> path, so a bad/absent formid yields a per-item recoverable error (Q3) without
-    /// failing the batch. Returns one <see cref="ReadOutcome"/> per input, in order.</summary>
-    public IReadOnlyList<ReadOutcome> ResolveBatch(IReadOnlyList<string> formids, IReadOnlyList<string>? fields, bool conflictTree, int depth = 1)
+    /// failing the batch. Returns one <see cref="ReadOutcome"/> per input, in order. <paramref name="plugin"/> —
+    /// when set — reads every formid AS THAT NAMED PLUGIN'S version (its override, not the load-order winner), the
+    /// batch twin of housecarl_read_record's plugin= (HCBR-2026-07-15): a formid that plugin doesn't touch yields
+    /// its own per-item error (ResolveRead's "does not define this record"), never failing the batch.</summary>
+    public IReadOnlyList<ReadOutcome> ResolveBatch(IReadOnlyList<string> formids, IReadOnlyList<string>? fields, bool conflictTree, int depth = 1,
+                                                   bool resolveNames = false, string? plugin = null)
     {
         var resolver = Resolver;                // build/refresh ONCE for the batch
         var view = resolver.Capture();          // ONE build for every item — the whole batch is one logical operation (HCBR-2026-06-11-02)
+        var linkMemo = resolveNames ? new Dictionary<FormKey, ResolvedRef>() : null;   // P7: one link-resolution cache across the WHOLE batch
         var outcomes = new List<ReadOutcome>(formids.Count);
         foreach (var raw in formids)
         {
             FormKey fk;
             try { fk = FormKey.Factory(raw.Trim()); }
             catch (Exception ex) { outcomes.Add(ReadOutcome.Fail(default, $"bad FormID '{raw}': {ex.Message}")); continue; }
-            outcomes.Add(ResolveRead(resolver, view, fk, null, fields, conflictTree, depth));
+            outcomes.Add(ResolveRead(resolver, view, fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo));
         }
         return outcomes;
     }
@@ -1458,22 +1689,57 @@ public sealed class LoadOrderService : IDisposable
     /// pass with the matching record's body in hand (no per-candidate re-fetch): type= streams the WINNER body
     /// (effective truth) via typed group enumeration; plugins= streams each scoped plugin's OWN body (a content
     /// audit); conflicts_only= alone reads the index. Body filters (editorid_contains/references) test the
-    /// in-hand body and so require type= or plugins= to bound them. Returns pre-built match summaries (capped at
-    /// <paramref name="limit"/>, with the true total) or a recoverable Q3 error. Holds nothing.</summary>
-    public CrossQueryOutcome CrossQuery(string? type, FormKey? references, string? editoridContains,
-                                        bool conflictsOnly, IReadOnlyList<string>? plugins, IReadOnlyList<string>? where, int limit)
+    /// in-hand body and so require type= or plugins= to bound them. <paramref name="references"/> is a LIST — a
+    /// record matches if it references ANY target (OR), and each match records which target(s) it hit (multi-target
+    /// un-merge). <paramref name="definedIn"/> keeps only matches whose FormKey ORIGINATES in a scoped plugin
+    /// (definitions, not overrides) — requires plugins=, refused loud otherwise. <paramref name="groupBy"/>
+    /// ("winner"|"type"|"defined_in") replaces per-match lines with a count table over ALL matches (not capped by
+    /// limit=). Returns pre-built match summaries (capped at <paramref name="limit"/>, with the true total), a group
+    /// table, or a recoverable Q3 error. Holds nothing.</summary>
+    public CrossQueryOutcome CrossQuery(string? type, IReadOnlyList<FormKey>? references, string? editoridContains,
+                                        bool conflictsOnly, IReadOnlyList<string>? plugins, IReadOnlyList<string>? where, int limit,
+                                        bool definedIn = false, string? groupBy = null)
     {
         var resolver = Resolver;
         var view = resolver.Capture();          // ONE build for the SCAN and every per-match fill it makes (HCBR-2026-06-11-02)
         bool hasPlugins = plugins is { Count: > 0 };
         bool hasType = type is not null;
         bool hasWhere = where is { Count: > 0 };
-        bool bodyFilter = references is not null || !string.IsNullOrEmpty(editoridContains) || hasWhere;
+        bool hasReferences = references is { Count: > 0 };
+        bool bodyFilter = hasReferences || !string.IsNullOrEmpty(editoridContains) || hasWhere;
 
         if (!hasType && !conflictsOnly && !hasPlugins && !bodyFilter)
             return CrossQueryOutcome.Fail("cross_plugin_query needs at least one of: type=, conflicts_only=true, editorid_contains=, references=, where=, or plugins=.");
         if (bodyFilter && !hasType && !hasPlugins)
             return CrossQueryOutcome.Fail("editorid_contains/references/where is a body scan and must be combined with type= or plugins= to bound it (conflicts_only= alone is not enough — an unbounded body scan over the whole order is refused). A global reverse-reference index is a future capability.");
+
+        // defined_in= keeps only records DEFINED in the scoped plugins (origin FormKey), the catalogue-scope semantics
+        // distinct from plugins='everything this plugin TOUCHES'. It needs a plugins= scope to mean anything — refused
+        // loud otherwise, never silently ignored (Q3).
+        if (definedIn && !hasPlugins)
+            return CrossQueryOutcome.Fail("defined_in=true keeps only records DEFINED in a scoped plugin, so it requires plugins= to name that scope. Add plugins=, or drop defined_in= (a bare scan already reports each match's defining plugin via its FormID suffix).");
+        HashSet<ModKey>? scopedModKeys = null;
+        if (definedIn)
+        {
+            scopedModKeys = new();
+            foreach (var p in plugins!)
+                try { scopedModKeys.Add(ModKey.FromFileName(p.Trim())); }
+                catch (Exception ex) { return CrossQueryOutcome.Fail($"defined_in: '{p}' is not a valid plugin filename: {ex.Message}"); }
+        }
+
+        // group_by= aggregates matches into a count table. Validated up front (an unknown key refuses BEFORE any scan,
+        // Q3). group_by=type needs the matched body to name the type, so it requires a body-bearing scope (type= or
+        // plugins=); winner/defined_in are derivable from the FormKey alone and work with conflicts_only= too.
+        if (groupBy is not null)
+        {
+            groupBy = groupBy.Trim().ToLowerInvariant();
+            if (groupBy is not ("winner" or "type" or "defined_in"))
+                return CrossQueryOutcome.Fail($"group_by='{groupBy}' is not a known aggregation key — use 'winner', 'type', or 'defined_in'.");
+            if (groupBy == "type" && !hasType && !hasPlugins)
+                return CrossQueryOutcome.Fail("group_by=type needs each match's type, which requires a body-bearing scope — add type= or plugins= (winner/defined_in group without a body).");
+        }
+        var refSet = hasReferences ? new HashSet<FormKey>(references!) : null;
+        bool multiTarget = references is { Count: >= 2 };
 
         // where= → the field-value predicate set. Parsed up front so a malformed predicate refuses the call BEFORE
         // any scan (Q3). The predicate reuses the read engine's path-walk, so its reach == the read surface's reach.
@@ -1491,7 +1757,9 @@ public sealed class LoadOrderService : IDisposable
 
         var keys = new List<FormKey>();
         var sources = new List<string?>();                                    // parallel to keys: the plugin whose body matched (null ⇒ winner), so the render displays the SAME body it filtered
+        List<string?>? matched = multiTarget ? new() : null;                  // parallel to keys: which target(s) each hit referenced (multi-target references= un-merge); null when 0/1 target
         List<RecordSummary>? prefilled = (hasType || hasPlugins) ? new() : null;   // parallel to keys; null = renderer fills lazily
+        Dictionary<string, int>? groups = groupBy is not null ? new(StringComparer.Ordinal) : null;   // group_by= aggregation (bumped per match, over ALL matches — not limit-capped)
         int total = 0;
         int unscannable = 0;                                                  // records whose body tests THREW (Mutagen-unparseable content) — excluded + accounted, never silent (Q3)
         var unscannableSamples = new List<string>();
@@ -1512,6 +1780,9 @@ public sealed class LoadOrderService : IDisposable
                 foreach (var (fk, depth, body, source) in stream)
                 {
                     if (conflictsOnly && depth <= 1) continue;
+                    // defined_in=: keep only records whose ORIGIN FormKey is a scoped plugin (a DEFINITION here, not
+                    // an override this plugin merely touches). A FormKey test — no body needed, so it runs before the try.
+                    if (definedIn && !scopedModKeys!.Contains(fk.ModKey)) continue;
                     // PER-RECORD FAULT ISOLATION (HCBR-2026-06-09-03): the body tests lazily parse subrecord
                     // content (references= walks Effects etc. via Mutagen's EnumerateFormLinks), so ONE record
                     // Mutagen can't parse used to abort the WHOLE call as an opaque transport error — the
@@ -1522,9 +1793,18 @@ public sealed class LoadOrderService : IDisposable
                         if (!string.IsNullOrEmpty(editoridContains)
                             && (body.EditorID is null || body.EditorID.IndexOf(editoridContains, StringComparison.OrdinalIgnoreCase) < 0))
                             continue;
-                        if (references is { } target
-                            && !(body is IFormLinkContainerGetter flc && flc.EnumerateFormLinks().Any(l => l.FormKey == target)))
-                            continue;
+                        // references= (LIST, OR semantics): a record matches if it links to ANY target. One
+                        // EnumerateFormLinks pass collects the intersection so a multi-target lookup can be un-merged
+                        // (matches=<which target(s)>) — the same single pass, membership-in-a-set instead of ==.
+                        List<FormKey>? hitTargets = null;
+                        if (refSet is not null)
+                        {
+                            if (body is not IFormLinkContainerGetter flc) continue;
+                            var hitSet = new HashSet<FormKey>();
+                            foreach (var l in flc.EnumerateFormLinks()) if (refSet.Contains(l.FormKey)) hitSet.Add(l.FormKey);
+                            if (hitSet.Count == 0) continue;
+                            if (multiTarget && groups is null) hitTargets = references!.Where(hitSet.Contains).Distinct().ToList();   // in input order; only the match-line path consumes it (group_by ignores it)
+                        }
                         if (predicate is not null && !predicate.Matches(body))    // value filter — same in-hand body, no extra fetch
                         {
                             if (predicate.FatalError is not null) break;          // numeric op vs non-numeric field — abort + surface (Q3)
@@ -1535,10 +1815,18 @@ public sealed class LoadOrderService : IDisposable
                         // array order) whose body PASSED the filters — deterministic, and it's the body we'll display.
                         if (!seen.Add(fk)) continue;
                         total++;
-                        if (keys.Count < limit)                                   // in-hand body → fill the summary for free
+                        if (groups is not null)                                   // group_by=: aggregate over ALL matches, no keys/prefill, no limit cap
+                        {
+                            var gk = groupBy == "type" ? RecordNaming.StripOverlay(body.GetType().Name)
+                                   : groupBy == "defined_in" ? fk.ModKey.FileName.ToString()
+                                   : view.ResolveWinner(fk)?.WinnerPlugin ?? "?";  // "winner"
+                            groups[gk] = groups.GetValueOrDefault(gk) + 1;
+                        }
+                        else if (keys.Count < limit)                              // in-hand body → fill the summary for free
                         {
                             keys.Add(fk);
                             sources.Add(source);                                  // the body we filtered IS the body we'll display (null ⇒ winner)
+                            matched?.Add(hitTargets is not null ? string.Join(", ", hitTargets) : null);   // parallel to keys (multi-target only)
                             // winner= off the SAME view the scan runs on — a rebuild landing mid-scan can no longer
                             // make a row's winner reflect a newer build than the depth beside it (HCBR-2026-06-11-02).
                             prefilled!.Add(new RecordSummary(fk, RecordNaming.StripOverlay(body.GetType().Name), body.EditorID,
@@ -1563,10 +1851,19 @@ public sealed class LoadOrderService : IDisposable
         {
             // Summaries here would each need a winner-body fetch; leaving them to the renderer (which stops at
             // max_chars) means a big limit with a small max_chars doesn't fetch bodies it will never show.
+            // group_by= here can only be winner/defined_in (type was refused up front — no body to name the type).
             foreach (var fk in view.ConflictKeys())
             {
                 total++;
-                if (keys.Count < limit) { keys.Add(fk); sources.Add(null); }   // no scoped plugin → display the winner
+                if (groups is not null)
+                {
+                    // group_by=winner here does an index-level ResolveWinner PER conflict key — a resolve, not a body
+                    // parse, and unavoidable for the aggregate (the non-group path defers winner= to the renderer, which
+                    // only fetches the capped rows). Intentional under accuracy-over-perf; don't "optimize" it away.
+                    var gk = groupBy == "defined_in" ? fk.ModKey.FileName.ToString() : view.ResolveWinner(fk)?.WinnerPlugin ?? "?";
+                    groups[gk] = groups.GetValueOrDefault(gk) + 1;
+                }
+                else if (keys.Count < limit) { keys.Add(fk); sources.Add(null); }   // no scoped plugin → display the winner
             }
         }
         // Unscannable accounting (Q3): name the count, the first few offenders with Mutagen's reason, and what
@@ -1578,7 +1875,12 @@ public sealed class LoadOrderService : IDisposable
               + string.Join("; ", unscannableSamples)
               + (unscannable > unscannableSamples.Count ? $"; and {unscannable - unscannableSamples.Count} more" : "")
               + ". Inspect one with read_record (per-field fault isolation applies).";
-        return new CrossQueryOutcome(keys, prefilled, total, total > keys.Count, null, predicate?.AccountingNote(), sources, scanNote);
+        // group_by= aggregation isn't limit-capped (cheap), so Capped is a match-line concern only.
+        var groupRows = groups?.Select(kv => new GroupCount(kv.Key, kv.Value))
+                              .OrderByDescending(g => g.Count).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
+        return new CrossQueryOutcome(keys, prefilled, total, groups is null && total > keys.Count, null,
+                                     predicate?.AccountingNote(), sources, scanNote,
+                                     matched, groupRows, groupBy, definedIn ? string.Join(", ", plugins!) : null);
     }
 
     // ---- effect-chain resolver (housecarl_effect_chain — gap 2026-06-08) --------------------------------
@@ -1620,9 +1922,42 @@ public sealed class LoadOrderService : IDisposable
     /// <summary>Sweep the active order (or the given <paramref name="plugins"/> scope) for record integrity errors —
     /// dangling FormLinks, missing masters, and parse failures (housecarl_check_errors). Thin wiring over the
     /// core <see cref="ErrorCheck.Run"/>, which holds all the scan logic + Q3 teeth so the self-contained guard drives
-    /// this same path over synthetic plugins. Read-only; composes existing primitives, no new dependency.</summary>
+    /// this same path over synthetic plugins. Read-only; composes existing primitives, no new dependency.
+    /// <para>A scope name NOT in the active order is resolved on disk by the shared plugin-locate contract
+    /// (<see cref="LocatePluginFileOnDisk"/> — enabled, disabled, AND unlisted mod folders) and swept OFF-ORDER: its
+    /// own overlay, links resolved against the active order + the file's own records. This is the pre-enable verify
+    /// lane (HCBR-2026-07-14-02 gap 3) — the pre-ship dangling-ref sweep of a patch houseCARL just wrote, BEFORE the
+    /// MO2 refresh puts it in plugins.txt. A name found nowhere, or in several folders, still fails loud (Q3).</para></summary>
     public ErrorCheckResult CheckErrors(IReadOnlyList<string>? plugins, int limit)
-        => ErrorCheck.Run(Resolver, plugins, limit);
+    {
+        if (plugins is { Count: > 0 })
+        {
+            var view = Resolver.Capture();
+            var active = new List<string>();
+            var offOrder = new List<(string Name, string Path)>();
+            string modsDir, dataDir, overwriteDir, profileDir;
+            lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; }
+            Mo2Composition? comp = null;
+            foreach (var name in plugins)
+            {
+                var n = name?.Trim() ?? "";
+                if (n.Length == 0) return ErrorCheckResult.Fail("a blank plugin name in the scope — pass plugin filenames (e.g. 'CoolMod.esp').");
+                if (view.ContainsPlugin(n)) { active.Add(n); continue; }
+                comp ??= Mo2LoadOrder.ReadComposition(profileDir);
+                var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, n, null);
+                if (loc.Error is not null)
+                    return ErrorCheckResult.Fail($"plugin not in the load order: {n} — and no on-disk copy was found either ({loc.Error})");
+                if (loc.Ambiguous is not null)
+                    return ErrorCheckResult.Fail(
+                        $"plugin '{n}' is not in the active load order and {loc.Ambiguous.Count} mod folders provide a file with that name " +
+                        $"({string.Join(", ", loc.Ambiguous.Select(h => h.Where))}) — ambiguous, refusing to guess which to sweep. " +
+                        "Enable the one you mean in MO2, or remove the duplicates.");
+                offOrder.Add((n, loc.Path!));
+            }
+            return ErrorCheck.Run(Resolver, active, limit, offOrder.Count > 0 ? offOrder : null);
+        }
+        return ErrorCheck.Run(Resolver, plugins, limit);
+    }
 
     // ---- script-property sweep (housecarl_validate_scripts) --------------------------------------------
 
@@ -1691,10 +2026,70 @@ public sealed class LoadOrderService : IDisposable
             try { outPath = ResolveOutputPath(patchName, into, out extend, out created); }
             catch (Exception ex) { return WritePatchBuilder.PatchOutcome.Fail(ex.Message); }
 
-            var outcome = WritePatchBuilder.Apply(resolver, rulebook, edits, outPath, extend, fullReadback);
-            if (!outcome.Success && created) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused write leaves no orphan
-            return outcome;
+            // P8b: pre-resolve any CopyFrom source that is OFF-ORDER (from_plugin on disk but NOT in the active order —
+            // the "copy from the disabled OLD patch" case). Active-order sources are resolved INSIDE Apply via its own
+            // captured view (sharing the winner's build); only off-order files need the MO2 on-disk locate here, and
+            // their overlays must stay OPEN through the serialize (CopyField deep-copies through them) — disposed after.
+            Dictionary<WritePatchBuilder.PatchEdit, IMajorRecordGetter>? copyFromSources = null;
+            List<IDisposable>? offOrderOverlays = null;
+            var cfError = ResolveOffOrderCopySources(resolver, edits, ref copyFromSources, ref offOrderOverlays);
+            if (cfError is not null)
+            {
+                if (offOrderOverlays is not null) foreach (var d in offOrderOverlays) d.Dispose();
+                if (created) RemoveFolderCreatedThisCall(outPath);   // a refused write leaves no orphan folder
+                return WritePatchBuilder.PatchOutcome.Fail(cfError);
+            }
+            try
+            {
+                var outcome = WritePatchBuilder.Apply(resolver, rulebook, edits, outPath, extend, fullReadback, copyFromSources);
+                if (!outcome.Success && created) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused write leaves no orphan
+                return outcome;
+            }
+            finally { if (offOrderOverlays is not null) foreach (var d in offOrderOverlays) d.Dispose(); }
         }
+    }
+
+    /// <summary>P8b — locate every OFF-ORDER CopyFrom source (from_plugin present on disk but NOT in the active order)
+    /// and fetch its version of the target record, holding each overlay OPEN (returned in <paramref name="overlays"/> for
+    /// the caller to dispose AFTER the patch serialize — CopyField deep-copies through them). Active-order sources are
+    /// left for <see cref="WritePatchBuilder.Apply"/> to resolve via its shared view (so they read the winner's build).
+    /// Returns a Q3 refusal string if any off-order source can't be located/opened/read or doesn't define the record
+    /// (all-or-nothing, before any write); null on success. Uses the SAME on-disk locate as read_plugin_file / the
+    /// copy-npc-appearance donor lane, so the tools can never disagree on which file a filename names.</summary>
+    string? ResolveOffOrderCopySources(LoadOrderResolver resolver, IReadOnlyList<WritePatchBuilder.PatchEdit> edits,
+        ref Dictionary<WritePatchBuilder.PatchEdit, IMajorRecordGetter>? sources, ref List<IDisposable>? overlays)
+    {
+        if (!edits.Any(e => string.Equals(e.Verb, "CopyFrom", StringComparison.Ordinal))) return null;   // no CopyFrom → no source work
+        var view = resolver.Capture();
+        string modsDir = "", dataDir = "", overwriteDir = "", profileDir = "";
+        Mo2Composition? comp = null;
+        var problems = new List<string>();
+        foreach (var e in edits)
+        {
+            if (!string.Equals(e.Verb, "CopyFrom", StringComparison.Ordinal) || string.IsNullOrWhiteSpace(e.FromPlugin)) continue;
+            if (view.ContainsPlugin(e.FromPlugin)) continue;   // active — Apply resolves it (shared build)
+            if (comp is null)
+            {
+                try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
+                catch (Exception ex) { return $"CopyFrom off-order source locate failed to derive the MO2 roots: {ex.Message}"; }
+                comp = Mo2LoadOrder.ReadComposition(profileDir);
+            }
+            var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, e.FromPlugin!, null);
+            if (loc.Error is not null) { problems.Add($"{e.Target}: CopyFrom source '{e.FromPlugin}' is not in the load order and {loc.Error}"); continue; }
+            if (loc.Ambiguous is not null) { problems.Add($"{e.Target}: CopyFrom source '{e.FromPlugin}' matches several mod folders on disk — pass an exact path to disambiguate."); continue; }
+            ISkyrimModGetter ov;
+            try { ov = LoadOrderResolver.OpenOverlay(loc.Path!, string.IsNullOrEmpty(dataDir) ? null : dataDir); }
+            catch (Exception ex) { problems.Add($"{e.Target}: CopyFrom source file '{e.FromPlugin}' could not be opened as a Skyrim plugin ({ex.Message})."); continue; }
+            IMajorRecordGetter? body;
+            try { body = ov.EnumerateMajorRecords().FirstOrDefault(r => r.FormKey == e.Target); }
+            catch (Exception ex) { (ov as IDisposable)?.Dispose(); problems.Add($"{e.Target}: CopyFrom source file '{e.FromPlugin}' could not be read ({ex.Message})."); continue; }
+            if (body is null) { (ov as IDisposable)?.Dispose(); problems.Add($"{e.Target}: CopyFrom source file '{e.FromPlugin}' does not define or override this record — there is no version of it there to copy."); continue; }
+            (overlays ??= new()).Add((IDisposable)ov);
+            (sources ??= new())[e] = body;   // distinct Path-array refs make each PatchEdit a distinct key (value equality); indexer is collision-safe regardless
+        }
+        return problems.Count > 0
+            ? $"refused — {problems.Count} CopyFrom source problem(s); NO patch written:\n  - " + string.Join("\n  - ", problems)
+            : null;
     }
 
     /// <summary>The in-place branch of <see cref="ApplyEdits"/> (in-place write lane, Wave 1) — runs under _writeGate.
@@ -1836,11 +2231,11 @@ public sealed class LoadOrderService : IDisposable
             var stamp = $"editedInPlace={DateTime.UtcNow:o}";
             var lines = File.Exists(meta) ? File.ReadAllLines(meta).ToList() : new List<string>();
 
-            int sec = lines.FindIndex(l => l.Trim().Equals("[houseCARL]", StringComparison.OrdinalIgnoreCase));
+            int sec = lines.FindIndex(l => l.Trim().Equals(HousecarlOwnerMeta.Section, StringComparison.OrdinalIgnoreCase));
             if (sec < 0)
             {
                 if (lines.Count > 0 && lines[^1].Trim().Length > 0) lines.Add("");
-                lines.Add("[houseCARL]");
+                lines.Add(HousecarlOwnerMeta.Section);
                 lines.Add(stamp);
             }
             else
@@ -2239,7 +2634,11 @@ public sealed class LoadOrderService : IDisposable
     /// <paramref name="acknowledge"/>=true — a first call without it returns a CONFIRM prompt listing exactly what will be
     /// rewritten (never a silent original-file edit).</para>
     ///
-    /// <para>Refuses loud + writes nothing on: the plugin not active / excluded (unparseable) / not on disk; MORE than the
+    /// <para>An INACTIVE target (on disk but not in the load order — the fresh houseCARL patch pre-MO2-refresh, or a
+    /// disabled mod) is resolved by filename via the shared locate contract and compacted OFF-ORDER; its declared
+    /// masters must still be active (HCBR-2026-07-14-02 gap 3). An override-only target with esl=true takes the
+    /// FLAG-ONLY lane (empty remap; the write sets the light flag).</para>
+    /// <para>Refuses loud + writes nothing on: the plugin not found on disk / ambiguous / excluded (unparseable); MORE than the
     /// light window holds (the hard ESL ceiling — named, never truncated); a declared master not active; a serialize fault.
     /// Renumber mechanism + nested coverage: <see cref="RemapEngine.RenumberModInto"/> (remap-wave1/2). Serialized on the
     /// write gate; the identify-pass is one whole-order link walk (~25s at full scale — a deliberate, one-shot operation).</para></summary>
@@ -2258,16 +2657,41 @@ public sealed class LoadOrderService : IDisposable
                 return WritePatchBuilder.CompactOutcome.Fail($"cannot write: ModsDir '{_modsDir}' does not exist. Check HouseCarl:ModsDir.");
 
             var name = pluginName.Trim();
-            if (!view.ContainsPlugin(name))
-                return WritePatchBuilder.CompactOutcome.Fail(
-                    $"'{name}' is not an active plugin in your load order — compact targets an active plugin (so its records, and the plugins that reference it, can be read). Pass the exact filename (e.g. 'CoolMod.esp').");
-            if (view.ExcludedPlugins.TryGetValue(name, out var excluded))
-                return WritePatchBuilder.CompactOutcome.Fail(
-                    $"cannot compact '{name}': it was EXCLUDED from this session ({excluded}) — houseCARL won't renumber a plugin it can't fully parse. The file is untouched.");
-
-            var srcPath = view.PluginPath(name);
-            if (srcPath is null || !File.Exists(srcPath))
-                return WritePatchBuilder.CompactOutcome.Fail($"'{name}' not found on disk at {srcPath ?? "<unresolved>"} — nothing to compact.");
+            string? srcPath;
+            string? offOrderNote = null;
+            if (view.ContainsPlugin(name))
+            {
+                if (view.ExcludedPlugins.TryGetValue(name, out var excluded))
+                    return WritePatchBuilder.CompactOutcome.Fail(
+                        $"cannot compact '{name}': it was EXCLUDED from this session ({excluded}) — houseCARL won't renumber a plugin it can't fully parse. The file is untouched.");
+                srcPath = view.PluginPath(name);
+                if (srcPath is null || !File.Exists(srcPath))
+                    return WritePatchBuilder.CompactOutcome.Fail($"'{name}' not found on disk at {srcPath ?? "<unresolved>"} — nothing to compact.");
+            }
+            else
+            {
+                // NOT in the active order → resolve the FILE on disk (enabled, disabled, AND unlisted mod folders — the
+                // shared locate contract). This is the pre-enable finishing lane (HCBR-2026-07-14-02 gap 3): ESL-flagging
+                // the patch houseCARL just wrote, BEFORE the MO2 refresh puts it in plugins.txt. The requirement that
+                // actually protects correctness is unchanged: every DECLARED MASTER must be active (CompactBuild refuses
+                // otherwise), and the external-referencer scan still runs over the active order — which, for a plugin
+                // nothing active can master, is exactly the right (empty) answer.
+                string modsDir, dataDir, overwriteDir, profileDir;
+                lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; }
+                var comp = Mo2LoadOrder.ReadComposition(profileDir);
+                var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, name, null);
+                if (loc.Error is not null)
+                    return WritePatchBuilder.CompactOutcome.Fail(
+                        $"'{name}' is not an active plugin in your load order, and no on-disk copy was found either ({loc.Error})");
+                if (loc.Ambiguous is not null)
+                    return WritePatchBuilder.CompactOutcome.Fail(
+                        $"'{name}' is not in the active load order and {loc.Ambiguous.Count} mod folders provide a file with that name " +
+                        $"({string.Join(", ", loc.Ambiguous.Select(h => h.Where))}) — ambiguous, refusing to guess which to compact. " +
+                        "Enable the one you mean in MO2, or remove the duplicates.");
+                srcPath = loc.Path!;
+                offOrderNote = $"'{name}' is not in the active load order (found: {loc.Where}) — compacted OFF-ORDER; " +
+                               "masters resolved from the active order. Enable the result in MO2 to use it.";
+            }
 
             ModKey modKey;
             try { modKey = ModKey.FromFileName(name); }
@@ -2276,19 +2700,38 @@ public sealed class LoadOrderService : IDisposable
             // 1. originating record keys + the remap into the (light, by default) window.
             if (!WritePatchBuilder.TryReadOriginatingKeys(srcPath, modKey, out var keys, out var keyErr))
                 return WritePatchBuilder.CompactOutcome.Fail(keyErr!);
-            if (keys.Count == 0)
-                return WritePatchBuilder.CompactOutcome.Fail(
-                    $"'{name}' defines no originating records to renumber (it carries only overrides, or is empty) — nothing to compact.");
-
+            string? flagOnlyNote = null;
             uint floor = RemapEngine.EslFloor;
-            uint ceiling = esl ? RemapEngine.EslCeiling : FormIdRange.ObjectIdMax;   // light window, or the full 24-bit object-ID range
-            var plan = RemapEngine.BuildSequentialRemap(keys, modKey, floor, ceiling);
-            if (!plan.Success) return WritePatchBuilder.CompactOutcome.Fail(plan.Error!);
+            IReadOnlyDictionary<FormKey, FormKey> remapDict;
+            if (keys.Count == 0)
+            {
+                // Override-only (or empty) plugin: nothing to RENUMBER — but with esl=true the job the caller actually
+                // wants (make it light) is trivially satisfiable, because the light window only constrains ORIGINATING
+                // records. Proceed with an empty remap: every record copies verbatim and the write sets the light flag
+                // (the flag-only lane — the all-override compatibility patch, HCBR-2026-07-14-02 gap 3's ESL endgame).
+                if (!esl)
+                    return WritePatchBuilder.CompactOutcome.Fail(
+                        $"'{name}' defines no originating records to renumber (it carries only overrides, or is empty) — nothing to compact. " +
+                        "(With esl=true this would still set the ESL/light header flag — always valid for an override-only plugin.)");
+                remapDict = new Dictionary<FormKey, FormKey>();
+                flagOnlyNote = $"'{name}' defines no originating records — nothing renumbered; every record copied verbatim with the ESL (light) flag set (always valid for an override-only plugin).";
+            }
+            else
+            {
+                uint ceiling = esl ? RemapEngine.EslCeiling : FormIdRange.ObjectIdMax;   // light window, or the full 24-bit object-ID range
+                var plan = RemapEngine.BuildSequentialRemap(keys, modKey, floor, ceiling);
+                if (!plan.Success) return WritePatchBuilder.CompactOutcome.Fail(plan.Error!);
+                remapDict = plan.Dict;
+            }
 
             // 2. identify-pass — which plugins OUTSIDE the target reference a record being renumbered (the break risk).
-            var targets = plan.Dict.Keys.ToHashSet();
+            //    Nothing being renumbered ⇒ nothing can break ⇒ the scan has nothing to ask (skip the whole-order walk).
+            var targets = remapDict.Keys.ToHashSet();
             var transformSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { name };
-            var id = RemapEngine.IdentifyExternalReferencers(resolver, targets, transformSet);
+            var id = targets.Count == 0
+                ? new RemapEngine.IdentifyResult(Array.Empty<RemapEngine.ExternalRef>(), Array.Empty<string>(), 0, 0,
+                                                 Array.Empty<string>(), Array.Empty<RemapEngine.ExternalOverride>(), Array.Empty<string>())
+                : RemapEngine.IdentifyExternalReferencers(resolver, targets, transformSet);
 
             // 3. external-referencer policy (Q3 — never silently ship a compaction that dangles an external reference).
             if (id.HasExternalReferencers)
@@ -2349,7 +2792,7 @@ public sealed class LoadOrderService : IDisposable
             }
 
             // 6. build + write the compacted plugin.
-            var build = WritePatchBuilder.CompactBuild(srcPath, modKey, plan.Dict, view.PluginPath, outPath, esl, floor);
+            var build = WritePatchBuilder.CompactBuild(srcPath, modKey, remapDict, view.PluginPath, outPath, esl, floor);
             if (!build.Success)
             {
                 if (!inPlace && createdFresh) RemoveOrNameRiderResidue(rf);   // a refused build leaves no orphan folder
@@ -2361,7 +2804,7 @@ public sealed class LoadOrderService : IDisposable
             if (willRepoint)
                 foreach (var ext in id.ExternalPlugins)
                 {
-                    var rep = RemapEngine.RepointInPlace(resolver, ext, plan.Dict);
+                    var rep = RemapEngine.RepointInPlace(resolver, ext, remapDict);
                     repointed.Add(new WritePatchBuilder.RepointReport(ext, rep.Success, rep.Error));
                 }
 
@@ -2388,8 +2831,8 @@ public sealed class LoadOrderService : IDisposable
                 var assetView = assetResolver.Capture();
                 seqGate = assetView.ResolveForPlacement(srcSeqRel).Sources.Count > 0;   // VFS-aware (loose roots + active BSAs)
                 var outDir = Path.GetDirectoryName(outPath)!;
-                assetRename = AssetRenameService.CarryFaceGen(outPath, plan.Dict, assetView, outDir);
-                voiceRename = AssetRenameService.CarryVoice(outPath, plan.Dict, assetView, outDir);
+                assetRename = AssetRenameService.CarryFaceGen(outPath, remapDict, assetView, outDir);
+                voiceRename = AssetRenameService.CarryVoice(outPath, remapDict, assetView, outDir);
             }
             catch (Exception ex)
             {
@@ -2426,6 +2869,8 @@ public sealed class LoadOrderService : IDisposable
             //    field-edit ack silently authorize a full renumber. Markers are best-effort (a miss never fails the done
             //    write, Q3) — any miss is surfaced in Note.
             var markerNotes = new List<string>();
+            if (offOrderNote is not null) markerNotes.Add(offOrderNote);
+            if (flagOnlyNote is not null) markerNotes.Add(flagOnlyNote);
             if (inPlace) { var n = MergeEditedInPlaceMarker(Path.GetDirectoryName(srcPath)); if (n is not null) markerNotes.Add(n); }
             foreach (var r in repointed.Where(r => r.Success))
             {
@@ -3186,11 +3631,19 @@ public sealed class LoadOrderService : IDisposable
             spec = MapStruct(op.Compose, where, out error);
             if (error is not null) return null;
         }
+        var specs = MapComposes(op, where, spec, out error);
+        if (error is not null) return null;
+
+        if (string.Equals(op.Verb, "CopyFrom", StringComparison.Ordinal) || !string.IsNullOrWhiteSpace(op.FromPlugin))
+        {
+            error = $"{where}: CopyFrom / from_plugin copies from an EXISTING record's other version — it isn't valid when CREATING a record (there is no other version yet). Set the new field with value= / compose= instead.";
+            return null;
+        }
 
         return new WriteRequest
         {
             RecordType = recordType, Path = path, Verb = string.IsNullOrWhiteSpace(op.Verb) ? "Set" : op.Verb,
-            Key = op.Key, Value = op.Value, Values = op.Values, Entries = op.Entries, Struct = spec,
+            Key = op.Key, Value = op.Value, Values = op.Values, Entries = op.Entries, Struct = spec, Structs = specs,
         };
     }
 
@@ -3215,12 +3668,44 @@ public sealed class LoadOrderService : IDisposable
             spec = MapStruct(op.Compose, where, out error);
             if (error is not null) return null;
         }
+        var specs = MapComposes(op, where, spec, out error);
+        if (error is not null) return null;
+
+        var verb = string.IsNullOrWhiteSpace(op.Verb) ? "Set" : op.Verb;
+        var fromPlugin = MapFromPlugin(op, verb, $"{where} ({op.Formid})", spec, specs, out error);
+        if (error is not null) return null;
 
         return new WritePatchBuilder.PatchEdit
         {
-            Target = fk, Path = path, Verb = string.IsNullOrWhiteSpace(op.Verb) ? "Set" : op.Verb,
-            Key = op.Key, Value = op.Value, Values = op.Values, Entries = op.Entries, Struct = spec,
+            Target = fk, Path = path, Verb = verb,
+            Key = op.Key, Value = op.Value, Values = op.Values, Entries = op.Entries, Struct = spec, Structs = specs,
+            FromPlugin = fromPlugin,
         };
+    }
+
+    /// <summary>P8b — validate + extract from_plugin for a CopyFrom op. from_plugin is REQUIRED with (and ONLY with)
+    /// verb=CopyFrom, which copies the field FROM that plugin's version and so takes no value/values/entries/compose/
+    /// composes. Both rules refuse loud (Q3), never silently ignore. Returns null for a non-CopyFrom op.</summary>
+    static string? MapFromPlugin(BulkOp op, string verb, string where, StructSpec? spec, IReadOnlyList<StructSpec>? specs, out string? error)
+    {
+        error = null;
+        if (!string.Equals(verb, "CopyFrom", StringComparison.Ordinal))   // match the engine's Ordinal verb compare — a mis-cased verb fails loud uniformly (Unknown verb … Legal: …CopyFrom)
+        {
+            if (!string.IsNullOrWhiteSpace(op.FromPlugin))
+                error = $"{where}: from_plugin is only valid with verb=CopyFrom (got verb={verb}).";
+            return null;
+        }
+        if (string.IsNullOrWhiteSpace(op.FromPlugin))
+        {
+            error = $"{where}: CopyFrom requires from_plugin — the plugin whose version of this record to copy field_path from.";
+            return null;
+        }
+        if (op.Value is not null || op.Values is not null || op.Entries is not null || spec is not null || specs is not null)
+        {
+            error = $"{where}: CopyFrom copies the field from from_plugin's version — it takes no value/values/entries/compose/composes.";
+            return null;
+        }
+        return op.FromPlugin.Trim();
     }
 
     /// <summary>Build a core composition <see cref="StructSpec"/> from the wire shape — flat <c>fields</c> (coercible
@@ -3260,6 +3745,42 @@ public sealed class LoadOrderService : IDisposable
             }
         }
         return new StructSpec { Type = s.Type!, Fields = s.Fields, CtorArgs = s.CtorArgs, Sets = sets };
+    }
+
+    /// <summary>P8a — map a wire op's composes[] (MANY build-from-parts list elements) to core StructSpecs. Mutually
+    /// exclusive with the singular compose (both set → refused loud, Q3, never silently merged). Each element maps via
+    /// the SAME <see cref="MapStruct"/> the singular compose uses, so a composes element can never be shaped differently
+    /// from a compose element; a bad element names itself (composes[i]). Returns null when no composes= is present; an
+    /// explicitly EMPTY composes=[] is a named caller mistake, not a silent no-op.</summary>
+    static List<StructSpec>? MapComposes(BulkOp op, string where, StructSpec? singular, out string? error)
+    {
+        error = null;
+        if (op.Composes is null) return null;
+        if (singular is not null)
+        {
+            error = $"{where}: pass compose= (one element) OR composes= (many), not both.";
+            return null;
+        }
+        if (op.Composes.Length == 0)
+        {
+            // An EMPTY composes=[] is the CLEAR intent for a ReplaceAll (empty the modeled list — the modeled twin of
+            // ReplaceAll values=[], which already clears a coercible list); for any other verb an empty batch is a
+            // caller mistake worth naming.
+            if (!string.Equals(op.Verb, "ReplaceAll", StringComparison.Ordinal))
+            {
+                error = $"{where}: composes=[] is empty — supply one or more element specs (or compose= for one); an empty composes= is only meaningful with verb=ReplaceAll, to CLEAR the list.";
+                return null;
+            }
+            return new List<StructSpec>();   // ReplaceAll composes=[] → clear the modeled list
+        }
+        var specs = new List<StructSpec>(op.Composes.Length);
+        for (int j = 0; j < op.Composes.Length; j++)
+        {
+            var s = MapStruct(op.Composes[j], $"{where} composes[{j}]", out error);
+            if (error is not null) return null;
+            specs.Add(s!);
+        }
+        return specs;
     }
 
     static string[] SplitPath(string dotted)
@@ -3302,7 +3823,7 @@ public sealed class LoadOrderService : IDisposable
             }
 
             extend = false;
-            var baseStem = PatchStem(string.IsNullOrWhiteSpace(patchName) ? "houseCARL_Patch" : patchName!);
+            var baseStem = PatchStem(string.IsNullOrWhiteSpace(patchName) ? "Patch" : patchName!);
             var freeStem = UniqueStem(baseStem);
             var newFolder = Path.Combine(_modsDir, ModFolderName(freeStem));
             Directory.CreateDirectory(newFolder);
@@ -3668,20 +4189,51 @@ public sealed class LoadOrderService : IDisposable
         var name = Path.GetFileName(raw.Trim());
         foreach (var ext in PluginExts)
             if (name.EndsWith(ext, StringComparison.OrdinalIgnoreCase)) { name = name[..^ext.Length]; break; }
-        return string.IsNullOrEmpty(name) ? "houseCARL_Patch" : name;
+        return string.IsNullOrEmpty(name) ? "Patch" : name;
     }
 
-    /// <summary>The given stem if its mod folder is free, else the first free "<c>&lt;stem&gt;_NNN</c>" — never clobbers
-    /// an existing folder (houseCARL's own OR a user's; into= is the way to grow an existing houseCARL patch).</summary>
+    /// <summary>The given stem if it's free, else the first free "<c>&lt;stem&gt;_NNN</c>". "Free" means BOTH: no mod
+    /// folder "<c>houseCARL - &lt;stem&gt;</c>" already exists (houseCARL's own OR a user's), AND no plugin
+    /// "<c>&lt;stem&gt;.esp</c>" is already in the active load order. The load-order arm stops a GENERIC default stem
+    /// (e.g. "Patch") from emitting a "Patch.esp" that DUPLICATES a foreign active plugin — the engine forbids two active
+    /// plugins sharing a basename, and mod-folder uniqueness alone never sees a same-named plugin that lives in another
+    /// mod (PR #192 review). into= remains the way to grow an existing houseCARL patch; this is only the fresh path.</summary>
     string UniqueStem(string stem)
     {
-        if (!Directory.Exists(Path.Combine(_modsDir, ModFolderName(stem)))) return stem;
+        var active = ActivePluginBasenames();
+        if (IsStemFree(stem, active)) return stem;
         for (int i = 1; i < 10000; i++)
         {
             var cand = $"{stem}_{i:D3}";
-            if (!Directory.Exists(Path.Combine(_modsDir, ModFolderName(cand)))) return cand;
+            if (IsStemFree(cand, active)) return cand;
         }
         throw new InvalidOperationException($"too many patches named '{stem}' under ModsDir — clean some out.");
+    }
+
+    /// <summary>A stem is free to claim when no houseCARL mod folder for it exists AND its plugin "<c>&lt;stem&gt;.esp</c>"
+    /// isn't already an active load-order plugin (case-insensitive — Skyrim plugin basenames are).</summary>
+    bool IsStemFree(string stem, IReadOnlySet<string> activePlugins)
+        => !Directory.Exists(Path.Combine(_modsDir, ModFolderName(stem))) && !activePlugins.Contains(stem + ".esp");
+
+    /// <summary>The active load order's plugin filenames (case-insensitive) for the UniqueStem collision arm. Read from
+    /// the already-built resolver if present, else the SAME cheap composition it builds from — deliberately NOT via the
+    /// <see cref="Resolver"/> getter, which REFUSES a zero-plugin instance (a legitimate minimal write). BEST-EFFORT: any
+    /// read failure (or no active plugins) yields an EMPTY set — folder-only uniqueness, exactly the behaviour before the
+    /// load-order arm. So the collision check is a pure safety net; it never turns a previously-valid write into a failure
+    /// (Q3 degrade — the write itself, if it needs the load order, still surfaces a genuine problem through its own read).</summary>
+    IReadOnlySet<string> ActivePluginBasenames()
+    {
+        var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        try
+        {
+            IReadOnlyList<string>? names = _resolver?.PluginNames;
+            if (names is null)
+                names = Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir)
+                    .OrderedPaths.Select(Path.GetFileName).Where(n => !string.IsNullOrEmpty(n)).ToList()!;
+            foreach (var n in names) set.Add(n);
+        }
+        catch { /* unreadable / empty load order → folder-only uniqueness (the pre-guard behaviour) */ }
+        return set;
     }
 
     /// <summary>The 4-step <c>into=</c> EXTEND resolver, SHARED by the .esp write path (<see cref="ResolveOutputPath"/>)
@@ -3800,7 +4352,7 @@ public sealed class LoadOrderService : IDisposable
         {
             var line = raw.Trim();
             if (line.StartsWith('[') && line.EndsWith(']'))
-                inMarker = line.Equals("[houseCARL]", StringComparison.OrdinalIgnoreCase);
+                inMarker = line.Equals(HousecarlOwnerMeta.Section, StringComparison.OrdinalIgnoreCase);
             else if (inMarker && line.Replace(" ", "").Equals("generated=true", StringComparison.OrdinalIgnoreCase))
                 return true;
         }
@@ -3820,7 +4372,7 @@ public sealed class LoadOrderService : IDisposable
             "category=0\r\n" +
             "comments=Generated by houseCARL - load-order patch\r\n" +
             "\r\n" +
-            "[houseCARL]\r\n" +
+            HousecarlOwnerMeta.Section + "\r\n" +
             "generated=true\r\n" +
             $"plugin={plugin}\r\n" +
             $"created={DateTime.UtcNow:o}\r\n" +
@@ -3847,7 +4399,8 @@ public sealed class LoadOrderService : IDisposable
     /// <para>Read-only. Q3: a missing/ambiguous filename, a bad or absent FormID, or a record Mutagen cannot parse is
     /// NAMED, never a silent wrong answer.</para></summary>
     public PluginFileOutcome ReadPluginFile(string plugin, string? formid, string? type, string? mod,
-                                            IReadOnlyList<string>? fields, int depth, string? editoridContains, int limit)
+                                            IReadOnlyList<string>? fields, int depth, string? editoridContains, int limit,
+                                            bool resolveNames = false)
     {
         if (string.IsNullOrWhiteSpace(plugin))
             return PluginFileOutcome.Fail(plugin ?? "", "plugin is required — a plugin filename (e.g. 'Vivace.esp') or an absolute path to a .esp/.esm/.esl.");
@@ -3917,7 +4470,18 @@ public sealed class LoadOrderService : IDisposable
                 catch (Exception ex) { return baseOut with { Mode = "error", Error = $"'{Path.GetFileName(path)}' could not be fully read — a record Mutagen cannot parse before reaching {fk}: {ex.Message}" }; }
                 if (rec is null)
                     return baseOut with { Mode = "error", Error = $"file '{Path.GetFileName(path)}' does not define or override {fk}. This reads the FILE's OWN records only — it does not resolve across masters or report a load-order winner; use housecarl_read_record for the winner." };
-                return baseOut with { Mode = "read", Record = ReadEngine.ReadFields(rec, fields, depth <= 0 ? 1 : depth) };
+                var rf = ReadEngine.ReadFields(rec, fields, depth <= 0 ? 1 : depth);
+                if (resolveNames)
+                {
+                    // resolve_names on a RAW file read: the FILE's link tokens are resolved against the ACTIVE order
+                    // (the only identity frame houseCARL holds) — honest, and a target the active order doesn't define
+                    // is marked 'unresolved', not guessed. Opt-in only, so the deliberate no-resolver cheapness of the
+                    // default path is untouched; a caller asking for identities accepts the resolver build.
+                    var view = Resolver.Capture();
+                    using var session = Resolver.OpenSession();
+                    rf = AnnotateLinks(rf, view, session, new());
+                }
+                return baseOut with { Mode = "read", Record = rf };
             }
 
             if (hasType)
@@ -3992,7 +4556,7 @@ public sealed class LoadOrderService : IDisposable
         var hits = Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, plugin);
         if (hits.Count == 0)
             return new(null, "", false, null,
-                $"'{Path.GetFileName(plugin)}' is in no mod folder (enabled or disabled), the overwrite folder, or the game Data folder. Check the filename, pass an absolute path, or (if it's an MO2 mod) the exact folder via mod=.");
+                $"'{Path.GetFileName(plugin)}' is in no mod folder (enabled, disabled, or not-yet-listed in MO2), the overwrite folder, or the game Data folder. Check the filename, pass an absolute path, or (if it's an MO2 mod) the exact folder via mod=.");
         if (hits.Count > 1) return new(null, "", false, hits, null);
         return new(hits[0].Path, hits[0].Where, hits[0].Enabled, null, null);
     }
@@ -4100,10 +4664,16 @@ public sealed record ReadOutcome(
 /// <see cref="Total"/> is the true match count; <see cref="Capped"/> is true when Total exceeded what was returned.</summary>
 public sealed record CrossQueryOutcome(
     IReadOnlyList<FormKey> Keys, IReadOnlyList<RecordSummary>? Prefilled, int Total, bool Capped, string? Error,
-    string? PredicateNote = null, IReadOnlyList<string?>? Sources = null, string? ScanNote = null)
+    string? PredicateNote = null, IReadOnlyList<string?>? Sources = null, string? ScanNote = null,
+    IReadOnlyList<string?>? MatchedTargets = null, IReadOnlyList<GroupCount>? Groups = null,
+    string? GroupBy = null, string? ScopeLabel = null)
 {
     public static CrossQueryOutcome Fail(string error) => new(Array.Empty<FormKey>(), null, 0, false, error);
 }
+
+/// <summary>One row of a cross_plugin_query <c>group_by=</c> aggregation: a group key (winner plugin / record type /
+/// defining plugin) and how many matches fell in it. Emitted instead of per-match lines when group_by is set.</summary>
+public sealed record GroupCount(string Key, int Count);
 
 /// <summary>A compact, header-only record summary (no field dump) — the per-match line cross_plugin_query emits
 /// by default. <see cref="Error"/> non-null ⇒ the winner couldn't be summarised (named, recoverable — Q3).</summary>
@@ -4175,6 +4745,27 @@ public sealed record LoadOrderStatusData(
     string ProfileName,         // the ACTIVE profile (instance mode: MO2's selected_profile; explicit: the dir name) — captured under the gate, not re-derived at render
     string? InstanceDir,        // the resolved MO2 instance folder houseCARL is pointed at; null ⇒ explicit-paths / unconfigured mode
     IReadOnlyDictionary<string, string> ExcludedPlugins);
+
+/// <summary>The data behind housecarl_update_status: MO2's own local Nexus update cache read from meta.ini, with no
+/// network. <see cref="Entries"/> is one row per Nexus-linked mod (installed vs newest version, modid, enabled state);
+/// <see cref="UntrackedCount"/> is how many mod folders were skipped as not Nexus-linked (no meta.ini or no modid).
+/// <see cref="Problems"/> carries any Q3 read faults (e.g. a missing mods folder), never a silent empty.</summary>
+public sealed record UpdateCacheData(
+    string ModsDir,
+    string? InstanceDir,
+    IReadOnlyList<ModUpdateEntry> Entries,
+    IReadOnlyList<string> Problems,
+    int UntrackedCount);
+
+/// <summary>One Nexus-linked mod's update-cache row. <see cref="Newest"/> empty ⇒ MO2 never learned a newer version.
+/// MO2's own "update available" rule: <see cref="Newest"/> is set, non-empty, != <see cref="Installed"/>, and !=
+/// <see cref="Ignored"/>. <see cref="Enabled"/> is null when the mod isn't in the active profile (state unknown).
+/// <see cref="LastUpdate"/> is unix-seconds of MO2's last Nexus check (staleness signal). <see cref="InstalledFileIds"/>
+/// are the exact Nexus file id(s) MO2 installed (from meta.ini <c>[installedFiles]</c>) — the FILE-level currency join
+/// key that makes a live check immune to the multi-file-page false positive; empty for a FOMOD/manual install.</summary>
+public sealed record ModUpdateEntry(
+    string Folder, bool? Enabled, int ModId, string? Installed, string? Newest, string? Ignored, string? LastUpdate,
+    IReadOnlyList<int> InstalledFileIds);
 
 /// <summary>The result of <see cref="LoadOrderService.NamedProfileComposition"/> — the profiles affordance behind
 /// housecarl_load_order_status' profile= param. <see cref="InstanceMode"/> is false in explicit-paths mode (no profiles

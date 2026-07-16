@@ -28,21 +28,27 @@ namespace HousecarlCore;
 /// field is a fast, named <see cref="FatalError"/> on the first value-bearing candidate — never a whole-scan
 /// silent skip.</para>
 ///
-/// <para>Scope (v1): scalar-leaf paths only (incl. a concrete bracketed element like <c>Keywords[0]</c>). A whole
-/// LIST leaf (<c>Keywords</c>, <c>Effects</c>) reads as a no-value container summary, so a list path is surfaced
-/// by the Q3 accounting, never silently matched — list→FormID membership is <c>references=</c>'s job. A wildcard
-/// over a list (<c>Effects[*].Magnitude &gt; 50</c>) is a deliberate future extension, not v1.</para>
+/// <para>Scope: the value operators take scalar-leaf paths only (incl. a concrete bracketed element like
+/// <c>Keywords[0]</c>). A whole LIST leaf (<c>Keywords</c>, <c>Effects</c>) reads as a no-value container summary,
+/// so a value predicate on a list path is surfaced by the Q3 accounting, never silently matched — list→FormID
+/// membership is <c>references=</c>'s job. The PRESENCE operators (<c>exists</c>/<c>missing</c>) are the exception:
+/// they DO match a carried substruct/list leaf (present and non-empty), the "which records carry a VMAD/Effects"
+/// query (#197). A wildcard over a list (<c>Effects[*].Magnitude &gt; 50</c>) is a deliberate future extension.</para>
 /// </summary>
 public sealed class FieldPredicateSet
 {
-    /// <summary>The eight v1 operators. <see cref="Gt"/>/<see cref="Ge"/>/<see cref="Lt"/>/<see cref="Le"/> are
+    /// <summary>The operators. <see cref="Gt"/>/<see cref="Ge"/>/<see cref="Lt"/>/<see cref="Le"/> are
     /// numeric-only; <see cref="Contains"/> is a case-insensitive substring; <see cref="Eq"/>/<see cref="Ne"/>
     /// compare across the whole token vocabulary (FormKey-canonical, else numeric, else case-insensitive string).
     /// <see cref="Has"/> is a BITWISE set-test for a <c>[Flags]</c> enum (or plain integer) leaf — true iff every
     /// bit of the operand is set on the field, regardless of other bits — so a multi-slot BodyTemplate still
     /// matches the one slot asked for, which <see cref="Eq"/> (exact value) and the range ops cannot express. Its
-    /// operand is a bit value (decimal or <c>0x</c> hex) or a flag NAME.</summary>
-    enum Op { Eq, Ne, Gt, Ge, Lt, Le, Contains, Has }
+    /// operand is a bit value (decimal or <c>0x</c> hex) or a flag NAME.
+    /// <see cref="Exists"/>/<see cref="Missing"/> are PRESENCE tests that take NO operand — true iff the path
+    /// resolves to a present, NON-EMPTY value (a scalar OR a carried substruct/list) / its complement. They are the
+    /// only operators that MATCH a no-value container leaf: the "which records CARRY a VirtualMachineAdapter /
+    /// Effects / Conditions" query (#197), which the value operators (needing a scalar leaf) cannot express.</summary>
+    enum Op { Eq, Ne, Gt, Ge, Lt, Le, Contains, Has, Exists, Missing }
 
     /// <summary>One parsed predicate: the split path segments (fed straight to <see cref="ReadEngine.ReadLeaf"/>),
     /// the operator, the raw operand, and — for a numeric operator — the operand pre-parsed to a double (validated
@@ -51,7 +57,10 @@ public sealed class FieldPredicateSet
 
     readonly IReadOnlyList<Predicate> _predicates;
     readonly long[] _valueRead;   // per-predicate: candidates whose path read SOME value
-    readonly long[] _noValue;     // per-predicate: candidates whose path read NO value (absent / no-such-field / container / fault)
+    readonly long[] _noValue;     // per-predicate: candidates whose path read NO value (any reason below)
+    readonly long[] _noField;     // per-predicate SUBSET of _noValue: the path is not a field on the record (mistyped / wrong for this type)
+    readonly long[] _container;   // per-predicate SUBSET of _noValue: the path resolves to a container/list, not a scalar leaf
+    readonly long[] _unreadable;  // per-predicate SUBSET of _noValue: the path READ FAULTED (Mutagen-unparseable content) — a fault, NOT an unset value
     long _scanned;
     string? _fatal;
 
@@ -60,6 +69,9 @@ public sealed class FieldPredicateSet
         _predicates = predicates;
         _valueRead = new long[predicates.Count];
         _noValue = new long[predicates.Count];
+        _noField = new long[predicates.Count];
+        _container = new long[predicates.Count];
+        _unreadable = new long[predicates.Count];
     }
 
     /// <summary>Set once when a numeric operator meets a non-numeric field value on the first value-bearing
@@ -108,7 +120,7 @@ public sealed class FieldPredicateSet
         // 2. skip whitespace to the operator.
         while (i < text.Length && char.IsWhiteSpace(text[i])) i++;
         if (i >= text.Length)
-            return (null, $"predicate '{raw}': no operator. Use one of = != > >= < <= contains has, e.g. \"{path} = <value>\".");
+            return (null, $"predicate '{raw}': no operator. Use one of = != > >= < <= contains has exists missing, e.g. \"{path} = <value>\" or \"{path} exists\".");
 
         // 3. operator — symbolic (longest match) or the 'contains' word.
         Op op;
@@ -121,7 +133,7 @@ public sealed class FieldPredicateSet
             else if (text[i] == '=') { op = Op.Eq; after = i + 1; }
             else if (text[i] == '>') { op = Op.Gt; after = i + 1; }
             else if (text[i] == '<') { op = Op.Lt; after = i + 1; }
-            else return (null, $"predicate '{raw}': unrecognized operator at '{text.Substring(i)}'. Use = != > >= < <= contains has.");
+            else return (null, $"predicate '{raw}': unrecognized operator at '{text.Substring(i)}'. Use = != > >= < <= contains has exists missing.");
         }
         else
         {
@@ -130,14 +142,30 @@ public sealed class FieldPredicateSet
             var word = text.Substring(i, w - i);
             if (word.Equals("contains", StringComparison.OrdinalIgnoreCase)) op = Op.Contains;
             else if (word.Equals("has", StringComparison.OrdinalIgnoreCase)) op = Op.Has;
+            else if (word.Equals("exists", StringComparison.OrdinalIgnoreCase)) op = Op.Exists;
+            else if (word.Equals("missing", StringComparison.OrdinalIgnoreCase)) op = Op.Missing;
             else
-                return (null, $"predicate '{raw}': unrecognized operator '{word}'. Use = != > >= < <= contains or has.");
+                return (null, $"predicate '{raw}': unrecognized operator '{word}'. Use = != > >= < <= contains has exists or missing.");
             after = w;
         }
 
         // 4. operand — the remainder, trimmed. (For 'contains' the operand may contain operator chars; we already
         //    consumed the operator positionally, so that's fine.)
         var operand = text.Substring(after).Trim();
+
+        var segs = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+        if (segs.Length == 0)
+            return (null, $"predicate '{raw}': '{path}' is not a usable field path.");
+
+        // A presence op (exists/missing) takes NO operand — a trailing value is a mistake, refused loud (Q3, never
+        // silently ignored). Every other op REQUIRES an operand.
+        if (op is Op.Exists or Op.Missing)
+        {
+            if (operand.Length != 0)
+                return (null, $"predicate '{raw}': '{OpStr(op)}' is a presence test and takes no value (got '{operand}'). Write it as \"{path} {OpStr(op)}\".");
+            return (new Predicate(text, segs, path, op, "", 0), null);
+        }
+
         if (operand.Length == 0)
             return (null, $"predicate '{raw}': no value after '{OpStr(op)}'.");
 
@@ -146,9 +174,6 @@ public sealed class FieldPredicateSet
         if (IsNumericOp(op) && !TryNum(operand, out num))
             return (null, $"predicate '{raw}': operator '{OpStr(op)}' needs a numeric value, got '{operand}'.");
 
-        var segs = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-        if (segs.Length == 0)
-            return (null, $"predicate '{raw}': '{path}' is not a usable field path.");
         return (new Predicate(text, segs, path, op, operand, num), null);
     }
 
@@ -176,13 +201,73 @@ public sealed class FieldPredicateSet
         {
             var p = _predicates[k];
             var leaf = ReadEngine.ReadLeaf(body, p.PathSegments);   // internal, same assembly — the by-construction read walk
-            if (!leaf.HasValue) { _noValue[k]++; all = false; continue; }
+
+            // Presence ops (exists/missing) are the ONE case where a no-value CONTAINER leaf is a MATCH, not a miss:
+            // they test whether the path resolves to a present, non-empty value (a scalar OR a carried
+            // substruct/list), the "which records carry a VMAD/Effects/Conditions" query the value ops can't express
+            // (#197). Handled BEFORE the value-predicate no-value classification below. Accounting stays Q3-honest: a
+            // DEFINITE verdict (Present or Absent) counts as read, so "exists returns 0 because the field is
+            // genuinely absent on all" is a true zero (no false alarm); only a no-such-field or a read-fault is a
+            // no-value residue, so a mistyped exists= path still fails LOUD. NoField/Unreadable match NEITHER op —
+            // an unjudgeable record is asserted neither present nor absent.
+            if (p.Op is Op.Exists or Op.Missing)
+            {
+                bool present;
+                switch (ClassifyPresence(leaf))
+                {
+                    case Presence.Present: _valueRead[k]++; present = true; break;
+                    case Presence.Absent:  _valueRead[k]++; present = false; break;
+                    case Presence.NoField: _noField[k]++; _noValue[k]++; all = false; continue;    // not a field here — can't judge
+                    default:               _unreadable[k]++; _noValue[k]++; all = false; continue;  // read fault — unjudgeable
+                }
+                if (!(p.Op == Op.Exists ? present : !present)) all = false;
+                continue;
+            }
+
+            if (!leaf.HasValue)
+            {
+                // Classify WHY there was no value, so the Q3 accounting can distinguish a MISTYPED path (no such
+                // field anywhere) from a VALID-but-unset field (the path reads fine; there simply are no values in
+                // this scope) — the two look identical in a bare "0 matches", and conflating them sent a reporter
+                // hunting a non-bug (HCBR-2026-07-12: 'Prompt' is a real INFO field, just unset on all 531 scanned).
+                // Reason vocabulary is ReadLeaf's own notes: "(no field …" = mistyped/wrong-type; a leading '[' =
+                // a container/list summary; "(unreadable …" = a Mutagen-parse FAULT (must NOT read as "unset" — that
+                // would confidently assert a valid empty field where the truth is a read fault, Q3); anything else
+                // (absent / null link / unresolved string) = a genuinely-unset valid field.
+                var note = leaf.Note ?? "";
+                if (note.StartsWith("(no field", StringComparison.Ordinal)) _noField[k]++;
+                else if (note.StartsWith("(unreadable", StringComparison.Ordinal)) _unreadable[k]++;
+                else if (note.Length > 0 && note[0] == '[') _container[k]++;
+                _noValue[k]++; all = false; continue;
+            }
             _valueRead[k]++;
             var (satisfied, err) = Compare(p, leaf);
             if (err is not null) { _fatal ??= err; return false; }
             if (!satisfied) all = false;
         }
         return all;
+    }
+
+    /// <summary>The three-state presence verdict for a leaf under <c>exists</c>/<c>missing</c>: a DEFINITE
+    /// Present/Absent, or an unjudgeable NoField (the path is not a field on this record) / Unreadable (a Mutagen
+    /// read fault). Only Present/Absent decide a match; NoField/Unreadable match NEITHER op and feed the Q3
+    /// accounting, so a mistyped presence path still fails loud (never a silent "0 matches").</summary>
+    enum Presence { Present, Absent, NoField, Unreadable }
+
+    /// <summary>Map a leaf read to its presence verdict. A round-trippable scalar is Present. A container/substruct
+    /// summary (note starts with '[') is Present UNLESS it is an EMPTY list/dict (<see cref="ReadEngine.LeafRead.ContainerCount"/>
+    /// == 0) — a modeled-but-empty field carries nothing, so it is Absent (the crucial empty-vs-carried split the
+    /// display note alone can't give). A "(no field…" note is NoField, "(unreadable…" is Unreadable, and every other
+    /// no-value note ((absent)/(null link)/(unresolved…)) is a valid-but-unset Absent.</summary>
+    static Presence ClassifyPresence(ReadEngine.LeafRead leaf)
+    {
+        if (leaf.HasValue) return Presence.Present;
+        var note = leaf.Note ?? "";
+        if (note.StartsWith("(no field", StringComparison.Ordinal)) return Presence.NoField;
+        if (note.StartsWith("(unreadable", StringComparison.Ordinal)) return Presence.Unreadable;
+        if (note.Length > 0 && note[0] == '[')
+            return leaf.ContainerCount is 0 ? Presence.Absent : Presence.Present;   // empty list/dict → absent; substruct (null count) → present
+        return Presence.Absent;   // (absent) / (null link) / (unresolved localized string) — a valid, unset field
     }
 
     static (bool satisfied, string? error) Compare(Predicate p, ReadEngine.LeafRead leaf)
@@ -307,10 +392,34 @@ public sealed class FieldPredicateSet
         {
             var path = _predicates[k].PathDisplay;
             if (_valueRead[k] == 0)
-                (notes ??= new()).Add(
-                    $"predicate field '{path}' yielded no readable value on any of {_scanned:N0} scanned record(s) — likely a mistyped path, " +
-                    $"or a container/list path (use a scalar leaf like 'Archetype.ActorValue', or references= for list→FormID membership). " +
-                    $"0 matches on that basis is NOT a confirmed 'nothing matches'.");
+            {
+                // No candidate read a value — but the CAUSE decides whether this is a wrong path or a correct path
+                // over a value-less scope, and those need opposite next moves (fix the path vs. widen the scope). All
+                // four keep the loud marker "yielded no readable value on any" (distinct from the SOFT "had no readable
+                // value on" for a >half-but-not-all miss), then diverge on the actionable reason.
+                const string loud = "yielded no readable value on any of";
+                long unset = _noValue[k] - _noField[k] - _container[k] - _unreadable[k];   // the residue: genuinely-unset valid fields
+                string reason;
+                if (_noField[k] == _scanned)
+                    reason = $"predicate field '{path}' {loud} {_scanned:N0} scanned record(s) — it is NOT A FIELD on these records " +
+                             $"(a mistyped path, or a field that doesn't exist on this record type); check the field name against the record's schema.";
+                else if (_container[k] == _scanned)
+                    reason = $"predicate field '{path}' {loud} {_scanned:N0} scanned record(s) — it resolves to a container/list here, not a scalar " +
+                             $"leaf; filter on a scalar sub-path (e.g. '{path}[0]' or a nested field), or use references= for list→FormID membership.";
+                else if (_unreadable[k] == _scanned)
+                    reason = $"predicate field '{path}' could not be READ on any of {_scanned:N0} scanned record(s) — a read FAULT (Mutagen could not " +
+                             $"parse the field's content), NOT an unset value. This is a coverage/parse limit on this field, not a filter miss; the " +
+                             $"filter can't judge these records.";
+                else if (_noField[k] == 0 && _container[k] == 0 && _unreadable[k] == 0)
+                    reason = $"predicate field '{path}' {loud} {_scanned:N0} scanned record(s) — but the field IS VALID; it is simply UNSET " +
+                             $"(absent/null) on every one, so the path reads fine and there are just no values in this scope. Widen the scope, or " +
+                             $"the value you want may live on a different field (e.g. a dialogue topic's player text is on DIAL 'Name', not INFO 'Prompt').";
+                else
+                    reason = $"predicate field '{path}' {loud} {_scanned:N0} scanned record(s) — a mix of no-such-field ({_noField[k]:N0}), " +
+                             $"container/list ({_container[k]:N0}), read-fault ({_unreadable[k]:N0}), and unset ({unset:N0}); check it's a scalar " +
+                             $"leaf that exists on these records.";
+                (notes ??= new()).Add(reason + " 0 matches on that basis is NOT a confirmed 'nothing matches'.");
+            }
             else if (_noValue[k] * 2 > _scanned)
                 (notes ??= new()).Add(
                     $"note: '{path}' had no readable value on {_noValue[k]:N0} of {_scanned:N0} scanned record(s) " +
@@ -321,7 +430,8 @@ public sealed class FieldPredicateSet
 
     static string OpStr(Op op) => op switch
     {
-        Op.Eq => "=", Op.Ne => "!=", Op.Gt => ">", Op.Ge => ">=", Op.Lt => "<", Op.Le => "<=", Op.Contains => "contains", _ => "?",
+        Op.Eq => "=", Op.Ne => "!=", Op.Gt => ">", Op.Ge => ">=", Op.Lt => "<", Op.Le => "<=",
+        Op.Contains => "contains", Op.Has => "has", Op.Exists => "exists", Op.Missing => "missing", _ => "?",
     };
 
     static string Trunc(string s) => s.Length > 60 ? s.Substring(0, 60) + "…" : s;

@@ -28,24 +28,24 @@ public static class WriteTools
          "didn't make), not a patch — pass target=<plugin filename> + in_place=true (opt-in; see those params; the default " +
          "patch lane leaves originals untouched). Pre-flight rejects an illegal edit with the reason and writes nothing (Q3). Returns the patch path, " +
          "its masters, and the value read back. Does NOT compose modeled structs (leveled-list entries, polymorphic " +
-         "fields) or edit a dict via Merge — use housecarl_bulk_apply for those, or for many edits in one patch. Read " +
-         "first with housecarl_read_record.")]
+         "fields), edit a dict via Merge, or copy a field from another plugin's version (CopyFrom) — use " +
+         "housecarl_bulk_apply for those, or for many edits in one patch. Read first with housecarl_read_record.")]
     public static string SetField(
         LoadOrderService svc,
         [Description("The record's FormID as 'XXXXXX:Plugin.esp' (6 hex digits, the defining master's filename).")]
             string formid,
         [Description("Dotted field path to edit, e.g. 'BasicStats.Damage', 'Name', 'Keywords'. Step into a list/dict element MID-PATH with brackets, e.g. 'Effects[0].Data.Magnitude' or 'VirtualMachineAdapter.Aliases[0].Scripts[0].Properties'. At the LEAF, edit a collection element with verb + key (SetAtIndex/Remove by index, Set/Remove by dict key) — not brackets.")]
             string field_path,
-        [Description("The value, coerced to the field's type: a number, an enum name (e.g. 'OneHanded'), or a FormID 'XXXXXX:Plugin.esp' for a reference. Omit only for Remove.")]
+        [Description("The value, coerced to the field's type: a number, an enum name (e.g. 'OneHanded'), or a FormID 'XXXXXX:Plugin.esp' for a reference. On a [Flags] enum, the flag(s) to Add/Remove (a name or comma-combo, e.g. 'ManualCostCalc'). Omit only for a Remove that whole-clears a NULLABLE field (scalar/link/flags → cleared/absent); a flags Remove WITH a value clears just that bit, and to turn all bits off Set the field to '0'.")]
             string? value = null,
-        [Description("Set (default) | Add | Remove | SetAtIndex | ReplaceAll. Set edits a scalar (or a dict element with key=); Add/Remove/SetAtIndex/ReplaceAll edit a collection.")]
+        [Description("Set (default) | Add | Remove | SetAtIndex | ReplaceAll. Set edits a scalar (or a dict element with key=); Add/Remove/SetAtIndex/ReplaceAll edit a collection. On a [Flags] enum (SPEL Flags, NPC Configuration.Flags, WEAP Data.Flags, …), Add SETS a bit and Remove CLEARS one, leaving the OTHER bits untouched — the way to flip one flag WITHOUT a Set re-listing (and silently dropping) every bit you didn't mention.")]
             string verb = "Set",
         [Description("Optional. The dict key or list index at the leaf (for a dict Set, a SetAtIndex/Remove on a list, etc.).")]
             string? key = null,
         [Description("Optional. The whole new list contents for ReplaceAll on a list (each coerced).")]
             string[]? values = null,
-        [Description("Optional. Base filename for the new patch (default 'houseCARL_Patch'); auto-suffixed if taken so a prior patch is never overwritten. Ignored if into= is given.")]
-            string patch_name = "houseCARL_Patch",
+        [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken so a prior patch is never overwritten. Ignored if into= is given.")]
+            string patch_name = "Patch",
         [Description("Optional. Filename of an existing patch (from a prior call) to EXTEND with this edit instead of writing a fresh one — the way to accumulate edits into one patch across calls/sessions. Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to edit IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
@@ -71,26 +71,35 @@ public static class WriteTools
      Description(
          "Apply MANY edits in ONE patch plugin (originals untouched) — the batch form of housecarl_set_field, and the way " +
          "to COMPOSE modeled structs. Each operation is {formid, field_path, verb, value?, key?, values?, entries?, " +
-         "compose?}: scalar/collection verbs work as in set_field; entries (a key→value map) drives a dict Merge or " +
+         "compose?, composes?}: scalar/collection verbs work as in set_field; entries (a key→value map) drives a dict Merge or " +
          "ReplaceAll; compose builds a modeled struct for an Add (a leveled-list entry, an effect — and a POLYMORPHIC " +
          "list element composes by its concrete arm type, e.g. a VMAD script property: verb=Add, " +
          "field_path='VirtualMachineAdapter.Scripts[0].Properties', compose={type:'ScriptObjectProperty', " +
          "fields:{Name:'MyProp', Flags:'Edited', Object:'XXXXXX:Plugin.esp', Alias:'-1'}}) or a polymorphic Set " +
          "(an arm) — e.g. merge a weapon into a leveled list with verb=Add, field_path='Entries', " +
          "compose={type:'LeveledItemEntry', sets:[{path:'Data.Level',value:'1'},{path:'Data.Count',value:'1'}," +
-         "{path:'Data.Reference',value:'<weapon FormID>'}]}. All edits land in ONE reviewable .esp; the patch spans " +
+         "{path:'Data.Reference',value:'<weapon FormID>'}]}. composes is the BATCH sibling of compose — a LIST of " +
+         "elements built in ONE op: verb=Add APPENDS each in order (author many leveled-list entries / condition rows " +
+         "at once, e.g. field_path='Conditions', composes=[{type:'Condition',...},{type:'Condition',...}]), verb=ReplaceAll " +
+         "CLEARS the list then appends each (the way to replace a whole modeled list — conditions, effects, entries). " +
+         "compose and composes are mutually exclusive; a bad element refuses the whole call with per-element " +
+         "(composes[i]) reasons. All edits land in ONE reviewable .esp; the patch spans " +
          "masters automatically when edits reference forms across several plugins (cross-master merge). ALL-OR-NOTHING " +
          "(Q3): if ANY operation is malformed or fails pre-flight, the whole call is refused with per-op reasons and " +
          "nothing is written — no partial patches. By default writes a fresh patch named patch_name; pass into= to extend " +
-         "an existing one. To edit an EXISTING plugin IN PLACE instead — rewriting your ORIGINAL file (incl. a mod houseCARL " +
+         "an existing one. PRECEDENCE with into= (pinned): a FormKey the patch ALREADY CARRIES (e.g. from a prior " +
+         "housecarl_forward_record) is edited AS-IS in the patch — the op lands on the patch's own copy; only a FormKey " +
+         "the patch does NOT yet carry copies the load-order winner in first. So forward_record from a source + " +
+         "bulk_apply into= is THE recipe to build on a specific plugin's version while a stale winner sits above it. " +
+         "To edit an EXISTING plugin IN PLACE instead — rewriting your ORIGINAL file (incl. a mod houseCARL " +
          "didn't make), not a patch — pass target=<plugin filename> + in_place=true (opt-in; the default lane leaves originals " +
          "untouched). Returns the patch path, masters, and per-op read-back.")]
     public static string BulkApply(
         LoadOrderService svc,
         [Description("The edits to apply, all into one patch. Each: {formid, field_path, verb, value?, key?, values?, entries?, compose?}.")]
             BulkOp[] operations,
-        [Description("Optional. Base filename for the new patch (default 'houseCARL_Patch'); auto-suffixed if taken. Ignored if into= is given.")]
-            string patch_name = "houseCARL_Patch",
+        [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken. Ignored if into= is given.")]
+            string patch_name = "Patch",
         [Description("Optional. Filename of an existing patch to EXTEND with these edits instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to edit IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
@@ -183,8 +192,8 @@ public static class WriteTools
             string? collection = null,
         [Description("Optional. For an EXTERIOR cell (record_type 'Cell' with parent= a Worldspace FormID): the cell's grid as \"X,Y\" (e.g. \"5,-12\") — houseCARL files it into the worldspace's block tree (block=floor(grid/32), subblock=floor(grid/8)). A 'Cell' with NO parent and NO grid is an INTERIOR cell (self-files by FormID). Ignored for non-Cell types.")]
             string? grid = null,
-        [Description("Optional. Base filename for the new patch (default 'houseCARL_Patch'); auto-suffixed if taken. Ignored if into= is given.")]
-            string patch_name = "houseCARL_Patch",
+        [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken. Ignored if into= is given.")]
+            string patch_name = "Patch",
         [Description("Optional. Filename of an existing houseCARL patch to add this new record to instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to create the new record straight INTO, IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. Full create parity in place — incl. a nested record (parent=): a parent the target already owns is edited to host the child, a parent from another plugin is overridden in (exactly as the patch lane does). OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
@@ -232,8 +241,8 @@ public static class WriteTools
         LoadOrderService svc,
         [Description("The records to create, all into one patch. Each: {record_type, editorid, operations?, parent?, collection?}. For a nested one-shot, declare the parent (e.g. a DialogTopic) BEFORE the children whose parent= names its editorid.")]
             CreateOp[] records,
-        [Description("Optional. Base filename for the new patch (default 'houseCARL_Patch'); auto-suffixed if taken. Ignored if into= is given.")]
-            string patch_name = "houseCARL_Patch",
+        [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken. Ignored if into= is given.")]
+            string patch_name = "Patch",
         [Description("Optional. Filename of an existing houseCARL patch to add these new records to instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to create the new records straight INTO, IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. Full create parity in place — incl. a nested one-shot (a topic AND its lines, a cell AND its refs): a same-call or target-owned parent hosts the child, a parent from another plugin is overridden in (exactly as the patch lane does). OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
@@ -273,16 +282,19 @@ public static class WriteTools
          "existing override is REPLACED by from_plugin's body (xEdit's copy-as-override overwrite — flagged per record in the " +
          "response). target= + in_place=true is the opt-in THIRD route: forward INTO an existing plugin's OWN file (incl. one " +
          "houseCARL didn't author) — same replace-on-collision semantics, same one-time acknowledge= consent as the sibling " +
-         "write tools, master header grown from the copied bodies. Returns the patch path, masters, and per-record what was " +
-         "copied + the current winner it will out-rank (a forward whose version is ALREADY winning is flagged redundant).")]
+         "write tools, master header grown from the copied bodies. THE STALE-WINNER BYPASS RECIPE (pinned): forward from " +
+         "the source you want, then bulk_apply into= the same patch — the ops edit the patch's FORWARDED copy, never " +
+         "re-resolve the (stale) load-order winner, so you build on the forwarded body directly. Returns the patch path, " +
+         "masters, and per-record what was copied + the current winner it will out-rank (a forward whose version is " +
+         "ALREADY winning is flagged redundant).")]
     public static string ForwardRecord(
         LoadOrderService svc,
         [Description("The record(s) to forward, each as 'XXXXXX:Plugin.esp' (6 hex digits, the defining master's filename). All are copied from the SAME from_plugin.")]
             string[] formids,
         [Description("The plugin filename whose version of the record(s) to copy (e.g. 'Authoria - ATweaks.esp', or a master like 'Skyrim.esm' to revert to vanilla). Must be an active plugin that DEFINES or overrides each formid.")]
             string from_plugin,
-        [Description("Optional. Base filename for the new patch (default 'houseCARL_Patch'); auto-suffixed if taken so a prior patch is never overwritten. Ignored if into= is given.")]
-            string patch_name = "houseCARL_Patch",
+        [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken so a prior patch is never overwritten. Ignored if into= is given.")]
+            string patch_name = "Patch",
         [Description("Optional. Filename of an existing houseCARL patch to ADD these forwards to instead of writing a fresh one (accumulate across calls — e.g. forward from a different source plugin into the same patch). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match). If the patch already carries a forwarded FormKey, its existing override is REPLACED by from_plugin's body.")]
             string? into = null,
         [Description("When true, the response ALSO returns each forwarded record IN FULL, read back from the written patch file on disk (every field, deep). The pre-enable verification: confirm the copied version is exactly the source's, WITHOUT enabling the patch in MO2 (the written file's content, not load-order truth).")]
@@ -350,13 +362,18 @@ public static class WriteTools
          "houseCARL scans the WHOLE load order for such external referencers (a one-pass walk — can take ~25s on a big order): " +
          "if NONE, it's a clean compaction; if SOME, the call is REFUSED and lists them, UNLESS repoint_externals=true, which " +
          "ALSO rewrites each of them in place to follow the renumber (needs acknowledge=true; no backup of them either). " +
-         "Refuses loud + writes nothing on: the plugin not active / unparseable / not on disk; MORE records than the light " +
+         "The target need NOT be active: a plugin on disk but not (yet) in the load order — e.g. the patch houseCARL just " +
+         "wrote, before the MO2 refresh — is resolved by filename across ALL mod folders and compacted OFF-ORDER (its " +
+         "declared masters must still be active). An override-only plugin with esl=true takes the FLAG-ONLY lane: nothing " +
+         "to renumber, every record copies verbatim, the ESL flag is set (always valid — the light window only constrains " +
+         "originating records). Refuses loud + writes nothing on: the plugin found nowhere on disk / ambiguous across " +
+         "folders / unparseable; an override-only plugin with esl=false (nothing to do); MORE records than the light " +
          "range holds (the hard 2048 ESL ceiling — named, never truncated); a declared master not active; a serialize fault. " +
          "Note: references compiled into Papyrus scripts (.pex hardcoded FormIDs / GetFormFromFile) are NOT remappable — " +
          "verify scripted records after compacting.")]
     public static string CompactPlugin(
         LoadOrderService svc,
-        [Description("The plugin's filename to compact (e.g. 'CoolMod.esp') — must be active in your load order. The compacted output keeps this EXACT basename.")]
+        [Description("The plugin's filename to compact (e.g. 'CoolMod.esp'). Usually active in your load order; a plugin on disk but not in the order (a fresh houseCARL patch, a disabled mod) is resolved by filename and compacted OFF-ORDER — its declared masters must still be active. The compacted output keeps this EXACT basename.")]
             string plugin,
         [Description("When true (default), renumber into the light/ESL range (0x800–0xFFF, 2048 IDs) and flag the result a light master (ESPFE) — the canonical 'compact for ESL'. false = renumber contiguously from 0x800 with no light flag or 2048 ceiling (just closes FormID gaps).")]
             bool esl = true,
@@ -1038,7 +1055,7 @@ public sealed record BulkOp
     [JsonPropertyName("field_path"), Description("Dotted field path, e.g. 'BasicStats.Damage' or 'Entries'. Step into a list/dict element mid-path with brackets, e.g. 'Effects[0].Data.Magnitude'; at the LEAF use verb + key, not brackets.")]
     public string? FieldPath { get; init; }
 
-    [JsonPropertyName("verb"), Description("Set (default) | Add | Remove | SetAtIndex | ReplaceAll | Merge.")]
+    [JsonPropertyName("verb"), Description("Set (default) | Add | Remove | SetAtIndex | ReplaceAll | Merge | CopyFrom (deep-copy the field at field_path from from_plugin's version — see from_plugin).")]
     public string Verb { get; init; } = "Set";
 
     [JsonPropertyName("value"), Description("The value (coerced to the field's type). Omit for Remove / ReplaceAll / Merge / compose.")]
@@ -1055,6 +1072,12 @@ public sealed record BulkOp
 
     [JsonPropertyName("compose"), Description("Build a modeled struct: an arm for a polymorphic Set, or the element for a struct-element Add (e.g. a leveled-list entry; for a polymorphic list like VMAD Scripts[i].Properties, the element's CONCRETE arm type, e.g. 'ScriptObjectProperty').")]
     public StructInput? Compose { get; init; }
+
+    [JsonPropertyName("composes"), Description("Build MANY modeled list elements in ONE op — the batch sibling of compose (each entry the same {type, fields?, ctor_args?, sets?} shape). With verb=Add, APPENDS each element in order (e.g. 10 leveled-list entries, a whole block of condition rows in one op instead of ten Adds). With verb=ReplaceAll, CLEARS the list then appends each — the way to replace a whole modeled list (conditions, effects, entries); pass composes=[] with ReplaceAll to CLEAR the list to empty (the modeled twin of values=[]). LIST elements only; mutually exclusive with compose/value/values. All-or-nothing: a bad element refuses the whole call with per-element (composes[i]) reasons.")]
+    public StructInput[]? Composes { get; init; }
+
+    [JsonPropertyName("from_plugin"), Description("For verb=\"CopyFrom\" ONLY: the plugin whose version of THIS record to deep-copy the field at field_path from — an ACTIVE plugin, OR a plugin FILE on disk that isn't in the load order (e.g. a disabled OLD patch you want to re-assert a field from). CopyFrom takes no value/values/entries/compose/composes — the source IS from_plugin's version of the field. Honors forward-then-edit precedence: into= a patch that already carries the record copies onto the patch's own version. Copies a WHOLE field's value (scalar, formlink, modeled list, sub-struct); it can't copy owned child records (forward the whole record with housecarl_forward_record instead).")]
+    public string? FromPlugin { get; init; }
 }
 
 /// <summary>One brand-new record to create off the wire (housecarl_bulk_create) — the batch element matching the scalar

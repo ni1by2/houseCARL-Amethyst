@@ -114,6 +114,11 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
     {
         c.Timeout = TimeSpan.FromSeconds(20);
         c.DefaultRequestHeaders.UserAgent.ParseAdd("houseCARL (+https://github.com/Avick3110/houseCARL)");
+        // Nexus API Acceptable-Use Policy requires Application-Name + Application-Version on API traffic
+        // (article 114). We send them on every request regardless of tier — cheap, compliant, and it identifies
+        // houseCARL honestly to Nexus. The version is the exe's stamped release (ServerVersion), 0.0.0-dev unstamped.
+        c.DefaultRequestHeaders.Add("Application-Name", "houseCARL");
+        c.DefaultRequestHeaders.Add("Application-Version", ServerVersion());
     });
 
     return (svc, explicitMode, instanceDir, instanceSource, configNote);
@@ -133,10 +138,20 @@ static void AddMcp(IServiceCollection services, bool stdio)
             "houseCARL exposes the Skyrim Special Edition load order at the data layer. Reads return the TRUE " +
             "load-order winner and, on request, the conflict tree; writes go to a NEW plugin, leaving originals " +
             "untouched. FormIDs are 'XXXXXX:Plugin.esp' (6 hex digits, then the defining master's filename). " +
-            "Beyond the local load order, houseCARL also reaches Nexus Mods directly: housecarl_nexus_search " +
-            "(find a mod by name) and housecarl_nexus_mod (fetch a mod page — requirements, recommended INI " +
-            "settings, accurate latest version, full description, by id or URL). Prefer these over a browser or " +
-            "generic web search for any Nexus Mods lookup.";
+            "Beyond the local load order, houseCARL reaches Nexus Mods directly and KEYLESSLY (no API key): " +
+            "housecarl_nexus_search (find a mod by name); housecarl_nexus_mod (a mod's requirements, recommended INI " +
+            "settings, accurate latest version and full page description, plus files=true for the complete per-file " +
+            "list and changelog=true / since= for the per-version CHANGELOG and update delta, by id or URL); " +
+            "housecarl_nexus_check_updates (batch FILE-LEVEL update check — pass each mod as 'id#fileid' to tell CURRENT " +
+            "from OUTDATED for the EXACT file installed, correct for the multi-file pages where a version compare lies); and " +
+            "housecarl_nexus_identify (trace a file to its source mod by MD5 hash); and housecarl_nexus_graphql (a RAW " +
+            "read-only query over the same keyless GraphQL — the completeness backstop: prefer the curated tools above, and " +
+            "reach for this ONLY for a field they don't surface yet, e.g. a mod's page tags). For mod updates, start with " +
+            "housecarl_update_status — it reads MO2's OWN local update cache with NO network to narrow the list AND prints " +
+            "each mod's 'id#fileid' verify token — then feed those tokens to housecarl_nexus_check_updates to confirm live. " +
+            "Prefer these over a browser or generic web search for any Nexus lookup: " +
+            "houseCARL can already read changelogs, file lists, and update status directly, so never hand-roll scripts " +
+            "around a rendered Nexus page.";
     });
     // Stateless HTTP: each request is independent (no MCP session affinity); the resolver singleton persists across
     // requests regardless. Stdio is inherently a single long-lived session over the pipe.

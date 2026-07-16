@@ -38,16 +38,40 @@ public static class CiAll
         ("pkcu-regression", PkcuProbe.RunRegression),
         ("depth-leak-guard", DepthLeakProbe.RunGuard),
         ("vmad-property-read-guard", VmadPropertyReadProbe.RunGuard),
+        // depth-2 element identity (#198): a struct with no Name/EditorID/Title but EXACTLY ONE FormLink surfaces
+        // that link as its identity ([PerkPlacement] Perk=…) instead of a bare opaque [PerkPlacement]; name-identity
+        // still wins over the lone link (fallback fires only when no name-like identity exists). Self-contained.
+        ("element-identity-guard", ElementIdentityProbe.RunGuard),
         ("floi-read-guard", FloiReadProbe.RunGuard),
         ("floi-fields-guard", FloiFieldsProbe.RunGuard),
         ("forward-from-plugin-guard", ForwardFromPluginProbe.RunGuard),
         ("extend-resolve-guard", ExtendResolveProbe.RunGuard),
+        // Patch-stem load-order collision (PR #192 review): the default stem "Patch" → "Patch.esp" basename is common,
+        // and mod-folder uniqueness alone can't see a same-named plugin in another mod, so UniqueStem now also uniquifies
+        // against the active load order. Drives the real service write on a synth order that already holds an active
+        // "Patch.esp"; a default-stem write must dodge to "Patch_001", a non-colliding stem stays bare, base byte-intact.
+        ("patch-stem-collision-guard", PatchStemCollisionProbe.RunGuard),
         ("create-plugin-guard", CreatePluginGuardProbe.RunGuard),
         ("value-predicate-guard", ValuePredicateProbe.RunGuard),
         ("effect-chain-guard", EffectChainProbe.RunGuard),
         ("check-errors-guard", CheckErrorsProbe.RunGuard),
         ("script-property-check-guard", ScriptPropertyCheckProbe.RunGuard),
         ("source-display-guard", SourceDisplayProbe.RunGuard),
+        // BULK-PRIMITIVES Wave 1 — the three type-agnostic cross_plugin_query additions (PLAN P1/P2/P4): defined_in=
+        // (definitions vs touches), list-valued references= (OR + matches= un-merge), group_by= (winner|type|
+        // defined_in count table). Drives the real service scan + the tool-layer group_by/fields guard on a synthetic
+        // master+replacer order; group_by counts are cross-checked against a hand tally; both loud refusals asserted.
+        ("bulk-query-primitives-guard", BulkQueryPrimitivesProbe.RunGuard),
+        // WAVE 2 output contract — housecarl_resolve (P3), winner_fields= (P5), format=json (P6), resolve_names= (P7).
+        // Drives the real service + tool layer on a synthetic order with NAMED weapons; asserts identity resolution,
+        // per-item error isolation, always-valid JSON with token parity, the winner-vs-scoped body choice, and the
+        // display-only link annotation.
+        ("bulk-primitives-wave2-guard", BulkPrimitivesWave2Probe.RunGuard),
+        // WAVE 3 write batch + diff — composes= (P8a batch struct-list Add/ReplaceAll), CopyFrom (P8b field transplant),
+        // housecarl_diff_record (P8c pairwise diff). Drives the real tool path on a synthetic order (+ an off-order pole
+        // for CopyFrom/diff); asserts append-vs-clear semantics, all-or-nothing per-element reasons, copy-then-readback
+        // equality across field kinds + named non-transplantable refusals, and the two-pole diff incl. an off-order side.
+        ("bulk-primitives-wave3-guard", BulkPrimitivesWave3Probe.RunGuard),
         ("writelock-guard", WriteLockProbe.RunGuard),
         ("inplace-guard", InPlaceProbe.RunGuard),
         ("subclass-remove-guard", SubclassRemoveGuardProbe.RunGuard),
@@ -77,6 +101,11 @@ public static class CiAll
         ("nullarm-guard", NullArmGuardProbe.RunGuard),
         ("formlink-null-guard", FormLinkNullProbe.RunGuard),
         ("formlink-remove-guard", FormLinkRemoveProbe.RunGuard),
+        // Flags-enum bit verbs (HCBR-2026-07-15): Add/Remove on a [Flags] enum are bit-SET / bit-CLEAR, preserving the
+        // OTHER bits — closing the silent-clobber a whole-value Set caused. Pre-flight admits the verb + validates the
+        // flag (gate), apply ORs/AND-NOTs the bit (WriteEngine), the two keyed off the SAME FlagsAttribute test; the
+        // anti-clobber Add + scoped-not-universal controls are the teeth. Self-contained (Quest.Flags, no Skyrim.esm).
+        ("flags-bit-verb-guard", FlagsBitVerbProbe.RunGuard),
         ("gendered-nav-guard", GenderedNavProbe.RunGuard),
         ("loadorder-status-guard", LoadOrderStatusProbe.RunGuard),
         ("compile-ergonomics-guard", CompileErgonomicsProbe.RunGuard),
@@ -99,6 +128,17 @@ public static class CiAll
         // the honest-degrade paths (real-PE Read → NotSkse; non-PE / missing → Unreadable, never a throw).
         ("skse-reader-guard", SkseReaderProbe.RunGuard),
         ("mo2instance-probe", Mo2InstanceProbe.RunProbe),
+        // meta.ini Nexus-update-cache parse (Tier 0 PR review fold): the QSettings quirks + exact-key vs [installedFiles]
+        // 1\modid, the fiddliest OFFLINE logic behind housecarl_update_status — locked with synthetic fixtures. Now also
+        // pins the [installedFiles] N\fileid capture (single / multi / size=0 no-fileid) the file-level check joins on.
+        ("mo2-modmeta-guard", Mo2ModMetaProbe.RunGuard),
+        // FILE-LEVEL Nexus update check (fixes the multi-file-page false positive): ComputeStatus verdicts (live→current,
+        // archived→outdated+same-name pointer, missing→file-gone, no-fileid→loud fallback), the id#fileid parse, and the
+        // same-modId-across-folders fileid MERGE (never dedup-drop). Pure, network-free; synthetic AMON-shaped fixtures.
+        ("nexus-file-check-guard", NexusFileCheckProbe.RunGuard),
+        // The raw GraphQL passthrough backstop: read-only mutation/subscription refusal (an op keyword at doc start or
+        // after a prior '}', never a field that merely contains the word) + BOUNDED pretty-printed output. Pure, no network.
+        ("nexus-graphql-guard", NexusGraphqlProbe.RunGuard),
         ("atomic-commit-guard", AtomicCommitProbe.RunGuard),
         ("place-asset-guard", PlaceAssetProbe.RunGuard),
         // NIF layer Wave 1: NifService.Inspect decodes an authored SE mesh's N2-whitelist values (version, census, node

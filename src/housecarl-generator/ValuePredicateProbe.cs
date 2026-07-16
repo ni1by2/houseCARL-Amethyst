@@ -214,6 +214,56 @@ public static class ValuePredicateProbe
         // parse: `has` is a recognized operator.
         Check("parse: `has` accepted", FieldPredicateSet.Parse(new[] { "BodyTemplate.FirstPersonFlags has 16" }).Error is null);
 
+        // ============== PRESENCE tests: exists / missing (no operand) — "which records CARRY this field" (#197) ==============
+        Console.WriteLine();
+        Console.WriteLine("-- presence: exists / missing --");
+
+        // A SUBSTRUCT present on every MGEF (Archetype, set by MakeMgef; test 9 confirms it reads as a container
+        // summary) — exists matches all, missing none.
+        CheckSet("Archetype exists  (substruct present on all)",
+            Run(new[] { "Archetype exists" }, mgefBodies), Expect(mgefs, _ => true));
+        CheckSet("Archetype missing  (complement — none)",
+            Run(new[] { "Archetype missing" }, mgefBodies), Expect(mgefs, _ => false));
+
+        // A SCALAR present on every MGEF (MagicSkill, set by MakeMgef) — exists matches all.
+        CheckSet("MagicSkill exists  (scalar present on all)",
+            Run(new[] { "MagicSkill exists" }, mgefBodies), Expect(mgefs, _ => true));
+
+        // A whole LIST — the count-sensitive case proving present-and-NON-EMPTY (an EMPTY list is NOT carried).
+        // Three Armors: Keywords non-empty / empty / absent(null). exists matches ONLY the non-empty one; missing
+        // the other two. The empty-vs-carried split is exactly what the structural ContainerCount buys — a naive
+        // "container summary == present" would wrongly match the empty list.
+        {
+            var m2 = new SkyrimMod(new ModKey("hcpresence", ModType.Plugin), SkyrimRelease.SkyrimSE);
+            var kwFull = m2.Armors.AddNew();  kwFull.Keywords = new() { new FormLink<IKeywordGetter>(projX) };  // carried
+            var kwEmpty = m2.Armors.AddNew(); kwEmpty.Keywords = new();                                          // present-but-EMPTY
+            var kwNull = m2.Armors.AddNew();                                                                     // absent (null)
+            var listCohort = new List<IMajorRecordGetter> { kwFull, kwEmpty, kwNull };
+            var (matchedE, setE) = RunWithSet(new[] { "Keywords exists" }, listCohort);
+            CheckSet("Keywords exists  (non-empty ONLY — empty & null excluded)",
+                matchedE, new HashSet<FormKey> { kwFull.FormKey });
+            Check("Keywords exists: healthy presence scan — no false-alarm note (2 of 3 absent is a TRUE result)",
+                setE.AccountingNote() is null);
+            CheckSet("Keywords missing  (empty & null — complement)",
+                Run(new[] { "Keywords missing" }, listCohort),
+                new HashSet<FormKey> { kwEmpty.FormKey, kwNull.FormKey });
+        }
+
+        // Q3: a MISTYPED presence path (no such field on ANY record) fails LOUD — not a silent 0.
+        {
+            var (matched, set) = RunWithSet(new[] { "Archetyp exists" }, mgefBodies);  // typo'd 'Archetyp'
+            var note = set.AccountingNote();
+            Check("mistyped exists: 0 matches", matched.Count == 0);
+            Check("mistyped exists: LOUD 'not a field' note", note is not null && note.Contains("NOT A FIELD", StringComparison.Ordinal));
+            Console.WriteLine($"     note: {Trunc(note)}");
+        }
+
+        // parse: exists / missing accepted; a trailing value is refused (they take NO operand).
+        Check("parse: `exists` accepted", FieldPredicateSet.Parse(new[] { "VirtualMachineAdapter exists" }).Error is null);
+        Check("parse: `missing` accepted", FieldPredicateSet.Parse(new[] { "VirtualMachineAdapter missing" }).Error is null);
+        Check("parse: `exists <value>` refused (presence takes no operand)", FieldPredicateSet.Parse(new[] { "Archetype exists foo" }).Error is not null);
+        Check("parse: `missing <value>` refused", FieldPredicateSet.Parse(new[] { "Archetype missing foo" }).Error is not null);
+
         // ============================ Q3 TEETH (no silent wrong answer) ============================
         Console.WriteLine();
         Console.WriteLine("-- Q3 teeth --");
@@ -228,12 +278,42 @@ public static class ValuePredicateProbe
             Console.WriteLine($"     note: {Trunc(note)}");
         }
 
-        // 9. LIST path (Keywords) reads as a container → no value → surfaced, never silently matched.
+        // 8b. VALID field, UNSET on ALL scanned → still LOUD, but DISTINGUISHED from a mistyped path: the note says
+        //     the field is valid/unset and does NOT call it "mistyped" (HCBR-2026-07-12 — 'Prompt' is a real INFO
+        //     field, just unset on every one of the 531 scanned; the old "likely a mistyped path" note sent the
+        //     reporter hunting a non-bug). 'Name' (FULL) is a real MagicEffect field left unset by MakeMgef.
         {
-            var (matched, set) = RunWithSet(new[] { "Keywords = 0ABCDE:hcvalguard.esp" }, mgefBodies);
+            var (matched, set) = RunWithSet(new[] { "Name = Whatever" }, mgefBodies);
+            var note = set.AccountingNote();
+            Check("valid-but-unset: 0 matches", matched.Count == 0);
+            Check("valid-but-unset: LOUD note (not silent zero)",
+                  note is not null && note.Contains("no readable value", StringComparison.Ordinal));
+            Check("valid-but-unset: says VALID/unset, NOT 'mistyped'",
+                  note is not null && note.Contains("VALID", StringComparison.Ordinal) && !note.Contains("mistyped", StringComparison.Ordinal));
+            Console.WriteLine($"     note: {Trunc(note)}");
+        }
+
+        // 9. CONTAINER path (a non-scalar leaf — here the Archetype substruct, populated on every MGEF fixture)
+        //    reads as a container summary → no scalar value → surfaced with the container-specific guidance, never
+        //    silently matched. (A whole-LIST path lands in the same branch by the same '['-summary signal.)
+        {
+            var (matched, set) = RunWithSet(new[] { "Archetype = whatever" }, mgefBodies);
+            var note = set.AccountingNote();
+            Check("container path: 0 matches", matched.Count == 0);
+            Check("container path: surfaced (note mentions container/list)",
+                  note is not null && note.Contains("container/list", StringComparison.Ordinal));
+            Console.WriteLine($"     note: {Trunc(note)}");
+        }
+
+        // 9b. A whole-LIST path (a POPULATED Keywords list) lands in the same container branch — exercising the
+        //     [list: N item(s)] rendering directly, not just the substruct summary above (review item 3).
+        {
+            var kwArmo = mod.Armors.AddNew();
+            kwArmo.Keywords = new() { new FormLink<IKeywordGetter>(projX) };   // a present, non-empty list → container summary, never "unset"
+            var (matched, set) = RunWithSet(new[] { "Keywords = 0FFFFF:hcvalguard.esp" }, new List<IMajorRecordGetter> { kwArmo });
             var note = set.AccountingNote();
             Check("list path: 0 matches", matched.Count == 0);
-            Check("list path: surfaced (note mentions list/container)",
+            Check("list path: surfaced (note mentions container/list)",
                   note is not null && note.Contains("container/list", StringComparison.Ordinal));
         }
 

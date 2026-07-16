@@ -17,6 +17,7 @@ public sealed class WriteRequest
     public string[]? Values { get; init; }              // list ReplaceAll — the whole new contents
     public Dictionary<string, string>? Entries { get; init; } // dict ReplaceAll / Merge — key→value pairs
     public StructSpec? Struct { get; init; }            // build-from-parts spec: the arm for a polymorphic Set, OR the new element for a struct-element Add
+    public IReadOnlyList<StructSpec>? Structs { get; init; } // P8a: a LIST of build-from-parts elements (composes=) — Add appends each, ReplaceAll clears then appends each
 }
 
 /// <summary>
@@ -229,6 +230,21 @@ public sealed class CorpusRulebook
         if (leafPolyErr is not null) return leafPolyErr;
         if (leaf is null) return FieldNotFound(current, leafName);
 
+        // (3a-composes) P8a batch struct-list surface: composes= is a distinct input shape (a LIST of build-from-parts
+        // element specs) that short-circuits the singular verb/value pipeline — Add appends each, ReplaceAll clears then
+        // appends each (the modeled-list replace the singular composable block below still defers; THIS is that input
+        // surface). Validated whole, all-or-nothing per element (Q3). Gated FIRST so composes on a dict/substruct gets a
+        // composes-specific message, not the singular VerbLegality reject.
+        if (req.Structs is not null)
+            return ComposesLegality(leaf, leafOwner, req, siblingEditorIds);
+
+        // (3a-copyfrom) P8b CopyFrom transplants the WHOLE field from another plugin's version — a distinct input shape
+        // (no wire value; the source is from_plugin). Gate writable + not-identity + a transplantable KIND here; the
+        // SOURCE resolution (is from_plugin in the order / does it define the record) is the cleave's Phase 1. The one
+        // non-transplantable kind is an owned-child record collection — refused by name (forward the whole record).
+        if (string.Equals(req.Verb, "CopyFrom", StringComparison.Ordinal))
+            return CopyFromLegality(leaf, leafOwner);
+
         // (3a) verb legal for this cardinality?
         if (VerbLegality(leaf, req) is { } verbErr) return verbErr;
 
@@ -257,6 +273,22 @@ public sealed class CorpusRulebook
         return inner.Length == 0 ? null : inner;
     }
 
+    /// <summary>True iff the leaf is a <c>[Flags]</c>-attributed enum — the ONLY scalar/enum kind the bit verbs
+    /// <c>Add</c>/<c>Remove</c> operate on (a single-value enum like CastType has no bits to OR/clear, so it stays
+    /// refused). Resolved from the field's OWN assembly-qualified type — never the simple-name catalog, which
+    /// collides on shared enum names ("Flags", "MajorFlags", …) — checking <see cref="FlagsAttribute"/>. False when
+    /// the AQ won't resolve (Q3 — never ASSUME flags-ness, so a bit verb is refused rather than accepted-then-thrown).
+    /// The SAME resolution the apply path keys on (WriteEngine.ApplyScalarVerb's [Flags] gate), so gate and apply
+    /// can't drift on which leaves accept a bit verb.</summary>
+    static bool IsFlagsEnumLeaf(FieldSchema leaf)
+    {
+        if (leaf.Cardinality != "enum") return false;
+        var aq = leaf.MutableTypeAssemblyQualified ?? leaf.GetterTypeAssemblyQualified;
+        if (WriteEngine.ResolveType(aq) is not { } rt) return false;
+        var u = Nullable.GetUnderlyingType(rt) ?? rt;
+        return u.IsEnum && u.IsDefined(typeof(FlagsAttribute), false);
+    }
+
     // ---- verb × cardinality (plan §3 P-VERBS) ----
     static string? VerbLegality(FieldSchema leaf, WriteRequest req)
     {
@@ -273,13 +305,24 @@ public sealed class CorpusRulebook
                 // MISSING key reaches apply and throws UNNAMED (Coerce(null)). A list Add appends — no key. Gate dict-Add
                 // key PRESENCE here, the structural twin of Set-on-dict above (key VALUE-shape is ValueLegality's step-4-key).
                 if (c == "dict") return hasKey ? null : $"Add on dict field '{leaf.Name}' requires a key.";
-                return c == "list" ? null : $"Add is only valid on list/dict; '{leaf.Name}' is {c}.";
+                if (c == "list") return null;
+                // A [Flags] enum accepts Add as a bit-SET (OR the flag in, other bits preserved) — the fix for the
+                // silent-clobber a whole-value Set caused (HCBR-2026-07-15). A bit verb takes no key (it is not a
+                // collection); the flag VALUE is gated in ValueLegality. Non-flags scalars/enums still refuse below.
+                if (IsFlagsEnumLeaf(leaf))
+                    return hasKey ? $"Add on flags field '{leaf.Name}' takes no key — the value IS the flag to set." : null;
+                return $"Add is only valid on a list/dict or a [Flags] enum; '{leaf.Name}' is {c}.";
             case "Remove":
                 // A dict Remove identifies the entry to drop BY KEY (ApplyDictVerb -> Coerce(req.Key!, kType)); a MISSING
                 // key throws UNNAMED at apply. A list Remove is by-index-OR-by-value (ApplyListVerb): a null key legally
                 // falls back to remove-by-value, so list Remove needs NO key — gate dict-Remove key PRESENCE only.
                 if (c == "dict") return hasKey ? null : $"Remove on dict field '{leaf.Name}' requires a key.";
                 if (c == "list") return null;
+                // A [Flags] enum accepts Remove as a bit-CLEAR (AND-NOT the flag out, other bits preserved) — the
+                // Remove twin of the flags Add above (HCBR-2026-07-15). Distinct from the nullable-scalar whole-clear
+                // below: it clears ONE bit, not the whole field. No key; the flag VALUE is gated in ValueLegality.
+                if (IsFlagsEnumLeaf(leaf))
+                    return hasKey ? $"Remove on flags field '{leaf.Name}' takes no key — the value IS the flag to clear." : null;
                 return leaf.Nullable ? null : $"Remove on non-nullable {c} field '{leaf.Name}' is not valid.";
             case "ReplaceAll":
                 return c is "list" or "dict" ? null : $"ReplaceAll is only valid on list/dict; '{leaf.Name}' is {c}.";
@@ -292,8 +335,62 @@ public sealed class CorpusRulebook
             case "Merge":
                 return c == "dict" ? null : $"Merge is only valid on dict; '{leaf.Name}' is {c}.";
             default:
-                return $"Unknown verb '{req.Verb}'. Legal: Set, Add, Remove, ReplaceAll, SetAtIndex, Merge.";
+                return $"Unknown verb '{req.Verb}'. Legal: Set, Add, Remove, ReplaceAll, SetAtIndex, Merge, CopyFrom.";
         }
+    }
+
+    /// <summary>P8a — validate a composes= batch (a LIST of build-from-parts element specs) whole: Add appends each,
+    /// ReplaceAll clears then appends each. LIST-of-modeled-elements ONLY (a dict needs keyed entries; a substruct/
+    /// scalar takes compose=/value=). Each element is validated by the SAME <see cref="StructElementLegality"/> the
+    /// singular compose Add uses (poly-base arm resolution + recursive contents), so composes can never admit a shape
+    /// the singular path rejects. All-or-nothing: the first bad element names itself (composes[i]) and refuses the whole
+    /// op (Q3). ReplaceAll here OPENS the modeled-list replace the singular composable block defers — that block has no
+    /// per-element input surface; composes IS that surface.</summary>
+    string? ComposesLegality(FieldSchema leaf, TypeSchema owner, WriteRequest req,
+        IReadOnlyCollection<string>? siblingEditorIds)
+    {
+        if (req.Verb is not ("Add" or "ReplaceAll"))
+            return $"composes= appends/replaces a LIST of modeled elements — use it with Add (append each) or " +
+                   $"ReplaceAll (clear, then append each), not {req.Verb}. (For one element use compose=; to overwrite " +
+                   "one index use SetAtIndex with compose=.)";
+        if (leaf.Cardinality != "list")
+            return $"composes= builds a LIST of modeled elements, but '{leaf.Name}' on '{owner.Name}' is a " +
+                   $"{leaf.Cardinality}. (A dict takes keyed entries, not a positional list; a substruct/scalar takes " +
+                   "compose= / value=.)";
+        if (!IsComposableElement(leaf))
+            return $"'{leaf.Name}' on '{owner.Name}' holds " +
+                   (leaf.FormLinkTarget is not null ? "formlink" : "coercible") +
+                   $" values ({leaf.ElementTypeRef ?? leaf.ElementType}), not modeled structs — use values= " +
+                   "(ReplaceAll) / value= (Add), not composes=.";
+        if (req.Structs!.Count == 0)
+            return req.Verb is "ReplaceAll"
+                ? null   // ReplaceAll composes=[] = CLEAR the modeled list (the modeled twin of ReplaceAll values=[]); apply Clears + appends nothing
+                : $"composes= for '{leaf.Name}' is empty — supply one or more element specs (only ReplaceAll composes=[] is meaningful, to clear the list).";
+        for (int i = 0; i < req.Structs.Count; i++)
+            if (StructElementLegality(leaf, req.Structs[i], siblingEditorIds) is { } elemErr)
+                return $"composes[{i}]: {elemErr}";
+        return null;
+    }
+
+    /// <summary>P8b — validate a CopyFrom target leaf: writable, not record identity, and a TRANSPLANTABLE kind. The one
+    /// non-transplantable kind is an owned-child record collection (Cell.Persistent, DialogTopic.Responses, …) — CopyFrom
+    /// copies a FIELD's value, not owned child records; refuse by name and redirect to forward_record (whole record) or
+    /// the record axis (create_record). Everything else — scalar/enum/value, formlink, formlink/modeled list, sub-struct,
+    /// polymorphic arm — WriteEngine.CopyField transplants by construction. The SAME record-element predicate the write
+    /// verbs use (step 4-rec), so gate and apply can't drift on what counts as an owned child.</summary>
+    string? CopyFromLegality(FieldSchema leaf, TypeSchema owner)
+    {
+        if (leaf.IsIdentity)
+            return $"'{leaf.Name}' on '{owner.Name}' is record identity (FormKey/ModKey), not a copyable content field.";
+        if (!leaf.Writable) return WritabilityRejection(owner, leaf);
+        if (leaf.Cardinality is "list" or "dict" && SchemaClassifier.ClassifyElement(leaf, _corpus) == ElementKind.Record)
+            return $"'{leaf.Name}' on '{owner.Name}' holds owned child records ({leaf.ElementTypeRef}); CopyFrom copies a " +
+                   "FIELD's value, not owned child records. To carry the WHOLE record from another plugin use " +
+                   "housecarl_forward_record; a child record is authored on its own (housecarl_create_record with parent=).";
+        if (leaf.Cardinality == "dict")
+            return $"'{leaf.Name}' on '{owner.Name}' is a dict field; CopyFrom transplants scalar / formlink / list / " +
+                   "sub-struct fields — a dict isn't transplanted yet. Set its entries individually, or forward the whole record.";
+        return null;
     }
 
     // ---- writability rejection (plan §3 P-DISC) ----
@@ -475,6 +572,29 @@ public sealed class CorpusRulebook
                 return CoercibilityReject(leaf);
             }
             return CheckValue(leaf.Type, req.Value, $"value for '{leaf.Name}'",
+                leaf.MutableTypeAssemblyQualified ?? leaf.GetterTypeAssemblyQualified);
+        }
+        // (step 4-flags) Add/Remove on a [Flags] enum are bit-SET / bit-CLEAR (HCBR-2026-07-15): the value is the
+        // flag(s) to OR in or AND-NOT out. VerbLegality already admitted the verb for a [Flags] leaf; validate the
+        // flag NAME/bits here with the SAME CheckValue recognizer a Set uses (the field's real enum AQ), so a bogus
+        // flag fails LOUD at the gate instead of throwing Enum.Parse at apply (Q3 accept-then-throw). Gated ahead of
+        // the collection branches (which are list/dict-scoped and would ignore an enum leaf anyway) so it can't fall
+        // through to the terminal `return null` accept.
+        if (req.Verb is "Add" or "Remove" && IsFlagsEnumLeaf(leaf))
+        {
+            if (req.Value is null)
+            {
+                // Add always needs the bit to set. A VALUELESS Remove keeps its pre-bit-verb meaning — the WHOLE-CLEAR
+                // of a nullable scalar (the ONLY path to make a nullable flags field ABSENT/null) — preserved by
+                // construction so the bit verbs ADD capability without removing any (no silent trade-away): allowed iff
+                // the field is nullable, else refused with the turn-all-off redirect (Set '0'), never a dead end (Q3).
+                if (req.Verb == "Add")
+                    return $"Add on flags field '{leaf.Name}' requires a flag value (the bit to set).";
+                return leaf.Nullable ? null
+                    : $"Remove on flags field '{leaf.Name}' needs the flag to clear (value=<flag>) — a non-nullable flags " +
+                      "field can't be whole-cleared; to turn ALL bits off, Set it to '0'.";
+            }
+            return CheckValue(leaf.Type, req.Value, $"flag value for '{leaf.Name}'",
                 leaf.MutableTypeAssemblyQualified ?? leaf.GetterTypeAssemblyQualified);
         }
         // (step 4-pre) ELEMENT-VALUE PRESENCE — the collection twin of the singular Set "requires a value" reject

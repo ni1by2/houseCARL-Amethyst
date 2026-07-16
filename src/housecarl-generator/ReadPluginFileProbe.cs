@@ -1,3 +1,4 @@
+using System.Text.Json;
 using Mutagen.Bethesda;
 using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Plugins.Records;
@@ -11,6 +12,9 @@ namespace HousecarlGenerator;
 /// read_plugin_file guard — the standalone-copy chain's Stage-1 tool: a RAW, OUT-OF-LOAD-ORDER read of ONE plugin
 /// file straight off disk, INCLUDING a plugin DISABLED in MO2. Proves the load-bearing behaviours:
 ///   1  locate + READ a plugin inside a DISABLED mod folder, by filename (the whole point — reach an inactive donor)
+///   1b locate + READ a plugin in an UNLISTED mod folder — on disk but absent from modlist.txt, the state of a patch
+///      houseCARL just wrote before the MO2 refresh registers it (HCBR-2026-07-14-02 gap 3: the write lane resolved
+///      the fresh patch by bare filename while the read lane demanded an absolute path)
 ///   2  ENUMERATE a type the file defines (+ editorid_contains), and 3 the whole-file record-type SUMMARY
 ///   4  a DIRECT PATH read ("inspect any file")
 ///   5  the render stamps OUT-OF-LOAD-ORDER (the single load-bearing requirement) + read_record's `path = token` format
@@ -79,6 +83,24 @@ internal static class ReadPluginFileProbe
                   $"field token round-trips like read_record — {(rd.Record is { Fields.Count: > 0 } ? rd.Record.Fields[0].Token : "?")}");
             Check(rd.Where is not null && rd.Where.Contains("DISABLED") && !rd.Enabled, $"located in a DISABLED mod, flagged not-active — where='{rd.Where}', enabled={rd.Enabled}");
 
+            // 1b — locate + read a plugin in an UNLISTED mod folder (a fresh houseCARL patch before the MO2 refresh).
+            //      The folder exists on disk but modlist.txt does NOT mention it — before the fix, the locate missed it
+            //      and the bare-filename read errored "in no mod folder" while into= resolved the same file fine.
+            Console.WriteLine("\n--- 1b: locate + read a plugin in an UNLISTED mod folder (pre-refresh houseCARL patch) ---");
+            var unlistedKey = new ModKey("HcUnlisted", ModType.Plugin);
+            FormKey unlistedFk;
+            {
+                Directory.CreateDirectory(Path.Combine(mods, "UnlistedPatch"));   // deliberately NOT added to modlist.txt
+                var u = new SkyrimMod(unlistedKey, SkyrimRelease.SkyrimSE);
+                var uw = u.Weapons.AddNew(); uw.EditorID = "UnlistedSword"; uw.BasicStats = new WeaponBasicStats { Damage = 9 }; unlistedFk = uw.FormKey;
+                u.BeginWrite.ToPath(Path.Combine(mods, "UnlistedPatch", unlistedKey.FileName.String)).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
+            }
+            var ur = svc.ReadPluginFile("HcUnlisted.esp", unlistedFk.ToString(), null, null, new[] { "BasicStats.Damage" }, 1, null, 500);
+            Check(ur.Error is null && ur.Mode == "read" && ur.Record?.EditorId == "UnlistedSword",
+                  $"reads an UNLISTED-folder plugin by bare filename — mode={ur.Mode}, editorid={ur.Record?.EditorId ?? "?"}, err={ur.Error ?? "none"}");
+            Check(ur.Where is not null && ur.Where.Contains("UNLISTED") && !ur.Enabled,
+                  $"located as UNLISTED, flagged not-active — where='{ur.Where}', enabled={ur.Enabled}");
+
             // 2 — enumerate a type the file defines (+ editorid_contains)
             Console.WriteLine("\n--- 2: enumerate a type the file defines ---");
             var en = svc.ReadPluginFile("Donor.esp", null, "Weapon", null, null, 1, null, 500);
@@ -102,9 +124,27 @@ internal static class ReadPluginFileProbe
 
             // 5 — render stamps OUT-OF-LOAD-ORDER (end-to-end through the tool)
             Console.WriteLine("\n--- 5: render stamps OUT-OF-LOAD-ORDER ---");
-            var render = ReadTools.ReadPluginFile(svc, "Donor.esp", swordFk.ToString(), null, null, new[] { "BasicStats.Damage" }, 1, null, 500, 0);
+            var render = ReadTools.ReadPluginFile(svc, "Donor.esp", swordFk.ToString(), null, null, new[] { "BasicStats.Damage" }, 1, null, limit: 500, max_chars: 0);
             Check(render.Contains("OUT-OF-LOAD-ORDER"), "the rendered read is stamped OUT-OF-LOAD-ORDER (the load-bearing requirement)");
             Check(render.Contains("BasicStats.Damage = 12"), "…and shows the field line in read_record's `path = token` format");
+
+            // 5b — json render (P6): a valid document stamped out_of_load_order, same field token as the text render.
+            var renderJson = ReadTools.ReadPluginFile(svc, "Donor.esp", swordFk.ToString(), null, null, new[] { "BasicStats.Damage" }, 1, null, limit: 500, format: "json", max_chars: 0);
+            JsonDocument? pfDoc = null;
+            try { pfDoc = JsonDocument.Parse(renderJson); } catch { }
+            Check(pfDoc is not null, "read_plugin_file format=json is VALID json (P6)");
+            if (pfDoc is not null)
+            {
+                var pfRoot = pfDoc.RootElement;
+                bool okShape = pfRoot.TryGetProperty("out_of_load_order", out var ool) && ool.GetBoolean()
+                               && pfRoot.TryGetProperty("mode", out var m) && m.GetString() == "read";
+                string? dmg = null;
+                if (pfRoot.TryGetProperty("record", out var rec) && rec.TryGetProperty("fields", out var flds))
+                    foreach (var f in flds.EnumerateArray())
+                        if (f.TryGetProperty("path", out var p) && p.GetString() == "BasicStats.Damage" && f.TryGetProperty("value", out var v)) dmg = v.GetString();
+                Check(okShape && dmg == "12", $"read_plugin_file json: out_of_load_order + mode=read + the SAME field token as text (damage={dmg ?? "?"})");
+                pfDoc.Dispose();
+            }
 
             // 6 — master advisory (Q3): each declared master classified by whether it will actually LOAD.
             //   6a missing  — installed NOWHERE in the install
@@ -147,7 +187,7 @@ internal static class ReadPluginFileProbe
                   $"6b the disabled-mod-only master is INACTIVE, NOT satisfied (the fixed false-negative) — inactive=[{string.Join(", ", mm.InactiveMasters)}]");
             Check(!mm.MissingMasters.Concat(mm.InactiveMasters).Any(x => x.Equals("HcRpfActive.esm", StringComparison.OrdinalIgnoreCase)),
                   "6c the enabled+checked master is satisfied — in neither list");
-            var mmRender = ReadTools.ReadPluginFile(svc, "Dependent.esp", null, null, null, null, 1, null, 500, 0);
+            var mmRender = ReadTools.ReadPluginFile(svc, "Dependent.esp", null, null, null, null, 1, null, limit: 500, max_chars: 0);
             Check(mmRender.Contains("NOT installed anywhere") && mmRender.Contains("NOT ACTIVE"),
                   "…and the render shows BOTH the not-installed and the not-active advisory lines");
 
@@ -176,7 +216,7 @@ internal static class ReadPluginFileProbe
             }
             var amb = svc.ReadPluginFile("Dup.esp", null, "Weapon", null, null, 1, null, 500);
             Check(amb.Mode == "ambiguous" && amb.Ambiguous.Count == 2, $"a name in 2 folders is AMBIGUOUS, not guessed — mode={amb.Mode}, hits={amb.Ambiguous.Count}");
-            var ambRender = ReadTools.ReadPluginFile(svc, "Dup.esp", null, "Weapon", null, null, 1, null, 500, 0);
+            var ambRender = ReadTools.ReadPluginFile(svc, "Dup.esp", null, "Weapon", null, null, 1, null, limit: 500, max_chars: 0);
             Check(ambRender.Contains("mod="), "…and the render tells the caller to pass mod=");
             var disamb = svc.ReadPluginFile("Dup.esp", null, "Weapon", "DupModB", null, 1, null, 500);
             Check(disamb.Mode == "enumerate" && disamb.Rows.Count == 1 && disamb.Rows[0].EditorId == "DupDisabledW",
