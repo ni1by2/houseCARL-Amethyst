@@ -30,6 +30,9 @@ public sealed class LoadOrderService : IDisposable
     // _instanceDir stays null (no ini watch). UNCONFIGURED: neither was set — the server still BOOTS; every tool returns the
     // trained prompt (so houseCARL asks the user for the path) until housecarl_set_mo2_instance is called.
     string? _instanceDir;                          // INSTANCE-mode source of truth; null in explicit/unconfigured mode
+    string? _manifestPath;
+    IModManagerLayout? _layout;
+    ManagerSnapshot? _managerSnapshot;
     string _dataDir;                               // DERIVED (instance mode) or configured (explicit); mutable for a live profile switch
     string _modsDir;
     string _profileDir;
@@ -67,9 +70,11 @@ public sealed class LoadOrderService : IDisposable
 
     static readonly string[] ProfileFileNames = { "loadorder.txt", "modlist.txt", "plugins.txt" };
 
-    LoadOrderService(string? instanceDir, string dataDir, string modsDir, string profileDir, bool configured, int maxPlugins, UserConfigStore store)
+    LoadOrderService(string? instanceDir, string dataDir, string modsDir, string profileDir, bool configured,
+                     int maxPlugins, UserConfigStore store, string? manifestPath = null)
     {
         _instanceDir = instanceDir;
+        _manifestPath = manifestPath;
         _dataDir = dataDir;
         _modsDir = modsDir;
         _profileDir = profileDir;
@@ -85,6 +90,11 @@ public sealed class LoadOrderService : IDisposable
     public static LoadOrderService WithInstance(string? instanceDir, int maxPlugins, UserConfigStore store)
         => new(string.IsNullOrWhiteSpace(instanceDir) ? null : instanceDir.Trim(),
                "", "", "", configured: !string.IsNullOrWhiteSpace(instanceDir), maxPlugins, store);
+
+    /// <summary>Product mode: derive native Linux roots from a connector manifest and follow profile switches lazily.</summary>
+    public static LoadOrderService WithAmethystConnection(string? manifestPath, int maxPlugins, UserConfigStore store)
+        => new(null, "", "", "", configured: !string.IsNullOrWhiteSpace(manifestPath), maxPlugins, store,
+               string.IsNullOrWhiteSpace(manifestPath) ? null : manifestPath.Trim());
 
     /// <summary>EXPLICIT mode (dev / non-portable override): the three roots are configured directly; no ModOrganizer.ini is
     /// read and no profile-switch watch runs (the paths are fixed for the process lifetime).</summary>
@@ -1000,7 +1010,8 @@ public sealed class LoadOrderService : IDisposable
         // concurrent freshness rebuild landing in that gap could compose one status line from TWO adjacent builds —
         // the count from one, the warnings beside it from another. The fresh composition stays OUTSIDE the gate by
         // design (it is documented as always-current and is not judged against the resolver's build).
-        LoadOrderResolver.IndexView view; IReadOnlyList<string> warnings; bool profileChanged; string profileDir; string profileName; string? instanceDir;
+        LoadOrderResolver.IndexView view; IReadOnlyList<string> warnings; bool profileChanged; string profileDir; string profileName;
+        string? instanceDir; string? managerPath;
         lock (_gate)
         {
             view = Resolver.Capture();                             // force build/refresh; ONE build for count + exclusions (HCBR-2026-06-11-02)
@@ -1009,10 +1020,12 @@ public sealed class LoadOrderService : IDisposable
             profileDir = _profileDir;
             profileName = _profileName;                            // captured under the SAME gate (hunt F6) — one snapshot, never re-derived at render
             instanceDir = _instanceDir;                            // the configured MO2 instance folder; null ⇒ explicit-paths / unconfigured mode
+            managerPath = _manifestPath;
         }
         var comp = Mo2LoadOrder.ReadComposition(profileDir);       // FRESH composition (always current)
         return new LoadOrderStatusData(
-            comp, warnings, view.PluginCount, _maxPlugins, profileChanged, profileDir, profileName, instanceDir, view.ExcludedPlugins);
+            comp, warnings, view.PluginCount, _maxPlugins, profileChanged, profileDir, profileName,
+            instanceDir, managerPath, view.ExcludedPlugins);
     }
 
     /// <summary>Read MO2's OWN local Nexus update cache — the modid / version / newestVersion / ignoredVersion /
@@ -1080,17 +1093,17 @@ public sealed class LoadOrderService : IDisposable
     /// just the available list (the discovery affordance on the default status). Case-insensitive name match.</summary>
     public NamedProfileResult NamedProfileComposition(string? requested)
     {
-        string? instanceDir; string profilesRoot;
+        bool managerMode; string profilesRoot;
         lock (_gate)
         {
             if (!_configured) throw NotConfigured();              // fresh install → the tool returns the trained prompt
             EnsurePathsDerived();                                 // instance mode: derive the ACTIVE ProfileDir (cheap ini read; throws Q3 if the instance is unusable)
-            instanceDir = _instanceDir;
-            profilesRoot = instanceDir is null ? "" : (Path.GetDirectoryName(_profileDir.TrimEnd('\\', '/')) ?? "");
+            managerMode = _instanceDir is not null || _manifestPath is not null;
+            profilesRoot = managerMode ? (Path.GetDirectoryName(_profileDir.TrimEnd('\\', '/')) ?? "") : "";
         }
 
         var name = string.IsNullOrWhiteSpace(requested) ? null : requested.Trim();
-        if (instanceDir is null)                                  // explicit-paths mode — no profiles root (refuse loud; the tool renders the named-mode-only message)
+        if (!managerMode)                                         // explicit-paths mode — no profiles root
             return new NamedProfileResult(InstanceMode: false, AvailableProfiles: Array.Empty<string>(), RequestedName: name, ResolvedProfileDir: null, Composition: null, Warnings: Array.Empty<string>());
 
         var available = ListProfiles(profilesRoot);              // directory listing OUTSIDE the gate (like StatusData's ReadComposition) — no lock held over I/O
@@ -1176,6 +1189,19 @@ public sealed class LoadOrderService : IDisposable
     /// Tolerates a transient/invalid read (MO2 mid-write): keeps the last good set and retries next call. Caller holds the gate.</summary>
     bool RederiveIfIniChanged()
     {
+        if (_manifestPath is not null)
+        {
+            EnsurePathsDerived();
+            if (_layout is null || !_layout.RefreshIfStale()) return false;
+            var snapshot = _layout.Capture();
+            bool rootsChanged = !PathEq(snapshot.ProfileDir, _profileDir) || !PathEq(snapshot.ModsDir, _modsDir)
+                                || !PathEq(snapshot.VanillaDataDir, _dataDir) || !PathEq(snapshot.OverwriteDir, _overwriteDir);
+            Apply(snapshot);
+            if (!rootsChanged) return false;
+            InvalidateClassParents();
+            ReResolve();
+            return true;
+        }
         if (_instanceDir is null) return false;                  // explicit/override mode — no ini to watch
         var ini = Mo2Instance.IniPath(_instanceDir);
         if (!File.Exists(ini)) return false;                     // missing/mid-replace → keep last good, retry next call
@@ -1239,6 +1265,16 @@ public sealed class LoadOrderService : IDisposable
     /// so the profile-switch check has a reference point. Caller holds the gate.</summary>
     void EnsurePathsDerived()
     {
+        if (_manifestPath is not null)
+        {
+            if (_layout is null)
+            {
+                _layout = new AmethystLayout(_manifestPath);
+                Apply(_layout.Capture());
+                InvalidateClassParents();
+            }
+            return;
+        }
         if (_instanceDir is null) return;                        // explicit mode — roots configured directly
         if (_profileDir.Length > 0) return;                      // already derived (a prior build / SetInstance); RederiveIfIniChanged owns later updates
         var iniMtime = SafeMtime(Mo2Instance.IniPath(_instanceDir));   // stat BEFORE the read (TOCTOU): an ini write during/after Resolve is caught next call
@@ -1246,6 +1282,16 @@ public sealed class LoadOrderService : IDisposable
         _profileDir = p.ProfileDir; _modsDir = p.ModsDir; _dataDir = p.DataDir; _profileName = p.ProfileName; _overwriteDir = p.OverwriteDir;
         _iniMtime = iniMtime;
         InvalidateClassParents();                                // _modsDir just gained a value — a cache built before derivation is baseline-only (hunt F1)
+    }
+
+    void Apply(ManagerSnapshot snapshot)
+    {
+        _managerSnapshot = snapshot;
+        _profileDir = snapshot.ProfileDir;
+        _modsDir = snapshot.ModsDir;
+        _dataDir = snapshot.VanillaDataDir;
+        _profileName = snapshot.ActiveProfileName;
+        _overwriteDir = snapshot.OverwriteDir;
     }
 
     static bool PathEq(string a, string b) =>
@@ -1351,16 +1397,67 @@ public sealed class LoadOrderService : IDisposable
     /// still works, but the user is told the choice won't survive a restart. <c>note</c> carries a corrupt-file recovery
     /// (hunt F3 — the prior file was backed up; other saved settings were lost), rendered even on success.</summary>
     (bool ok, string? error, string? note) PersistInstanceDir(string instanceDir)
-        => _store.Update(c => c.Mo2InstanceDir = instanceDir);
+        => (true, null, null); // legacy synthetic-test path; the Linux product persists only Amethyst manifests
+
+    /// <summary>Validate, activate, and persist a schema-v1 Amethyst connection manifest.</summary>
+    public (ManagerSnapshot snapshot, bool persisted, string? persistError, string? persistNote)
+        SetAmethystConnection(string manifestPath)
+    {
+        var layout = new AmethystLayout(manifestPath);
+        var snapshot = layout.Capture();
+        lock (_writeGate)
+        lock (_gate)
+        {
+            _instanceDir = null;
+            _manifestPath = snapshot.ManifestPath;
+            _layout = layout;
+            Apply(snapshot);
+            _configured = true;
+            _resolver?.Dispose(); _resolver = null;
+            _assetResolver?.Dispose(); _assetResolver = null;
+            _resolvedPaths = Array.Empty<string>();
+            _profileMtimes = new DateTime[ProfileFileNames.Length];
+            _orderWarnings = Array.Empty<string>();
+            InvalidateClassParents();
+        }
+        var (ok, error, note) = _store.Update(c => c.AmethystConnectionManifest = snapshot.ManifestPath);
+        return (snapshot, ok, error, note);
+    }
+
+    /// <summary>The current manager snapshot without forcing the record index to build.</summary>
+    public ManagerSnapshot AmethystSnapshot()
+    {
+        RefreshAmethyst();
+        lock (_gate) return _managerSnapshot!;
+    }
+
+    /// <summary>Refresh manager state explicitly; normal tool calls also refresh lazily.</summary>
+    public bool RefreshAmethyst()
+    {
+        lock (_writeGate)
+        lock (_gate)
+        {
+            if (!_configured) throw NotConfigured();
+            EnsurePathsDerived();
+            if (_layout is null) throw new InvalidOperationException("Amethyst connection is not active.");
+            var changed = _layout.RefreshIfStale();
+            Apply(_layout.Capture());
+            if (changed)
+            {
+                _resolver?.Dispose(); _resolver = null;
+                InvalidateAssetResolver();
+                _resolvedPaths = Array.Empty<string>();
+            }
+            return changed;
+        }
+    }
 
     /// <summary>The trained prompt shown while unconfigured: tells houseCARL to ask the user which MO2 instance to use (not
     /// silently pick among several) and call the setup tool. Tools RETURN this (so the client SEES it) via <see cref="ConfigPromptOrNull"/>; the <see cref="Resolver"/>
     /// getter also THROWS it as a backstop. The two must say the same thing, hence one shared string.</summary>
     const string NotConfiguredText =
-        "houseCARL has no Mod Organizer 2 instance configured yet. Ask the user which MO2 instance folder to use — the " +
-        "folder that contains ModOrganizer.ini (for a Wabbajack / portable list, that's the list's install folder). You " +
-        "may help locate it, but do NOT silently pick one when more than one MO2 install exists: list the candidates you " +
-        "found and let the user choose. State which folder you're using, then call housecarl_set_mo2_instance with that path.";
+        "houseCARL-Amethyst is not connected yet. Ask for the schema-v1 connection.json exported for Skyrim Special " +
+        "Edition, then call housecarl_set_amethyst_connection with its absolute native Linux path.";
 
     /// <summary>Tools call this FIRST: returns the trained prompt (a normal result string the client SEES) when
     /// unconfigured, else null (proceed). Preferred over letting <see cref="Resolver"/> throw — the MCP framework
@@ -4744,6 +4841,7 @@ public sealed record LoadOrderStatusData(
     string ProfileDir,
     string ProfileName,         // the ACTIVE profile (instance mode: MO2's selected_profile; explicit: the dir name) — captured under the gate, not re-derived at render
     string? InstanceDir,        // the resolved MO2 instance folder houseCARL is pointed at; null ⇒ explicit-paths / unconfigured mode
+    string? ManagerPath,
     IReadOnlyDictionary<string, string> ExcludedPlugins);
 
 /// <summary>The data behind housecarl_update_status: MO2's own local Nexus update cache read from meta.ini, with no
