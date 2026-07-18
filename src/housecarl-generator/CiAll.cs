@@ -128,6 +128,7 @@ public static class CiAll
         // the honest-degrade paths (real-PE Read → NotSkse; non-PE / missing → Unreadable, never a throw).
         ("skse-reader-guard", SkseReaderProbe.RunGuard),
         ("mo2instance-probe", Mo2InstanceProbe.RunProbe),
+        ("amethyst-layout-guard", AmethystLayoutProbe.RunGuard),
         // meta.ini Nexus-update-cache parse (Tier 0 PR review fold): the QSettings quirks + exact-key vs [installedFiles]
         // 1\modid, the fiddliest OFFLINE logic behind housecarl_update_status — locked with synthetic fixtures. Now also
         // pins the [installedFiles] N\fileid capture (single / multi / size=0 no-fileid) the file-level check joins on.
