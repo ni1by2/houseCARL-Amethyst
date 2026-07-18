@@ -230,40 +230,37 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 2 — required Amethyst connector, after the initial
-  hosted commits.
-- Last completed checkpoint: connector core, Qt external wizard, installers,
-  atomic manifest export, and synthetic tests implemented in the separate
-  `housecarl-amethyst-connector/` repository.
-- Verification performed: .NET SDK 9.0.315 / runtime 9.0.17; generator and all
-  referenced product projects build in Release with no errors; focused guards
-  pass for asset resolution/status, nested creation, placement, NIF, facegen,
-  voice, merge, NPC appearance, and SkyPatcher discovery. The final `ci-all`
-  result is 76/85 passing in 0.24 minutes, up from the 67/85 baseline.
-  Startup inspection confirms GameFinder/registry probing remains lazy behind
-  external-tool requests and is not executed during MCP server construction.
-- Files/components changed: `BethesdaPath`, asset/appearance/rename resolution,
-  MCP placement paths, SkyPatcher gate extraction, Linux probe fixtures,
-  `docs/PATH_MODEL.md`, and this roadmap.
-- Decisions made: Bethesda paths are validated canonical strings; host I/O uses
-  native segments; logical lookup is case-insensitive and returns raw host
-  casing. Linux probes do not assert Windows creation-time semantics.
-- Known failures or residual risks: Windows file-lock, creation-time, `.exe`, and
-  installer assumptions remain assigned to later milestones. The independent
-  `skypatcher-conflicts` duplicate-reporting failure remains unrelated to this
-  port. Session 1 does not replace MO2 startup/configuration; that public boundary
-  is Session 3. Amethyst's current Qt app discards external plugins'
-  `dialog_class_path`; the connector therefore registers a narrow generic Qt
-  adapter at import time without changing Amethyst source. This seam requires a
-  real-install smoke test. GitHub device authorization is still awaiting user
-  approval.
-- Exact next action: run the connector in a real Amethyst install, record the
-  smoke-test result, then begin `AmethystLayout`.
-- Commits: `2e39b5d` (roadmap/baseline), `4e2d27a` (native Linux path
-  boundary), `f010b7c` (milestone record); connector `6fcee5d` in its separate
-  repository.
-- Published repositories: `ni1by2/houseCARL-Amethyst` on default branch
-  `amethyst-main`; `ni1by2/housecarl-amethyst-connector` on `main`.
+- Active milestone: Session 3 — Amethyst profile and plugin-order adapter.
+- Last completed checkpoint: schema-v1 `AmethystLayout`, manager snapshot,
+  persisted runtime connection, profile-switch refresh, and the
+  `housecarl_set_amethyst_connection`, `housecarl_amethyst_status`, and
+  `housecarl_refresh` MCP surfaces.
+- Verification performed: Linux Release build passed. The layout and runtime
+  guards pass for strict schemas, shared/profile-specific staging, Unicode and
+  spaced paths, game-path precedence, `Data_Core` safety, invalid-config
+  non-persistence, hardlink status, and active-profile switching. Full
+  `ci-all` is 87/96; its nine failures exactly match the validated upstream
+  Linux baseline.
+- Files/components changed: `AmethystLayout`, `IModManagerLayout`,
+  `ManagerSnapshot`, runtime configuration, setup/status MCP tools, user config,
+  server startup, and synthetic guards.
+- Decisions made: invalid Amethyst state never falls back to MO2 or merged
+  deployed `Data/`; manager status does not force the Mutagen record index;
+  the MO2-only local update-cache tool is no longer registered.
+- Known failures or residual risks: record resolution still passes Amethyst
+  profile files through the legacy composition parser. It does not yet support
+  locked `*ModName` entries or authoritative filemap/mod-index winners.
+  Windows external-tool and installer paths remain deferred. The nine baseline
+  failures are `writelock`, `upsert`, `binding-shim`, `compile-ergonomics`,
+  `setup-update-lock`, `bsa-contract`, `atomic-commit`, `seq-regen`, and
+  `skypatcher-conflicts`.
+- Exact next action: implement the Amethyst `modlist.txt`, `plugins.txt`, and
+  `loadorder.txt` parser, including locked mods and staging/Data_Core plugin
+  source resolution, then replace the legacy composition calls.
+- Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
+  `6ec4ea7` (runtime connection).
+- Draft pull requests: #2 upstream integration; #3 layout foundation. The
+  runtime connection PR is ready locally and awaiting GitHub authentication.
 
 ## Session update template
 
