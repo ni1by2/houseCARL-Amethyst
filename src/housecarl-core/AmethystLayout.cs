@@ -183,9 +183,16 @@ public sealed class AmethystLayout : IModManagerLayout
 
     static string Absolute(string value, string label)
     {
-        if (string.IsNullOrWhiteSpace(value) || !Path.IsPathFullyQualified(value))
+        if (string.IsNullOrWhiteSpace(value) || value.Contains('\0'))
             throw Error($"{label} must be an absolute native Linux path: '{value}'");
-        return Path.GetFullPath(value);
+        try
+        {
+            if (!Path.IsPathFullyQualified(value))
+                throw Error($"{label} must be an absolute native Linux path: '{value}'");
+            return Path.GetFullPath(value);
+        }
+        catch (AmethystConfigurationException) { throw; }
+        catch (Exception ex) { throw Error($"{label} is not a valid native Linux path: {ex.Message}"); }
     }
 
     static void ValidateName(string value, string label)

@@ -5,7 +5,7 @@ using ModelContextProtocol.Server;
 namespace HousecarlMcp;
 
 /// <summary>
-/// houseCARL diagnostic tool (post-§8). Read-only. Surfaces the active MO2 profile's load-order COMPOSITION — what
+/// Read-only view of the active Amethyst profile's load-order composition.
 /// houseCARL sees as enabled vs DISABLED (mods) and active vs INACTIVE vs implicit (plugins) — so the user can confirm
 /// houseCARL resolves reads/writes against the right active set (and SEE what it excludes, not just trust that it does).
 /// The enabled/disabled picture is read FRESH from the profile each call (cheap text-file parse via
@@ -17,12 +17,12 @@ public static class StatusTools
 {
     [McpServerTool(Name = "housecarl_load_order_status", ReadOnly = true, Title = "Load-order status (enabled/disabled mods & plugins)"),
      Description(
-         "Report what houseCARL sees in the active MO2 profile: enabled vs DISABLED mods, active vs INACTIVE plugins, " +
+         "Report what houseCARL sees in the active Amethyst profile: enabled vs disabled mods, active vs inactive plugins, " +
          "the implicit force-loaded masters/CC, how many plugins resolved to real files, and any load-order warnings. " +
-         "The enabled/disabled picture is read FRESH each call, so a mod/plugin you just toggled in MO2 shows " +
+         "The enabled/disabled picture is read fresh each call, so a mod/plugin you just toggled in Amethyst shows " +
          "immediately; the resolved count reflects the resolver's last build, which houseCARL refreshes AUTOMATICALLY on " +
          "each call when the profile changed — no restart needed (a 'refresh still pending' note appears only in the rare " +
-         "case MO2 was mid-write). Pass lookup= a mod folder name (e.g. 'Requiem " +
+         "case Amethyst was mid-write). Pass lookup= a mod folder name (e.g. 'Requiem " +
          "Lite 2') or a plugin filename (e.g. 'Requiem.esp') to ask whether houseCARL sees that one as enabled/disabled " +
          "(mod) or active/inactive/implicit (plugin). Also reports the resolved Papyrus script-log and SKSE crash-log " +
          "FOLDERS — where to Read logs for triage/diagnosis (auto-detected, or as set via housecarl_set_tool_path). " +
@@ -35,7 +35,7 @@ public static class StatusTools
         [Description("Optional. A profile NAME to INSPECT without switching to it (e.g. 'Default', 'Modded') — reports that " +
             "profile's enabled/disabled mods + active/inactive plugins even if it is not the active one, so you can compare " +
             "load orders across profiles. Omit to describe the ACTIVE profile (which also lists the available profile names). " +
-            "MO2-instance mode only (explicit-paths mode has no profiles folder); if both lookup= and profile= are given, " +
+            "Amethyst connection mode only (explicit-paths mode has no profiles folder); if both lookup= and profile= are given, " +
             "both render.")]
             string? profile = null,
         [Description("Optional. Max characters before name lists are cut with an explicit notice. 0 = the server default (~80k).")]
@@ -64,9 +64,8 @@ static class StatusWire
 
         var sb = new StringBuilder();
         sb.Append("load order status — profile '").Append(d.ProfileName).Append("'\n");
-        // The resolved MO2 instance houseCARL is pointed at (9.2: easy to lose track of which instance is configured);
-        // null ⇒ explicit-paths mode (dev override — the three roots are set directly, there is no MO2 instance folder).
-        sb.Append("instance: ").Append(d.InstanceDir ?? "explicit-paths mode (no MO2 instance configured)").Append('\n');
+        if (d.ManagerPath is not null) sb.Append("connection: ").Append(d.ManagerPath).Append('\n');
+        else sb.Append("instance: ").Append(d.InstanceDir ?? "explicit-paths mode").Append('\n'); // legacy probe seam
         sb.Append("mods:    ").Append(c.EnabledMods.Count).Append(" enabled · ").Append(c.DisabledMods.Count).Append(" disabled\n");
         sb.Append("plugins in load order: ").Append(c.OrderedPluginNames.Count).Append('\n');
         sb.Append("  active:   ").Append(gameLoaded).Append("  (").Append(checkedActive).Append(" checked + ").Append(impl).Append(" implicit masters/CC)\n");
@@ -184,7 +183,7 @@ static class StatusWire
         if (!p.InstanceMode)
         {
             sb.Append("\nprofile '").Append(p.RequestedName)
-              .Append("': can't inspect — that needs MO2-instance mode; in explicit-paths mode there is no profiles folder to read from.\n");
+              .Append("': can't inspect — that needs an Amethyst connection; explicit-paths mode has no profiles root.\n");
             return;
         }
         if (p.Composition is null)                                // not found → name the real options, never a silent empty composition

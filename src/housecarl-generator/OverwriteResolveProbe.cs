@@ -147,11 +147,7 @@ internal static class OverwriteResolveProbe
                 Check(read.Error is null && read.Record is not null && read.WinnerPlugin == tKey.FileName,
                       $"a record inside the overwrite plugin reads end-to-end — winner={read.WinnerPlugin ?? "?"}, err={read.Error ?? "none"}");
 
-                // F9-4: the setup confirmation (housecarl_set_mo2_instance) lists the overwrite root among the derived
-                // roots, not silently omitted — it's a real load-order root the user should see.
-                var confirm = SetupTools.Render(Mo2Instance.Resolve(instance), persisted: true, persistError: null, persistNote: null);
-                Check(confirm.Contains(ovw, StringComparison.OrdinalIgnoreCase),
-                      "the setup confirmation lists the overwrite root among the derived roots (hunt F9-4)");
+                // The Amethyst setup/status rendering contract is covered by amethyst-runtime-guard.
             }
         }
         finally { try { Directory.Delete(root, recursive: true); } catch { /* temp scratch */ } }

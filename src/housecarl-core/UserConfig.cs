@@ -6,16 +6,15 @@ namespace HousecarlCore;
 
 /// <summary>
 /// The on-disk user config shape (houseCARL.user.json) — the values houseCARL persists for ITSELF at runtime, separate
-/// from the shipped appsettings.json. TWO independent concerns share this one file: the MO2 instance folder (written by
-/// housecarl_set_mo2_instance) and the external-TOOL paths (written by housecarl_set_tool_path — the bridge for compile /
+/// from the shipped appsettings.json. Independent concerns share this one file: the Amethyst connection, external-tool
+/// paths (written by housecarl_set_tool_path — the bridge for compile /
 /// BSA / log access). They MUST coexist — a write of one must never clobber the other — which is why the only writer is
 /// <see cref="UserConfigStore.Update"/> (read-modify-write under a lock), never a whole-object overwrite.
 /// </summary>
 public sealed class UserConfig
 {
-    /// <summary>The MO2 instance folder housecarl_set_mo2_instance saved (precedence §6d: this beats appsettings'
-    /// Mo2InstanceDir). Null/absent ⇒ fall through to explicit paths / unconfigured.</summary>
-    public string? Mo2InstanceDir { get; set; }
+    /// <summary>The schema-v1 Amethyst connection manifest selected at runtime.</summary>
+    public string? AmethystConnectionManifest { get; set; }
 
     /// <summary>External-tool paths the bridge saved, keyed by tool wire-name (papyrus_compiler, bsarch, papyrus_logs,
     /// crash_logs) → an absolute file/dir path. Null/absent until housecarl_set_tool_path is first called.</summary>
@@ -27,13 +26,13 @@ public sealed class UserConfig
     /// it waives the CONSENT axis ONLY, never the touched-record verify (a tool-capability fact no acknowledgement can
     /// override). Null/absent until the first in-place acknowledgement. The third independent concern in this file —
     /// like the other two it is read-modify-written ONLY through <see cref="UserConfigStore.Update"/> so it can never
-    /// clobber (or be clobbered by) the MO2 instance / tool paths.</summary>
+    /// clobber (or be clobbered by) the connection or tool paths.</summary>
     public List<string>? InPlaceAcknowledged { get; set; }
 }
 
 /// <summary>
 /// The single OWNER of houseCARL.user.json — every read and write of that file goes through here, so the two independent
-/// writers (housecarl_set_mo2_instance, housecarl_set_tool_path) can never clobber each other's field. Hardened per the
+/// writers can never clobber each other's field. Hardened per the
 /// 2026-06-12 adversarial hunt (F3, hunter-PROVEN silent clobbers):
 ///   • ATOMIC — <see cref="Update"/> serializes to a sibling temp file and renames it over the target (same volume),
 ///     so a reader never sees a half-written file and a crash mid-write never corrupts the saved config.
@@ -138,7 +137,7 @@ public sealed class UserConfigStore
     }
 
     /// <summary>PERSIST an in-place acknowledgement for <paramref name="pluginPath"/> (idempotent — never duplicated),
-    /// through the same atomic read-modify-write as every other field so it can never clobber the MO2 instance / tool
+    /// through the same atomic read-modify-write as every other field so it can never clobber the connection or tool
     /// paths sharing this file. Returns (ok, error): a write failure is RETURNED, not thrown (Q3 — the caller can tell
     /// the user the edit proceeded but the acknowledgement won't survive a restart, so the next session re-prompts).</summary>
     public (bool ok, string? error) RecordInPlaceAcknowledged(string pluginPath)
@@ -185,7 +184,7 @@ public sealed class UserConfigStore
             {
                 File.Copy(_path, backup, overwrite: true);
                 note = $"houseCARL.user.json was unreadable (corrupt JSON: {ex.Message}). The corrupt file was backed up to " +
-                       $"'{backup}'; previously saved settings (MO2 instance / tool paths) are NOT loaded and need re-saving.";
+                       $"'{backup}'; previously saved settings (Amethyst connection / tool paths) are NOT loaded and need re-saving.";
             }
             catch (Exception bex)
             {

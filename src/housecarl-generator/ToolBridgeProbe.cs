@@ -4,9 +4,9 @@ namespace HousecarlGenerator;
 
 /// <summary>
 /// External-tool bridge — step-1 proof (EXTERNAL_TOOL_BRIDGE_PLAN). Exercises the PURE core pieces the
-/// housecarl_set_tool_path tool + the riders ride, with NO MO2 / NO server, so it's a cheap, deterministic green/red gate:
+/// housecarl_set_tool_path tool + the riders ride, with no manager or server, so it's a cheap deterministic gate:
 ///
-///   1. <see cref="UserConfigStore"/> CLOBBER-SAFETY (the load-bearing claim) — two independent writers (the MO2 instance
+///   1. <see cref="UserConfigStore"/> CLOBBER-SAFETY (the load-bearing claim) — two independent writers (the Amethyst connection
 ///      dir + a tool path) share one houseCARL.user.json and must NOT overwrite each other's field, in either order;
 ///      hardened per the 2026-06-12 hunt (F3): a corrupt file is BACKED UP + REPORTED (never silently blank — the old
 ///      path wiped every saved setting on the next Update), writes are atomic (temp + rename, no residue), and TWO
@@ -24,8 +24,8 @@ namespace HousecarlGenerator;
 ///   6. <see cref="ToolBridge.Inspect"/> — the status-surface resolve (housecarl_load_order_status' log-folder section): a
 ///      saved+valid path → Saved; an invalid/absent one with no canonical home → Unset; PURE (takes the saved path,
 ///      persists nothing — a ReadOnly status read never mutates config).
-///   7. CROSS-INSTANCE SHARING (6.2/7.1 "share across instances") — tool paths live in ONE global houseCARL.user.json keyed
-///      by tool, and an MO2-instance switch (SetInstance) only writes Mo2InstanceDir; so repeated instance-dir rewrites
+///   7. CROSS-INSTANCE SHARING (6.2/7.1 "share across connections") — tool paths live in ONE global houseCARL.user.json keyed
+///      by tool, and an Amethyst-connection switch (SetInstance) only writes AmethystConnectionManifest; so repeated connection-path rewrites
 ///      (the switch shape) leave the saved compiler + bsarch paths untouched. A regression-lock on that by-construction
 ///      coexistence (the same store the clobber-safety arm proves), framed in the gap's own "set once, reuse" terms.
 ///
@@ -54,49 +54,49 @@ public static class ToolBridgeProbe
         try
         {
             var store = new UserConfigStore(tmp);
-            Check(store.Load().Mo2InstanceDir is null && store.Load().ToolPaths is null, "absent file loads blank");
+            Check(store.Load().AmethystConnectionManifest is null && store.Load().ToolPaths is null, "absent file loads blank");
 
-            store.Update(c => c.Mo2InstanceDir = @"C:\MO2\Instance");
+            store.Update(c => c.AmethystConnectionManifest = "/profiles/one/connection.json");
             store.Update(c => (c.ToolPaths ??= new())["bsarch"] = @"C:\Tools\bsarch.exe");
             var a = store.Load();
-            Check(a.Mo2InstanceDir == @"C:\MO2\Instance", "MO2 dir survives a later tool-path write");
+            Check(a.AmethystConnectionManifest == "/profiles/one/connection.json", "connection path survives a later tool-path write");
             Check(a.ToolPaths is { } tp && tp.TryGetValue("bsarch", out var bp) && bp == @"C:\Tools\bsarch.exe",
-                  "tool path persisted alongside the MO2 dir");
+                  "tool path persisted alongside the connection path");
 
-            store.Update(c => c.Mo2InstanceDir = @"D:\Other");                 // reverse order
+            store.Update(c => c.AmethystConnectionManifest = @"D:\Other");                 // reverse order
             var b = store.Load();
-            Check(b.Mo2InstanceDir == @"D:\Other" && b.ToolPaths!["bsarch"] == @"C:\Tools\bsarch.exe",
-                  "tool path survives a later MO2-dir write (no clobber, both directions)");
+            Check(b.AmethystConnectionManifest == @"D:\Other" && b.ToolPaths!["bsarch"] == @"C:\Tools\bsarch.exe",
+                  "tool path survives a later connection write (no clobber, both directions)");
 
             store.Update(c => (c.ToolPaths ??= new())["papyrus_compiler"] = @"C:\CK\PapyrusCompiler.exe");
             var c2 = store.Load();
-            Check(c2.ToolPaths!.Count == 2 && c2.Mo2InstanceDir == @"D:\Other", "a second tool path merges; MO2 dir intact");
+            Check(c2.ToolPaths!.Count == 2 && c2.AmethystConnectionManifest == @"D:\Other", "a second tool path merges; connection path intact");
             Check(!File.Exists(tmp + ".tmp"), "atomic write leaves no .tmp residue");
 
             // CORRUPT = LOUD (hunt F3, hunter-proven silent clobber): blank-with-note + backup, never silently blank.
             File.WriteAllText(tmp, "{ this is not valid json");
             var blank = store.Load(out var loadNote);
-            Check(blank.Mo2InstanceDir is null, "corrupt file loads blank, no throw (Q3)");
+            Check(blank.AmethystConnectionManifest is null, "corrupt file loads blank, no throw (Q3)");
             Check(loadNote is not null && loadNote.Contains(".corrupt.bak"), "corrupt load is REPORTED, naming the backup");
             Check(File.Exists(tmp + ".corrupt.bak") && File.ReadAllText(tmp + ".corrupt.bak") == "{ this is not valid json",
                   "the corrupt original is backed up byte-for-byte beside the file");
-            var (upOk, upErr, upNote) = store.Update(c => c.Mo2InstanceDir = @"E:\Fresh");
+            var (upOk, upErr, upNote) = store.Update(c => c.AmethystConnectionManifest = @"E:\Fresh");
             Check(upOk && upErr is null && upNote is not null, "Update over a corrupt file succeeds AND reports the recovery");
             var fresh = store.Load(out var freshNote);
-            Check(fresh.Mo2InstanceDir == @"E:\Fresh" && freshNote is null, "the fresh file holds the new setting and reads clean");
+            Check(fresh.AmethystConnectionManifest == @"E:\Fresh" && freshNote is null, "the fresh file holds the new setting and reads clean");
 
-            // CROSS-PROCESS shape (hunt F3): TWO store instances on ONE file — each with its own process-local gate, the
+            // CROSS-PROCESS shape (hunt F3): TWO store connections on ONE file — each with its own process-local gate, the
             // way the CLI plugin + desktop app share houseCARL.user.json — hammer different fields concurrently. Without
             // the named mutex the read-modify-write races and one concern's last value is clobbered (hunter-measured).
             const int rounds = 200;
             var s1 = new UserConfigStore(tmp);
             var s2 = new UserConfigStore(tmp);
-            var t1 = Task.Run(() => { for (int i = 1; i <= rounds; i++) s1.Update(c => c.Mo2InstanceDir = @"C:\Race\" + i); });
+            var t1 = Task.Run(() => { for (int i = 1; i <= rounds; i++) s1.Update(c => c.AmethystConnectionManifest = @"C:\Race\" + i); });
             var t2 = Task.Run(() => { for (int i = 1; i <= rounds; i++) s2.Update(c => (c.ToolPaths ??= new())["bsarch"] = @"C:\Race\bsarch" + i + ".exe"); });
             Task.WaitAll(t1, t2);
             var final = s1.Load(out var raceNote);
             Check(raceNote is null, "no corruption under two-store contention (every write atomic + serialized)");
-            Check(final.Mo2InstanceDir == @"C:\Race\" + rounds
+            Check(final.AmethystConnectionManifest == @"C:\Race\" + rounds
                   && final.ToolPaths is { } rtp && rtp.TryGetValue("bsarch", out var rb) && rb == @"C:\Race\bsarch" + rounds + ".exe",
                   "BOTH concerns' LAST values survive two-store concurrent updates (no cross-process clobber)");
         }
@@ -209,7 +209,7 @@ public static class ToolBridgeProbe
 
         // ---------------------------------------------------------------- 7) CROSS-INSTANCE SHARING (6.2/7.1: set once, reuse)
         Console.WriteLine();
-        Console.WriteLine("--- 7: tool paths persist across MO2-instance switches (one global file; SetInstance writes only Mo2InstanceDir) ---");
+        Console.WriteLine("--- 7: tool paths persist across Amethyst connection switches ---");
         var tmp7 = Path.Combine(Path.GetTempPath(), "houseCARL.user.share." + Guid.NewGuid().ToString("N") + ".json");
         try
         {
@@ -217,15 +217,14 @@ public static class ToolBridgeProbe
             // The user sets the compiler + bsarch ONCE (housecarl_set_tool_path writes ToolPaths).
             store.Update(c => (c.ToolPaths ??= new())["papyrus_compiler"] = @"C:\CK\Papyrus Compiler\PapyrusCompiler.exe");
             store.Update(c => (c.ToolPaths ??= new())["bsarch"] = @"C:\Tools\bsarch.exe");
-            // Now they "jump around" instances — each SetInstance writes ONLY Mo2InstanceDir (PersistInstanceDir), never
-            // ToolPaths. Replay that shape: repeated instance-dir rewrites must not disturb the saved tool paths.
-            for (int i = 1; i <= 5; i++) store.Update(c => c.Mo2InstanceDir = @"C:\MO2\Instance" + i);
+            // Repeated connection changes must not disturb the saved tool paths.
+            for (int i = 1; i <= 5; i++) store.Update(c => c.AmethystConnectionManifest = $"/profiles/{i}/connection.json");
             var after = store.Load();
-            Check(after.Mo2InstanceDir == @"C:\MO2\Instance5", "the last instance switch is recorded");
+            Check(after.AmethystConnectionManifest == "/profiles/5/connection.json", "the last connection switch is recorded");
             Check(after.ToolPaths is { } tps
                   && tps.TryGetValue("papyrus_compiler", out var cp) && cp == @"C:\CK\Papyrus Compiler\PapyrusCompiler.exe"
                   && tps.TryGetValue("bsarch", out var bs) && bs == @"C:\Tools\bsarch.exe",
-                  "BOTH tool paths survive every instance switch unchanged (set once → shared across instances)");
+                  "BOTH tool paths survive every connection switch unchanged (set once → shared across connections)");
         }
         finally { try { File.Delete(tmp7); } catch { /* non-fatal */ } }
 

@@ -1,6 +1,4 @@
-using System.ComponentModel;
 using System.Text;
-using ModelContextProtocol.Server;
 
 namespace HousecarlMcp;
 
@@ -11,24 +9,12 @@ namespace HousecarlMcp;
 /// verifying online (housecarl_nexus_check_updates), reading only files MO2 has already populated. Works fully offline;
 /// it does NOT touch Nexus and does NOT modify anything. Sits in the MO2-static-read lane beside housecarl_load_order_status.
 /// </summary>
-[McpServerToolType]
-public static class UpdateStatusTools
+// Retained temporarily for upstream comparison; not registered because its cache format is MO2-specific.
+static class UpdateStatusTools
 {
-    [McpServerTool(Name = "housecarl_update_status", ReadOnly = true, Title = "MO2's local mod-update cache (no network)"),
-     Description(
-         "Report which installed mods have a version DIFFERENT from MO2's cached 'newest' — read from MO2's OWN local " +
-         "cache (each mod's meta.ini), with NO network and NO API key. For every Nexus-linked mod it compares the " +
-         "installed version against the newest version MO2 last learned and lists the ones that DIFFER (candidates only — " +
-         "MO2's cache can be stale or a different version scheme, so direction isn't assured), plus any you told MO2 to " +
-         "ignore, and how many were never checked or match. This is the cheap FIRST pass of update triage — it " +
-         "narrows a big modlist to the handful worth checking online — but it is only as fresh as MO2's last Nexus check, " +
-         "and a 'never checked' mod is NOT 'up to date' (Q3). To verify live, pass the flagged mod ids to " +
-         "housecarl_nexus_check_updates; use housecarl_nexus_mod changelog=true to see what changed. READ-ONLY, works " +
-         "OFFLINE, and modifies/updates NOTHING. Needs a configured MO2 instance (housecarl_set_mo2_instance).")]
-    public static string UpdateStatus(
+    internal static string UpdateStatus(
         LoadOrderService svc,
-        [Description("Optional. Max characters before the mod lists are cut with an explicit notice. 0 = the server default (~40k).")]
-            int max_chars = 0) => Guard.Tool("housecarl_update_status", () =>
+        int max_chars = 0) => Guard.Tool("housecarl_update_status", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
         var data = svc.UpdateCache();

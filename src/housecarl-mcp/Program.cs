@@ -3,11 +3,8 @@ using ModelContextProtocol.Protocol;
 
 // houseCARL MCP server. DEFAULT transport is STDIO (the 1.0 launch model): the MCP client (Claude Code) spawns
 // this exe and talks JSON-RPC over stdin/stdout — no port, no console window, no manual start. Pass --http to run
-// the localhost HTTP transport instead (kept for the curl-driven dev proofs). EITHER way it runs STANDALONE: it
-// reads the TRUE active load order STATICALLY from the configured MO2 instance's profile files (§8.5 — no USVFS, no
-// live MO2 state; MO2 need not be running). ONE config knob — the MO2 instance folder — yields ProfileDir/ModsDir/
-// DataDir + the active profile (Mo2Instance, from ModOrganizer.ini); an empty config BOOTS anyway and the tools
-// prompt the user for the path. Tools (attribute-registered) ride the PROVEN housecarl-core.
+// the localhost HTTP transport instead. Both modes read native Amethyst files through a schema-v1 connection manifest;
+// an empty config still boots so the setup tool can connect it.
 
 bool useHttp = args.Contains("--http");
 var hostArgs = args.Where(a => a != "--http").ToArray();   // strip our own flag so the config provider doesn't choke on it
@@ -15,7 +12,7 @@ var hostArgs = args.Where(a => a != "--http").ToArray();   // strip our own flag
 if (useHttp)
 {
     var builder = WebApplication.CreateBuilder(hostArgs);
-    var (svc, explicitMode, instanceDir, instanceSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
+    var (svc, explicitMode, connection, connectionSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
     AddMcp(builder.Services, stdio: false);
 
     var app = builder.Build();
@@ -26,11 +23,11 @@ if (useHttp)
         app.Logger.LogWarning("houseCARL user config recovered: {Note}", configNote);   // corrupt file — backed up, never silent (hunt F3)
     if (!svc.IsConfigured)
         app.Logger.LogWarning(
-            "houseCARL listening on {Url} — NOT configured yet. The first tool call will ask for your MO2 instance folder (or call housecarl_set_mo2_instance with it).", url);
+            "houseCARL-Amethyst listening on {Url} — NOT connected yet. Call housecarl_set_amethyst_connection.", url);
     else
         app.Logger.LogInformation(
-            "houseCARL listening on {Url} — reading {Source} STANDALONE (MO2 need not be running); load order resolves lazily on the first tool call.",
-            url, explicitMode ? "explicit configured paths" : $"MO2 instance '{instanceDir}' [{instanceSource}]");
+            "houseCARL-Amethyst listening on {Url} — reading {Source}; load order resolves lazily on the first tool call.",
+            url, explicitMode ? "explicit configured paths" : $"Amethyst connection '{connection}' [{connectionSource}]");
     app.Run(url);
 }
 else
@@ -39,7 +36,7 @@ else
     // STDIO GOTCHA: stdout IS the JSON-RPC channel — route ALL logs to stderr or they corrupt the protocol stream.
     builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-    var (svc, explicitMode, instanceDir, instanceSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
+    var (svc, explicitMode, connection, connectionSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
     AddMcp(builder.Services, stdio: true);
 
     var app = builder.Build();
@@ -49,23 +46,20 @@ else
         logger.LogWarning("houseCARL user config recovered: {Note}", configNote);   // corrupt file — backed up, never silent (hunt F3)
     if (!svc.IsConfigured)
         logger.LogWarning(
-            "houseCARL stdio server — NOT configured yet. The first tool call will ask for your MO2 instance folder (or call housecarl_set_mo2_instance with it).");
+            "houseCARL-Amethyst stdio server — NOT connected yet. Call housecarl_set_amethyst_connection.");
     else
         logger.LogInformation(
-            "houseCARL stdio server — reading {Source} STANDALONE (MO2 need not be running); load order resolves lazily on the first tool call.",
-            explicitMode ? "explicit configured paths" : $"MO2 instance '{instanceDir}' [{instanceSource}]");
+            "houseCARL-Amethyst stdio server — reading {Source}; load order resolves lazily on the first tool call.",
+            explicitMode ? "explicit configured paths" : $"Amethyst connection '{connection}' [{connectionSource}]");
     await app.RunAsync();
 }
 
 // ── shared setup — MUST stay identical across transports (divergence here = stdio and http resolving the load
 //    order differently, a latent bug). Both branches call these; only the transport line itself differs. ──────────
 
-// houseCARL's OWN rulebook (corpus.json, shipped WITH the app) + the MO2-instance precedence (§6d): houseCARL.user.json
-// (in HOUSECARL_DATA_DIR = ${CLAUDE_PLUGIN_DATA} when set, else beside the exe; written by housecarl_set_mo2_instance at
-// RUNTIME) > explicit DataDir+ModsDir+ProfileDir (dev/non-portable) > Mo2InstanceDir (userConfig install dialog / appsettings)
-// > UNCONFIGURED (boots; tools prompt). The runtime user choice beats the install default. A corrupt user file never crashes boot (Q3).
+// Runtime user config wins over appsettings; explicit roots remain a local-development seam.
 // Builds + registers the LoadOrderService; returns the bits the boot log needs.
-static (LoadOrderService svc, bool explicitMode, string? instanceDir, string instanceSource, string? configNote) SetupHouseCarl(IConfiguration config, IServiceCollection services)
+static (LoadOrderService svc, bool explicitMode, string? connection, string connectionSource, string? configNote) SetupHouseCarl(IConfiguration config, IServiceCollection services)
 {
     var cfg = config.GetSection("HouseCarl");
 
@@ -76,22 +70,21 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
 
     // user.json lives in the WRITABLE data dir — HOUSECARL_DATA_DIR (the plugin's ${CLAUDE_PLUGIN_DATA}, which survives
     // updates) when set, else beside the exe (dev / non-plugin). NEVER under the plugin root: the client wipes that dir on
-    // every plugin update, which would silently drop the user's saved MO2 instance (rulebook §6c / F1).
+    // every plugin update, which would silently drop the saved connection.
     var pluginDataDir = Environment.GetEnvironmentVariable("HOUSECARL_DATA_DIR");
     var userConfigDir = string.IsNullOrWhiteSpace(pluginDataDir) ? AppContext.BaseDirectory : pluginDataDir;
     var userConfigPath = Path.Combine(userConfigDir, "houseCARL.user.json");
-    // ONE owner of houseCARL.user.json (UserConfigStore): the MO2 instance dir AND the external-tool paths share the file,
+    // ONE owner of houseCARL.user.json: the Amethyst connection and external-tool paths share the file,
     // so neither writer clobbers the other (read-modify-write under a cross-process lock; atomic writes). A corrupt file
     // never crashes boot, but it is NOT silent either (hunt F3): it's backed up and the note rides the boot log.
     var store = new UserConfigStore(userConfigPath);
     services.AddSingleton(store);
-    string? userInstanceDir = store.Load(out var configNote).Mo2InstanceDir;
+    string? userConnection = store.Load(out var configNote).AmethystConnectionManifest;
 
-    // PRECEDENCE (§6d): the saved user config (houseCARL.user.json, written by housecarl_set_mo2_instance at RUNTIME) wins
-    // over Mo2InstanceDir (the userConfig install-dialog value / appsettings) — the runtime switch beats the install default.
-    bool fromUser = !string.IsNullOrWhiteSpace(userInstanceDir);
-    var instanceDir = fromUser ? userInstanceDir : cfg["Mo2InstanceDir"];
-    var instanceSource = fromUser ? "saved user config" : "Mo2InstanceDir (install dialog / appsettings)";
+    // A runtime connection switch beats the optional install-time default.
+    bool fromUser = !string.IsNullOrWhiteSpace(userConnection);
+    var connection = fromUser ? userConnection : cfg["ConnectionManifest"];
+    var connectionSource = fromUser ? "saved user config" : "ConnectionManifest (appsettings)";
     var maxPlugins = int.TryParse(cfg["MaxPlugins"], out var mp) ? mp : 0;
 
     var dataDir = cfg["DataDir"]; var modsDir = cfg["ModsDir"]; var profileDir = cfg["ProfileDir"];
@@ -100,7 +93,7 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
 
     LoadOrderService svc = explicitMode
         ? LoadOrderService.WithExplicitPaths(dataDir!, modsDir!, profileDir!, maxPlugins, store)
-        : LoadOrderService.WithInstance(instanceDir, maxPlugins, store);
+        : LoadOrderService.WithAmethystConnection(connection, maxPlugins, store);
     services.AddSingleton(svc);
 
     // The external-tool bridge (compile / BSA / log access): one resolver over the shared user config. Riders inject it.
@@ -121,7 +114,7 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
         c.DefaultRequestHeaders.Add("Application-Version", ServerVersion());
     });
 
-    return (svc, explicitMode, instanceDir, instanceSource, configNote);
+    return (svc, explicitMode, connection, connectionSource, configNote);
 }
 
 // The MCP server registration — server identity + instructions + the attribute-registered tools. ONLY the
@@ -146,9 +139,7 @@ static void AddMcp(IServiceCollection services, bool stdio)
             "from OUTDATED for the EXACT file installed, correct for the multi-file pages where a version compare lies); and " +
             "housecarl_nexus_identify (trace a file to its source mod by MD5 hash); and housecarl_nexus_graphql (a RAW " +
             "read-only query over the same keyless GraphQL — the completeness backstop: prefer the curated tools above, and " +
-            "reach for this ONLY for a field they don't surface yet, e.g. a mod's page tags). For mod updates, start with " +
-            "housecarl_update_status — it reads MO2's OWN local update cache with NO network to narrow the list AND prints " +
-            "each mod's 'id#fileid' verify token — then feed those tokens to housecarl_nexus_check_updates to confirm live. " +
+            "reach for this ONLY for a field they don't surface yet, e.g. a mod's page tags). " +
             "Prefer these over a browser or generic web search for any Nexus lookup: " +
             "houseCARL can already read changelogs, file lists, and update status directly, so never hand-roll scripts " +
             "around a rendered Nexus page.";

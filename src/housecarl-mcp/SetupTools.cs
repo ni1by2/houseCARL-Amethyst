@@ -5,12 +5,7 @@ using ModelContextProtocol.Server;
 namespace HousecarlMcp;
 
 /// <summary>
-/// houseCARL setup tools — the config the USER owns, persisted to houseCARL.user.json (validated loud; nothing saved on a
-/// bad value — Q3). Two tools live here:
-///   • housecarl_set_mo2_instance — WHERE Mod Organizer 2 is: one path (the instance folder); ModOrganizer.ini yields the
-///     mods folder, the ACTIVE profile, and the game Data folder (<see cref="Mo2Instance"/>), so nothing is hand-typed.
-///     First-run setup (an unconfigured server's tools return a trained prompt naming this tool) AND switching instances
-///     both flow through here.
+/// houseCARL-Amethyst setup tools. User-owned values are validated before an atomic config update.
 ///   • housecarl_set_tool_path — WHERE an external tool is (the Papyrus compiler, BSArch, or a log folder): the bridge the
 ///     compile / BSA / log-access riders sit on. Auto-detects canonical homes, so it's usually only needed for BSArch or a
 ///     non-standard install (<see cref="ToolPathResolver"/> + <see cref="ToolBridge"/>).
@@ -18,30 +13,24 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class SetupTools
 {
-    [McpServerTool(Name = "housecarl_set_mo2_instance", Title = "Tell houseCARL where Mod Organizer 2 is"),
+    [McpServerTool(Name = "housecarl_set_amethyst_connection", Title = "Connect houseCARL to Amethyst"),
      Description(
-         "Point houseCARL at your Mod Organizer 2 instance folder — the folder that contains ModOrganizer.ini (for a " +
-         "Wabbajack / portable modlist, that's the list's install folder). houseCARL reads ModOrganizer.ini to derive the " +
-         "mods folder, the ACTIVE profile, and the game's Data folder automatically — you give ONLY the one folder, and " +
-         "the profile is always auto-detected (you never name it). Use this for FIRST-RUN setup (when a tool reports " +
-         "houseCARL isn't configured yet) and to SWITCH to a different MO2 instance later. It VALIDATES the folder is a " +
-         "real MO2 instance and reports exactly what's wrong if not (nothing is changed or saved on failure); on success " +
-         "it re-points houseCARL immediately (the next read/write resolves against it) and SAVES the choice so it persists " +
-         "across restarts. Returns the detected profile plus a quick enabled-mods / active-plugins summary.")]
-    public static string SetMo2Instance(
+         "Validate and activate a schema-v1 connection.json exported for Amethyst's Skyrim Special Edition profile. " +
+         "The file supplies stable native Linux roots; houseCARL re-reads deploy_state.json to follow profile switches. " +
+         "Unknown schemas, stale roots, malformed state, and unsafe merged Data layouts fail without changing the saved connection.")]
+    public static string SetAmethystConnection(
         LoadOrderService svc,
-        [Description("Full path to the MO2 instance folder — the one containing ModOrganizer.ini (e.g. a Wabbajack list's install folder).")]
-            string path) => Guard.Tool("housecarl_set_mo2_instance", () =>
+        [Description("Absolute native Linux path to the exported .housecarl-amethyst/connection.json.")]
+            string manifest_path) => Guard.Tool("housecarl_set_amethyst_connection", () =>
     {
-        if (string.IsNullOrWhiteSpace(path))
-            return "error: no path given. Pass the full path to your MO2 instance folder (the one containing ModOrganizer.ini).";
-        path = path.Trim().Trim('"');   // tolerate a copy-pasted quoted path, like every sibling path-taking tool
-
-        Mo2InstancePaths paths; bool persisted; string? persistError; string? persistNote;
-        try { (paths, persisted, persistError, persistNote) = svc.SetInstance(path); }
-        catch (InvalidOperationException ex) { return "error: " + ex.Message; }   // not a usable instance — Q3 reason, nothing changed
-
-        return Render(paths, persisted, persistError, persistNote);
+        if (string.IsNullOrWhiteSpace(manifest_path))
+            return "error: manifest_path is required.";
+        try
+        {
+            var result = svc.SetAmethystConnection(manifest_path.Trim().Trim('"'));
+            return Render(result.snapshot, result.persisted, result.persistError, result.persistNote);
+        }
+        catch (AmethystConfigurationException ex) { return "error: " + ex.Message; }
     });
 
     [McpServerTool(Name = "housecarl_set_tool_path", Title = "Tell houseCARL where an external tool is"),
@@ -53,7 +42,7 @@ public static class SetupTools
          "canonical homes for the compiler and the log folders, so you usually only need this for BSArch (no fixed home) " +
          "or a non-standard install. VALIDATES the path — the .exe exists and looks like the right tool; the log folder " +
          "exists — and reports exactly what's wrong if not, saving NOTHING on failure (Q3). On success it SAVES the choice " +
-         "to houseCARL.user.json so it persists across restarts, coexisting with your MO2 instance setting. tool must be " +
+         "to houseCARL.user.json so it persists across restarts, coexisting with your Amethyst connection. tool must be " +
          "one of: papyrus_compiler, bsarch, papyrus_logs, crash_logs.")]
     public static string SetToolPath(
         ToolPathResolver bridge,
@@ -77,49 +66,29 @@ public static class SetupTools
         sb.Append("configured houseCARL -> ").Append(info.Display).Append('\n');
         sb.Append("  path: ").Append(resolved).Append('\n');
         sb.Append(persisted
-            ? "saved to houseCARL.user.json — persists across restarts (coexists with your MO2 instance)."
+            ? "saved to houseCARL.user.json — persists across restarts (coexists with your Amethyst connection)."
             : $"NOTE: could not save ({persistError}) — works this session, but you'll need to set it again after a restart.");
         if (persistNote is not null) sb.Append("\nRECOVERED: ").Append(persistNote);   // corrupt prior config — never silent (hunt F3)
         return sb.ToString();
     });
 
-    /// <summary>Confirmation: the instance + the DERIVED roots + the AUTO-DETECTED profile, a cheap enabled/active summary
-    /// (text-file read, no deep index — proof houseCARL found the order), and whether the choice was persisted (Q3: a
-    /// failed save is reported, not hidden; a corrupt-file recovery is named even on success — hunt F3).</summary>
-    internal static string Render(Mo2InstancePaths p, bool persisted, string? persistError, string? persistNote)
+    /// <summary>Render the validated roots and whether the connection persisted.</summary>
+    internal static string Render(ManagerSnapshot p, bool persisted, string? persistError, string? persistNote)
     {
         var sb = new StringBuilder();
-        sb.Append("configured houseCARL -> MO2 instance '").Append(p.InstanceDir).Append("'\n");
-        sb.Append("active profile: ").Append(p.ProfileName).Append("  (auto-detected from ModOrganizer.ini)\n");
+        sb.Append("connected houseCARL-Amethyst\n");
+        sb.Append("manifest: ").Append(p.ManifestPath).Append("  (schema ").Append(p.SchemaVersion).Append(")\n");
+        sb.Append("active profile: ").Append(p.ActiveProfileName).Append('\n');
+        sb.Append("  staging     : ").Append(p.ProfileSpecificMods ? "profile-specific" : "shared").Append('\n');
         sb.Append("  mods folder: ").Append(p.ModsDir).Append('\n');
-        sb.Append("  game Data  : ").Append(p.DataDir).Append('\n');
-        // The overwrite layer is one of the derived roots (MO2's top-of-VFS, where tool outputs resolve from). It is
-        // NOT required to exist on a fresh instance, so annotate an absent one rather than printing a bare path that
-        // looks like a broken root.
-        sb.Append("  overwrite  : ").Append(p.OverwriteDir)
-          .Append(Directory.Exists(p.OverwriteDir) ? "" : "  (none yet — MO2 creates it when a tool writes here)").Append('\n');
-
-        // Cheap composition (the three profile text files only — NO deep index): a quick figure so the user sees houseCARL
-        // actually found the order. The resolve already confirmed the profile files exist; a read hiccup here is non-fatal
-        // but NAMED — the proof line is what tells the user the setup really worked, so its absence must not be silent (Q3).
-        try
-        {
-            var comp = Mo2LoadOrder.ReadComposition(p.ProfileDir);
-            int active = comp.ActivePluginNames.Count + comp.ImplicitPluginNames.Count;
-            sb.Append("sees: ").Append(comp.EnabledMods.Count).Append(" enabled mods · ")
-              .Append(comp.OrderedPluginNames.Count).Append(" plugins in the load order (").Append(active).Append(" active)\n");
-        }
-        catch (Exception ex)
-        {
-            sb.Append("(couldn't read the enabled-mods summary just now: ").Append(ex.Message)
-              .Append(" — the instance itself validated; the first real read will confirm.)\n");
-        }
-
+        sb.Append("  overwrite  : ").Append(p.OverwriteDir).Append('\n');
+        sb.Append("  vanilla Data: ").Append(p.VanillaDataDir).Append('\n');
+        sb.Append("  deployment : ").Append(p.DeploymentActive ? "active" : "inactive")
+          .Append(p.LastDeploymentMode is null ? "" : $" ({p.LastDeploymentMode})").Append('\n');
         sb.Append(persisted
             ? "saved to houseCARL.user.json — persists across restarts."
-            : $"NOTE: could not save the choice ({persistError}) — it works this session, but you'll need to set it again after a restart.");
-        if (persistNote is not null) sb.Append("\nRECOVERED: ").Append(persistNote);   // corrupt prior config — never silent (hunt F3)
-        sb.Append("\nthe load order resolves on the next read/write (first build ~10s).");
+            : $"NOTE: could not save ({persistError}) — reconnect after restart.");
+        if (persistNote is not null) sb.Append("\nRECOVERED: ").Append(persistNote);
         return sb.ToString();
     }
 }

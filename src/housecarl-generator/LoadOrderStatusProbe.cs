@@ -169,7 +169,7 @@ internal static class LoadOrderStatusProbe
                 var r = svc.NamedProfileComposition("whatever");
                 Check(!r.InstanceMode && r.Composition is null, "explicit mode → named read refused (InstanceMode false, no composition)");
                 var text = Render(svc, r, "whatever");
-                Check(text.Contains("MO2-instance mode"), "render explains the named read needs instance mode");
+                Check(text.Contains("needs an Amethyst connection"), "render explains the named read needs manager mode");
             }
 
             // ---- G: base_directory redirect — profiles under the redirected base are still found (by construction) ----
