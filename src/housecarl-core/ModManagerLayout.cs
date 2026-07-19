@@ -27,8 +27,9 @@ public sealed record ManagerSnapshot(
     string DeployStateFile,
     bool DeploymentActive,
     string? LastDeploymentMode,
+    bool FilemapReady,
     IReadOnlyList<string> ActivePluginOrder,
     IReadOnlyDictionary<string, string> ResolvedPluginSources,
-    IReadOnlyDictionary<string, string> LooseAssetSources,
+    IReadOnlyDictionary<string, ManagerFileSource> LooseAssetSources,
     IReadOnlyList<string> Warnings,
     IReadOnlyDictionary<string, DateTime> FreshnessInputs);

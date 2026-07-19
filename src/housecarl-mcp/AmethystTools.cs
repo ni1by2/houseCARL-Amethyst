@@ -34,6 +34,10 @@ public static class AmethystTools
             .Append("overwrite: ").Append(s.OverwriteDir).Append('\n')
             .Append("filemap: ").Append(s.FilemapPath).Append('\n')
             .Append("mod index: ").Append(s.ModIndexPath).Append('\n')
+            .Append("filemap state: ").Append(s.FilemapReady ? "ready" : "not ready").Append('\n')
+            .Append("plugins: ").Append(s.ResolvedPluginSources.Count).Append(" resolved / ")
+            .Append(s.ActivePluginOrder.Count).Append(" active\n")
+            .Append("loose winners: ").Append(s.LooseAssetSources.Count).Append('\n')
             .Append("deployment: ").Append(s.DeploymentActive ? "active" : "inactive");
         if (s.LastDeploymentMode is not null) text.Append(" (").Append(s.LastDeploymentMode).Append(')');
         text.Append("\nfreshness inputs:\n");

@@ -217,6 +217,25 @@ public sealed class LoadOrderService : IDisposable
     /// is DataDir's parent (DataDir = gamePath\Data). Caller holds <see cref="_gate"/>.</summary>
     AssetResolver BuildAssetResolverLocked()
     {
+        if (_manifestPath is not null)
+        {
+            var snapshot = _managerSnapshot
+                ?? throw new InvalidOperationException("Amethyst manager state is unavailable.");
+            var fileIndex = new ManagerFileIndex(
+                snapshot.FilemapReady,
+                snapshot.LooseAssetSources,
+                snapshot.Warnings);
+            if (!fileIndex.Ready)
+                throw new AmethystConfigurationException(string.Join("; ", fileIndex.Warnings));
+            var amethystDiscovery = ArchiveDiscovery.DiscoverAmethyst(
+                snapshot.ProfileDir,
+                snapshot.GamePath,
+                snapshot.VanillaDataDir,
+                fileIndex);
+            _assetWarnings = snapshot.Warnings.Concat(amethystDiscovery.Warnings).Distinct().ToList();
+            return AssetResolver.Build(fileIndex.Sources, snapshot.VanillaDataDir, amethystDiscovery.Archives);
+        }
+
         var comp = ReadManagerComposition(_profileDir);                            // EnabledMods (priority) — cheap text parse
         var gamePath = _dataDir.Length > 0 ? Path.GetDirectoryName(_dataDir.TrimEnd('\\', '/')) ?? "" : "";
         var discovery = ArchiveDiscovery.Discover(_profileDir, _modsDir, _dataDir, _overwriteDir, gamePath);
@@ -1197,8 +1216,7 @@ public sealed class LoadOrderService : IDisposable
             bool rootsChanged = !PathEq(snapshot.ProfileDir, _profileDir) || !PathEq(snapshot.ModsDir, _modsDir)
                                 || !PathEq(snapshot.VanillaDataDir, _dataDir) || !PathEq(snapshot.OverwriteDir, _overwriteDir);
             Apply(snapshot);
-            if (!rootsChanged) return false;
-            InvalidateClassParents();
+            if (rootsChanged) InvalidateClassParents();
             ReResolve();
             return true;
         }
@@ -1294,9 +1312,16 @@ public sealed class LoadOrderService : IDisposable
         _overwriteDir = snapshot.OverwriteDir;
     }
 
-    ModOrderResult BuildManagerOrder() => _manifestPath is null
-        ? Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir)
-        : AmethystLoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
+    ModOrderResult BuildManagerOrder()
+    {
+        if (_manifestPath is null)
+            return Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
+        var snapshot = _managerSnapshot
+            ?? throw new AmethystConfigurationException("manager snapshot is not initialized");
+        return AmethystLoadOrder.Build(
+            snapshot.ProfileDir, snapshot.VanillaDataDir,
+            new ManagerFileIndex(snapshot.FilemapReady, snapshot.LooseAssetSources, snapshot.Warnings));
+    }
 
     ModComposition ReadManagerComposition(string profileDir, List<string>? warnings = null) =>
         _manifestPath is null

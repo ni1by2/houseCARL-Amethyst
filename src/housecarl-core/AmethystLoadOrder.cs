@@ -15,6 +15,29 @@ public static class AmethystLoadOrder
         var composition = ReadComposition(profileDir, warnings);
         var winners = PluginWinners(
             composition.EnabledMods, modsDir, vanillaDataDir, overwriteDir, warnings);
+        return Resolve(composition, winners, warnings);
+    }
+
+    public static ModOrderResult Build(
+        string profileDir, string vanillaDataDir, ManagerFileIndex fileIndex)
+    {
+        if (!fileIndex.Ready)
+            throw new AmethystConfigurationException(string.Join("; ", fileIndex.Warnings));
+
+        var warnings = new List<string>();
+        var composition = ReadComposition(profileDir, warnings);
+        var winners = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (logicalPath, source) in fileIndex.Sources)
+            if (BethesdaPath.DirectoryName(logicalPath).Length == 0
+                && PluginExts.Contains(Path.GetExtension(logicalPath), StringComparer.OrdinalIgnoreCase))
+                winners[logicalPath] = source.HostPath;
+        AddPlugins(vanillaDataDir, winners, warnings);
+        return Resolve(composition, winners, warnings);
+    }
+
+    static ModOrderResult Resolve(
+        ModComposition composition, Dictionary<string, string> winners, List<string> warnings)
+    {
         var inactive = new HashSet<string>(
             composition.InactivePluginNames, StringComparer.OrdinalIgnoreCase);
         var paths = new List<string>();
@@ -33,7 +56,7 @@ public static class AmethystLoadOrder
             }
 
             warnings.Add(
-                $"load order lists '{name}' but no enabled Amethyst mod, overwrite, or vanilla Data source provides it; " +
+                $"load order lists '{name}' but no Amethyst filemap or vanilla Data source provides it; " +
                 "refresh Amethyst and rebuild its load order");
         }
 

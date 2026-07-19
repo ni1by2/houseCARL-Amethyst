@@ -95,6 +95,7 @@ public sealed class AssetResolver : IDisposable
     readonly IReadOnlyList<string> _enabledMods;         // mod folder names, HIGHEST priority FIRST (Mo2Composition.EnabledMods order)
     readonly IReadOnlyList<ActiveArchive> _archives;     // active BSAs (path-deduped; winner decided by PluginRank)
     readonly IReadOnlyList<(string Name, string Dir)> _looseRoots;   // loose roots in PRECEDENCE order: overwrite > mods (priority) > Data
+    readonly IReadOnlyDictionary<string, ManagerFileSource>? _authoritativeLoose;
 
     /// <summary>One table-build's whole output, swapped in as a single reference write (the LoadOrderResolver
     /// snapshot discipline) so a concurrent Resolve never sees a half-rebuilt cache. Holds string sets only.
@@ -137,14 +138,18 @@ public sealed class AssetResolver : IDisposable
     public bool ReadIncomplete => _snap.Failures.Count > 0;
 
     AssetResolver(string overwriteDir, string modsDir, string dataDir,
-                  IReadOnlyList<string> enabledMods, IReadOnlyList<ActiveArchive> archives)
+                  IReadOnlyList<string> enabledMods, IReadOnlyList<ActiveArchive> archives,
+                  IReadOnlyDictionary<string, ManagerFileSource>? authoritativeLoose = null)
     {
         _overwriteDir = overwriteDir ?? "";
         _modsDir = modsDir ?? "";
         _dataDir = dataDir ?? "";
         _enabledMods = enabledMods;
         _archives = DedupeArchives(archives);    // collapse a path bound by >1 plugin → ONE provider (no double-count → no false Ambiguous)
-        _looseRoots = BuildLooseRoots();         // fixed ordered roots: overwrite > mods (priority) > Data
+        _authoritativeLoose = authoritativeLoose;
+        _looseRoots = authoritativeLoose is null
+            ? BuildLooseRoots()
+            : _dataDir.Length > 0 ? new[] { ("Data", _dataDir) } : Array.Empty<(string, string)>();
         _snap = BuildTables();
     }
 
@@ -187,6 +192,16 @@ public sealed class AssetResolver : IDisposable
     public static AssetResolver Build(string overwriteDir, string modsDir, string dataDir,
                                       IReadOnlyList<string> enabledModsByPriority, IReadOnlyList<ActiveArchive> activeArchives)
         => new(overwriteDir, modsDir, dataDir, enabledModsByPriority, activeArchives);
+
+    /// <summary>
+    /// Build from Amethyst's authoritative loose-file winner map. The map supplies staged
+    /// winners; vanilla Data remains the lowest-priority loose source.
+    /// </summary>
+    public static AssetResolver Build(
+        IReadOnlyDictionary<string, ManagerFileSource> looseWinners,
+        string vanillaDataDir,
+        IReadOnlyList<ActiveArchive> activeArchives)
+        => new("", "", vanillaDataDir, Array.Empty<string>(), activeArchives, looseWinners);
 
     /// <summary>Open each active archive, copy its file table into a string set, and DISPOSE it immediately (Option B:
     /// no handle survives the build). An archive that won't read is recorded in Failures (Q3) and contributes nothing.</summary>
@@ -301,15 +316,36 @@ public sealed class AssetResolver : IDisposable
     /// <paramref name="rel"/> is already <see cref="NormalizeQueryPath"/>'d by the caller. Pure read over the snapshot.</summary>
     List<PlacementSource> ResolveProviders(string rel, Snapshot snap)
     {
-        // ---- loose, in MO2 precedence order — via the per-subtree cache (warmed on first touch) ----
-        var subtreeDir = BethesdaPath.DirectoryName(rel);
-        var fname = BethesdaPath.FileName(rel);
-        var st = snap.LooseCache.GetOrAdd(subtreeDir, WarmSubtree);
         var loose = new List<PlacementSource>();
-        foreach (var (rootIndex, directory, files) in st.Present)    // Present is already in precedence order
-            if (files.TryGetValue(fname, out var rawName))
-                loose.Add(new PlacementSource(_looseRoots[rootIndex].Name, AssetKind.Loose,
-                    LooseFilePath: Path.Combine(directory, rawName), ArchivePath: null, EntryPath: rel));
+        if (_authoritativeLoose is not null)
+        {
+            if (_authoritativeLoose.TryGetValue(rel, out var source))
+            {
+                if (!File.Exists(source.HostPath))
+                    throw new InvalidOperationException(
+                        $"Amethyst filemap winner '{rel}' from '{source.Provider}' is missing at " +
+                        $"'{source.HostPath}'; refresh Amethyst and rebuild the filemap");
+                loose.Add(new PlacementSource(source.Provider, AssetKind.Loose,
+                    LooseFilePath: source.HostPath, ArchivePath: null, EntryPath: rel));
+            }
+            if (_dataDir.Length > 0
+                && BethesdaPath.TryResolveExisting(_dataDir, rel, out var vanillaPath)
+                && File.Exists(vanillaPath)
+                && !loose.Any(x => string.Equals(x.LooseFilePath, vanillaPath, StringComparison.Ordinal)))
+                loose.Add(new PlacementSource("Data", AssetKind.Loose,
+                    LooseFilePath: vanillaPath, ArchivePath: null, EntryPath: rel));
+        }
+        else
+        {
+            // Legacy root walk: overwrite > enabled mods > Data.
+            var subtreeDir = BethesdaPath.DirectoryName(rel);
+            var fname = BethesdaPath.FileName(rel);
+            var st = snap.LooseCache.GetOrAdd(subtreeDir, WarmSubtree);
+            foreach (var (rootIndex, directory, files) in st.Present)
+                if (files.TryGetValue(fname, out var rawName))
+                    loose.Add(new PlacementSource(_looseRoots[rootIndex].Name, AssetKind.Loose,
+                        LooseFilePath: Path.Combine(directory, rawName), ArchivePath: null, EntryPath: rel));
+        }
 
         // ---- BSA, highest plugin rank first ----
         var bsa = new List<(PlacementSource source, int rank)>();
@@ -369,7 +405,12 @@ public sealed class AssetResolver : IDisposable
         var withSep = pre + "\\";                                // match a SUBTREE, not a sibling whose name starts with 'pre'
         var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
-        // loose: recurse each root's copy of the prefix dir (set-UNION across roots — the per-path winner is decided later).
+        if (_authoritativeLoose is not null)
+            foreach (var path in _authoritativeLoose.Keys)
+                if (path.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))
+                    found.Add(path);
+
+        // Legacy roots, or vanilla Data in authoritative mode.
         foreach (var (_, rootDir) in _looseRoots)
         {
             if (!BethesdaPath.TryResolveExisting(rootDir, pre, out var baseDir) || !Directory.Exists(baseDir)) continue;
@@ -442,8 +483,17 @@ public sealed class AssetResolver : IDisposable
         foreach (var a in _archives)
             if (!snap.Mtimes.TryGetValue(a.Path, out var m) || SafeMtime(a.Path) != m) { stale = true; break; }
         if (!stale)
-            foreach (var kv in snap.LooseCache)                       // each warmed loose subtree — re-stat its dirs across all roots
-                if (LooseSubtreeStale(kv.Key, kv.Value)) { stale = true; break; }
+        {
+            if (_authoritativeLoose is not null)
+            {
+                // Filemap/index membership changes rebuild the whole resolver in the manager layout.
+                // Here only a vanished staged winner requires a local refresh signal.
+                stale = _authoritativeLoose.Values.Any(x => !File.Exists(x.HostPath));
+            }
+            else
+                foreach (var kv in snap.LooseCache)
+                    if (LooseSubtreeStale(kv.Key, kv.Value)) { stale = true; break; }
+        }
         if (!stale) return false;
         _snap = BuildTables();                                        // BSA tables re-read; loose cache starts empty, re-warms lazily
         return true;

@@ -31,6 +31,8 @@ public static class AmethystRuntimeProbe
             var status = AmethystTools.Status(service);
             Check(status.Contains("profile: default (shared staging)"), "status reports active shared profile");
             Check(status.Contains("deployment: active (HARDLINK)"), "status reports hardlink deployment");
+            Check(status.Contains("filemap state: ready"), "status reports authoritative filemap readiness");
+            Check(status.Contains("plugins: 1 resolved / 1 active"), "status reports plugin counts");
             var order = service.StatusData();
             Check(order.ResolvedPluginCount == 1, "record resolver uses the Amethyst plugin source");
             Check(order.Composition.LockedMods.SequenceEqual(new[] { "Runtime Mod" }),
@@ -74,6 +76,9 @@ public static class AmethystRuntimeProbe
         File.WriteAllText(Path.Combine(profile, "modlist.txt"), "*Runtime Mod\n");
         File.WriteAllText(Path.Combine(profile, "plugins.txt"), "*" + key.FileName + "\n");
         File.WriteAllText(Path.Combine(profile, "loadorder.txt"), key.FileName + "\n");
+        AmethystFileMapProbe.WriteIndex(Path.Combine(profileRoot, "modindex.bin"), 4,
+            ("Runtime Mod", new[] { (key.FileName.String.ToLowerInvariant(), key.FileName.String, "n") }));
+        File.WriteAllText(Path.Combine(profileRoot, "filemap.txt"), key.FileName + "\tRuntime Mod\n");
         var paths = Path.Combine(config, "paths.json");
         deploy = Path.Combine(config, "deploy_state.json");
         Write(paths, new { staging_path = profileRoot, game_path = game });
