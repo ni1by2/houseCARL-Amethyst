@@ -142,11 +142,11 @@ restart, and deployed `Data/` is never classified as vanilla.
 
 ### Session 4 — Authoritative filemap and asset resolution
 
-- [ ] Parse `filemap.txt` and MessagePack `modindex.bin` v4.
-- [ ] Resolve normalized winners to raw-cased staging files.
-- [ ] Support overwrite, exclusions, strip-prefix output and casing rewrites.
-- [ ] Drive archive discovery and asset provenance from the snapshot.
-- [ ] Add all relevant files to freshness checks and refuse stale mismatches.
+- [x] Parse `filemap.txt` and MessagePack `modindex.bin` v4.
+- [x] Resolve normalized winners to raw-cased staging files.
+- [x] Support overwrite, exclusions, strip-prefix output and casing rewrites.
+- [x] Drive archive discovery and asset provenance from the snapshot.
+- [x] Add all relevant files to freshness checks and refuse stale mismatches.
 
 Exit gate: loose/loose and loose/BSA winners, overwrite, excluded files,
 strip-prefix mods, facegen, voice, NIF, SKSE and SkyPatcher fixtures pass.
@@ -230,35 +230,39 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 3 complete; Session 4 is next.
-- Last completed checkpoint: native Amethyst composition and plugin-source
-  resolution, including `+`, `-`, locked `*`, separators, overwrite,
-  `Data_Core`, inactive plugins, implicit masters, duplicate priorities, and
-  native case-sensitive filesystem access.
-- Verification performed: Linux build passed. Focused load-order, layout,
-  runtime, status, and overwrite guards pass. The runtime guard builds a real
-  Mutagen record index from an Amethyst-staged locked mod. Full `ci-all` is
-  88/97; its nine failures exactly match the validated upstream Linux baseline.
-- Files/components changed: `AmethystLoadOrder`, manager-neutral composition
-  records, `AmethystLayout`, `LoadOrderService`, load-order status, and two
-  synthetic Amethyst guards.
-- Decisions made: invalid Amethyst state never falls back to MO2 or merged
-  deployed `Data/`; Amethyst and legacy test seams share manager-neutral result
-  records but use separate parsers; case-insensitive logical lookup selects
-  deterministic raw-cased Linux paths and names case-colliding folders.
-- Known failures or residual risks: plugin source resolution currently follows
-  mod priority directly. Session 4 must replace loose-asset and plugin guessing
-  with authoritative `filemap.txt` and `modindex.bin` v4 handling, including
-  exclusions and strip prefixes. Windows external-tool and installer paths
-  remain deferred. The nine baseline failures are `writelock`, `upsert`,
+- Active milestone: Session 4 complete; Session 5 is next.
+- Last completed checkpoint: strict Amethyst `filemap.txt` and MessagePack
+  `modindex.bin` v4 parsing now drives plugin, loose-asset and BSA source
+  resolution using raw Linux casing and staging paths.
+- Verification performed: the Linux solution and generator build with .NET 9.
+  The Amethyst filemap guard covers loose/loose winners, loose/BSA precedence,
+  overwrite, exclusions, global and per-mod strip prefixes, mixed case,
+  Unicode, vanilla fallback, archive discovery, stale/missing state, unknown
+  versions, traversal, and vanished winners. Existing asset, facegen, voice,
+  SKSE, SkyPatcher and runtime guards pass. Full `ci-all` is 89/98; its nine
+  failures exactly match the validated upstream Linux baseline.
+- Files/components changed: `AmethystFileMap`, `AmethystLayout`,
+  `AmethystLoadOrder`, `ArchiveDiscovery`, `AssetResolver`,
+  `IModManagerLayout`, `LoadOrderService`, the runtime/filemap probes, package
+  metadata, and third-party notices.
+- Decisions made: `filemap.txt` is the only loose winner authority.
+  `modindex.bin` v4 `rel_str` preserves casing after Amethyst's strip operation;
+  it is not always a complete physical source-relative path. Source lookup
+  therefore mirrors Amethyst's direct, global `Data`, and configured per-mod
+  wrapper reconstruction. Unknown versions, stale pairs, mismatches, or
+  vanished winners fail instead of scanning staging or deployed `Data/`.
+- Known failures or residual risks: real Amethyst and Skyrim validation remains
+  a manual release gate. MessagePack is a new MIT-licensed dependency.
+  Windows external-tool and installer paths remain deferred. The nine baseline
+  failures are `writelock`, `upsert`,
   `binding-shim`, `compile-ergonomics`, `setup-update-lock`, `bsa-contract`,
   `atomic-commit`, `seq-regen`, and `skypatcher-conflicts`.
-- Exact next action: begin Session 4 with failing-first synthetic fixtures for
-  `filemap.txt` and MessagePack `modindex.bin` v4, then implement strict version
-  parsing and raw-cased source lookup.
+- Exact next action: begin Session 5 by routing new patch folders into effective
+  Amethyst staging and adding the pending-refresh/enable/deploy state contract.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
-  (native Amethyst load order).
+  (native Amethyst load order), `4560247` (authoritative filemap and asset
+  resolution).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order.
 
