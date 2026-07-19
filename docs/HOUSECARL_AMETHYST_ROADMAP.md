@@ -260,7 +260,7 @@ manual release gate.
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
-  runtime connection. The native load-order PR is ready locally.
+  runtime connection; #5 native Amethyst load order.
 
 ## Session update template
 
