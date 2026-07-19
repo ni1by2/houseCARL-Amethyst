@@ -1,4 +1,7 @@
 using System.Text.Json;
+using Mutagen.Bethesda;
+using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Skyrim;
 using HousecarlCore;
 using HousecarlMcp;
 
@@ -28,6 +31,10 @@ public static class AmethystRuntimeProbe
             var status = AmethystTools.Status(service);
             Check(status.Contains("profile: default (shared staging)"), "status reports active shared profile");
             Check(status.Contains("deployment: active (HARDLINK)"), "status reports hardlink deployment");
+            var order = service.StatusData();
+            Check(order.ResolvedPluginCount == 1, "record resolver uses the Amethyst plugin source");
+            Check(order.Composition.LockedMods.SequenceEqual(new[] { "Runtime Mod" }),
+                "runtime composition preserves locked mods");
 
             var alternate = Path.Combine(profileRoot, "profiles", "alternate");
             Directory.CreateDirectory(alternate);
@@ -55,8 +62,18 @@ public static class AmethystRuntimeProbe
         profileRoot = Path.Combine(root, "staging");
         var game = Path.Combine(root, "game");
         Directory.CreateDirectory(config);
-        Directory.CreateDirectory(Path.Combine(profileRoot, "profiles", "default"));
+        var profile = Path.Combine(profileRoot, "profiles", "default");
+        Directory.CreateDirectory(profile);
         Directory.CreateDirectory(Path.Combine(game, "Data_Core"));
+        var key = new ModKey("HcAmethystRuntime", ModType.Master);
+        var modPath = Path.Combine(profileRoot, "mods", "Runtime Mod", key.FileName.String);
+        Directory.CreateDirectory(Path.GetDirectoryName(modPath)!);
+        var mod = new SkyrimMod(key, SkyrimRelease.SkyrimSE);
+        mod.Weapons.AddNew().EditorID = "HcAmethystRuntimeWeapon";
+        mod.BeginWrite.ToPath(modPath).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
+        File.WriteAllText(Path.Combine(profile, "modlist.txt"), "*Runtime Mod\n");
+        File.WriteAllText(Path.Combine(profile, "plugins.txt"), "*" + key.FileName + "\n");
+        File.WriteAllText(Path.Combine(profile, "loadorder.txt"), key.FileName + "\n");
         var paths = Path.Combine(config, "paths.json");
         deploy = Path.Combine(config, "deploy_state.json");
         Write(paths, new { staging_path = profileRoot, game_path = game });

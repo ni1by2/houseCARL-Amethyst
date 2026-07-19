@@ -9,7 +9,7 @@ namespace HousecarlMcp;
 /// houseCARL sees as enabled vs DISABLED (mods) and active vs INACTIVE vs implicit (plugins) — so the user can confirm
 /// houseCARL resolves reads/writes against the right active set (and SEE what it excludes, not just trust that it does).
 /// The enabled/disabled picture is read FRESH from the profile each call (cheap text-file parse via
-/// <see cref="HousecarlCore.Mo2LoadOrder.ReadComposition"/>); resolved/record counts reflect the resolver's last build,
+/// <see cref="HousecarlCore.AmethystLoadOrder.ReadComposition"/>); resolved/record counts reflect the resolver's last build,
 /// with a staleness note (Q3) if the profile changed since.
 /// </summary>
 [McpServerToolType]
@@ -66,7 +66,8 @@ static class StatusWire
         sb.Append("load order status — profile '").Append(d.ProfileName).Append("'\n");
         if (d.ManagerPath is not null) sb.Append("connection: ").Append(d.ManagerPath).Append('\n');
         else sb.Append("instance: ").Append(d.InstanceDir ?? "explicit-paths mode").Append('\n'); // legacy probe seam
-        sb.Append("mods:    ").Append(c.EnabledMods.Count).Append(" enabled · ").Append(c.DisabledMods.Count).Append(" disabled\n");
+        sb.Append("mods:    ").Append(c.EnabledMods.Count).Append(" enabled (")
+          .Append(c.LockedMods.Count).Append(" locked) · ").Append(c.DisabledMods.Count).Append(" disabled\n");
         sb.Append("plugins in load order: ").Append(c.OrderedPluginNames.Count).Append('\n');
         sb.Append("  active:   ").Append(gameLoaded).Append("  (").Append(checkedActive).Append(" checked + ").Append(impl).Append(" implicit masters/CC)\n");
         sb.Append("  inactive: ").Append(inactive).Append("  (present but unchecked — houseCARL excludes these)\n");
@@ -195,7 +196,8 @@ static class StatusWire
         var c = p.Composition;
         int active = c.ActivePluginNames.Count + c.ImplicitPluginNames.Count;
         sb.Append("\n— inspecting profile '").Append(p.RequestedName).Append("' (read-only; the active profile is unchanged):\n");
-        sb.Append("  mods:    ").Append(c.EnabledMods.Count).Append(" enabled · ").Append(c.DisabledMods.Count).Append(" disabled\n");
+        sb.Append("  mods:    ").Append(c.EnabledMods.Count).Append(" enabled (")
+          .Append(c.LockedMods.Count).Append(" locked) · ").Append(c.DisabledMods.Count).Append(" disabled\n");
         sb.Append("  plugins: ").Append(c.OrderedPluginNames.Count).Append(" in order · ").Append(active).Append(" active · ")
           .Append(c.InactivePluginNames.Count).Append(" inactive\n");
         // Q3: any read note (e.g. a missing modlist.txt) — so a 0-enabled-mods inspection is never silently mistaken for a
@@ -235,7 +237,7 @@ static class StatusWire
         sb.Append('\n');
     }
 
-    static void AppendLookup(StringBuilder sb, HousecarlCore.Mo2Composition c,
+    static void AppendLookup(StringBuilder sb, HousecarlCore.ModComposition c,
                              IReadOnlyDictionary<string, string> excluded, string name)
     {
         sb.Append("\nlookup '").Append(name).Append("':\n");
@@ -245,6 +247,7 @@ static class StatusWire
         // could surface a suggestion on a non-miss. Kept adjacent + mirrored so the pairing is obvious.
         bool modMiss = !Contains(c.EnabledMods, name) && !Contains(c.DisabledMods, name);
         string asMod =
+            Contains(c.LockedMods, name)   ? "ENABLED + LOCKED (Amethyst keeps this mod on)" :
             Contains(c.EnabledMods, name)  ? "ENABLED (mod present + switched on)" :
             Contains(c.DisabledMods, name) ? "DISABLED (mod present but switched OFF — houseCARL excludes it)" :
                                              "not found in modlist.txt (not a managed mod folder name, or a UI separator)";

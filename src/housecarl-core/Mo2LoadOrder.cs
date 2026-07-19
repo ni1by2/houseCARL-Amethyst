@@ -38,25 +38,26 @@ namespace HousecarlCore;
 /// <param name="OrderedPaths">Real plugin paths, masters-first → highest priority LAST (resolver winner order).</param>
 /// <param name="Warnings">Plugins listed in the order with no resolvable file, or missing profile files.</param>
 /// <param name="ActiveCount">Active plugins in the load order (the resolution target).</param>
-public sealed record Mo2OrderResult(
+public sealed record ModOrderResult(
     IReadOnlyList<string> OrderedPaths, IReadOnlyList<string> Warnings, int ActiveCount)
 {
     public int ResolvedCount => OrderedPaths.Count;
+    public IReadOnlyDictionary<string, string> ResolvedSources { get; init; }
+        = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
 }
 
-/// <summary>The MO2 profile's enabled/disabled COMPOSITION, parsed from the three profile text files only (no mod-folder
-/// enumeration — cheap to re-read on demand). This is the picture the diagnostic surfaces; the heavier path resolution
-/// (which physical file wins) lives in <see cref="Mo2LoadOrder.Build"/>. Names are verbatim from the files: mod folder
-/// names for the mod lists, plugin filenames for the plugin lists.</summary>
+/// <summary>The manager profile's enabled/disabled composition.</summary>
 /// <param name="EnabledMods">modlist.txt `+` entries (separators excluded), priority order (top = highest).</param>
 /// <param name="DisabledMods">modlist.txt `-` entries (separators excluded) — present in MO2 but switched OFF.</param>
+/// <param name="LockedMods">Enabled `*` entries that the manager prevents users from toggling.</param>
 /// <param name="OrderedPluginNames">loadorder.txt — every plugin in load order (masters first, winner last).</param>
 /// <param name="ActivePluginNames">plugins.txt `*` entries (the `*` stripped) — explicitly checked/active.</param>
 /// <param name="InactivePluginNames">plugins.txt entries WITHOUT a `*` — present but unchecked (the game won't load them).</param>
 /// <param name="ImplicitPluginNames">in the load order but NOT listed in plugins.txt at all — the force-loaded base/CC masters.</param>
-public sealed record Mo2Composition(
+public sealed record ModComposition(
     IReadOnlyList<string> EnabledMods,
     IReadOnlyList<string> DisabledMods,
+    IReadOnlyList<string> LockedMods,
     IReadOnlyList<string> OrderedPluginNames,
     IReadOnlySet<string> ActivePluginNames,
     IReadOnlyList<string> InactivePluginNames,
@@ -77,7 +78,7 @@ public static class Mo2LoadOrder
     /// layer beats every mod — it's where tool outputs land), then the highest-priority enabled mod under
     /// <paramref name="modsDir"/> that provides the filename, falling back to <paramref name="dataDir"/> for vanilla/base
     /// plugins. The returned paths are in load order (winner last) — feed straight to <see cref="LoadOrderResolver.Build"/>.</summary>
-    public static Mo2OrderResult Build(string profileDir, string modsDir, string dataDir, string overwriteDir = "")
+    public static ModOrderResult Build(string profileDir, string modsDir, string dataDir, string overwriteDir = "")
     {
         var warnings = new List<string>();
 
@@ -110,7 +111,7 @@ public static class Mo2LoadOrder
                     "trigger an MO2 refresh / re-sort so it re-writes the profile files).");
         }
 
-        return new Mo2OrderResult(orderedPaths, warnings, active);
+        return new ModOrderResult(orderedPaths, warnings, active);
     }
 
     /// <summary>Parse the profile's enabled/disabled COMPOSITION from loadorder.txt + modlist.txt + plugins.txt — text
@@ -118,7 +119,7 @@ public static class Mo2LoadOrder
     /// re-reads this FRESH each call (independent of the cached resolver), so a just-toggled mod/plugin shows immediately;
     /// <see cref="Build"/> calls it too, then adds the heavier physical-path resolution on top. <paramref name="warnings"/>
     /// collects missing-file notes (Q3) when provided.</summary>
-    public static Mo2Composition ReadComposition(string profileDir, List<string>? warnings = null)
+    public static ModComposition ReadComposition(string profileDir, List<string>? warnings = null)
     {
         var enabled = new List<string>();
         var disabled = new List<string>();
@@ -135,7 +136,7 @@ public static class Mo2LoadOrder
             if (!active.Contains(name) && !inactiveSet.Contains(name))
                 implicitNames.Add(name);                            // in the order, never in plugins.txt → force-loaded master/CC
 
-        return new Mo2Composition(enabled, disabled, ordered, active, inactive, implicitNames);
+        return new ModComposition(enabled, disabled, Array.Empty<string>(), ordered, active, inactive, implicitNames);
     }
 
     /// <summary>modlist.txt → enabled + disabled mod folder names (file order: TOP = highest priority). `+Name` = enabled,
@@ -252,10 +253,10 @@ public static class Mo2LoadOrder
         string profileDir, string modsDir, string dataDir, string overwriteDir, string filename)
         => LocatePlugin(ReadComposition(profileDir), modsDir, dataDir, overwriteDir, filename);
 
-    /// <summary>As the profileDir overload, but reusing a <see cref="Mo2Composition"/> the caller already parsed — so a
+    /// <summary>As the profileDir overload, but reusing a <see cref="ModComposition"/> the caller already parsed — so a
     /// scan of a file AND its declared masters pays the modlist parse once, not once per name.</summary>
     public static IReadOnlyList<PluginFileHit> LocatePlugin(
-        Mo2Composition comp, string modsDir, string dataDir, string overwriteDir, string filename)
+        ModComposition comp, string modsDir, string dataDir, string overwriteDir, string filename)
     {
         var hits = new List<PluginFileHit>();
         var fn = Path.GetFileName(filename?.Trim() ?? "");
@@ -281,7 +282,7 @@ public static class Mo2LoadOrder
     /// NEITHER list — the state of a mod folder created since MO2 last rewrote the profile (houseCARL's own fresh
     /// patches live here until the refresh). One directory listing; a missing/inaccessible ModsDir yields nothing
     /// (never a false hit — Q3).</summary>
-    static IEnumerable<string> UnlistedModFolders(Mo2Composition comp, string modsDir)
+    static IEnumerable<string> UnlistedModFolders(ModComposition comp, string modsDir)
     {
         if (string.IsNullOrWhiteSpace(modsDir) || !Directory.Exists(modsDir)) yield break;
         var listed = new HashSet<string>(comp.EnabledMods, StringComparer.OrdinalIgnoreCase);
@@ -299,7 +300,7 @@ public static class Mo2LoadOrder
     /// it stops at the FIRST hit, so checking a master that IS present costs a handful of stats, not a whole-install
     /// scan. Used for the read-plugin-file "is this declared master installed?" advisory (Q3 — say when it isn't).</summary>
     public static bool PluginFileExists(
-        Mo2Composition comp, string modsDir, string dataDir, string overwriteDir, string filename)
+        ModComposition comp, string modsDir, string dataDir, string overwriteDir, string filename)
     {
         var fn = Path.GetFileName(filename?.Trim() ?? "");
         if (fn.Length == 0) return false;
