@@ -136,15 +136,15 @@ public sealed class LoadOrderService : IDisposable
                     // plugins.txt) — no VFS, no live MO2 state. See HousecarlCore.Mo2LoadOrder + memory
                     // project_mo2_load_order_resolution.
                     var profileMtimes = StatProfileFiles();      // stat BEFORE the read (TOCTOU): a profile write during the build is caught next call, not missed
-                    var order = Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
+                    var order = BuildManagerOrder();
                     _orderWarnings = order.Warnings;
                     var paths = order.OrderedPaths;
                     if (_maxPlugins > 0 && paths.Count > _maxPlugins) paths = paths.Take(_maxPlugins).ToList();
                     if (paths.Count == 0)
                         throw new InvalidOperationException(
-                            $"No active plugins resolved from the MO2 profile. ProfileDir='{_profileDir}', " +
+                            $"No active plugins resolved from the configured profile. ProfileDir='{_profileDir}', " +
                             $"ModsDir='{_modsDir}', DataDir='{_dataDir}'. {order.Warnings.Count} warning(s). Check " +
-                            "HouseCarl config and that MO2 has written loadorder.txt/modlist.txt (a refresh/re-sort in MO2).");
+                            "the manager connection and refresh/rebuild its load-order files.");
                     _resolver = LoadOrderResolver.Build(paths);
                     _resolvedPaths = paths;
                     _profileMtimes = profileMtimes;
@@ -217,7 +217,7 @@ public sealed class LoadOrderService : IDisposable
     /// is DataDir's parent (DataDir = gamePath\Data). Caller holds <see cref="_gate"/>.</summary>
     AssetResolver BuildAssetResolverLocked()
     {
-        var comp = Mo2LoadOrder.ReadComposition(_profileDir);                       // EnabledMods (priority) — cheap text parse
+        var comp = ReadManagerComposition(_profileDir);                            // EnabledMods (priority) — cheap text parse
         var gamePath = _dataDir.Length > 0 ? Path.GetDirectoryName(_dataDir.TrimEnd('\\', '/')) ?? "" : "";
         var discovery = ArchiveDiscovery.Discover(_profileDir, _modsDir, _dataDir, _overwriteDir, gamePath);
         _assetWarnings = discovery.Warnings;
@@ -1022,7 +1022,7 @@ public sealed class LoadOrderService : IDisposable
             instanceDir = _instanceDir;                            // the configured MO2 instance folder; null ⇒ explicit-paths / unconfigured mode
             managerPath = _manifestPath;
         }
-        var comp = Mo2LoadOrder.ReadComposition(profileDir);       // FRESH composition (always current)
+        var comp = ReadManagerComposition(profileDir);             // FRESH composition (always current)
         return new LoadOrderStatusData(
             comp, warnings, view.PluginCount, _maxPlugins, profileChanged, profileDir, profileName,
             instanceDir, managerPath, view.ExcludedPlugins);
@@ -1053,7 +1053,7 @@ public sealed class LoadOrderService : IDisposable
         var disabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         if (!string.IsNullOrEmpty(profileDir) && Directory.Exists(profileDir))
         {
-            var comp = Mo2LoadOrder.ReadComposition(profileDir);
+            var comp = ReadManagerComposition(profileDir);
             foreach (var e in comp.EnabledMods) enabled.Add(e);
             foreach (var d in comp.DisabledMods) disabled.Add(d);
         }
@@ -1116,7 +1116,7 @@ public sealed class LoadOrderService : IDisposable
 
         var dir = Path.Combine(profilesRoot, match);
         var warnings = new List<string>();                       // surface read notes (e.g. a missing modlist.txt) — so a 0-mods inspected profile isn't silently mistaken for empty (Q3)
-        var comp = Mo2LoadOrder.ReadComposition(dir, warnings);  // cheap text parse of THAT profile's loadorder/modlist/plugins — no index build, no switch
+        var comp = ReadManagerComposition(dir, warnings);        // cheap text parse of THAT profile's loadorder/modlist/plugins — no index build, no switch
         return new NamedProfileResult(true, available, match, dir, comp, warnings);
     }
 
@@ -1224,7 +1224,7 @@ public sealed class LoadOrderService : IDisposable
     void ReResolve()
     {
         var profileMtimes = StatProfileFiles();                  // stat BEFORE the read (TOCTOU): a write during the re-read is caught next call, not missed
-        var order = Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
+        var order = BuildManagerOrder();
         var paths = order.OrderedPaths;
         if (_maxPlugins > 0 && paths.Count > _maxPlugins) paths = paths.Take(_maxPlugins).ToList();
 
@@ -1293,6 +1293,15 @@ public sealed class LoadOrderService : IDisposable
         _profileName = snapshot.ActiveProfileName;
         _overwriteDir = snapshot.OverwriteDir;
     }
+
+    ModOrderResult BuildManagerOrder() => _manifestPath is null
+        ? Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir)
+        : AmethystLoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
+
+    ModComposition ReadManagerComposition(string profileDir, List<string>? warnings = null) =>
+        _manifestPath is null
+            ? Mo2LoadOrder.ReadComposition(profileDir, warnings)
+            : AmethystLoadOrder.ReadComposition(profileDir, warnings);
 
     static bool PathEq(string a, string b) =>
         string.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
@@ -1722,7 +1731,7 @@ public sealed class LoadOrderService : IDisposable
         string modsDir, dataDir, overwriteDir, profileDir;
         try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
         catch (Exception ex) { return (null, null, $"'{plugin}' is not in the load order and the MO2 roots couldn't be derived to find it on disk: {ex.Message}"); }
-        var comp = Mo2LoadOrder.ReadComposition(profileDir);
+        var comp = ReadManagerComposition(profileDir);
         var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, plugin, mod);
         if (loc.Error is not null) return (null, null, $"'{plugin}' is not in the load order and {loc.Error}");
         if (loc.Ambiguous is not null) return (null, null, $"'{plugin}' matches several mod folders on disk — pass an exact path to disambiguate.");
@@ -2034,13 +2043,13 @@ public sealed class LoadOrderService : IDisposable
             var offOrder = new List<(string Name, string Path)>();
             string modsDir, dataDir, overwriteDir, profileDir;
             lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; }
-            Mo2Composition? comp = null;
+            ModComposition? comp = null;
             foreach (var name in plugins)
             {
                 var n = name?.Trim() ?? "";
                 if (n.Length == 0) return ErrorCheckResult.Fail("a blank plugin name in the scope — pass plugin filenames (e.g. 'CoolMod.esp').");
                 if (view.ContainsPlugin(n)) { active.Add(n); continue; }
-                comp ??= Mo2LoadOrder.ReadComposition(profileDir);
+                comp ??= ReadManagerComposition(profileDir);
                 var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, n, null);
                 if (loc.Error is not null)
                     return ErrorCheckResult.Fail($"plugin not in the load order: {n} — and no on-disk copy was found either ({loc.Error})");
@@ -2159,7 +2168,7 @@ public sealed class LoadOrderService : IDisposable
         if (!edits.Any(e => string.Equals(e.Verb, "CopyFrom", StringComparison.Ordinal))) return null;   // no CopyFrom → no source work
         var view = resolver.Capture();
         string modsDir = "", dataDir = "", overwriteDir = "", profileDir = "";
-        Mo2Composition? comp = null;
+        ModComposition? comp = null;
         var problems = new List<string>();
         foreach (var e in edits)
         {
@@ -2169,7 +2178,7 @@ public sealed class LoadOrderService : IDisposable
             {
                 try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
                 catch (Exception ex) { return $"CopyFrom off-order source locate failed to derive the MO2 roots: {ex.Message}"; }
-                comp = Mo2LoadOrder.ReadComposition(profileDir);
+                comp = ReadManagerComposition(profileDir);
             }
             var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, e.FromPlugin!, null);
             if (loc.Error is not null) { problems.Add($"{e.Target}: CopyFrom source '{e.FromPlugin}' is not in the load order and {loc.Error}"); continue; }
@@ -2775,7 +2784,7 @@ public sealed class LoadOrderService : IDisposable
                 // nothing active can master, is exactly the right (empty) answer.
                 string modsDir, dataDir, overwriteDir, profileDir;
                 lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; }
-                var comp = Mo2LoadOrder.ReadComposition(profileDir);
+                var comp = ReadManagerComposition(profileDir);
                 var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, name, null);
                 if (loc.Error is not null)
                     return WritePatchBuilder.CompactOutcome.Fail(
@@ -3242,7 +3251,7 @@ public sealed class LoadOrderService : IDisposable
                     string modsDir, dataDir, overwriteDir, profileDir;
                     lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; }
                     dataDirForAssets = dataDir;
-                    var comp = Mo2LoadOrder.ReadComposition(profileDir);
+                    var comp = ReadManagerComposition(profileDir);
                     var sp = sourcePlugin.Trim();
                     var loc = LocatePluginFileOnDisk(comp, modsDir, dataDir, overwriteDir, sp, sourceMod);
                     if (loc.Error is not null) return NpcCopyOutcome.Fail(loc.Error);
@@ -4325,7 +4334,7 @@ public sealed class LoadOrderService : IDisposable
         {
             IReadOnlyList<string>? names = _resolver?.PluginNames;
             if (names is null)
-                names = Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir)
+                names = BuildManagerOrder()
                     .OrderedPaths.Select(Path.GetFileName).Where(n => !string.IsNullOrEmpty(n)).ToList()!;
             foreach (var n in names) set.Add(n);
         }
@@ -4520,7 +4529,7 @@ public sealed class LoadOrderService : IDisposable
         try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
         catch (Exception ex) { return PluginFileOutcome.Fail(plugin, ex.Message); }
 
-        var comp = Mo2LoadOrder.ReadComposition(profileDir);           // cheap text parse (enabled + disabled folders) — reused for locate + master advisory
+        var comp = ReadManagerComposition(profileDir);                 // cheap text parse (enabled + disabled folders) — reused for locate + master advisory
 
         // Locate the file — the shared on-disk plugin-locate contract (also the copy-npc-appearance donor lane;
         // one home so the two tools can never find different files for the same filename).
@@ -4636,7 +4645,7 @@ public sealed class LoadOrderService : IDisposable
     /// <paramref name="mod"/> narrowing a name several folders provide. Ambiguity comes back structured — each
     /// caller renders its own remedy.</summary>
     internal static PluginLocateResult LocatePluginFileOnDisk(
-        Mo2Composition comp, string modsDir, string dataDir, string overwriteDir, string plugin, string? mod)
+        ModComposition comp, string modsDir, string dataDir, string overwriteDir, string plugin, string? mod)
     {
         if (LooksLikePath(plugin))
         {
@@ -4833,7 +4842,7 @@ public sealed record ConflictNodeView(string Plugin, RecordFields Record);
 /// plugins dropped from the index this build (unopenable, or carrying a record Mutagen can't parse) — surfaced so the
 /// user can fix/remove them (Q3).</summary>
 public sealed record LoadOrderStatusData(
-    Mo2Composition Composition,
+    ModComposition Composition,
     IReadOnlyList<string> Warnings,
     int ResolvedPluginCount,
     int MaxPlugins,
@@ -4879,7 +4888,7 @@ public sealed record NamedProfileResult(
     IReadOnlyList<string> AvailableProfiles,
     string? RequestedName,
     string? ResolvedProfileDir,
-    Mo2Composition? Composition,
+    ModComposition? Composition,
     IReadOnlyList<string> Warnings);
 
 /// <summary>One queried asset path's resolution behind housecarl_asset_status: the resolver's <see cref="AssetHit"/>

@@ -131,11 +131,11 @@ invalid state produces actionable diagnostics.
 
 ### Session 3 — Amethyst profile and load-order adapter
 
-- [ ] Add `IModManagerLayout`, `ManagerSnapshot`, and `AmethystLayout`.
-- [ ] Read connection, path, deployment, profile, mod and plugin state.
-- [ ] Support shared/profile-specific staging and `*` locked mods.
-- [ ] Resolve plugins from staging/overwrite and vanilla `Data_Core`.
-- [ ] Replace public MO2 configuration/status with Amethyst MCP tools.
+- [x] Add `IModManagerLayout`, `ManagerSnapshot`, and `AmethystLayout`.
+- [x] Read connection, path, deployment, profile, mod and plugin state.
+- [x] Support shared/profile-specific staging and `*` locked mods.
+- [x] Resolve plugins from staging/overwrite and vanilla `Data_Core`.
+- [x] Replace public MO2 configuration/status with Amethyst MCP tools.
 
 Exit gate: synthetic order matches Amethyst, profile switching refreshes without
 restart, and deployed `Data/` is never classified as vanilla.
@@ -230,37 +230,37 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 3 — Amethyst profile and plugin-order adapter.
-- Last completed checkpoint: schema-v1 `AmethystLayout`, manager snapshot,
-  persisted runtime connection, profile-switch refresh, and the
-  `housecarl_set_amethyst_connection`, `housecarl_amethyst_status`, and
-  `housecarl_refresh` MCP surfaces.
-- Verification performed: Linux Release build passed. The layout and runtime
-  guards pass for strict schemas, shared/profile-specific staging, Unicode and
-  spaced paths, game-path precedence, `Data_Core` safety, invalid-config
-  non-persistence, hardlink status, and active-profile switching. Full
-  `ci-all` is 87/96; its nine failures exactly match the validated upstream
-  Linux baseline.
-- Files/components changed: `AmethystLayout`, `IModManagerLayout`,
-  `ManagerSnapshot`, runtime configuration, setup/status MCP tools, user config,
-  server startup, and synthetic guards.
+- Active milestone: Session 3 complete; Session 4 is next.
+- Last completed checkpoint: native Amethyst composition and plugin-source
+  resolution, including `+`, `-`, locked `*`, separators, overwrite,
+  `Data_Core`, inactive plugins, implicit masters, duplicate priorities, and
+  native case-sensitive filesystem access.
+- Verification performed: Linux build passed. Focused load-order, layout,
+  runtime, status, and overwrite guards pass. The runtime guard builds a real
+  Mutagen record index from an Amethyst-staged locked mod. Full `ci-all` is
+  88/97; its nine failures exactly match the validated upstream Linux baseline.
+- Files/components changed: `AmethystLoadOrder`, manager-neutral composition
+  records, `AmethystLayout`, `LoadOrderService`, load-order status, and two
+  synthetic Amethyst guards.
 - Decisions made: invalid Amethyst state never falls back to MO2 or merged
-  deployed `Data/`; manager status does not force the Mutagen record index;
-  the MO2-only local update-cache tool is no longer registered.
-- Known failures or residual risks: record resolution still passes Amethyst
-  profile files through the legacy composition parser. It does not yet support
-  locked `*ModName` entries or authoritative filemap/mod-index winners.
-  Windows external-tool and installer paths remain deferred. The nine baseline
-  failures are `writelock`, `upsert`, `binding-shim`, `compile-ergonomics`,
-  `setup-update-lock`, `bsa-contract`, `atomic-commit`, `seq-regen`, and
-  `skypatcher-conflicts`.
-- Exact next action: implement the Amethyst `modlist.txt`, `plugins.txt`, and
-  `loadorder.txt` parser, including locked mods and staging/Data_Core plugin
-  source resolution, then replace the legacy composition calls.
+  deployed `Data/`; Amethyst and legacy test seams share manager-neutral result
+  records but use separate parsers; case-insensitive logical lookup selects
+  deterministic raw-cased Linux paths and names case-colliding folders.
+- Known failures or residual risks: plugin source resolution currently follows
+  mod priority directly. Session 4 must replace loose-asset and plugin guessing
+  with authoritative `filemap.txt` and `modindex.bin` v4 handling, including
+  exclusions and strip prefixes. Windows external-tool and installer paths
+  remain deferred. The nine baseline failures are `writelock`, `upsert`,
+  `binding-shim`, `compile-ergonomics`, `setup-update-lock`, `bsa-contract`,
+  `atomic-commit`, `seq-regen`, and `skypatcher-conflicts`.
+- Exact next action: begin Session 4 with failing-first synthetic fixtures for
+  `filemap.txt` and MessagePack `modindex.bin` v4, then implement strict version
+  parsing and raw-cased source lookup.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
-  `6ec4ea7` (runtime connection).
-- Draft pull requests: #2 upstream integration; #3 layout foundation. The
-  runtime connection PR is ready locally and awaiting GitHub authentication.
+  `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
+  (native Amethyst load order).
+- Draft pull requests: #2 upstream integration; #3 layout foundation; #4
+  runtime connection; #5 native Amethyst load order.
 
 ## Session update template
 

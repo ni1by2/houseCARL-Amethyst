@@ -86,17 +86,24 @@ public sealed class AmethystLayout : IModManagerLayout
                         : throw Error($"vanilla Data directory does not exist: '{data}'");
 
             var staging = specific ? profileDir : profileRoot;
+            var modsDir = Path.Combine(staging, "mods");
+            var overwriteDir = Path.Combine(staging, "overwrite");
+            var order = AmethystLoadOrder.Build(profileDir, modsDir, vanillaData, overwriteDir);
+            var composition = AmethystLoadOrder.ReadComposition(profileDir);
+            var activeNames = composition.OrderedPluginNames
+                .Where(name => !composition.InactivePluginNames.Contains(name, StringComparer.OrdinalIgnoreCase))
+                .ToList();
             var freshness = Freshness(_manifestPath, pathsFile, deployStateFile, profileStateFile,
                 Path.Combine(profileDir, "modlist.txt"), Path.Combine(profileDir, "plugins.txt"),
                 Path.Combine(profileDir, "loadorder.txt"), Path.Combine(staging, "filemap.txt"),
                 Path.Combine(staging, "modindex.bin"));
             var snapshot = new ManagerSnapshot(
                 _manifestPath, schema, activeProfile, profileDir, specific,
-                Path.Combine(staging, "mods"), Path.Combine(staging, "overwrite"),
+                modsDir, overwriteDir,
                 Path.Combine(staging, "filemap.txt"), Path.Combine(staging, "modindex.bin"),
                 gamePath, vanillaData, pathsFile, deployStateFile, deploymentActive, lastMode,
-                Array.Empty<string>(), new Dictionary<string, string>(), new Dictionary<string, string>(),
-                Array.Empty<string>(), freshness);
+                activeNames, order.ResolvedSources, new Dictionary<string, string>(),
+                order.Warnings, freshness);
             return (snapshot, Identity(snapshot, freshness));
         }
         finally { profileState?.Dispose(); }
