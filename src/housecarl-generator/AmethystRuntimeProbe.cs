@@ -94,8 +94,8 @@ public static class AmethystRuntimeProbe
             gameConfigDir = config,
             pathsFile = paths,
             deployStateFile = deploy,
-            createdBy = "housecarl-amethyst-connector",
-            connectorVersion = "1.0.0"
+            createdBy = "housecarl-amethyst-setup",
+            setupVersion = "1.0.0"
         });
         return manifest;
     }

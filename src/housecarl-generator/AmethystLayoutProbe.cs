@@ -3,7 +3,7 @@ using HousecarlCore;
 
 namespace HousecarlGenerator;
 
-/// <summary>Synthetic Linux fixtures for the connector/layout contract; no game data required.</summary>
+/// <summary>Synthetic Linux fixtures for the setup-manifest layout contract; no game data required.</summary>
 public static class AmethystLayoutProbe
 {
     public static int RunGuard(string[] args)
@@ -131,8 +131,8 @@ public static class AmethystLayoutProbe
                 gameConfigDir = config,
                 pathsFile = paths,
                 deployStateFile = deploy,
-                createdBy = "housecarl-amethyst-connector",
-                connectorVersion = "1.0.0"
+                createdBy = "housecarl-amethyst-setup",
+                setupVersion = "1.0.0"
             });
             return new Fixture(root, profileRoot, game, manifest, deploy);
         }

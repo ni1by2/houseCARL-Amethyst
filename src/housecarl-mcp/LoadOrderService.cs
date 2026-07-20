@@ -91,7 +91,7 @@ public sealed class LoadOrderService : IDisposable
         => new(string.IsNullOrWhiteSpace(instanceDir) ? null : instanceDir.Trim(),
                "", "", "", configured: !string.IsNullOrWhiteSpace(instanceDir), maxPlugins, store);
 
-    /// <summary>Product mode: derive native Linux roots from a connector manifest and follow profile switches lazily.</summary>
+    /// <summary>Product mode: derive native Linux roots from the setup manifest and follow profile switches lazily.</summary>
     public static LoadOrderService WithAmethystConnection(string? manifestPath, int maxPlugins, UserConfigStore store)
         => new(null, "", "", "", configured: !string.IsNullOrWhiteSpace(manifestPath), maxPlugins, store,
                string.IsNullOrWhiteSpace(manifestPath) ? null : manifestPath.Trim());

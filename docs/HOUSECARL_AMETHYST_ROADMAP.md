@@ -10,7 +10,8 @@ complete only when its exit gate is supported by recorded evidence.
 - Platform: Linux x86_64, distributed as a self-contained bundle.
 - AI hosts: Codex and Claude Code over MCP stdio.
 - Manager: Amethyst only; the public MO2/Windows surface will be removed.
-- Connector: required and shipped as a separate Amethyst external plugin.
+- Connection setup: a standalone command shipped inside houseCARL-Amethyst.
+  No Amethyst-side plugin or companion product is required.
 - Profiles: shared and profile-specific staging are both required.
 - Deployment: hardlinks are the v1 release gate. Symlink and copy modes receive
   smoke coverage when this adds no production branching. Amethyst has no VFS
@@ -27,13 +28,12 @@ complete only when its exit gate is supported by recorded evidence.
 - houseCARL: `3fb962b87137c1ff25db0a191c7e27a4a5215da2`
 - Amethyst Mod Manager: `30f4efb5349e95f04968fca9b809130a34f6032a`
 - Fork directory: `houseCARL-Amethyst/`
-- Companion directory: `housecarl-amethyst-connector/` (created in Session 2)
 
 ## Architecture contracts
 
 ### Connection manifest
 
-The required connector writes
+The bundled standalone setup command writes
 `<profile-root>/.housecarl-amethyst/connection.json` atomically. Schema v1:
 
 ```json
@@ -46,8 +46,8 @@ The required connector writes
   "gameConfigDir": "/absolute/native/path",
   "pathsFile": "/absolute/native/path/paths.json",
   "deployStateFile": "/absolute/native/path/deploy_state.json",
-  "createdBy": "housecarl-amethyst-connector",
-  "connectorVersion": "1.0.0"
+  "createdBy": "housecarl-amethyst-setup",
+  "setupVersion": "1.0.0"
 }
 ```
 
@@ -117,17 +117,16 @@ Exit gate: baseline build/probe evidence and complete assumption ownership.
 Exit gate: Linux build and probes pass; nested asset tests pass; startup makes
 no Windows registry or drive assumptions.
 
-### Session 2 — Required Amethyst connector
+### Session 2 — Connection manifest and runtime seam
 
-- [x] Create the separate connector product/repository.
-- [x] Implement the `skyrim_se` external wizard plugin.
-- [x] Validate and atomically export the v1 manifest.
-- [x] Package native/AppImage and Flatpak plugin installers plus uninstall.
-- [ ] Test a real Amethyst smoke install; synthetic shared/profile-specific
-  layouts pass five dependency-free unit tests.
+- [x] Define and validate the stable schema-v1 connection manifest.
+- [x] Keep changing profile and deployment state out of the manifest.
+- [x] Cover shared and profile-specific layouts with synthetic tests.
+- [x] Retire the experimental Amethyst-side connector design.
+- [ ] Ship the standalone discovery/setup command with Session 6 packaging.
 
-Exit gate: a connector-generated manifest remains usable across restarts and
-invalid state produces actionable diagnostics.
+Exit gate: a setup-generated manifest remains usable across restarts and
+invalid state produces actionable diagnostics without modifying Amethyst.
 
 ### Session 3 — Amethyst profile and load-order adapter
 
@@ -166,6 +165,7 @@ old hardlinks honestly, and clear pending state only after verification.
 ### Session 6 — Linux packaging and host integration
 
 - [ ] Replace Windows setup/build scripts with Linux equivalents.
+- [ ] Add standalone Amethyst discovery and atomic manifest setup.
 - [ ] Publish self-contained `linux-x64` with trimming disabled.
 - [ ] Install under XDG data paths and register Codex/Claude MCP stdio.
 - [ ] Add backups, update locks, uninstall, rollback and checksums.
@@ -178,7 +178,7 @@ upgrade/uninstall preserve user configuration.
 ### Session 7 — CI, documentation, and v1 release candidate
 
 - [ ] Move required CI to Ubuntu and run all CI-safe probes.
-- [ ] Add connector and end-to-end synthetic Amethyst tests.
+- [ ] Add standalone-setup and end-to-end synthetic Amethyst tests.
 - [ ] Add reproducible package validation and leak scanning.
 - [ ] Complete installation, workflow, safety and troubleshooting docs.
 - [ ] Perform disposable real-profile hardlink validation.
@@ -222,7 +222,7 @@ patch, redeploy and guarded in-place workflows.
 - Exclusions, strip prefixes, mixed case, spaces, Unicode and mounted paths.
 - Loose/BSA conflicts, generated ownership and cleanup.
 - In-place hardlink identity before/after atomic replacement and redeploy.
-- Native/AppImage and Flatpak connector paths.
+- Native/AppImage, AUR-style and Flatpak Amethyst discovery paths.
 - Codex and Claude installation and startup.
 
 CI fixtures contain no copyrighted Skyrim data. Real-game validation is a
@@ -250,11 +250,15 @@ manual release gate.
   it is not always a complete physical source-relative path. Source lookup
   therefore mirrors Amethyst's direct, global `Data`, and configured per-mod
   wrapper reconstruction. Unknown versions, stale pairs, mismatches, or
-  vanished winners fail instead of scanning staging or deployed `Data/`.
+  vanished winners fail instead of scanning staging or deployed `Data/`. The
+  earlier companion connector design is superseded: connection setup belongs
+  in the main product and Amethyst requires no houseCARL plugin.
 - Known failures or residual risks: real Amethyst and Skyrim validation remains
-  a manual release gate. MessagePack is a new MIT-licensed dependency.
-  Windows external-tool and installer paths remain deferred. The nine baseline
-  failures are `writelock`, `upsert`,
+  a manual release gate. The standalone discovery/setup command is not yet
+  shipped; it is a Session 6 packaging deliverable. The obsolete connector
+  repository and local checkout were deleted on 2026-07-20. MessagePack is a
+  new MIT-licensed dependency. Windows external-tool and installer paths remain
+  deferred. The nine baseline failures are `writelock`, `upsert`,
   `binding-shim`, `compile-ergonomics`, `setup-update-lock`, `bsa-contract`,
   `atomic-commit`, `seq-regen`, and `skypatcher-conflicts`.
 - Exact next action: begin Session 5 by routing new patch folders into effective
@@ -265,7 +269,7 @@ manual release gate.
   resolution).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
-  and asset resolution.
+  and asset resolution; #7 connector retirement.
 
 ## Session update template
 
