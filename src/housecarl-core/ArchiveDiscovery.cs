@@ -44,6 +44,38 @@ public sealed record ArchiveDiscoveryResult(IReadOnlyList<ActiveArchive> Archive
 
 public static class ArchiveDiscovery
 {
+    /// <summary>
+    /// Discover archives from Amethyst's authoritative loose-file winners. Only top-level
+    /// BSA files can participate in Skyrim's archive loading rules.
+    /// </summary>
+    public static ArchiveDiscoveryResult DiscoverAmethyst(
+        string profileDir,
+        string gamePath,
+        string vanillaDataDir,
+        ManagerFileIndex fileIndex)
+    {
+        if (!fileIndex.Ready)
+            throw new AmethystConfigurationException(string.Join("; ", fileIndex.Warnings));
+
+        var warnings = new List<string>();
+        var composition = AmethystLoadOrder.ReadComposition(profileDir, warnings);
+        var archiveMap = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var (logicalPath, source) in fileIndex.Sources)
+            if (BethesdaPath.DirectoryName(logicalPath).Length == 0
+                && Path.GetExtension(logicalPath).Equals(".bsa", StringComparison.OrdinalIgnoreCase))
+                archiveMap[logicalPath] = source.HostPath;
+        foreach (var (name, path) in EnumerateArchives(vanillaDataDir))
+            archiveMap.TryAdd(name, path);
+
+        return Build(
+            profileDir,
+            gamePath,
+            composition.OrderedPluginNames,
+            composition.InactivePluginNames,
+            archiveMap,
+            warnings);
+    }
+
     /// <summary>Discover the active BSAs for the MO2 profile at <paramref name="profileDir"/>, resolving each
     /// through the same overwrite &gt; mods(priority) &gt; Data VFS the loose/plugin layers use. The roots are the
     /// ones <see cref="Mo2LoadOrder.Build"/> already receives; <paramref name="gamePath"/> is only the game-dir
@@ -53,16 +85,26 @@ public static class ArchiveDiscovery
     {
         var warnings = new List<string>();
         var comp = Mo2LoadOrder.ReadComposition(profileDir, warnings);
-
-        // Active plugins in load order (winner LAST) — same filter as Mo2LoadOrder.Build: drop the unchecked
-        // (inactive) ones; implicit masters/CC and explicitly-active plugins both load.
-        var inactive = new HashSet<string>(comp.InactivePluginNames, StringComparer.OrdinalIgnoreCase);
-        var activeOrdered = new List<string>(comp.OrderedPluginNames.Count);
-        foreach (var name in comp.OrderedPluginNames)
-            if (!inactive.Contains(name)) activeOrdered.Add(name);
-
-        // archive filename → WINNING physical path (overwrite > enabled mods highest-priority-first > Data).
         var archiveMap = BuildArchiveMap(comp.EnabledMods, modsDir, dataDir, overwriteDir);
+        return Build(
+            profileDir,
+            gamePath,
+            comp.OrderedPluginNames,
+            comp.InactivePluginNames,
+            archiveMap,
+            warnings);
+    }
+
+    static ArchiveDiscoveryResult Build(
+        string profileDir,
+        string gamePath,
+        IReadOnlyList<string> orderedPlugins,
+        IReadOnlyList<string> inactivePlugins,
+        IReadOnlyDictionary<string, string> archiveMap,
+        List<string> warnings)
+    {
+        var inactive = new HashSet<string>(inactivePlugins, StringComparer.OrdinalIgnoreCase);
+        var activeOrdered = orderedPlugins.Where(name => !inactive.Contains(name));
 
         var archives = new List<ActiveArchive>();
         int rank = 0;
@@ -147,7 +189,7 @@ public static class ArchiveDiscovery
             "could not read the [Archive] sResourceArchiveList from a Skyrim.ini (looked in the profile folder" +
             (gamePath.Length > 0 ? " and the game dir" : "") + ") — the base-game BSAs (Skyrim - Textures*.bsa, " +
             "etc.) are NOT in the asset scan, so an asset present ONLY in a vanilla archive may read as absent. " +
-            "If your MO2 uses profile-specific INIs, make sure the active profile has a Skyrim.ini.");
+            "If profile-specific INIs are enabled, make sure the active profile has a Skyrim.ini.");
         return Array.Empty<string>();
     }
 

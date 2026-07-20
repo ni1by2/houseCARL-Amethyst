@@ -88,21 +88,26 @@ public sealed class AmethystLayout : IModManagerLayout
             var staging = specific ? profileDir : profileRoot;
             var modsDir = Path.Combine(staging, "mods");
             var overwriteDir = Path.Combine(staging, "overwrite");
-            var order = AmethystLoadOrder.Build(profileDir, modsDir, vanillaData, overwriteDir);
+            var filemapPath = Path.Combine(staging, "filemap.txt");
+            var modIndexPath = Path.Combine(staging, "modindex.bin");
+            var fileIndex = AmethystFileMap.Load(
+                profileDir, modsDir, overwriteDir, filemapPath, modIndexPath);
             var composition = AmethystLoadOrder.ReadComposition(profileDir);
             var activeNames = composition.OrderedPluginNames
                 .Where(name => !composition.InactivePluginNames.Contains(name, StringComparer.OrdinalIgnoreCase))
                 .ToList();
+            var order = fileIndex.Ready
+                ? AmethystLoadOrder.Build(profileDir, vanillaData, fileIndex)
+                : new ModOrderResult(Array.Empty<string>(), fileIndex.Warnings, activeNames.Count);
             var freshness = Freshness(_manifestPath, pathsFile, deployStateFile, profileStateFile,
                 Path.Combine(profileDir, "modlist.txt"), Path.Combine(profileDir, "plugins.txt"),
-                Path.Combine(profileDir, "loadorder.txt"), Path.Combine(staging, "filemap.txt"),
-                Path.Combine(staging, "modindex.bin"));
+                Path.Combine(profileDir, "loadorder.txt"), filemapPath, modIndexPath);
             var snapshot = new ManagerSnapshot(
                 _manifestPath, schema, activeProfile, profileDir, specific,
                 modsDir, overwriteDir,
-                Path.Combine(staging, "filemap.txt"), Path.Combine(staging, "modindex.bin"),
+                filemapPath, modIndexPath,
                 gamePath, vanillaData, pathsFile, deployStateFile, deploymentActive, lastMode,
-                activeNames, order.ResolvedSources, new Dictionary<string, string>(),
+                fileIndex.Ready, activeNames, order.ResolvedSources, fileIndex.Sources,
                 order.Warnings, freshness);
             return (snapshot, Identity(snapshot, freshness));
         }
