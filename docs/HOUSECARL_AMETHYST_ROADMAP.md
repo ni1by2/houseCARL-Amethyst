@@ -264,7 +264,8 @@ manual release gate.
   (native Amethyst load order), `4560247` (authoritative filemap and asset
   resolution).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
-  runtime connection; #5 native Amethyst load order.
+  runtime connection; #5 native Amethyst load order; #6 authoritative filemap
+  and asset resolution.
 
 ## Session update template
 
