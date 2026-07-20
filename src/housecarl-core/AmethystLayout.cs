@@ -3,7 +3,7 @@ using System.Text.Json;
 namespace HousecarlCore;
 
 /// <summary>
-/// Reads the connector manifest and Amethyst's native profile state. This class resolves roots only;
+/// Reads the setup manifest and Amethyst's native profile state. This class resolves roots only;
 /// load order, filemap, and mod-index parsing are layered onto the snapshot in later milestones.
 /// </summary>
 public sealed class AmethystLayout : IModManagerLayout
@@ -39,7 +39,7 @@ public sealed class AmethystLayout : IModManagerLayout
         var root = manifest.RootElement;
         var schema = RequiredInt(root, "schemaVersion", "connection manifest");
         if (schema != SupportedSchema)
-            throw Error($"connection manifest schemaVersion {schema} is unsupported; install a compatible houseCARL-Amethyst connector");
+            throw Error($"connection manifest schemaVersion {schema} is unsupported; run setup from a compatible houseCARL-Amethyst release");
         if (RequiredString(root, "manager", "connection manifest") != "amethyst")
             throw Error("connection manifest manager must be 'amethyst'");
         if (RequiredString(root, "gameId", "connection manifest") != "skyrim_se")
@@ -220,6 +220,6 @@ public sealed class AmethystLayout : IModManagerLayout
     static AmethystConfigurationException Error(string message) => new(message);
 }
 
-/// <summary>A connector or Amethyst state error that is safe to return directly to the user.</summary>
+/// <summary>A setup-manifest or Amethyst-state error safe to return to the user.</summary>
 public sealed class AmethystConfigurationException(string message)
     : InvalidOperationException($"Amethyst configuration error: {message}");
