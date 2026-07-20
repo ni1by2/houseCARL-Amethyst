@@ -256,9 +256,9 @@ manual release gate.
 - Known failures or residual risks: real Amethyst and Skyrim validation remains
   a manual release gate. The standalone discovery/setup command is not yet
   shipped; it is a Session 6 packaging deliverable. The obsolete connector
-  repository is pending confirmed deletion. MessagePack is a new MIT-licensed
-  dependency. Windows external-tool and installer paths remain deferred. The
-  nine baseline failures are `writelock`, `upsert`,
+  repository and local checkout were deleted on 2026-07-20. MessagePack is a
+  new MIT-licensed dependency. Windows external-tool and installer paths remain
+  deferred. The nine baseline failures are `writelock`, `upsert`,
   `binding-shim`, `compile-ergonomics`, `setup-update-lock`, `bsa-contract`,
   `atomic-commit`, `seq-regen`, and `skypatcher-conflicts`.
 - Exact next action: begin Session 5 by routing new patch folders into effective
@@ -269,7 +269,7 @@ manual release gate.
   resolution).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
-  and asset resolution.
+  and asset resolution; #7 connector retirement.
 
 ## Session update template
 
