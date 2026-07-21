@@ -265,7 +265,7 @@ manual release gate.
   resolution), `5cbda36` (hardlink-safe redeployment).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
-  and asset resolution; #7 connector retirement.
+  and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
 
 ## Session update template
 
