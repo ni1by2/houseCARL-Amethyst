@@ -28,6 +28,9 @@ public sealed class UserConfig
     /// like the other two it is read-modify-written ONLY through <see cref="UserConfigStore.Update"/> so it can never
     /// clobber (or be clobbered by) the connection or tool paths.</summary>
     public List<string>? InPlaceAcknowledged { get; set; }
+
+    /// <summary>Staged writes that are not game-visible until Amethyst rebuilds and deploys.</summary>
+    public List<PendingAmethystWrite>? PendingAmethystWrites { get; set; }
 }
 
 /// <summary>
@@ -151,6 +154,39 @@ public sealed class UserConfigStore
         });
         return (ok, error);
     }
+
+    /// <summary>Add or replace one pending write for the same profile and Data path.</summary>
+    public (bool ok, string? error) RecordPendingAmethystWrite(PendingAmethystWrite pending)
+    {
+        var (ok, error, _) = Update(cfg =>
+        {
+            cfg.PendingAmethystWrites ??= new List<PendingAmethystWrite>();
+            cfg.PendingAmethystWrites.RemoveAll(x =>
+                x.ProfileName == pending.ProfileName
+                && x.DataRelativePath.Equals(pending.DataRelativePath, StringComparison.OrdinalIgnoreCase));
+            cfg.PendingAmethystWrites.Add(pending);
+        });
+        return (ok, error);
+    }
+
+    /// <summary>Clear only writes proven visible after a later Amethyst deployment.</summary>
+    public (int cleared, int remaining, string? error) VerifyPendingAmethystWrites(ManagerSnapshot snapshot)
+    {
+        var current = Load().PendingAmethystWrites;
+        if (current is null || current.Count == 0) return (0, 0, null);
+        var cleared = 0;
+        var (ok, error, _) = Update(cfg =>
+        {
+            cfg.PendingAmethystWrites ??= new List<PendingAmethystWrite>();
+            cleared = cfg.PendingAmethystWrites.RemoveAll(x => AmethystRedeploy.IsVerified(x, snapshot));
+        });
+        var remaining = Load().PendingAmethystWrites?.Count ?? 0;
+        return (cleared, remaining, ok ? null : error);
+    }
+
+    /// <summary>Return a detached view for status rendering; callers cannot mutate the stored list.</summary>
+    public IReadOnlyList<PendingAmethystWrite> PendingAmethystWrites() =>
+        Load().PendingAmethystWrites?.ToArray() ?? Array.Empty<PendingAmethystWrite>();
 
     /// <summary>Canonical identity for an in-place acknowledgement: the full, lower-cased path, so the same on-disk file
     /// matches whatever path spelling reaches the check. Best-effort — an un-rootable string falls back to a trimmed

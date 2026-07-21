@@ -707,8 +707,11 @@ public sealed class LoadOrderService : IDisposable
     ///     that refuses with the default-lane guidance.
     /// Serialized on the write gate. Q3 honesty: for the default lane "wrote it" ≠ "it wins" — the render says to enable +
     /// sort the fresh mod; this never claims the fix took effect on write.</summary>
-    public NifSetResult NifSet(string relPath, IReadOnlyList<NifSetOp> ops, string? mod, string? patchName, string? into, bool inPlace, bool acknowledge)
+    public NifSetResult NifSet(string relPath, IReadOnlyList<NifSetOp> ops, string? mod, string? patchName, string? into, bool inPlace, bool acknowledge,
+        bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return NifSetResult.Fail(redeploy);
         var rel = (relPath ?? "").Trim();
         if (rel.Length == 0) return NifSetResult.Fail("no mesh path given. Pass a Data-relative path, e.g. 'meshes\\armor\\iron\\cuirass_1.nif'.");
         if (ops is null || ops.Count == 0) return NifSetResult.Fail("no write op given — pass at least one op (e.g. set_flags, rename_shape).");
@@ -761,6 +764,8 @@ public sealed class LoadOrderService : IDisposable
                         "Drop in_place to write a loose winning override into a new houseCARL folder instead (the default lane).", providers, profileName);
                 var targetPath = chosen.LooseFilePath!;
                 var meshName = Path.GetFileName(targetPath);
+                if (!PrepareAmethystWrite(targetPath, rel, out var before, out var stagingError))
+                    return NifSetResult.Fail(stagingError!, providers, profileName);
 
                 bool already = _store.IsInPlaceAcknowledged(targetPath);
                 if (!already && !acknowledge)
@@ -779,8 +784,9 @@ public sealed class LoadOrderService : IDisposable
                 if (sz != editedBytes.Length)
                     return NifSetResult.Fail($"wrote '{meshName}' but its on-disk size ({sz}) does not match the {editedBytes.Length} verified byte(s) — verify before relying on it.", providers, profileName);
 
+                var redeployNote = RecordAmethystWrite(targetPath, rel, "nif_in_place", before);
                 return NifSetResult.OkInPlace(rel, chosenProv, providers, place.Ambiguous, editedIsWinner, report, targetPath,
-                    MergeWarnings(report.Warnings, warnings, ackNote), profileName);
+                    MergeWarnings(report.Warnings, warnings, JoinNotes(ackNote, redeployNote)), profileName);
             }
 
             // ---- DEFAULT (new-folder) lane ----
@@ -804,7 +810,8 @@ public sealed class LoadOrderService : IDisposable
             }
 
             string? winner = providers.Count > 0 ? $"{providers[0].Name} ({providers[0].Kind})" : null;
-            return NifSetResult.OkNewFolder(rel, chosenProv, providers, place.Ambiguous, report, rf.ModFolder, winner, MergeWarnings(report.Warnings, warnings, null), profileName);
+            var pendingNote = RecordAmethystWrite(dest, rel, "nif_override");
+            return NifSetResult.OkNewFolder(rel, chosenProv, providers, place.Ambiguous, report, rf.ModFolder, winner, MergeWarnings(report.Warnings, warnings, pendingNote), profileName);
         }
     }
 
@@ -879,7 +886,13 @@ public sealed class LoadOrderService : IDisposable
             // Nothing placed into a FRESH folder → remove the orphan (the .esp F4 / rider H2 principle). A reused into=
             // folder (the user owns it) is never touched. A partial fresh folder is kept and its path surfaced.
             string? leftover = placed == 0 ? RemoveOrNameRiderResidue(rf) : null;
-            return new PlaceOutcome(results, placed > 0 ? rf.ModFolder : null, warnings, leftover, null);
+            var allWarnings = warnings.ToList();
+            foreach (var result in results.Where(r => r.Placed))
+            {
+                var note = RecordAmethystWrite(BethesdaPath.Under(rf.OutputDir, result.AssetPath), result.AssetPath, "asset_override");
+                if (note is not null && !allWarnings.Contains(note, StringComparer.Ordinal)) allWarnings.Add(note);
+            }
+            return new PlaceOutcome(results, placed > 0 ? rf.ModFolder : null, allWarnings, leftover, null);
         }
     }
 
@@ -1310,7 +1323,80 @@ public sealed class LoadOrderService : IDisposable
         _dataDir = snapshot.VanillaDataDir;
         _profileName = snapshot.ActiveProfileName;
         _overwriteDir = snapshot.OverwriteDir;
+        _store.VerifyPendingAmethystWrites(snapshot);
     }
+
+    sealed record AmethystWriteBefore(LinuxFileIdentity? StagingIdentity, bool? DeployedWasSameHardlink);
+
+    /// <summary>Amethyst in-place writes require a fresh confirmation on every call because deployment is a second step.</summary>
+    string? AmethystRedeployConfirmation(bool inPlace, bool confirmed) =>
+        _manifestPath is not null && inPlace && !confirmed
+            ? "in_place=true on Amethyst also requires confirm_amethyst_redeploy=true. houseCARL writes staging only; " +
+              "after atomic replacement the deployed Data copy may still be the old hardlink until Amethyst rebuilds " +
+              "filemap.txt and deploys again. Nothing was written."
+            : null;
+
+    /// <summary>Capture hardlink state before an atomic replacement and refuse every non-staging target.</summary>
+    bool PrepareAmethystWrite(string stagingPath, string dataRelativePath, out AmethystWriteBefore? before, out string? error)
+    {
+        before = null; error = null;
+        if (_manifestPath is null) return true;
+        var snapshot = _managerSnapshot!;
+        if (!Under(stagingPath, snapshot.ModsDir) && !Under(stagingPath, snapshot.OverwriteDir))
+        {
+            error = $"refused — Amethyst in-place writes may target staging only, but '{stagingPath}' is outside the active mods/overwrite roots. Nothing was written.";
+            return false;
+        }
+        var rel = BethesdaPath.Normalize(dataRelativePath);
+        var deployed = BethesdaPath.Under(Path.Combine(snapshot.GamePath, "Data"), rel);
+        var stagingIdentity = LinuxFileIdentity.Read(stagingPath);
+        var deployedIdentity = LinuxFileIdentity.Read(deployed);
+        before = new(stagingIdentity,
+            stagingIdentity is null || deployedIdentity is null ? null : stagingIdentity == deployedIdentity);
+        return true;
+    }
+
+    /// <summary>Persist the honest post-write state; visibility is proven only by a later manager snapshot.</summary>
+    string? RecordAmethystWrite(string stagingPath, string dataRelativePath, string kind, AmethystWriteBefore? before = null)
+    {
+        if (_manifestPath is null) return null;
+        const string instruction = "PendingAmethystRefreshEnableDeploy: refresh Amethyst, enable the generated mod when applicable, " +
+                                   "rebuild the filemap, and deploy. Game-visible verification is refused until that later deployment is proven.";
+        try
+        {
+            var rel = BethesdaPath.Normalize(dataRelativePath);
+            var snapshot = _managerSnapshot!;
+            if (!Under(stagingPath, snapshot.ModsDir) && !Under(stagingPath, snapshot.OverwriteDir))
+                return instruction + $" Pending state was not recorded because the output is outside Amethyst staging: '{stagingPath}'.";
+            var pending = new PendingAmethystWrite
+            {
+                ProfileName = snapshot.ActiveProfileName,
+                StagingPath = Path.GetFullPath(stagingPath),
+                DataRelativePath = rel,
+                ContentSha256 = AmethystRedeploy.Hash(stagingPath),
+                WrittenUtc = DateTime.UtcNow,
+                Kind = kind,
+                StagingIdentity = LinuxFileIdentity.Read(stagingPath),
+                PreviousStagingIdentity = before?.StagingIdentity,
+                DeployedWasSameHardlink = before?.DeployedWasSameHardlink
+            };
+            var (ok, error) = _store.RecordPendingAmethystWrite(pending);
+            var note = instruction;
+            if (before?.DeployedWasSameHardlink == true)
+                note += " The deployed Data copy still references the pre-write inode until redeploy.";
+            return ok ? note : note + $" Pending state could not be saved ({error}).";
+        }
+        catch (Exception ex) { return instruction + $" Pending state could not be recorded ({ex.Message})."; }
+    }
+
+    static bool Under(string path, string root)
+    {
+        var candidate = Path.GetFullPath(path);
+        var parent = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return candidate.StartsWith(parent, StringComparison.Ordinal);
+    }
+
+    public IReadOnlyList<PendingAmethystWrite> PendingAmethystWrites() => _store.PendingAmethystWrites();
 
     ModOrderResult BuildManagerOrder()
     {
@@ -2113,8 +2199,11 @@ public sealed class LoadOrderService : IDisposable
     /// <paramref name="fullReadback"/> additionally reads every touched record back IN FULL off the written file
     /// (the pre-enable verify loop — wishlist #3 re-scoped / HCBR-2026-06-11-02 wave (b)).</summary>
     public WritePatchBuilder.PatchOutcome ApplyEdits(IReadOnlyList<BulkOp> ops, string? patchName, string? into,
-        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false)
+        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false,
+        bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.PatchOutcome.Fail(redeploy);
         if (ops.Count == 0)
             return WritePatchBuilder.PatchOutcome.Fail("no operations supplied.");
 
@@ -2174,7 +2263,9 @@ public sealed class LoadOrderService : IDisposable
             {
                 var outcome = WritePatchBuilder.Apply(resolver, rulebook, edits, outPath, extend, fullReadback, copyFromSources);
                 if (!outcome.Success && created) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused write leaves no orphan
-                return outcome;
+                if (!outcome.Success) return outcome;
+                var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+                return pendingNote is null ? outcome : outcome with { Note = JoinNotes(outcome.Note, pendingNote) };
             }
             finally { if (offOrderOverlays is not null) foreach (var d in offOrderOverlays) d.Dispose(); }
         }
@@ -2264,6 +2355,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.PatchOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.PatchOutcome.Fail(stagingError!);
+
         // (4) The write — touched-record verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.ApplyInPlace(resolver, rulebook, edits, targetPath, targetName, fullReadback: true);
 
@@ -2274,8 +2368,9 @@ public sealed class LoadOrderService : IDisposable
         {
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
             var seqNote = SeqStaleInPlaceNote(targetPath, targetName);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
             // outcome.Note first — the core's master-grow re-sort note (PR #163 review #1) must survive the merge.
-            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote);
+            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote, redeployNote);
             if (note is not null) return outcome with { Note = note };
         }
         else if (ackNote is not null)
@@ -2459,8 +2554,10 @@ public sealed class LoadOrderService : IDisposable
     /// → mod.Remove → re-serialize, with clean-masters riding along). The default lane never touches originals (only the
     /// patch folder is written).</summary>
     public WritePatchBuilder.RemovalOutcome RemoveRecords(IReadOnlyList<string> formids, string? patch,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.RemovalOutcome.Fail(redeploy);
         if (formids is null || formids.Count == 0)
             return WritePatchBuilder.RemovalOutcome.Fail("no formids supplied — pass the FormID(s) of the record(s) to remove.");
 
@@ -2507,7 +2604,10 @@ public sealed class LoadOrderService : IDisposable
             try { outPath = ResolveOutputPath(patchName: null, into: patch, out _, out _); }
             catch (Exception ex) { return WritePatchBuilder.RemovalOutcome.Fail(ex.Message); }
 
-            return WritePatchBuilder.RemoveRecords(resolver, keys, outPath);
+            var outcome = WritePatchBuilder.RemoveRecords(resolver, keys, outPath);
+            if (!outcome.Success) return outcome;
+            var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), "patch_update");
+            return pendingNote is null ? outcome : outcome with { Note = JoinNotes(outcome.Note, pendingNote) };
         }
     }
 
@@ -2550,6 +2650,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.RemovalOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.RemovalOutcome.Fail(stagingError!);
+
         // (4) The write — absence verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.RemoveRecordsInPlace(resolver, keys, targetPath, targetName);
 
@@ -2560,8 +2663,9 @@ public sealed class LoadOrderService : IDisposable
         {
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
             var seqNote = SeqStaleInPlaceNote(targetPath, targetName);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
             // outcome.Note first — the core's master-grow re-sort note (PR #163 review #1) must survive the merge.
-            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote);
+            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote, redeployNote);
             if (note is not null) return outcome with { Note = note };
         }
         else if (ackNote is not null)
@@ -2583,8 +2687,11 @@ public sealed class LoadOrderService : IDisposable
     /// write lane; HCBR-2026-07-08-01 F4) — forward INTO an existing plugin's own file, consent-gated like the sibling
     /// write tools — see <see cref="ForwardRecordsInPlace"/>.</summary>
     public WritePatchBuilder.ForwardOutcome ForwardRecords(IReadOnlyList<string> formids, string fromPlugin, string? patchName, string? into,
-        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false)
+        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false,
+        bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.ForwardOutcome.Fail(redeploy);
         if (string.IsNullOrWhiteSpace(fromPlugin))
             return WritePatchBuilder.ForwardOutcome.Fail(
                 "from_plugin is required — name the plugin whose version of the record(s) to forward (the earlier override, or a master to revert to vanilla).");
@@ -2632,7 +2739,9 @@ public sealed class LoadOrderService : IDisposable
 
             var outcome = WritePatchBuilder.ForwardRecords(resolver, specs, outPath, extend, fullReadback);
             if (!outcome.Success && created) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused forward leaves no orphan
-            return outcome;
+            if (!outcome.Success) return outcome;
+            var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+            return pendingNote is null ? outcome : outcome with { Note = JoinNotes(outcome.Note, pendingNote) };
         }
     }
 
@@ -2673,6 +2782,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.ForwardOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.ForwardOutcome.Fail(stagingError!);
+
         // (4) The write — touched-record verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.ForwardRecordsInPlace(resolver, specs, targetPath, targetName, fullReadback: true);
 
@@ -2682,8 +2794,9 @@ public sealed class LoadOrderService : IDisposable
         {
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
             var seqNote = SeqStaleInPlaceNote(targetPath, targetName);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
             // outcome.Note first — the core's master-grow re-sort note (PR #163 review #1) must survive the merge.
-            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote);
+            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote, redeployNote);
             if (note is not null) return outcome with { Note = note };
         }
         else if (ackNote is not null)
@@ -2744,7 +2857,9 @@ public sealed class LoadOrderService : IDisposable
 
             var outcome = WritePatchBuilder.CreatePlugin(outPath, esl, author, description);
             if (!outcome.Success) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused create leaves no orphan
-            return outcome;
+            if (!outcome.Success) return outcome;
+            var pendingNote = RecordAmethystWrite(outPath, plugin, "new_plugin");
+            return pendingNote is null ? outcome : outcome with { Note = pendingNote };
         }
     }
 
@@ -2775,8 +2890,10 @@ public sealed class LoadOrderService : IDisposable
     /// write gate; the identify-pass is one whole-order link walk (~25s at full scale — a deliberate, one-shot operation).</para></summary>
     public WritePatchBuilder.CompactOutcome CompactPlugin(
         string pluginName, bool esl = true, bool inPlace = false, bool repointExternals = false,
-        bool acknowledge = false, string? patchName = null)
+        bool acknowledge = false, string? patchName = null, bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace || repointExternals, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.CompactOutcome.Fail(redeploy);
         if (string.IsNullOrWhiteSpace(pluginName))
             return WritePatchBuilder.CompactOutcome.Fail("plugin is required — name the plugin filename to compact (e.g. 'CoolMod.esp').");
 
@@ -2922,6 +3039,20 @@ public sealed class LoadOrderService : IDisposable
                 outPath = Path.Combine(rf.OutputDir, name);
             }
 
+            AmethystWriteBefore? compactBefore = null;
+            string? stagingError = null;
+            if (inPlace && !PrepareAmethystWrite(srcPath, name, out compactBefore, out stagingError))
+                return WritePatchBuilder.CompactOutcome.Fail(stagingError!);
+            var repointBefore = new Dictionary<string, (string Path, AmethystWriteBefore? Before)>(StringComparer.OrdinalIgnoreCase);
+            if (willRepoint)
+                foreach (var ext in id.ExternalPlugins)
+                {
+                    var path = view.PluginPath(ext);
+                    if (path is null || !PrepareAmethystWrite(path, ext, out var prior, out stagingError))
+                        return WritePatchBuilder.CompactOutcome.Fail(stagingError ?? $"could not resolve staging path for '{ext}'. Nothing was written.");
+                    repointBefore[ext] = (path, prior);
+                }
+
             // 6. build + write the compacted plugin.
             var build = WritePatchBuilder.CompactBuild(srcPath, modKey, remapDict, view.PluginPath, outPath, esl, floor);
             if (!build.Success)
@@ -3008,6 +3139,14 @@ public sealed class LoadOrderService : IDisposable
                 var rp = view.PluginPath(r.Plugin);
                 if (rp is not null) { var n = MergeEditedInPlaceMarker(Path.GetDirectoryName(rp)); if (n is not null) markerNotes.Add(n); }
             }
+            var compactPending = RecordAmethystWrite(outPath, name, inPlace ? "compact_in_place" : "new_compact", compactBefore);
+            if (compactPending is not null) markerNotes.Add(compactPending);
+            foreach (var r in repointed.Where(r => r.Success))
+                if (repointBefore.TryGetValue(r.Plugin, out var prior))
+                {
+                    var pending = RecordAmethystWrite(prior.Path, r.Plugin, "compact_repoint", prior.Before);
+                    if (pending is not null) markerNotes.Add(pending);
+                }
 
             return new WritePatchBuilder.CompactOutcome(
                 true, null, false, outPath, name, inPlace, esl, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
@@ -3199,6 +3338,7 @@ public sealed class LoadOrderService : IDisposable
                 ? "the regenerated .seq lists EVERY start-game-enabled quest in the merge — including any from a donor that " +
                   "shipped no .seq of its own (such quests were NOT auto-starting before the merge; they will now)."
                 : null;
+            note = JoinNotes(note, RecordAmethystWrite(outPath, outName, "new_merge"));
 
             return new WritePatchBuilder.MergeOutcome(
                 true, null, outPath, outName, donorNames, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
@@ -3467,7 +3607,8 @@ public sealed class LoadOrderService : IDisposable
                     assets = new NpcAssetOutcome(Array.Empty<CarriedAsset>(), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
                         new[] { $"asset carry skipped — the asset layer could not be built ({ex.Message}); carry the facegen pair with housecarl_place_asset and verify in-game." }, false, false);
                 }
-                return outcome with { Assets = assets };
+                var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+                return outcome with { Assets = assets, Warning = JoinNotes(outcome.Warning, pendingNote) };
             }
             finally { (donorOverlay as IDisposable)?.Dispose(); (widenOverlay as IDisposable)?.Dispose(); }
         }
@@ -3486,14 +3627,14 @@ public sealed class LoadOrderService : IDisposable
     /// child's parent= naming a same-call sibling), see <see cref="CreateRecordsBatch"/>.</summary>
     public WritePatchBuilder.CreateOutcome CreateRecords(string recordType, string editorid, IReadOnlyList<BulkOp> operations,
         string? patchName, string? into, bool fullReadback = false, string? parent = null, string? collection = null, string? grid = null,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
         var problems = new List<string>();
         var spec = BuildCreateSpec(recordType, editorid, operations, parent, collection, grid, where: null, problems);
         if (spec is null)
             return WritePatchBuilder.CreateOutcome.Fail(
                 $"refused — {problems.Count} problem(s) creating the record; NOTHING created:\n  - " + string.Join("\n  - ", problems));
-        return CommitCreate(new[] { spec }, patchName, into, fullReadback, target, inPlace, acknowledge);
+        return CommitCreate(new[] { spec }, patchName, into, fullReadback, target, inPlace, acknowledge, confirmAmethystRedeploy);
     }
 
     /// <summary>Create MANY new records in ONE patch (housecarl_bulk_create) — the batch sibling of
@@ -3503,7 +3644,7 @@ public sealed class LoadOrderService : IDisposable
     /// spec refuses the whole call (with per-record reasons) and the core <see cref="WritePatchBuilder.CreateRecords"/>
     /// likewise refuses the whole batch on any creatability/parent problem. One serialize for the lot.</summary>
     public WritePatchBuilder.CreateOutcome CreateRecordsBatch(IReadOnlyList<CreateOp> records, string? patchName, string? into, bool fullReadback = false,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
         if (records is null || records.Count == 0)
             return WritePatchBuilder.CreateOutcome.Fail("no records to create supplied — pass one or more {record_type, editorid, operations?, parent?, collection?} specs.");
@@ -3519,7 +3660,7 @@ public sealed class LoadOrderService : IDisposable
         if (problems.Count > 0)
             return WritePatchBuilder.CreateOutcome.Fail(
                 $"refused — {problems.Count} problem(s) across {records.Count} record(s); NOTHING created:\n  - " + string.Join("\n  - ", problems));
-        return CommitCreate(specs, patchName, into, fullReadback, target, inPlace, acknowledge);
+        return CommitCreate(specs, patchName, into, fullReadback, target, inPlace, acknowledge, confirmAmethystRedeploy);
     }
 
     /// <summary>Build ONE core <see cref="WritePatchBuilder.CreateSpec"/> from wire parts (shared by the single create and
@@ -3574,8 +3715,10 @@ public sealed class LoadOrderService : IDisposable
     /// then drive the core multi-record create + serialize under the write gate (hunt F2: one write at a time). A refused
     /// create that just created the output folder leaves no orphan (hunt F4). Shared by the single + batch create.</summary>
     WritePatchBuilder.CreateOutcome CommitCreate(IReadOnlyList<WritePatchBuilder.CreateSpec> specs, string? patchName, string? into, bool fullReadback,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.CreateOutcome.Fail(redeploy);
         // In-place is the explicit, named-file opt-in (the SECOND write lane — create into an existing plugin, incl. one
         // houseCARL didn't author, instead of writing a new patch). Validate the contract up front (Q3): it REQUIRES a
         // target=, is mutually exclusive with into= (which EXTENDS a houseCARL patch — a different lane), and target=
@@ -3609,7 +3752,10 @@ public sealed class LoadOrderService : IDisposable
             // CreateRecords path stays untouched): unit B voice (.fuz/.lip) coverage, unit C the result-script binding,
             // then the §4-(b) structural-shell report. Each is a no-op unless the call created the relevant record kind
             // (a dialogue line / a cell); none can fail the create (the write already succeeded).
-            return outcome.Success ? EnrichWithCellShell(EnrichWithScriptCheck(EnrichWithVoiceCheck(outcome, resolver))) : outcome;
+            if (!outcome.Success) return outcome;
+            var enriched = EnrichWithCellShell(EnrichWithScriptCheck(EnrichWithVoiceCheck(outcome, resolver)));
+            var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+            return pendingNote is null ? enriched : enriched with { Note = JoinNotes(enriched.Note, pendingNote) };
         }
     }
 
@@ -3656,6 +3802,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.CreateOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.CreateOutcome.Fail(stagingError!);
+
         // (4) The write — created-record verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.CreateRecordsInPlace(resolver, rulebook, specs, targetPath, targetName, fullReadback: true);
 
@@ -3668,7 +3817,8 @@ public sealed class LoadOrderService : IDisposable
         {
             var enriched = EnrichWithCellShell(EnrichWithScriptCheck(EnrichWithVoiceCheck(outcome, resolver)));
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
-            var note = JoinNotes(ackNote, markerNote);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
+            var note = JoinNotes(ackNote, markerNote, redeployNote);
             return note is not null ? enriched with { Note = note } : enriched;
         }
         if (ackNote is not null)
@@ -4252,7 +4402,9 @@ public sealed class LoadOrderService : IDisposable
             if (size != built.Bytes.Length)
                 return SeqOutcome.Fail($"wrote '{seqName}' but its on-disk size ({size}) does not match the {built.Bytes.Length} expected byte(s) — verify before relying on it.");
 
-            return new SeqOutcome(true, null, dest, rf.ModFolder, built.Quests, built.PluginFileName, autoInto is not null);
+            var pendingNote = RecordAmethystWrite(dest, $@"SEQ\{seqName}", "seq");
+            return new SeqOutcome(true, null, dest, rf.ModFolder, built.Quests, built.PluginFileName, autoInto is not null)
+                { Note = pendingNote };
         }
     }
 
@@ -4490,9 +4642,7 @@ public sealed class LoadOrderService : IDisposable
         return false;
     }
 
-    /// <summary>Write the new mod folder's <c>meta.ini</c>: the <c>[houseCARL]</c> ownership marker (MO2-undeployed) plus a
-    /// minimal <c>[General]</c> for MO2's display. Format grounded against real MO2 meta.ini (a minimal one is valid;
-    /// the custom section is ours). A fresh folder has none, so this just writes it.</summary>
+    /// <summary>Write a minimal Amethyst-tolerated <c>meta.ini</c> plus the ownership marker used for safe cleanup.</summary>
     static void WriteOwnerMeta(string folder, string plugin)
     {
         var content =
@@ -4501,7 +4651,7 @@ public sealed class LoadOrderService : IDisposable
             "modid=0\r\n" +
             "version=1.0\r\n" +
             "category=0\r\n" +
-            "comments=Generated by houseCARL - load-order patch\r\n" +
+            "comments=Generated by houseCARL-Amethyst\r\n" +
             "\r\n" +
             HousecarlOwnerMeta.Section + "\r\n" +
             "generated=true\r\n" +
@@ -5130,6 +5280,7 @@ public sealed record SeqOutcome(
     bool Success, string? Error, string? SeqPath, string? ModFolder,
     IReadOnlyList<HousecarlCore.SeqFile.SeqQuest> Quests, string PluginFileName, bool WroteIntoPluginFolder)
 {
+    public string? Note { get; init; }
     public static SeqOutcome Fail(string error)
         => new(false, error, null, null, Array.Empty<HousecarlCore.SeqFile.SeqQuest>(), "", false);
 }

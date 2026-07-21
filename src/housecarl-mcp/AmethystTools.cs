@@ -12,7 +12,7 @@ public static class AmethystTools
      Description("Report the active Amethyst profile, native staging roots, deployment state, and freshness inputs. " +
                  "Validates connection.json, paths.json, deploy_state.json, and profile_state.json without writing them.")]
     public static string Status(LoadOrderService svc) =>
-        Guard.Tool("housecarl_amethyst_status", () => Render(svc.AmethystSnapshot()));
+        Guard.Tool("housecarl_amethyst_status", () => Render(svc.AmethystSnapshot(), svc.PendingAmethystWrites()));
 
     [McpServerTool(Name = "housecarl_refresh", ReadOnly = true, Title = "Refresh Amethyst state"),
      Description("Re-read the Amethyst connection and active profile now. Normal tools also refresh lazily.")]
@@ -20,7 +20,7 @@ public static class AmethystTools
         Guard.Tool("housecarl_refresh", () =>
             svc.RefreshAmethyst() ? "refreshed Amethyst state." : "Amethyst state is already current.");
 
-    internal static string Render(ManagerSnapshot s)
+    internal static string Render(ManagerSnapshot s, IReadOnlyList<PendingAmethystWrite>? pending = null)
     {
         var text = new StringBuilder()
             .Append("Amethyst connection — schema ").Append(s.SchemaVersion).Append('\n')
@@ -40,6 +40,12 @@ public static class AmethystTools
             .Append("loose winners: ").Append(s.LooseAssetSources.Count).Append('\n')
             .Append("deployment: ").Append(s.DeploymentActive ? "active" : "inactive");
         if (s.LastDeploymentMode is not null) text.Append(" (").Append(s.LastDeploymentMode).Append(')');
+        text.Append("\npending redeploy: ").Append(pending?.Count ?? 0);
+        if (pending is not null)
+            foreach (var item in pending)
+                text.Append("\n  ").Append(item.WrittenUtc.ToString("O")).Append("  ")
+                    .Append(item.ProfileName).Append("  ").Append(item.Kind).Append("  ")
+                    .Append(item.DataRelativePath);
         text.Append("\nfreshness inputs:\n");
         foreach (var input in s.FreshnessInputs)
             text.Append("  ").Append(input.Value == DateTime.MinValue ? "missing" : input.Value.ToString("O"))

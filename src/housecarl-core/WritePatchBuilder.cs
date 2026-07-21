@@ -1242,6 +1242,7 @@ public static class WritePatchBuilder
         bool Success, string? Error, string OutputPath, string PluginName, bool Esl,
         IReadOnlyList<string> Masters, int RecordCount, long Bytes)
     {
+        public string? Note { get; init; }
         public static CreatePluginOutcome Fail(string error) =>
             new(false, error, "", "", false, Array.Empty<string>(), 0, 0);
     }

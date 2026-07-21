@@ -54,6 +54,8 @@ public static class WriteTools
             bool in_place = false,
         [Description("Optional, default false. Confirms the one-time in-place trade-off for target (see in_place) — needed only on the FIRST in-place edit of a given plugin, never again for it. Waives the consent to touch your original ONLY; it NEVER skips the record verify.")]
             bool acknowledge = false,
+        [Description("Amethyst in-place safety gate. Set true to confirm that staging is written first and Amethyst must rebuild its filemap and redeploy before the game sees the edit.")]
+            bool confirm_amethyst_redeploy = false,
         [Description("When true, the read-back is the FULL deep field-by-field dump of the touched record (every field, not just the edited leaf) — confirm the write landed and nothing else was disturbed, WITHOUT enabling the patch in MO2. For an IN-PLACE edit the touched-record verify ALWAYS runs and is shown COMPACTLY by default (re-read-clean + what landed, every record); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
@@ -64,7 +66,7 @@ public static class WriteTools
         {
             Formid = formid, FieldPath = field_path, Verb = verb, Value = value, Key = key, Values = values,
         };
-        return Render(svc.ApplyEdits(new[] { op }, patch_name, into, full_readback, target, in_place, acknowledge), max_chars, full_readback);
+        return Render(svc.ApplyEdits(new[] { op }, patch_name, into, full_readback, target, in_place, acknowledge, confirm_amethyst_redeploy), max_chars, full_readback);
     });
 
     [McpServerTool(Name = "housecarl_bulk_apply", Title = "Apply many edits in one patch"),
@@ -108,6 +110,8 @@ public static class WriteTools
             bool in_place = false,
         [Description("Optional, default false. Confirms the one-time in-place trade-off for target (see in_place) — needed only on the FIRST in-place edit of a given plugin, never again for it. Waives the consent to touch your original ONLY; it NEVER skips the record verify.")]
             bool acknowledge = false,
+        [Description("Amethyst in-place safety gate. Set true to confirm that staging is written first and Amethyst must rebuild its filemap and redeploy before the game sees the edit.")]
+            bool confirm_amethyst_redeploy = false,
         [Description("When true, the read-back is the FULL deep field-by-field dump of every record this call touched (not just the edited leaves) — confirm composed structures (conditions, container entries) landed and nothing else was disturbed, WITHOUT enabling the patch in MO2. For an IN-PLACE edit the touched-record verify ALWAYS runs and is shown COMPACTLY by default (per record: re-read-clean + what landed, covering ALL of them); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
@@ -116,7 +120,7 @@ public static class WriteTools
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
         if (operations is null || operations.Length == 0)
             return "error: operations is empty. Pass one or more {formid, field_path, verb, ...} edits.";
-        return Render(svc.ApplyEdits(operations, patch_name, into, full_readback, target, in_place, acknowledge), max_chars, full_readback);
+        return Render(svc.ApplyEdits(operations, patch_name, into, full_readback, target, in_place, acknowledge, confirm_amethyst_redeploy), max_chars, full_readback);
     });
 
     [McpServerTool(Name = "housecarl_remove_record", Title = "Remove a whole record from a patch (or a plugin in place)"),
@@ -148,10 +152,12 @@ public static class WriteTools
         [Description("Optional, default false. With target=, remove the record straight from that plugin IN PLACE: houseCARL rewrites your ORIGINAL file — no patch, and NO houseCARL backup or undo (keep your own). houseCARL re-lays-out the whole plugin the way xEdit/CK do on save, VERIFIES the record is gone, and trusts Mutagen for the untouched rest; it refuses a file it can't parse or that holds engine-reserved (sub-0x800) records. Any master the removal orphans is pruned from the header. The FIRST in-place write to a given plugin returns a one-time confirmation prompt (re-call with acknowledge=true).")]
             bool in_place = false,
         [Description("Optional, default false. Confirms the one-time in-place trade-off for target (see in_place) — needed only on the FIRST in-place write to a given plugin (edit, create, OR remove), never again for it. Waives the consent to touch your original ONLY; it NEVER skips the record verify.")]
-            bool acknowledge = false) => Guard.Tool("housecarl_remove_record", () =>
+            bool acknowledge = false,
+        [Description("Amethyst in-place safety gate. Set true to confirm staging-only write plus a required Amethyst redeploy.")]
+            bool confirm_amethyst_redeploy = false) => Guard.Tool("housecarl_remove_record", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        return RenderRemoval(svc.RemoveRecords(new[] { formid }, patch, target, in_place, acknowledge));
+        return RenderRemoval(svc.RemoveRecords(new[] { formid }, patch, target, in_place, acknowledge, confirm_amethyst_redeploy));
     });
 
     [McpServerTool(Name = "housecarl_create_record", Title = "Create a brand-new record"),
@@ -202,13 +208,15 @@ public static class WriteTools
             bool in_place = false,
         [Description("Optional, default false. Confirms the one-time in-place trade-off for target (see in_place) — needed only on the FIRST in-place write to a given plugin (edit OR create), never again for it. Waives the consent to touch your original ONLY; it NEVER skips the record verify.")]
             bool acknowledge = false,
+        [Description("Amethyst in-place safety gate. Set true to confirm staging-only write plus a required Amethyst redeploy.")]
+            bool confirm_amethyst_redeploy = false,
         [Description("When true, the read-back is the FULL deep field-by-field dump of the created record (every field, not just the fields you set). For an IN-PLACE create the touched-record verify ALWAYS runs and is shown COMPACTLY by default (re-read-clean + field count per record); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
             int max_chars = 0) => Guard.Tool("housecarl_create_record", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        return RenderCreate(svc.CreateRecords(record_type, editorid, operations ?? Array.Empty<BulkOp>(), patch_name, into, full_readback, parent, collection, grid, target, in_place, acknowledge), max_chars, full_readback);
+        return RenderCreate(svc.CreateRecords(record_type, editorid, operations ?? Array.Empty<BulkOp>(), patch_name, into, full_readback, parent, collection, grid, target, in_place, acknowledge, confirm_amethyst_redeploy), max_chars, full_readback);
     });
 
     [McpServerTool(Name = "housecarl_bulk_create", Title = "Create many records (incl. a nested one-shot) in one patch"),
@@ -251,6 +259,8 @@ public static class WriteTools
             bool in_place = false,
         [Description("Optional, default false. Confirms the one-time in-place trade-off for target (see in_place) — needed only on the FIRST in-place write to a given plugin (edit OR create), never again for it. Waives the consent to touch your original ONLY; it NEVER skips the record verify.")]
             bool acknowledge = false,
+        [Description("Amethyst in-place safety gate. Set true to confirm staging-only write plus a required Amethyst redeploy.")]
+            bool confirm_amethyst_redeploy = false,
         [Description("When true, the read-back is the FULL deep field-by-field dump of each created record. For an IN-PLACE create the touched-record verify ALWAYS runs and is shown COMPACTLY by default (re-read-clean + field count per record); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
@@ -259,7 +269,7 @@ public static class WriteTools
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
         if (records is null || records.Length == 0)
             return "error: records is empty. Pass one or more {record_type, editorid, operations?, parent?, collection?} specs.";
-        return RenderCreate(svc.CreateRecordsBatch(records, patch_name, into, full_readback, target, in_place, acknowledge), max_chars, full_readback);
+        return RenderCreate(svc.CreateRecordsBatch(records, patch_name, into, full_readback, target, in_place, acknowledge, confirm_amethyst_redeploy), max_chars, full_readback);
     });
 
     [McpServerTool(Name = "housecarl_forward_record", Title = "Forward a plugin's version of a record as an override"),
@@ -305,6 +315,8 @@ public static class WriteTools
             bool in_place = false,
         [Description("Optional, default false. Confirms the one-time in-place trade-off for target (see in_place) — needed only on the FIRST in-place write to a given plugin (edit, create, remove, OR forward), never again for it. Waives the consent to touch your original ONLY; it NEVER skips the record verify.")]
             bool acknowledge = false,
+        [Description("Amethyst in-place safety gate. Set true to confirm staging-only write plus a required Amethyst redeploy.")]
+            bool confirm_amethyst_redeploy = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
             int max_chars = 0) => Guard.Tool("housecarl_forward_record", () =>
     {
@@ -313,7 +325,7 @@ public static class WriteTools
             return "error: formids is empty. Pass one or more 'XXXXXX:Plugin.esp' FormIDs to forward from from_plugin.";
         if (string.IsNullOrWhiteSpace(from_plugin))
             return "error: from_plugin is empty. Name the plugin whose version of the record(s) to forward.";
-        return RenderForward(svc.ForwardRecords(formids, from_plugin, patch_name, into, full_readback, target, in_place, acknowledge), max_chars);
+        return RenderForward(svc.ForwardRecords(formids, from_plugin, patch_name, into, full_readback, target, in_place, acknowledge, confirm_amethyst_redeploy), max_chars);
     });
 
     [McpServerTool(Name = "housecarl_create_plugin", Title = "Create an empty header-only (trigger) plugin"),
@@ -384,12 +396,14 @@ public static class WriteTools
         [Description("Optional, default false. Confirms the in-place trade-off when in_place=true OR repoint_externals=true (your original file(s) get rewritten, no backup). The FIRST such call without it returns a CONFIRM prompt listing exactly what will be overwritten — re-call with acknowledge=true to proceed.")]
             bool acknowledge = false,
         [Description("Optional. Base name for the NEW mod folder (new-file lane only; auto-suffixed if taken). Ignored with in_place=true. The PLUGIN inside ALWAYS keeps the source's exact basename so external masters still resolve.")]
-            string? patch_name = null) => Guard.Tool("housecarl_compact_plugin", () =>
+            string? patch_name = null,
+        [Description("Amethyst in-place safety gate. Required when compacting or repointing in place; confirms staging-only writes plus redeployment.")]
+            bool confirm_amethyst_redeploy = false) => Guard.Tool("housecarl_compact_plugin", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
         if (string.IsNullOrWhiteSpace(plugin))
             return "error: plugin is empty. Name the plugin filename to compact (e.g. 'CoolMod.esp').";
-        return RenderCompact(svc.CompactPlugin(plugin, esl, in_place, repoint_externals, acknowledge, patch_name));
+        return RenderCompact(svc.CompactPlugin(plugin, esl, in_place, repoint_externals, acknowledge, patch_name, confirm_amethyst_redeploy));
     });
 
     [McpServerTool(Name = "housecarl_merge_plugins", Title = "Merge plugins into one new plugin"),
@@ -441,13 +455,13 @@ public static class WriteTools
         if (o.InPlace)
             sb.Append("edited ").Append(file).Append(" IN PLACE (").Append(o.Bytes)
               .Append(" bytes — your ORIGINAL file was rewritten; no houseCARL backup or undo)\n")
-              .Append("mod folder: ").Append(modFolder).Append("  — already active in your load order; re-sort only if a winner changed\n");
+              .Append("mod folder: ").Append(modFolder).Append("  — staging changed; rebuild Amethyst's filemap and redeploy before relying on it in game\n");
         else
         {
             sb.Append(o.Extended ? "extended " : "wrote ").Append(file)
               .Append(o.Extended ? " (existing patch grown; " : " (new patch; ").Append(o.Bytes).Append(" bytes)\n");
             sb.Append("mod folder: ").Append(modFolder)
-              .Append(o.Extended ? "\n" : "  — enable + sort it in MO2 to use the patch\n");
+              .Append(o.Extended ? "\n" : "  — refresh Amethyst, enable it, rebuild the filemap, and deploy\n");
         }
         sb.Append("masters: ").Append(o.Masters.Count == 0 ? "(none)" : string.Join(", ", o.Masters)).Append('\n');
         sb.Append(o.Ops.Count).Append(o.Ops.Count == 1 ? " edit:\n" : " edits:\n");
@@ -489,14 +503,14 @@ public static class WriteTools
     {
         int cap = maxChars > 0 ? maxChars : Wire.ReadbackMaxChars;
         sb.Append("full read-back — the ENTIRE record(s) as written, re-read from the patch file on disk ")
-          .Append("(the written file's content, NOT load-order truth; the patch wins nothing until enabled + sorted in MO2):\n");
+          .Append("(the written file's content, NOT load-order truth; it is not game-visible until Amethyst deploys it):\n");
         for (int i = 0; i < rb.Count; i++)
         {
             if (sb.Length >= cap)
             {
                 sb.Append("  ... [truncated: full read-back rendered ").Append(i).Append(" of ").Append(rb.Count)
                   .Append(" record(s) at max_chars=").Append(cap)
-                  .Append("; raise max_chars, or enable the patch in MO2 and use housecarl_read_record]\n");
+                  .Append("; raise max_chars, or deploy the patch with Amethyst and use housecarl_read_record]\n");
                 return;
             }
             var r = rb[i];
@@ -509,7 +523,7 @@ public static class WriteTools
                 {
                     sb.Append("    ... [truncated: this record's field lines hit max_chars=").Append(cap)
                       .Append("; ").Append(rb.Count - i - 1).Append(" further record(s) not rendered")
-                      .Append("; raise max_chars, or enable the patch in MO2 and use housecarl_read_record]\n");
+                      .Append("; raise max_chars, or deploy the patch with Amethyst and use housecarl_read_record]\n");
                     return;
                 }
                 sb.Append("    ").Append(f.Path).Append(" = ").Append(f.HasValue ? f.Token : f.Note).Append('\n');
@@ -567,7 +581,7 @@ public static class WriteTools
             sb.Append(" IN PLACE (").Append(o.Bytes).Append(" bytes; ")
               .Append(o.RemainingRecords).Append(o.RemainingRecords == 1 ? " record remains" : " records remain")
               .Append(" — your ORIGINAL file was rewritten; no houseCARL backup or undo)\n")
-              .Append("mod folder: ").Append(modFolder).Append("  — already active in your load order; re-sort only if a winner changed\n");
+              .Append("mod folder: ").Append(modFolder).Append("  — staging changed; rebuild Amethyst's filemap and redeploy before relying on it in game\n");
         else
         {
             sb.Append(" (").Append(o.Bytes).Append(" bytes; ")
@@ -581,12 +595,12 @@ public static class WriteTools
         if (o.Note is { } note) sb.Append("note: ").Append(note).Append('\n');
         if (o.InPlace)
             sb.Append(o.RemainingRecords == 0
-                ? "this plugin now carries no records — it's an inert shell; disable or delete the mod in MO2 if you don't need it."
+                ? "this plugin now carries no records — it's an inert shell; disable or delete the mod in Amethyst if you don't need it."
                 : $"to remove more records from this plugin in place, pass target=\"{file}\" in_place=true (no further confirmation needed for it).");
         else
             sb.Append(o.RemainingRecords == 0
-                ? "this patch now carries no records — it's inert; disable or delete the mod folder in MO2 if you don't need it."
-                : "re-sort in MO2 if dropping this override changes a conflict winner.");
+                ? "this patch now carries no records — it's inert; disable or delete the mod folder in Amethyst if you don't need it."
+                : "refresh and redeploy with Amethyst if dropping this override changes a conflict winner.");
         return sb.ToString();
     }
 
@@ -604,13 +618,13 @@ public static class WriteTools
         if (o.InPlace)
             sb.Append("forwarded into ").Append(file).Append(" IN PLACE (").Append(o.Bytes)
               .Append(" bytes — your ORIGINAL file was rewritten; no houseCARL backup or undo)\n")
-              .Append("mod folder: ").Append(modFolder).Append("  — already active in your load order; re-sort only if a winner changed\n");
+              .Append("mod folder: ").Append(modFolder).Append("  — staging changed; rebuild Amethyst's filemap and redeploy before relying on it in game\n");
         else
         {
             sb.Append(o.Extended ? "extended " : "wrote ").Append(file)
               .Append(o.Extended ? " (existing patch grown; " : " (new patch; ").Append(o.Bytes).Append(" bytes)\n");
             sb.Append("mod folder: ").Append(modFolder)
-              .Append(o.Extended ? "\n" : "  — enable + sort it in MO2 to use the patch\n");
+              .Append(o.Extended ? "\n" : "  — refresh Amethyst, enable it, rebuild the filemap, and deploy\n");
         }
         sb.Append("masters: ").Append(o.Masters.Count == 0 ? "(none)" : string.Join(", ", o.Masters)).Append('\n');
         sb.Append("forwarded ").Append(o.Forwarded.Count).Append(o.Forwarded.Count == 1 ? " record:\n" : " records:\n");
@@ -623,7 +637,7 @@ public static class WriteTools
             if (f.WasAlreadyWinner)
                 sb.Append("  [NOTE: this source IS already the load-order winner — the override just re-asserts the content that already wins (a no-op in effect)]");
             else
-                sb.Append("  (out-ranks the current winner ").Append(f.PriorWinner).Append(" once this patch is enabled + sorted above it)");
+                sb.Append("  (out-ranks the current winner ").Append(f.PriorWinner).Append(" after Amethyst enables and deploys it above that source)");
             sb.Append('\n');
         }
         if (o.ReadBack is { } rb) AppendFullReadback(sb, rb, maxChars);
@@ -645,11 +659,12 @@ public static class WriteTools
         var sb = new StringBuilder();
         sb.Append("wrote ").Append(file).Append(o.Esl ? " (header-only, ESL-flagged; " : " (header-only; ")
           .Append(o.Bytes).Append(" bytes, ").Append(o.RecordCount).Append(o.RecordCount == 1 ? " record)\n" : " records)\n");
-        sb.Append("mod folder: ").Append(modFolder).Append("  — enable + sort it in MO2 to use it\n");
+        sb.Append("mod folder: ").Append(modFolder).Append("  — refresh Amethyst, enable it, rebuild the filemap, and deploy\n");
         sb.Append("masters: ").Append(o.Masters.Count == 0 ? "(none)" : string.Join(", ", o.Masters)).Append('\n');
         sb.Append("this is a trigger/placeholder plugin: it carries no records, so it changes nothing in game by itself — ")
           .Append("its only job is to make the basename '").Append(Path.GetFileNameWithoutExtension(file))
           .Append("' present in the load order (so a basename-bound SKSE config resolves, a FormID range is reserved, etc.).");
+        if (o.Note is not null) sb.Append("\nnote: ").Append(o.Note);
         return sb.ToString();
     }
 
@@ -668,11 +683,11 @@ public static class WriteTools
         if (o.InPlace)
             sb.Append("compacted ").Append(file).Append(" IN PLACE (").Append(o.Bytes)
               .Append(" bytes — your ORIGINAL file was rewritten; no houseCARL backup or undo)\n")
-              .Append("mod folder: ").Append(modFolder).Append("  — already active; re-sort only if a winner changed\n");
+              .Append("mod folder: ").Append(modFolder).Append("  — staging changed; rebuild Amethyst's filemap and redeploy before relying on it in game\n");
         else
             sb.Append("wrote compacted ").Append(file).Append(" (new plugin; ").Append(o.Bytes).Append(" bytes)\n")
               .Append("mod folder: ").Append(modFolder).Append("  — enable it and DISABLE the original '").Append(file)
-              .Append("' mod in MO2 (same basename — MO2 serves one). Review in xEdit first.\n");
+              .Append("' mod in Amethyst (same basename; one winner). Review in xEdit, then rebuild and deploy.\n");
 
         int overrides = o.RecordsCopied - o.RecordsRenumbered;
         sb.Append(o.Esl ? "light master (ESPFE): yes — " : "renumbered (not light-flagged): ");
@@ -788,7 +803,7 @@ public static class WriteTools
         var sb = new StringBuilder();
         sb.Append("wrote merged ").Append(file).Append(" (new plugin; ").Append(o.Bytes).Append(" bytes) from ")
           .Append(o.Donors.Count).Append(" donors: ").Append(string.Join(", ", o.Donors)).Append('\n');
-        sb.Append("mod folder: ").Append(modFolder).Append("  — review in xEdit, then enable + sort it in MO2.\n");
+        sb.Append("mod folder: ").Append(modFolder).Append("  — review in xEdit, then refresh Amethyst, enable, rebuild, and deploy.\n");
         // The swap is PLUGIN-level, not mod-level (merge is a RECORDS op): the merged records still reference the donors'
         // meshes/textures/scripts/BSA contents BY PATH, and those files live in the donor mod folders — only the
         // FormID-keyed facegen/voice/seq were carried. "Disable the donor mods" (compact's instruction, where the output
@@ -870,13 +885,13 @@ public static class WriteTools
         if (o.InPlace)
             sb.Append(file).Append(" rewritten IN PLACE (").Append(o.Bytes)
               .Append(" bytes — your ORIGINAL file; no houseCARL backup or undo)\n")
-              .Append("mod folder: ").Append(modFolder).Append("  — already active in your load order; re-sort only if a winner changed\n");
+              .Append("mod folder: ").Append(modFolder).Append("  — staging changed; rebuild Amethyst's filemap and redeploy before relying on it in game\n");
         else
         {
             sb.Append(o.Extended ? "extended " : "wrote ").Append(file)
               .Append(o.Extended ? " (existing patch grown; " : " (new patch; ").Append(o.Bytes).Append(" bytes)\n");
             sb.Append("mod folder: ").Append(modFolder)
-              .Append(o.Extended ? "\n" : "  — enable + sort it in MO2 to use the patch\n");
+              .Append(o.Extended ? "\n" : "  — refresh Amethyst, enable it, rebuild the filemap, and deploy\n");
         }
         sb.Append("masters: ").Append(o.Masters.Count == 0 ? "(none)" : string.Join(", ", o.Masters)).Append('\n');
         var replacedCount = o.Created.Count(c => c.ReplacedExisting);
