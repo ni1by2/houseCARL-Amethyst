@@ -98,7 +98,7 @@ writes staging only, and clears pending state only after a later verified deploy
 
 - [x] Clone the pinned upstream into `houseCARL-Amethyst/`.
 - [x] Configure the original repository as `upstream`.
-- [ ] Add a hosted fork as `origin` when GitHub authentication is available.
+- [x] Add the hosted `ni1by2/houseCARL-Amethyst` fork as `origin`.
 - [x] Create this roadmap and the Windows/MO2 assumption inventory below.
 - [x] Install an isolated .NET 9 SDK and capture the unmodified Linux build.
 - [x] Run CI-safe probes and classify failures.
@@ -150,14 +150,14 @@ restart, and deployed `Data/` is never classified as vanilla.
 Exit gate: loose/loose and loose/BSA winners, overwrite, excluded files,
 strip-prefix mods, facegen, voice, NIF, SKSE and SkyPatcher fixtures pass.
 
-### Session 5 — Writes and hardlink-safe redeployment
+### Session 5 — Writes and hardlink-safe redeployment — complete
 
-- [ ] Write generated mods into effective Amethyst staging.
-- [ ] Add Amethyst refresh/enable/deploy results and pending state.
-- [ ] Add inode/device capture and deployed-copy diagnostics.
-- [ ] Add `confirm_amethyst_redeploy` to guarded in-place calls.
-- [ ] Verify and clear pending state only after a later deployment.
-- [ ] Add hardlink release tests and symlink/copy smoke tests.
+- [x] Write generated mods into effective Amethyst staging.
+- [x] Add Amethyst refresh/enable/deploy results and pending state.
+- [x] Add inode/device capture and deployed-copy diagnostics.
+- [x] Add `confirm_amethyst_redeploy` to guarded in-place calls.
+- [x] Verify and clear pending state only after a later deployment.
+- [x] Add hardlink release tests and symlink/copy smoke tests.
 
 Exit gate: new and guarded in-place writes never target deployed `Data/`, report
 old hardlinks honestly, and clear pending state only after verification.
@@ -230,43 +230,39 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 4 complete; Session 5 is next.
-- Last completed checkpoint: strict Amethyst `filemap.txt` and MessagePack
-  `modindex.bin` v4 parsing now drives plugin, loose-asset and BSA source
-  resolution using raw Linux casing and staging paths.
-- Verification performed: the Linux solution and generator build with .NET 9.
-  The Amethyst filemap guard covers loose/loose winners, loose/BSA precedence,
-  overwrite, exclusions, global and per-mod strip prefixes, mixed case,
-  Unicode, vanilla fallback, archive discovery, stale/missing state, unknown
-  versions, traversal, and vanished winners. Existing asset, facegen, voice,
-  SKSE, SkyPatcher and runtime guards pass. Full `ci-all` is 89/98; its nine
-  failures exactly match the validated upstream Linux baseline.
-- Files/components changed: `AmethystFileMap`, `AmethystLayout`,
-  `AmethystLoadOrder`, `ArchiveDiscovery`, `AssetResolver`,
-  `IModManagerLayout`, `LoadOrderService`, the runtime/filemap probes, package
-  metadata, and third-party notices.
-- Decisions made: `filemap.txt` is the only loose winner authority.
-  `modindex.bin` v4 `rel_str` preserves casing after Amethyst's strip operation;
-  it is not always a complete physical source-relative path. Source lookup
-  therefore mirrors Amethyst's direct, global `Data`, and configured per-mod
-  wrapper reconstruction. Unknown versions, stale pairs, mismatches, or
-  vanished winners fail instead of scanning staging or deployed `Data/`. The
-  earlier companion connector design is superseded: connection setup belongs
-  in the main product and Amethyst requires no houseCARL plugin.
-- Known failures or residual risks: real Amethyst and Skyrim validation remains
-  a manual release gate. The standalone discovery/setup command is not yet
-  shipped; it is a Session 6 packaging deliverable. The obsolete connector
-  repository and local checkout were deleted on 2026-07-20. MessagePack is a
-  new MIT-licensed dependency. Windows external-tool and installer paths remain
-  deferred. The nine baseline failures are `writelock`, `upsert`,
-  `binding-shim`, `compile-ergonomics`, `setup-update-lock`, `bsa-contract`,
-  `atomic-commit`, `seq-regen`, and `skypatcher-conflicts`.
-- Exact next action: begin Session 5 by routing new patch folders into effective
-  Amethyst staging and adding the pending-refresh/enable/deploy state contract.
+- Active milestone: Session 5 complete; Session 6 is next.
+- Last completed checkpoint: every native patch/asset write records a pending
+  Amethyst deployment. Guarded in-place calls require the explicit redeploy
+  confirmation, refuse non-staging targets, and capture the pre-write Linux
+  device/inode identity before atomic replacement.
+- Verification performed: the .NET 9 Linux solution and generator build pass.
+  `amethyst-redeploy-guard` proves that an atomic staging replacement leaves an
+  existing deployed hardlink on its old inode, then clears pending state only
+  after newer filemap/deploy timestamps and matching deployed content or link
+  identity. Inactive/stale/profile-mismatched/content-changed states retain the
+  marker. Symlink and copy smoke modes pass without production branches.
+  Existing in-place, NIF and compact service guards pass. Full `ci-all` is
+  90/99; its nine failures exactly match the validated upstream Linux baseline.
+- Files/components changed: `AmethystRedeploy`, `UserConfigStore`,
+  `LoadOrderService`, Amethyst/NIF/write/SEQ tool output, the generated-plugin
+  outcome, and `AmethystRedeployProbe`.
+- Decisions made: staging is the only write target; deployed `Data/` is used
+  solely for later verification. A pending marker is keyed by profile and
+  canonical Data path, includes the expected content hash and pre/post inode
+  data, and cannot clear if staging changed again. Hardlinks are the v1 target;
+  symlink and copy verification use the same identity-or-content gate.
+- Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
+  profile remains the Session 7 manual release gate. Session 6 must replace the
+  remaining Windows installer/runtime surface and MO2 terminology. The nine
+  baseline failures are `writelock`, `upsert`, `binding-shim`,
+  `compile-ergonomics`, `setup-update-lock`, `bsa-contract`, `atomic-commit`,
+  `seq-regen`, and `skypatcher-conflicts`.
+- Exact next action: start Session 6 with the standalone Amethyst discovery and
+  manifest setup command, then build the self-contained Linux installer.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
-  resolution).
+  resolution), `5cbda36` (hardlink-safe redeployment).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement.
