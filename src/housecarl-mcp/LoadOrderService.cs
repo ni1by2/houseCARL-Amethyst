@@ -1315,6 +1315,12 @@ public sealed class LoadOrderService : IDisposable
         InvalidateClassParents();                                // _modsDir just gained a value — a cache built before derivation is baseline-only (hunt F1)
     }
 
+    /// <summary>Installs a freshly captured manager snapshot as the service's active path and deployment state.</summary>
+    /// <param name="snapshot">A complete, already validated view of the active Amethyst profile.</param>
+    /// <remarks>
+    /// Pending writes are checked only after all active paths have moved to the new snapshot. This
+    /// prevents a profile switch from verifying a write against stale roots from the prior profile.
+    /// </remarks>
     void Apply(ManagerSnapshot snapshot)
     {
         _managerSnapshot = snapshot;
@@ -1326,9 +1332,18 @@ public sealed class LoadOrderService : IDisposable
         _store.VerifyPendingAmethystWrites(snapshot);
     }
 
+    /// <summary>Filesystem identity captured before an atomic staging replacement.</summary>
+    /// <param name="StagingIdentity">The old staging inode, or null when it could not be read.</param>
+    /// <param name="DeployedWasSameHardlink">
+    /// True when deployed Data shared that inode, false when both identities proved they differed,
+    /// or null when either identity was unavailable.
+    /// </param>
     sealed record AmethystWriteBefore(LinuxFileIdentity? StagingIdentity, bool? DeployedWasSameHardlink);
 
-    /// <summary>Amethyst in-place writes require a fresh confirmation on every call because deployment is a second step.</summary>
+    /// <summary>Explains the extra confirmation required before an Amethyst in-place write.</summary>
+    /// <param name="inPlace">Whether the caller requested the guarded in-place lane.</param>
+    /// <param name="confirmed">Whether the caller acknowledged the required later redeployment.</param>
+    /// <returns>An actionable refusal message when confirmation is missing; otherwise null.</returns>
     string? AmethystRedeployConfirmation(bool inPlace, bool confirmed) =>
         _manifestPath is not null && inPlace && !confirmed
             ? "in_place=true on Amethyst also requires confirm_amethyst_redeploy=true. houseCARL writes staging only; " +
@@ -1336,7 +1351,12 @@ public sealed class LoadOrderService : IDisposable
               "filemap.txt and deploys again. Nothing was written."
             : null;
 
-    /// <summary>Capture hardlink state before an atomic replacement and refuse every non-staging target.</summary>
+    /// <summary>Validates the staging target and captures its pre-write hardlink relationship.</summary>
+    /// <param name="stagingPath">Absolute native path that the write intends to replace.</param>
+    /// <param name="dataRelativePath">Canonical Bethesda path used to locate the deployed counterpart.</param>
+    /// <param name="before">Captured state on success; null outside Amethyst mode.</param>
+    /// <param name="error">Actionable refusal on failure; otherwise null.</param>
+    /// <returns>True when the write may proceed, including the legacy non-Amethyst path.</returns>
     bool PrepareAmethystWrite(string stagingPath, string dataRelativePath, out AmethystWriteBefore? before, out string? error)
     {
         before = null; error = null;
@@ -1356,7 +1376,16 @@ public sealed class LoadOrderService : IDisposable
         return true;
     }
 
-    /// <summary>Persist the honest post-write state; visibility is proven only by a later manager snapshot.</summary>
+    /// <summary>Records a completed staging write as pending a later Amethyst deployment.</summary>
+    /// <param name="stagingPath">Absolute native path that was successfully written.</param>
+    /// <param name="dataRelativePath">Canonical Bethesda path represented by the output.</param>
+    /// <param name="kind">Short write category shown by status tools.</param>
+    /// <param name="before">Optional pre-write identity captured for an in-place replacement.</param>
+    /// <returns>
+    /// User-facing redeployment instructions in Amethyst mode; null in the legacy path. Persistence
+    /// failures are appended to the instructions because they must be visible but cannot undo a
+    /// write that already completed atomically.
+    /// </returns>
     string? RecordAmethystWrite(string stagingPath, string dataRelativePath, string kind, AmethystWriteBefore? before = null)
     {
         if (_manifestPath is null) return null;
@@ -1389,6 +1418,11 @@ public sealed class LoadOrderService : IDisposable
         catch (Exception ex) { return instruction + $" Pending state could not be recorded ({ex.Message})."; }
     }
 
+    /// <summary>Checks whether a candidate is a descendant of a staging root.</summary>
+    /// <remarks>
+    /// Appending the host separator to the normalized root prevents sibling prefixes such as
+    /// <c>mods-old</c> from being accepted as descendants of <c>mods</c>.
+    /// </remarks>
     static bool Under(string path, string root)
     {
         var candidate = Path.GetFullPath(path);
@@ -1396,6 +1430,7 @@ public sealed class LoadOrderService : IDisposable
         return candidate.StartsWith(parent, StringComparison.Ordinal);
     }
 
+    /// <summary>Returns the writes whose later Amethyst deployment has not yet been verified.</summary>
     public IReadOnlyList<PendingAmethystWrite> PendingAmethystWrites() => _store.PendingAmethystWrites();
 
     ModOrderResult BuildManagerOrder()

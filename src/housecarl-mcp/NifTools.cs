@@ -379,7 +379,10 @@ static class NifWire
         return bits.Count == 0 ? "none" : string.Join(",", bits);
     }
 
-    /// <summary>Append "<label><a, b, c>" as one line, cut with an explicit notice if it would blow the cap (Q3).</summary>
+    /// <summary>
+    /// Appends <c>&lt;label&gt;&lt;a, b, c&gt;</c> as one line and adds an explicit notice if the
+    /// output limit truncates the list (Q3).
+    /// </summary>
     static void AppendClampedList(StringBuilder sb, string label, IEnumerable<string> items, int cap)
     {
         sb.Append(label);

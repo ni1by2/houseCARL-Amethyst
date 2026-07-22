@@ -19,9 +19,10 @@ complete only when its exit gate is supported by recorded evidence.
 - Writes: new patch mods by default. In-place editing retains upstream consent
   guards and adds explicit Amethyst redeployment confirmation and verification.
 - PapyrusCompiler and BSArch process execution through Proton are post-v1.
-- Code style: keep production code sparse, concise, and easy to audit. Put
-  extensive explanation in architecture/contract documents; use inline comments
-  only for non-obvious invariants, safety boundaries, or format provenance.
+- Code style: keep implementation sparse, concise, and easy to audit. Every
+  inherited and fork-authored C# declaration receives a plain-English XML
+  contract; non-obvious reasoning is explained inline without narrating syntax.
+  `standards/HOUSECARL_CODE_DOCUMENTATION.md` defines the completion gate.
 
 ## Pinned upstream inputs
 
@@ -162,6 +163,28 @@ strip-prefix mods, facegen, voice, NIF, SKSE and SkyPatcher fixtures pass.
 Exit gate: new and guarded in-place writes never target deployed `Data/`, report
 old hardlinks honestly, and clear pending state only after verification.
 
+### Documentation pass — complete inherited and fork-authored codebase — active
+
+Baseline scope on 2026-07-22: 217 C# files, about 76,874 lines and roughly 722
+function declarations. Existing upstream documentation is extensive but uneven;
+presence of XML comments in a file is not evidence that every declaration or
+non-obvious invariant has been reviewed.
+
+- [x] Define the plain-English code documentation standard and completion gate.
+- [x] Document the fork's hardlink redeployment model and its safety probe.
+- [ ] Review all fork-authored Amethyst layout, filemap, load-order and path code.
+- [ ] Review all inherited `housecarl-core` declarations and reasoning seams.
+- [ ] Review all inherited and fork-authored `housecarl-mcp` declarations.
+- [ ] Review all `housecarl-setup` declarations during the Linux rewrite.
+- [ ] Review all generator, proof-harness and probe declarations.
+- [ ] Run a final stale MO2/Windows terminology and XML-reference audit.
+- [ ] Record per-component build/probe evidence and unresolved ambiguities.
+
+Exit gate: every declaration under `src/` has been inspected against
+`standards/HOUSECARL_CODE_DOCUMENTATION.md`, every non-obvious invariant has a
+nearby explanation, the solution builds, relevant probes pass, and the roadmap
+contains evidence for every component. This gate covers unchanged upstream code.
+
 ### Session 6 — Linux packaging and host integration
 
 - [ ] Replace Windows setup/build scripts with Linux equivalents.
@@ -230,12 +253,24 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 5 complete; Session 6 is next.
-- Last completed checkpoint: every native patch/asset write records a pending
+- Active milestone: full-codebase documentation pass; Session 6 follows it, with
+  setup documentation completed alongside the Linux setup rewrite.
+- Last completed checkpoint: the documentation contract now explicitly covers
+  every inherited and fork-authored declaration. The first reviewed slice covers
+  the hardlink identity ABI, pending-write state, verification rules, MCP staging
+  gate, and redeployment safety probe. Function inputs, outputs, null meanings,
+  failure behavior, and non-obvious invariants are stated in plain English.
+  Separately, every native patch/asset write records a pending
   Amethyst deployment. Guarded in-place calls require the explicit redeploy
   confirmation, refuse non-staging targets, and capture the pre-write Linux
   device/inode identity before atomic replacement.
-- Verification performed: the .NET 9 Linux solution and generator build pass.
+- Verification performed: the .NET 9 Linux solution builds successfully after
+  the first documentation slice (pre-existing nullable/obsolete warnings, zero
+  errors), and `git diff --check` passes. A second build with XML documentation
+  generation enabled succeeds with no malformed-XML warnings after repairing
+  inherited escaping defects in ten core, MCP, and generator files. The focused
+  `amethyst-redeploy-guard` also passes. Before this documentation work, the
+  generator build passed and
   `amethyst-redeploy-guard` proves that an atomic staging replacement leaves an
   existing deployed hardlink on its old inode, then clears pending state only
   after newer filemap/deploy timestamps and matching deployed content or link
@@ -243,9 +278,10 @@ manual release gate.
   marker. Symlink and copy smoke modes pass without production branches.
   Existing in-place, NIF and compact service guards pass. Full `ci-all` is
   90/99; its nine failures exactly match the validated upstream Linux baseline.
-- Files/components changed: `AmethystRedeploy`, `UserConfigStore`,
-  `LoadOrderService`, Amethyst/NIF/write/SEQ tool output, the generated-plugin
-  outcome, and `AmethystRedeployProbe`.
+- Files/components changed: documentation standard and roadmap;
+  `AmethystRedeploy`, the Amethyst write/redeploy helpers in `LoadOrderService`,
+  and `AmethystRedeployProbe`. Session 5 previously changed `UserConfigStore`,
+  Amethyst/NIF/write/SEQ tool output, and the generated-plugin outcome.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. A pending marker is keyed by profile and
   canonical Data path, includes the expected content hash and pre/post inode
@@ -253,12 +289,17 @@ manual release gate.
   symlink and copy verification use the same identity-or-content gate.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
-  remaining Windows installer/runtime surface and MO2 terminology. The nine
+  remaining Windows installer/runtime surface and MO2 terminology. Enabling XML
+  documentation output exposed inherited ambiguous/unresolved `cref` references
+  that the full pass must correct; all inherited malformed XML comments found in
+  the same audit are fixed in this checkpoint. The nine
   baseline failures are `writelock`, `upsert`, `binding-shim`,
   `compile-ergonomics`, `setup-update-lock`, `bsa-contract`, `atomic-commit`,
   `seq-regen`, and `skypatcher-conflicts`.
-- Exact next action: start Session 6 with the standalone Amethyst discovery and
-  manifest setup command, then build the self-contained Linux installer.
+- Exact next action: continue the documentation pass through the remaining
+  fork-authored Amethyst layout, filemap, load-order, path, and configuration
+  components before moving into inherited core engines. Start Session 6 after
+  those components are reviewed; document setup code as it is rewritten.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset

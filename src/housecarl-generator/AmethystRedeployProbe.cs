@@ -6,6 +6,9 @@ namespace HousecarlGenerator;
 /// <summary>Locks the staging-first redeploy gate for hardlink, symlink, and copy deployments.</summary>
 public static class AmethystRedeployProbe
 {
+    /// <summary>Runs all redeployment safety scenarios and returns a process-style success code.</summary>
+    /// <param name="args">Reserved for the common probe entry-point contract; currently unused.</param>
+    /// <returns>Zero on success or on non-Linux hosts; one when a scenario fails.</returns>
     public static int RunGuard(string[] args)
     {
         if (!OperatingSystem.IsLinux()) return 0;
@@ -22,6 +25,10 @@ public static class AmethystRedeployProbe
         finally { try { Directory.Delete(root, true); } catch { } }
     }
 
+    /// <summary>
+    /// Proves that atomic staging replacement leaves the deployed hardlink on its old inode and
+    /// that only a newer, matching Amethyst deployment can clear the pending marker.
+    /// </summary>
     static void HardlinkReplacement(string root)
     {
         var f = Fixture(Path.Combine(root, "hardlink"));
@@ -56,6 +63,7 @@ public static class AmethystRedeployProbe
         Check(!AmethystRedeploy.IsVerified(pending, verified), "changed staging content cannot clear an older pending write");
     }
 
+    /// <summary>Confirms that the content fallback also recognizes valid symlink and copy deployments.</summary>
     static void SmokeModes(string root)
     {
         foreach (var mode in new[] { "symlink", "copy" })
@@ -69,6 +77,7 @@ public static class AmethystRedeployProbe
         }
     }
 
+    /// <summary>Guards every public in-place tool against losing its explicit redeployment parameter.</summary>
     static void PublicGate()
     {
         foreach (var method in new[] { "SetField", "BulkApply", "RemoveRecord", "CreateRecord", "BulkCreate", "ForwardRecord", "CompactPlugin" })
@@ -82,6 +91,7 @@ public static class AmethystRedeployProbe
         Check(nif is not null && nif.HasDefaultValue && Equals(nif.DefaultValue, false), "NifSet exposes an opt-in redeploy gate");
     }
 
+    /// <summary>Creates an isolated staging/Data layout and manager-state files for one scenario.</summary>
     static FixtureData Fixture(string root)
     {
         var mods = Path.Combine(root, "mods");
@@ -97,6 +107,7 @@ public static class AmethystRedeployProbe
         return new(root, mods, game, staging, deployed, filemap, deploy);
     }
 
+    /// <summary>Records the fixture's current staged content as a pending write.</summary>
     static PendingAmethystWrite Pending(FixtureData f, LinuxFileIdentity? before, bool? sameHardlink) => new()
     {
         ProfileName = "Default", StagingPath = f.Staging, DataRelativePath = @"Meshes\Test.nif",
@@ -105,6 +116,7 @@ public static class AmethystRedeployProbe
         DeployedWasSameHardlink = sameHardlink
     };
 
+    /// <summary>Builds the minimum manager snapshot needed to test redeployment verification.</summary>
     static ManagerSnapshot Snapshot(FixtureData f, PendingAmethystWrite pending, bool active, bool fresh)
     {
         var stamp = fresh ? pending.WrittenUtc.AddSeconds(1) : pending.WrittenUtc.AddSeconds(-1);
@@ -118,11 +130,22 @@ public static class AmethystRedeployProbe
             { [f.Filemap] = stamp, [f.DeployState] = stamp });
     }
 
+    /// <summary>Turns a failed safety invariant into a probe failure with a readable reason.</summary>
     static void Check(bool value, string message)
     {
         if (!value) throw new InvalidOperationException(message);
     }
 
+    /// <summary>Calls Linux <c>link(2)</c> to create a real hardlink without invoking a shell utility.</summary>
     [DllImport("libc", SetLastError = true)] static extern int link(string oldpath, string newpath);
+
+    /// <summary>All native paths owned by one isolated redeployment test fixture.</summary>
+    /// <param name="Root">Temporary directory containing the entire fixture.</param>
+    /// <param name="Mods">Effective Amethyst mods staging root.</param>
+    /// <param name="Game">Synthetic Skyrim installation root.</param>
+    /// <param name="Staging">Physical winning file inside the staging mod.</param>
+    /// <param name="Deployed">Corresponding game-visible file under Data.</param>
+    /// <param name="Filemap">Synthetic Amethyst filemap freshness input.</param>
+    /// <param name="DeployState">Synthetic Amethyst deployment-state freshness input.</param>
     sealed record FixtureData(string Root, string Mods, string Game, string Staging, string Deployed, string Filemap, string DeployState);
 }

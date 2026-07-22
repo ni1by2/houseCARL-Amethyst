@@ -19,7 +19,7 @@ namespace HousecarlGenerator;
 /// "Patch.esp". Arms:
 ///   COLLISION — a DEFAULT-stem write (patch_name omitted → "Patch") uniquifies to "houseCARL - Patch_001\Patch_001.esp"
 ///               because "Patch.esp" is already active. RED if the load-order arm is reverted (old code emits "Patch.esp").
-///   CONTROL   — a write with a stem NOT in the load order stays bare ("houseCARL - <stem>\<stem>.esp"): the guard fires
+///   CONTROL   — a write with a stem NOT in the load order stays bare (<c>houseCARL - &lt;stem&gt;\&lt;stem&gt;.esp</c>): the guard fires
 ///               only on a real collision, never spuriously.
 ///   ORIGINAL  — the active "Patch.esp" is byte-untouched (the write went to a fresh uniquified patch, not in place).
 /// </summary>
