@@ -173,6 +173,7 @@ non-obvious invariant has been reviewed.
 - [x] Define the plain-English code documentation standard and completion gate.
 - [x] Document the fork's hardlink redeployment model and its safety probe.
 - [x] Review all fork-authored Amethyst layout, filemap, load-order and path code.
+- [x] Review the fork-authored Amethyst MCP connection, status and refresh seams.
 - [ ] Review all inherited `housecarl-core` declarations and reasoning seams.
 - [ ] Review all inherited and fork-authored `housecarl-mcp` declarations.
 - [ ] Review all `housecarl-setup` declarations during the Linux rewrite.
@@ -255,23 +256,22 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation completed alongside the Linux setup rewrite.
-- Last completed checkpoint: every declaration in the fork-authored Amethyst
-  layout, filemap, load-order, Bethesda-path, manager-snapshot, and user-config
-  foundation now documents purpose, inputs, outputs, null/absent states, failure
-  behavior, and safety invariants. The four matching probes document the risk and
-  contract of each scenario. The earlier slice covers hardlink identity,
-  pending-write verification, the MCP staging gate, and redeployment probing.
+- Last completed checkpoint: the fork-authored Amethyst MCP connection, status,
+  refresh, load-order lifecycle, and manager-specific service seams now document
+  purpose, inputs, outputs, state changes, failure behavior, and safety
+  boundaries. Product descriptions now name Amethyst's profile and authoritative
+  winner inputs; remaining MO2/explicit paths are labeled as temporary inherited
+  probe seams. Earlier slices cover the complete Amethyst layout/filemap/path
+  foundation and hardlink-safe writes.
 - Verification performed: the .NET 9 Linux solution builds successfully after
   the first documentation slice (pre-existing nullable/obsolete warnings, zero
   errors), and `git diff --check` passes. A second build with XML documentation
-  generation enabled succeeds with no malformed-XML warnings after repairing
-  inherited escaping defects in ten core, MCP, and generator files. The focused
+  generation enabled, while suppressing only missing-member warning CS1591,
+  succeeds with no XML reference, parameter, or malformed-comment warnings. The focused
   `amethyst-layout-guard`, `amethyst-load-order-guard`,
   `amethyst-filemap-guard`, `amethyst-runtime-guard`, and
   `amethyst-redeploy-guard` pass. The strict build reports no documentation
-  warning in this checkpoint's files; 15 inherited reference/parameter warnings
-  remain queued in other components. Before this documentation work, the
-  generator build passed and
+  warnings. Before this documentation work, the generator build passed and
   `amethyst-redeploy-guard` proves that an atomic staging replacement leaves an
   existing deployed hardlink on its old inode, then clears pending state only
   after newer filemap/deploy timestamps and matching deployed content or link
@@ -282,8 +282,9 @@ manual release gate.
 - Files/components changed: documentation standard and roadmap;
   `BethesdaPath`, `IModManagerLayout`/`ManagerSnapshot`, `AmethystLayout`,
   `AmethystLoadOrder`, `AmethystFileMap`, `UserConfigStore`, `AmethystRedeploy`,
-  the Amethyst write/redeploy helpers in `LoadOrderService`, and their five
-  focused probes.
+  the Amethyst write/redeploy and manager-lifecycle seams in `LoadOrderService`,
+  `AmethystTools`, `SetupTools`, `StatusTools`, `Guard`, and their five focused
+  probes.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. A pending marker is keyed by profile and
   canonical Data path, includes the expected content hash and pre/post inode
@@ -294,23 +295,24 @@ manual release gate.
   reasoning and safety boundaries.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
-  remaining Windows installer/runtime surface and MO2 terminology. Enabling XML
-  documentation output exposed inherited ambiguous/unresolved `cref` references
-  that the full pass must correct; all inherited malformed XML comments found in
-  the same audit are fixed in this checkpoint. The nine
+  remaining Windows installer/runtime surface and MO2 terminology. The
+  declaration-by-declaration review is still incomplete even though the strict
+  XML build is clean; CS1591 remains intentionally suppressed until each
+  component has been reviewed. The nine
   baseline failures are `writelock`, `upsert`, `binding-shim`,
   `compile-ergonomics`, `setup-update-lock`, `bsa-contract`, `atomic-commit`,
   `seq-regen`, and `skypatcher-conflicts`.
-- Exact next action: document the remaining fork-authored MCP integration surface
-  (`AmethystTools`, `SetupTools`, `StatusTools`, and the manager-specific seams in
-  `LoadOrderService`) before beginning the inherited core-engine pass. Document
-  setup code alongside its Session 6 Linux rewrite rather than preserving stale
-  Windows contracts.
+- Exact next action: begin the inherited `housecarl-core` pass with the
+  asset/archive layer (`AssetResolver`, `ArchiveDiscovery`, and their directly
+  coupled records), because it contains both inherited winner-resolution logic
+  and Amethyst filemap integration. Document setup code alongside its Session 6
+  Linux rewrite rather than preserving stale Windows contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
   resolution), `5cbda36` (hardlink-safe redeployment), `0928140` (documentation
-  standard and first slice), `196df59` (Amethyst foundation contracts).
+  standard and first slice), `196df59` (Amethyst foundation contracts),
+  `efacda9` (foundation checkpoint), `1b4c7e8` (Amethyst MCP lifecycle).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
