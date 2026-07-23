@@ -36,7 +36,7 @@ public static class ReadTools
             int depth = 1,
         [Description("When true, also return the ordered list of every plugin that touches this record (winner last) and the winner-relative field diff for each.")]
             bool conflict_tree = false,
-        [Description("When true, annotate every FormLink field value with its target's identity (→ editorid \"Name\"), resolved against the load order — so a Keywords/Template/DeathItem token reads as what it points AT, not just a FormID. Display-only: the token itself is unchanged (a write can still reuse it). A target no active plugin defines is marked 'unresolved'.")]
+        [Description("When true, annotate every FormLink field value with its target's identity (→ editorid \"Name\"), resolved against the load order — so a Keywords/Template/DeathItem token reads as what it points AT, not just a FormID. Display-only: the token itself is unchanged (a write can still reuse it). A target no active plugin defines is marked 'unresolved' — except the engine-implicit forms (PlayerRef 000014 / Player 000007), which annotate their hardcoded identity.")]
             bool resolve_names = false,
         [Description("Optional. 'text' (default) or 'json' — a machine-readable {formid,type,editorid,winner,override_depth,source,fields[]} document (field values are the SAME tokens as text). conflict_tree is a text-only diff view.")]
             string? format = null,
@@ -136,7 +136,8 @@ public static class ReadTools
          "editorid_contains= a substring of the EditorID; references= one or more FormIDs the record points at " +
          "(reverse lookup, e.g. 'what uses this keyword' — OR over the list, and each match shows which target(s) it " +
          "hit); where= filters by a field's VALUE (e.g. 'MagicSkill = Destruction', " +
-         "'BasicStats.Damage >= 50' — any scalar field, ANDed); plugins= limits the scan to records those plugins " +
+         "'BasicStats.Damage >= 50' — any scalar field, ANDed; under a plugins= scope pass where_source=winner to " +
+         "decide the match on the live load-order WINNER instead of the scoped plugin's own body); plugins= limits the scan to records those plugins " +
          "touch (a bare plugins= is 'everything this plugin touches'); defined_in=true narrows a plugins= scope to " +
          "records DEFINED in those plugins (not overrides they merely touch). At least one filter or plugins= is " +
          "required. editorid_contains/references/where " +
@@ -144,7 +145,9 @@ public static class ReadTools
          "enough). Pass fields= " +
          "or conflict_tree=true to expand each match from a summary line to full detail; or group_by= " +
          "(winner|type|defined_in) for a count table over ALL matches instead of per-match lines. Results cap at " +
-         "limit= matches and max_chars; both overruns are reported explicitly (never silent). Does NOT modify anything.")]
+         "limit= matches and max_chars; both overruns are reported explicitly (never silent), and offset= pages a big " +
+         "enumeration in exact windows (offset=0/500/1000… with format='dense' for the compact columnar rows). " +
+         "Does NOT modify anything.")]
     public static string CrossPluginQuery(
         LoadOrderService svc,
         [Description("Optional. A record signature ('WEAP', 'NPC_') or catalog name ('Weapon', 'Npc'). Cheap — uses typed group enumeration.")]
@@ -159,31 +162,44 @@ public static class ReadTools
             string[]? plugins = null,
         [Description("When true, narrow a plugins= scope to records DEFINED in those plugins (origin FormID), not overrides they merely touch — the catalogue-scope semantics. Requires plugins= (refused loud otherwise).")]
             bool defined_in = false,
-        [Description("Optional. Field-VALUE predicates, each \"<path> <op> <value>\" — e.g. 'MagicSkill = Destruction', 'BasicStats.Damage >= 50', 'Archetype.ActorValue = Infamy'. Operators: = != > >= < <= (>/< numeric), contains (case-insensitive substring), has (bitwise flag/bit set-test, e.g. 'BodyTemplate.FirstPersonFlags has Body'), and the no-value PRESENCE tests exists / missing ('VirtualMachineAdapter exists' lists records that CARRY a script/substruct/non-empty list; missing is its complement); multiple are ANDed. The value ops filter on ANY scalar field the read tools can read (any type, any depth); exists/missing also match a carried substruct/list. A body scan — MUST be combined with type= or plugins=. A wrong or container/list path is reported, never a silent '0 matches'. UNION-ARM tip: when a field can be one of several shapes (e.g. an NPC's Configuration.Level is EITHER a fixed level OR a PC-level multiplier), a scalar predicate on one arm's sub-field doubles as an ARM-PRESENCE test — only records whose live arm actually carries that sub-field can match; records on a different arm report no value and drop out. So where=[\"Configuration.Level.LevelMult >= 0\"] returns exactly the NPCs still on a PC-level multiplier (a one-call way to list which records are on a given arm).")]
+        [Description("Optional. Field-VALUE predicates, each \"<path> <op> <value>\" — e.g. 'MagicSkill = Destruction', 'BasicStats.Damage >= 50', 'Archetype.ActorValue = Infamy'. Operators: = != > >= < <= (>/< numeric), contains (case-insensitive substring), has (bitwise flag/bit set-test, e.g. 'BodyTemplate.FirstPersonFlags has Body'), and the no-value PRESENCE tests exists / missing ('VirtualMachineAdapter exists' lists records that CARRY a script/substruct/non-empty list; missing is its complement); multiple are ANDed. IDENTITY membership: 'formid in <list>' / 'formid not in <list>' keep/drop records BY FormID against a supplied list — the list is inline comma-separated ('formid not in [XXXXXX:A.esp, YYYYYY:B.esp]' — commas separate, spaces in plugin names are fine, brackets/quotes optional so a pasted JSON array works) or a file via '@' + ABSOLUTE path ('formid not in @C:\\work\\claimed.txt', FormIDs comma- or newline-separated). The reconciliation subtraction: 'every record of these types in plugin X minus the ~1,200 already claimed' is type= + plugins= + where=[\"formid not in @file\"]. The value ops filter on ANY scalar field the read tools can read (any type, any depth); exists/missing also match a carried substruct/list. A body scan — MUST be combined with type= or plugins=. A wrong or container/list path is reported, never a silent '0 matches'. UNION-ARM tip: when a field can be one of several shapes (e.g. an NPC's Configuration.Level is EITHER a fixed level OR a PC-level multiplier), a scalar predicate on one arm's sub-field doubles as an ARM-PRESENCE test — only records whose live arm actually carries that sub-field can match; records on a different arm report no value and drop out. So where=[\"Configuration.Level.LevelMult >= 0\"] returns exactly the NPCs still on a PC-level multiplier (a one-call way to list which records are on a given arm). SOURCE: under a plugins= scope this predicate reads each match's SCOPED body by default (the ORIGINAL arm) — pass where_source=winner to test the LIVE load-order winner's arm instead (the post-patch 'which winners are STILL on the multiplier' answer, #233).")]
             string[]? where = null,
         [Description("Optional. Aggregate matches into a count table (sorted desc) instead of listing them: 'winner' (by load-order-winning plugin), 'type' (by record type — needs type= or plugins=), or 'defined_in' (by defining plugin). Counts ALL matches (not capped by limit=). Cannot combine with fields= or conflict_tree=.")]
             string? group_by = null,
-        [Description("Optional. Dotted field paths to show for each match (e.g. 'BasicStats.Damage'). Omit for a one-line summary per match.")]
+        [Description("Optional. Dotted field paths to show for each match (e.g. 'BasicStats.Damage'). Omit for a one-line summary per match. Pair with depth= to expand list/dict contents (fields=['Effects'], depth=4 shows every effect's Data in the scan — no hand-written 'Effects[0].Data.Magnitude' index guessing).")]
             string[]? fields = null,
+        [Description("Optional. With fields= (or conflict_tree=true's whole-record dump): expansion depth for list/dict/substruct CONTENTS (#231; default 1 = a container shown as just a count like '[list: 3 item(s)]'), same semantics as housecarl_read_record / housecarl_batch_record_detail — depth=2 enumerates each element with index + identity, higher opens deeper (fields=['Effects'], depth=4 reaches every effect's Magnitude/Area/Duration). Applies to EVERY match in the scan. Refused loud on a surface with nothing to expand: bare summary lines (no fields=/conflict_tree) and group_by= (a count table has no field values). Not carried in format='dense' (columnar cells align 1:1 with the requested paths) — use format=text/json for depth expansion.")]
+            int depth = 1,
         [Description("When true, include each match's touching-plugin list (winner last) + winner-relative field diff.")]
             bool conflict_tree = false,
         [Description("When true (with fields=), annotate every FormLink field value with its target's identity (→ editorid \"Name\"), resolved against the load order and cached across all matches. Display-only; the token is unchanged. No effect on summary lines or group_by (there are no field tokens to annotate).")]
             bool resolve_names = false,
-        [Description("When true (with fields= under a plugins= scope), expand each match's fields from the load-order WINNER's body instead of the scoped plugin's OWN version. WITHOUT this, plugins=-scoped fields are that plugin's values (e.g. a defining esp's AR 38), NOT the live winner (AR 200) — a note names the source either way. No effect under type= scope (already the winner).")]
+        [Description("DISPLAY control (with fields= under a plugins= scope): when true, expand each match's fields from the load-order WINNER's body instead of the scoped plugin's OWN version. WITHOUT this, plugins=-scoped fields are that plugin's values (e.g. a defining esp's AR 38), NOT the live winner (AR 200) — a note names the source either way. No effect under type= scope (already the winner). This governs what is SHOWN, not what MATCHES — to filter on the winner, use where_source=winner (the two compose: where_source=winner + winner_fields=false matches on the winner but shows the scoped origin body).")]
             bool winner_fields = false,
-        [Description("Optional. 'text' (default) or 'json' — a machine-readable document (group_by count table, detail record objects with fields, or summary rows), with total/capped/notes/truncated accounting in-band. conflict_tree is a text-only diff view.")]
+        [Description("Optional. Which BODY the body filters (where=, references=, editorid_contains=) decide the MATCH on: 'scoped' (default) = the body the scan streams (the scoped plugin's OWN under plugins=, else the winner); 'winner' = the live load-order WINNER regardless of scan scope. THE FIX for #233: under a plugins= scope, where=['Configuration.Level.LevelMult >= 0'] with the default source matches records whose SCOPED body ever had a PC-level multiplier (259), while where_source=winner matches only those whose LIVE winner still does (82) — the post-patch audit answer. It retargets the MATCH; winner_fields= independently governs DISPLAY. Requires a body filter (refused loud otherwise). Redundant under a type=-only scope (that scan already reads the winner) — accepted with a note, not refused.")]
+            string? where_source = null,
+        [Description("Optional. 'text' (default), 'json' (a machine-readable document — group_by count table, detail record objects with fields, or summary rows), or 'dense' (#223 — COLUMNAR json: a columns array once, then ONE positional row array per match [formid, editorid, field values…] — plus a source column under a plugins= scope naming the body each row read — no per-field envelopes or repeated keys — the compact form for bulk enumeration; ~same data at a fraction of the characters; under group_by it renders the same count table as 'json'). All formats carry total/capped/notes/truncated accounting in-band. conflict_tree is a text-only diff view.")]
             string? format = null,
-        [Description("Optional. Max matches to return (default 500). The TRUE total is always reported; over the cap it says 'showing first N'.")]
+        [Description("Optional. Max matches to return (default 500). The TRUE total is always reported; over the cap it says 'showing first N'. Page with offset=.")]
             int limit = 500,
+        [Description("Optional. Skip the first N post-filter matches before returning rows (#223 pagination) — combine with limit= to page a big enumeration in windows (offset=0/500/1000…). Scan order is deterministic while the load order is unchanged, so windows tile exactly. The true total always counts ALL matches. Not valid with group_by= (a count table has no window).")]
+            int offset = 0,
         [Description("Optional. Max characters before the response stops with an explicit notice. 0 = the server default (~80k).")]
             int max_chars = 0) => Guard.Tool("housecarl_cross_plugin_query", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        bool json = Wire.WantsJson(format, out var ferr);
+        var fmt = Wire.CrossQueryFormat(format, out var ferr);
         if (ferr is not null) return ferr;
-        if (json && conflict_tree) return "error: conflict_tree=true is a text-only diff view and is not carried in json mode — use format=text for the conflict tree, or drop conflict_tree for the json field data.";
+        if (fmt is not Wire.QueryFormat.Text && conflict_tree) return $"error: conflict_tree=true is a text-only diff view and is not carried in {(fmt is Wire.QueryFormat.Json ? "json" : "dense")} mode — use format=text for the conflict tree, or drop conflict_tree for the field data.";
         if (group_by is not null && ((fields is { Length: > 0 }) || conflict_tree))
             return "error: group_by aggregates matches into a count table and cannot be combined with fields= or conflict_tree=true (those expand each match to full detail — pick one). Drop fields=/conflict_tree, or drop group_by.";
+        if (depth <= 0) depth = 1;
+        if (depth > 1 && group_by is not null)
+            return "error: depth= expands per-match field contents, and group_by= renders a count table with no field values — depth= never applies there. Drop depth= (or drop group_by= and pass fields= for per-match detail).";
+        if (depth > 1 && fields is not { Length: > 0 } && !conflict_tree)
+            return "error: depth= expands the list/dict contents of fields= paths, and no fields= was passed — summary lines have nothing to expand. Pass fields= (e.g. fields=['Effects'], depth=4) or conflict_tree=true (the whole-record dump), or drop depth=.";
+        if (depth > 1 && fmt is Wire.QueryFormat.Dense)
+            return "error: depth>1 is not carried in format='dense' — dense rows are positional (one cell per requested fields= path), and depth expansion emits extra sub-paths that would break the column alignment. Use format=text or format=json for depth expansion, or drop depth= for the dense summary cells.";
         IReadOnlyList<FormKey>? refFks = null;
         if (references is { Length: > 0 })
         {
@@ -196,9 +212,15 @@ public static class ReadTools
             }
             if (list.Count > 0) refFks = list.Distinct().ToList();   // preserve input order, drop dupes
         }
-        var outcome = svc.CrossQuery(type, refFks, editorid_contains, conflicts_only, plugins, where, limit <= 0 ? 500 : limit, defined_in, group_by);
-        return json ? JsonWire.RenderCrossQuery(svc, outcome, fields, max_chars, resolve_names, winner_fields)
-                    : Wire.RenderCrossQuery(svc, outcome, fields, conflict_tree, max_chars, resolve_names, winner_fields);
+        var outcome = svc.CrossQuery(type, refFks, editorid_contains, conflicts_only, plugins, where, limit <= 0 ? 500 : limit, defined_in, group_by, offset, where_source);
+        // dense + group_by: the count table is already columnar — render it exactly as json (documented on format=),
+        // so dense is never a refusal there and the two renders can't drift.
+        return fmt switch
+        {
+            Wire.QueryFormat.Dense when group_by is null => JsonWire.RenderCrossQueryDense(svc, outcome, fields, max_chars, resolve_names, winner_fields),
+            Wire.QueryFormat.Dense or Wire.QueryFormat.Json => JsonWire.RenderCrossQuery(svc, outcome, fields, max_chars, resolve_names, winner_fields, depth),
+            _ => Wire.RenderCrossQuery(svc, outcome, fields, conflict_tree, max_chars, resolve_names, winner_fields, depth),
+        };
     });
 
     [McpServerTool(Name = "housecarl_resolve", ReadOnly = true, Title = "Resolve FormIDs to their identity"),
@@ -208,7 +230,9 @@ public static class ReadTools
          "every record (fields, override depth, per-record header), this returns one compact identity line (or JSON " +
          "row) per FormID and nothing else — the cheap way to label a list of material/perk/keyword FormIDs. Resolved " +
          "in order; a bad or absent FormID yields a per-item error without failing the batch (never a silent drop — " +
-         "Q3). Winners only (the load-order-effective identity of each target). Deliberately minimal: no fields=, no " +
+         "Q3). Winners only (the load-order-effective identity of each target). The engine-implicit forms (PlayerRef " +
+         "000014:Skyrim.esm / Player 000007:Skyrim.esm) resolve to their hardcoded identity with winner '<engine>' — " +
+         "no plugin defines them, but they are real, never dangling. Deliberately minimal: no fields=, no " +
          "depth, no conflict_tree — for those use housecarl_batch_record_detail. Does NOT modify anything.")]
     public static string Resolve(
         LoadOrderService svc,
@@ -271,8 +295,9 @@ public static class ReadTools
          "for a patch houseCARL just wrote. Read-only — writes nothing. BOUNDARY " +
          "(never a silent claim of more — Q3): this covers the FormLink-resolution / missing-master / parse class. It does " +
          "NOT verify navmesh or terrain spatial integrity (CRC/grid — a Mutagen-delta residual), does NOT flag a required " +
-         "field left null (a null FormLink is a legal optional, not an error), and does NOT list unused-master cleanup " +
-         "(a FormLink scan cannot prove a master is unused). Results cap at limit= and max_chars (both overruns explicit).")]
+         "field left null (a null FormLink is a legal optional, not an error), does NOT list unused-master cleanup " +
+         "(a FormLink scan cannot prove a master is unused), and does NOT link-check an owned item's ownership 'variable' " +
+         "word (a rank/global Mutagen cannot type on an override without a link cache). Results cap at limit= and max_chars (both overruns explicit).")]
     public static string CheckErrorsTool(
         LoadOrderService svc,
         [Description("Optional. Plugin filenames to check (e.g. 'MyMod.esp'). A name not in the active order is resolved on disk (a fresh houseCARL patch, a disabled mod) and swept OFF-ORDER; found nowhere (or in several folders) it is an error. Omit to sweep the WHOLE active order (every non-excluded plugin) — thorough but heavier; scope to one plugin for a fast, focused check like the CK's per-plugin 'Check For Errors'.")]
@@ -323,7 +348,8 @@ public static class ReadTools
          "reaches an inactive/arbitrary plugin: give it a filename (located even inside a DISABLED mod folder) or an " +
          "absolute path. Modes: formid= reads one record's fields (compact `path = token`, same format as read_record); " +
          "type= enumerates the records of that type the file defines/overrides; neither returns a record-type summary " +
-         "(what's in the file). EVERY result is labeled OUT-OF-LOAD-ORDER — the game does not load this file. It emits " +
+         "(what's in the file). EVERY result is labeled OUT-OF-LOAD-ORDER — the read did not go through load-order " +
+         "resolution; whether the game loads the file is reported separately, per file, with its reason. It emits " +
          "FormLinks as FormKey tokens (does NOT follow links), so it needs no masters present; a declared master that " +
          "is not installed is flagged. Read-only — writes nothing: read an inactive donor here, then author into a NEW " +
          "active patch with the write tools. Primary use: fork/borrow an existing NPC's appearance records (the " +
@@ -348,7 +374,7 @@ public static class ReadTools
             string? editorid_contains = null,
         [Description("Optional. With type=: max rows to return (default 500). The TRUE total is always reported; over the cap it says 'showing first N'.")]
             int limit = 500,
-        [Description("Optional. With formid=: annotate every FormLink field value with its target's identity (→ editorid \"Name\"), resolved against the ACTIVE load order (the only identity frame — this file may itself be inactive). Display-only; the token is unchanged. A target the active order doesn't define is marked 'unresolved'. Forces the load-order build (opt-in), unlike the default cheap raw read.")]
+        [Description("Optional. With formid=: annotate every FormLink field value with its target's identity (→ editorid \"Name\"), resolved against the ACTIVE load order (the only identity frame — this file may itself be inactive). Display-only; the token is unchanged. A target the active order doesn't define is marked 'unresolved' — except the engine-implicit forms (PlayerRef 000014 / Player 000007), which annotate their hardcoded identity. Forces the load-order build (opt-in), unlike the default cheap raw read.")]
             bool resolve_names = false,
         [Description("Optional. 'text' (default) or 'json' — a machine-readable document (always stamped out_of_load_order:true; the file's masters context, then the record/records/type_counts payload). Field values are the SAME tokens as text.")]
             string? format = null,
@@ -393,6 +419,23 @@ static class Wire
         if (f.Equals("json", StringComparison.OrdinalIgnoreCase)) return true;
         error = $"error: format='{format}' is not recognized — use 'text' (the default) or 'json'.";
         return false;
+    }
+
+    /// <summary>The cross_plugin_query format vocabulary — the one tool with a third format (<c>dense</c>, the #223
+    /// columnar render). Every other tool stays on the two-value <see cref="WantsJson"/>.</summary>
+    internal enum QueryFormat { Text, Json, Dense }
+
+    /// <summary>Parse cross_plugin_query's <c>format=</c>: text (default) / json / dense; anything else is a named
+    /// refusal (Q3) listing all three.</summary>
+    internal static QueryFormat CrossQueryFormat(string? format, out string? error)
+    {
+        error = null;
+        var f = format?.Trim();
+        if (string.IsNullOrEmpty(f) || f.Equals("text", StringComparison.OrdinalIgnoreCase)) return QueryFormat.Text;
+        if (f.Equals("json", StringComparison.OrdinalIgnoreCase)) return QueryFormat.Json;
+        if (f.Equals("dense", StringComparison.OrdinalIgnoreCase)) return QueryFormat.Dense;
+        error = $"error: format='{format}' is not recognized — use 'text' (the default), 'json', or 'dense'.";
+        return QueryFormat.Text;
     }
 
     // ---- housecarl_diff_record (P8c) ----------------------------------------------------------------
@@ -512,13 +555,15 @@ static class Wire
 
     // ---- housecarl_cross_plugin_query ---------------------------------------------------------------
 
-    /// <summary>The container hint for cross_plugin_query field expansions: this tool has NO depth= parameter, so the
-    /// generic " — pass depth=2 to expand" would name a knob the tool refuses (the unknown-param guard rejects depth=)
-    /// — the honest redirect is the batch-read hop. Shared by the text render (here) and <see cref="JsonWire"/>.</summary>
-    internal const string CrossQueryContainerHint = " — cross_plugin_query has no depth=; expand these via housecarl_batch_record_detail depth=2";
+    /// <summary>The container hint for the DENSE render's field cells: dense refuses depth&gt;1 (positional cells align
+    /// 1:1 with the requested paths — #231), so the generic " — pass depth=2 to expand" alone would send the caller
+    /// into that refusal blind. Name the format hop with the knob. Used only by
+    /// <see cref="JsonWire.RenderCrossQueryDense"/>; the text/json renders take depth= directly and use the generic
+    /// <see cref="HousecarlCore.ReadEngine.DepthExpandHint"/>.</summary>
+    internal const string DenseContainerHint = " — pass depth=2 with format=text/json to expand (dense cells are positional)";
 
     public static string RenderCrossQuery(LoadOrderService svc, CrossQueryOutcome q, IReadOnlyList<string>? fields, bool conflictTree, int maxChars,
-                                          bool resolveNames = false, bool winnerFields = false)
+                                          bool resolveNames = false, bool winnerFields = false, int depth = 1)
     {
         if (q.Error is not null) return "error: " + q.Error;
         int cap = Cap(maxChars);
@@ -529,15 +574,27 @@ static class Wire
         var sb = new StringBuilder();
         sb.Append("cross_plugin_query: ").Append(q.Total).Append(q.Total == 1 ? " match" : " matches");
         if (q.ScopeLabel is not null) sb.Append(" DEFINED IN ").Append(q.ScopeLabel);   // P1: explicit scope — NOT the 'touches' default
-        if (q.Capped) sb.Append(" (showing first ").Append(q.Keys.Count).Append("; raise limit= or narrow to see more)");
+        if (q.Offset > 0)                                                              // #223 pagination — name the window, and the next offset while paging
+        {
+            if (q.Total == 0) sb.Append(" (offset=").Append(q.Offset).Append(" had nothing to skip — NO records match at any offset; check the filter, not the paging)");
+            else if (q.Keys.Count == 0) sb.Append(" (offset=").Append(q.Offset).Append(" skipped past the last match — nothing to show; lower offset=)");
+            else
+            {
+                sb.Append(" (showing matches ").Append(q.Offset + 1).Append('–').Append(q.Offset + q.Keys.Count);
+                if (q.Capped) sb.Append("; continue with offset=").Append(q.Offset + q.Keys.Count);
+                sb.Append(')');
+            }
+        }
+        else if (q.Capped) sb.Append(" (showing first ").Append(q.Keys.Count).Append("; raise limit=, page with offset=, or narrow to see more)");
         sb.Append('\n');
         if (q.PredicateNote is not null) sb.Append(q.PredicateNote).Append('\n');   // where= Q3 accounting (wrong-path/no-value surface)
         if (q.ScanNote is not null) sb.Append(q.ScanNote).Append('\n');             // unscannable-record Q3 accounting (Mutagen-unparseable content)
+        if (q.WhereSourceNote is not null) sb.Append(q.WhereSourceNote).Append('\n');   // #233: where_source=winner redundancy under a type=-only scope
         // P5: under a plugins= scope the per-match fields are the SCOPED plugin's OWN values, not the live winner's —
-        // the silent-wrong trap (a defining esp's AR 38 vs the winner's live AR 200). Name it loud, once (Q3).
-        if (anyScoped) sb.Append(winnerFields
-            ? "note: field values are the load-order WINNER's (winner_fields=true); each match was SELECTED on its scoped plugin's body.\n"
-            : "note: field values are each match's SCOPED plugin's OWN version, NOT the live load-order winner — pass winner_fields=true for load-order truth.\n");
+        // the silent-wrong trap (a defining esp's AR 38 vs the winner's live AR 200). Name it loud, once (Q3). The
+        // helper is 4-way over (winner_fields=, where_source=) so the note never claims a scoped-body MATCH the
+        // where_source=winner scan didn't make (D2 no-drift). Shared with the json/dense renders — one source of truth.
+        if (anyScoped) sb.Append("note: ").Append(JsonWire.ScopedFieldsNote(winnerFields, q.WhereWinner)).Append('\n');
 
         int rendered = 0;
         for (int i = 0; i < q.Keys.Count; i++)
@@ -555,8 +612,7 @@ static class Wire
             {
                 // winner_fields=: read the load-order WINNER's body (source=null) regardless of scan scope; else the
                 // body the scan filtered (scoped plugin under plugins=, else winner) — so display never contradicts filter.
-                var o = svc.ResolveRead(fk, winnerFields ? null : (q.Sources is { } src ? src[i] : null), fields, conflictTree, resolveNames: resolveNames, linkMemo: linkMemo,
-                                        containerHint: CrossQueryContainerHint);   // this tool has no depth= — don't hint a knob it refuses
+                var o = svc.ResolveRead(fk, winnerFields ? null : (q.Sources is { } src ? src[i] : null), fields, conflictTree, depth, resolveNames: resolveNames, linkMemo: linkMemo);
                 sb.Append('\n');
                 if (matches is not null) sb.Append("  ").Append(fk).Append("  matches=").Append(matches).Append('\n');
                 if (o.Error is not null) sb.Append(fk).Append(": error: ").Append(o.Error).Append('\n');
@@ -726,7 +782,8 @@ static class Wire
         }
 
         sb.Append("\nboundary: checks FormLink resolution, missing masters, and parse failures. Does NOT verify navmesh/terrain ")
-          .Append("spatial integrity (CRC/grid), flag required-but-null fields, or list unused-master cleanup; a null FormLink is a legal optional.\n");
+          .Append("spatial integrity (CRC/grid), flag required-but-null fields, list unused-master cleanup, or link-check an owned ")
+          .Append("item's ownership 'variable' word (a rank/global Mutagen can't type on an override); a null FormLink is a legal optional.\n");
         return sb.ToString().TrimEnd('\n');
     }
 
@@ -841,8 +898,9 @@ static class Wire
 
     /// <summary>The resolve_names parenthetical (P7): a FormLink token's target identity as "→ editorid "Name"", or
     /// "unresolved: not in the active order" for a dangling target (named, never dropped — Q3). DISPLAY-ONLY: this
-    /// is appended AFTER the round-trip token, never in place of it.</summary>
-    static string LinkText(ResolvedRef r) =>
+    /// is appended AFTER the round-trip token, never in place of it. Internal: the dense render's cells reuse the
+    /// SAME display vocabulary (D2 — renders must not drift).</summary>
+    internal static string LinkText(ResolvedRef r) =>
         !r.Resolved ? "unresolved: target not in the active order"
         : string.IsNullOrEmpty(r.Name) ? $"→ {r.EditorId ?? "<no editorid>"}"
         : $"→ {r.EditorId ?? "<no editorid>"} \"{r.Name}\"";
@@ -959,10 +1017,21 @@ static class Wire
             return sb.ToString().TrimEnd('\n');
         }
 
-        // The banner — OUT-OF-LOAD-ORDER first, always (the single load-bearing requirement).
-        sb.Append("read_plugin_file — OUT-OF-LOAD-ORDER (raw file read; the game does not load this file)\n");
+        // The banner — OUT-OF-LOAD-ORDER first, always (the single load-bearing requirement). The stamp describes THIS
+        // READ (it bypassed load-order resolution), which is true of every call; the old parenthetical went further and
+        // asserted "the game does not load this file", which is FALSE whenever the file passed is the live, winning
+        // plugin — exactly #269's case. The wording below says only what the stamp actually knows (#271); what the game
+        // does with the file is the separate, per-file question the bracket on the next line answers.
+        sb.Append("read_plugin_file — OUT-OF-LOAD-ORDER (raw file read — not resolved through the load order)\n");
         sb.Append("file: ").Append(o.FilePath);
-        if (!string.IsNullOrEmpty(o.Where)) sb.Append("  [").Append(o.Where).Append(o.Enabled ? "" : "; NOT active").Append(']');
+        // Where reports the LAYER the file was found in (a mod folder's switch); the standing reports the FILE. Read
+        // together, "mod 'X' (enabled)" beside a bare "NOT active" looked self-contradictory, so the two subjects are
+        // now named explicitly and the not-loaded case carries its CAUSE — the reader should never have to infer which
+        // of the two facts changed, nor go searching for a remedy the tool already knows (#271).
+        if (!string.IsNullOrEmpty(o.Where))
+            sb.Append("  [").Append(o.Where)
+              .Append(o.WhyNotActive is { } why ? $" — but the game does NOT load this file: {why}" : " — the game loads this file")
+              .Append(']');
         sb.Append('\n');
         sb.Append("masters: ").Append(o.Masters.Count == 0 ? "none" : string.Join(", ", o.Masters)).Append('\n');
         if (o.MissingMasters.Count > 0)

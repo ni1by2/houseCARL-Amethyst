@@ -1,6 +1,6 @@
 ---
 name: facegen-diagnostics
-description: Diagnose and (where houseCARL can) repair the dark / grey / black-face NPC bug in Skyrim SE — resolve the NPC to a FormKey, compare the load-order record winner against the VFS facegen file winner, read and write the winning facegen mesh's data values (`housecarl_nif_inspect` / `housecarl_nif_set` — baked shape names, embedded FaceTint/skin texture paths, flags, alpha, partitions; rewrite a wrong path or rename a shape, verified), place the correct facegen as a winning override (`housecarl_place_asset` / `housecarl_bulk_place_asset`), or forward the matching appearance into an override — instructing the CK bake / RaceMenu / geometry fixes houseCARL still cannot perform. Use when an NPC has a dark, grey, black, brown, or discolored face, a head darker than its body or a neck seam, a face "fine in xEdit but wrong in game", a whole mod's NPCs gone dark after an ESL-compaction or merge, a missing or headless face, or the player's own face turned grey — or when the user mentions FaceGen, facegeom/facetint, the dark face bug, or Face Discoloration Fix. Load this before judging any face bug, even one that looks like a simple missing file — the fix hinges on which of two independent precedence systems (record vs file) wins, and a wrong call places facegen where the engine never looks.
+description: Diagnose and (where houseCARL can) repair the dark / grey / black-face NPC bug in Skyrim SE — resolve the NPC to a FormKey, compare the load-order record winner against the VFS facegen file winner, read and write the winning facegen mesh's values, place the correct facegen as a winning override, or forward the matching appearance. Use when an NPC has a dark, grey, black, brown, or discolored face, a head darker than its body or a neck seam, a face "fine in xEdit but wrong in game", a whole mod's NPCs gone dark after an ESL-compaction or merge, a missing or headless face, or the player's own face turned grey — or when the user mentions FaceGen, facegeom/facetint, the dark face bug, or Face Discoloration Fix. Load before judging any face bug — the fix hinges on which of two precedence systems (record vs file) wins.
 ---
 
 # Facegen Diagnostics
@@ -215,10 +215,11 @@ bulk_place**:
 4. `housecarl_asset_status` each path. Three batch signatures: (i) *every* path resolves to nothing/vanilla
    → ESLify/merge FormID desync (Cause F/G, the "universal" case); (ii) record winner ≠ file winner
    consistently → record-vs-asset desync; (iii) only a subset dark → per-NPC missing/incompatible facegen.
-   For (iii)'s *incompatible* half — a file wins but the face is still wrong — `housecarl_nif_inspect` on a
-   sample of the subset separates "wrong content baked in" (shape names / tint path ≠ record → mode ii) from
-   "genuinely absent" (asset_status already said so), so you don't `bulk_place` a copy that was never the
-   problem.
+   For (iii)'s *incompatible* half — a file wins but the face is still wrong — `housecarl_nif_inspect` with
+   `mesh_paths` = **the whole flagged subset in one call** (it batches like `asset_status`: results in input
+   order, a per-path failure never aborts the rest — no sampling needed) separates "wrong content baked in"
+   (shape names / tint path ≠ record → mode ii) from "genuinely absent" (asset_status already said so), so
+   you don't `bulk_place` a copy that was never the problem.
 5. `housecarl_bulk_place_asset` the correct copies into one fresh reviewable mod.
 
 **Boundary:** houseCARL can batch-detect and batch-relocate/rename existing correct facegen (covers Cause

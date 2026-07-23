@@ -23,7 +23,7 @@ namespace HousecarlGenerator;
 //    (3) rewrites the SDK's generic binding-failure text into a named,
 //        actionable message when binding still fails.
 //
-//  THE GUARD: drives the REAL housecarl-mcp.exe over stdio (the exact wire
+//  THE GUARD: drives the REAL housecarl-mcp executable over stdio (the exact wire
 //  path the live failure took) with the exact argument shapes from the bug
 //  report. Needs NO game data and NO MO2 instance: argument binding resolves
 //  before configuration is consulted, and a deliberately-unconfigured server
@@ -33,7 +33,7 @@ namespace HousecarlGenerator;
 public static class BindingShimProbe
 {
     const string GenericError = "An error occurred invoking";          // the SDK's opaque text (measured live, HCBR-2026-06-11-01)
-    const string ConfigPrompt = "no Mod Organizer 2 instance configured"; // the unconfigured server's trained prompt = "the tool body ran"
+    const string ConfigPrompt = "houseCARL-Amethyst is not connected yet"; // the unconfigured prompt proves the tool body ran
 
     public static int RunGuard(string[] args)
     {
@@ -43,10 +43,10 @@ public static class BindingShimProbe
         var exe = Path.GetFullPath(AppContext.BaseDirectory.Replace(
             Path.DirectorySeparatorChar + "housecarl-generator" + Path.DirectorySeparatorChar,
             Path.DirectorySeparatorChar + "housecarl-mcp" + Path.DirectorySeparatorChar));
-        exe = Path.Combine(exe, "housecarl-mcp.exe");
+        exe = Path.Combine(exe, OperatingSystem.IsWindows() ? "housecarl-mcp.exe" : "housecarl-mcp");
         if (!File.Exists(exe))
         {
-            Console.WriteLine($"FAIL  housecarl-mcp.exe not found at '{exe}' — build the whole solution first.");
+            Console.WriteLine($"FAIL  housecarl-mcp executable not found at '{exe}' — build the whole solution first.");
             return 1;
         }
 
@@ -130,6 +130,17 @@ public static class BindingShimProbe
                 !d.text.Contains(GenericError) && d.text.Contains("required parameter") && d.text.Contains("formids"),
                 d.Describe());
 
+            // -- D2: #224 — bulk_apply's 'operations' moved OFF the schema's required list (operations XOR
+            //    from_file is judged in the tool BODY; dry-run-guard arm L proves that refusal named). Through the
+            //    full binding/shim stack an empty {} must still BIND cleanly — no required check fires, no binder
+            //    throw on the absent complex array — and reach the tool body (the config prompt here, since this
+            //    server is unconfigured and the body's config check runs first), never the generic error. RED if
+            //    optionalizing the parameter ever breaks {} binding (PR #241 review NOTE 4).
+            var d2 = Call(stdin, stdout, 38, "housecarl_bulk_apply", "{}");
+            failures += Check("D2 #224: bulk_apply {} binds with no required refusal and reaches the tool body",
+                !d2.text.Contains(GenericError) && !d2.text.Contains("required parameter") && d2.text.Contains(ConfigPrompt),
+                d2.Describe());
+
             // -- E: quoted number — same obvious-intent class as B. Must bind and run.
             var e = Call(stdin, stdout, 6, "housecarl_cross_plugin_query",
                 """{"type":"CELL","plugins":["Synthetic.esp"],"limit":"100"}""");
@@ -142,12 +153,24 @@ public static class BindingShimProbe
             failures += Check("F coerce: quoted bool conflicts_only binds and runs the tool body",
                 !f.text.Contains(GenericError) && f.text.Contains(ConfigPrompt), f.Describe());
 
-            // -- G: an UNCOERCIBLE shape (an object where a number is declared) must still fail — but
-            //    NAMED, telling the caller it's an argument-shape problem, never the bare generic text.
+            // -- G: an UNCOERCIBLE wrong-TYPE shape (an object where a number is declared) must still fail — but
+            //    NAMED, and (#222) naming the OFFENDING PARAMETER (limit) + its received kind, caught BEFORE
+            //    binding, not a bare byte-offset error over the whole received list.
             var g = Call(stdin, stdout, 8, "housecarl_cross_plugin_query",
                 """{"type":"CELL","plugins":["Synthetic.esp"],"limit":{"oops":1}}""");
-            failures += Check("G rewrite: an uncoercible argument fails NAMED, not generic",
-                !g.text.Contains(GenericError) && g.text.Contains("could not be bound"), g.Describe());
+            failures += Check("G type-mismatch: an uncoercible wrong-type arg fails NAMED, naming the parameter",
+                !g.text.Contains(GenericError) && g.text.Contains("could not be bound")
+                && g.text.Contains("limit") && g.text.Contains("object"), g.Describe());
+
+            // -- G2: #222 — a wrong-TYPE value for a declared BOOLEAN parameter (the report's exact class: a bad
+            //    conflicts_only threw "could not be converted to System.Boolean" with a byte offset but NO
+            //    parameter name). Must now be refused NAMED, identifying the parameter AND its expected type,
+            //    before binding — never the generic error and never a silent run (no ConfigPrompt = body ran).
+            var g2 = Call(stdin, stdout, 32, "housecarl_cross_plugin_query",
+                """{"type":"CELL","conflicts_only":"CELL"}""");
+            failures += Check("G2 type-mismatch: a wrong-type boolean arg is named with its parameter and expected type",
+                !g2.text.Contains(GenericError) && !g2.text.Contains(ConfigPrompt)
+                && g2.text.Contains("conflicts_only") && g2.text.Contains("boolean"), g2.Describe());
 
             // -- H: an EXPLICIT JSON null for a REQUIRED parameter (2026-06-12 hunt, proven over stdio on
             //    nexus_mod): ContainsKey saw it as supplied, the SDK bound null, and the tool body
@@ -178,6 +201,48 @@ public static class BindingShimProbe
                 """{"formid":"0F1AC1:Skyrim.esm"}""");
             failures += Check("I2 control: the same call without the stray param binds and runs the tool body",
                 !i2.text.Contains(GenericError) && i2.text.Contains(ConfigPrompt), i2.Describe());
+
+            // -- J1: #221 — the alias 'plugin' for a tool whose declared parameter is 'plugins' (singular↔plural
+            //    synonym group). Must be RENAMED to plugins, then shape-coerced (string → one-element array) and
+            //    reach the tool body — no unknown-parameter refusal, no generic error.
+            var j1 = Call(stdin, stdout, 33, "housecarl_cross_plugin_query",
+                """{"type":"CELL","plugin":"Synthetic.esp"}""");
+            failures += Check("J1 alias: 'plugin' is resolved to 'plugins' and the call binds and runs",
+                !j1.text.Contains(GenericError) && !j1.text.Contains("unknown parameter") && j1.text.Contains(ConfigPrompt),
+                j1.Describe());
+
+            // -- J2: #221 — the alias 'form_id' for 'formid' (an underscore/case variant, resolved by
+            //    normalization alone). Must be renamed to formid and reach the body.
+            var j2 = Call(stdin, stdout, 34, "housecarl_read_record",
+                """{"form_id":"0F1AC1:Skyrim.esm"}""");
+            failures += Check("J2 alias: 'form_id' is resolved to 'formid' and the call binds and runs",
+                !j2.text.Contains(GenericError) && !j2.text.Contains("unknown parameter") && j2.text.Contains(ConfigPrompt),
+                j2.Describe());
+
+            // -- J3: #221 — the alias 'plugin_name' for 'plugins' (normalizes to "pluginname"; resolved via the
+            //    synonym group, not by normalization equality). Must be renamed and reach the body.
+            var j3 = Call(stdin, stdout, 35, "housecarl_cross_plugin_query",
+                """{"type":"CELL","plugin_name":"Synthetic.esp"}""");
+            failures += Check("J3 alias: 'plugin_name' is resolved to 'plugins' and the call binds and runs",
+                !j3.text.Contains(GenericError) && !j3.text.Contains("unknown parameter") && j3.text.Contains(ConfigPrompt),
+                j3.Describe());
+
+            // -- J4: #221 GUARD — a tool whose REAL parameter is 'plugin' (read_plugin_file) must NOT have it
+            //    treated as an alias: a declared parameter is always left alone, so the call binds normally.
+            var j4 = Call(stdin, stdout, 36, "housecarl_read_plugin_file",
+                """{"plugin":"Skyrim.esm","formid":"0F1AC1:Skyrim.esm"}""");
+            failures += Check("J4 alias-guard: a tool's REAL 'plugin=' is untouched (binds and runs, not refused)",
+                !j4.text.Contains(GenericError) && !j4.text.Contains("unknown parameter") && j4.text.Contains(ConfigPrompt),
+                j4.Describe());
+
+            // -- J5: #221 GUARD — an explicit canonical value is never clobbered: with 'plugins' supplied, the
+            //    stray alias 'plugin' has no free target, so it is left for the unknown-parameter path (named),
+            //    never silently merged over the caller's canonical value.
+            var j5 = Call(stdin, stdout, 37, "housecarl_cross_plugin_query",
+                """{"type":"CELL","plugins":["Synthetic.esp"],"plugin":"Other.esp"}""");
+            failures += Check("J5 alias-guard: alias does not clobber an explicit canonical; the extra is named",
+                !j5.text.Contains(GenericError) && j5.text.Contains("unknown parameter") && j5.text.Contains("plugin"),
+                j5.Describe());
         }
         catch (Exception ex)
         {

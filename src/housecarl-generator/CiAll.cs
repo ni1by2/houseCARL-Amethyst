@@ -38,10 +38,23 @@ public static class CiAll
         ("pkcu-regression", PkcuProbe.RunRegression),
         ("depth-leak-guard", DepthLeakProbe.RunGuard),
         ("vmad-property-read-guard", VmadPropertyReadProbe.RunGuard),
+        // Conditions[].Data arm expansion (#258): the depth-floor "open one bounded level" exception — VMAD-property-
+        // only until now (vmad-property-read-guard's sibling) — also opens a polymorphic ConditionData arm's params,
+        // so a `Conditions` list dump at depth=3 reaches Data.ActorValue/Faction/… instead of stopping at the bare
+        // arm type. Bounded (one level), depth-not-lowered (depth=2 still suppresses), non-arm substructs still stop.
+        ("condition-arm-expand-guard", ConditionArmExpandProbe.RunGuard),
         // depth-2 element identity (#198): a struct with no Name/EditorID/Title but EXACTLY ONE FormLink surfaces
         // that link as its identity ([PerkPlacement] Perk=…) instead of a bare opaque [PerkPlacement]; name-identity
         // still wins over the lone link (fallback fires only when no name-like identity exists). Self-contained.
         ("element-identity-guard", ElementIdentityProbe.RunGuard),
+        // depth-2 element identity for an OWNED RECORD (#252): a list element that is itself an IMajorRecordGetter
+        // (DIAL Responses → DialogResponses/INFO) surfaces its OWN FormKey (+ EditorID when present) instead of a
+        // bare [DialogResponses] — the #198 family carried to records (FormKey is the identity, not a lone link).
+        ("owned-record-identity-guard", OwnedRecordIdentityProbe.RunGuard),
+        // unknown-bits flag decode (#255): a [Flags] enum leaf carrying unnamed bits (ToString falls back to a bare
+        // decimal, losing the known bits) now hangs a DISPLAY-ONLY "<names> (+unknown bits 0x…)" decode — the token
+        // (bare decimal, Enum.Parse-round-trippable) is untouched; biped-slot flags keep their own slot decode.
+        ("flag-bits-display-guard", FlagBitsDisplayProbe.RunGuard),
         ("floi-read-guard", FloiReadProbe.RunGuard),
         ("floi-fields-guard", FloiFieldsProbe.RunGuard),
         ("forward-from-plugin-guard", ForwardFromPluginProbe.RunGuard),
@@ -73,6 +86,10 @@ public static class CiAll
         // equality across field kinds + named non-transplantable refusals, and the two-pole diff incl. an off-order side.
         ("bulk-primitives-wave3-guard", BulkPrimitivesWave3Probe.RunGuard),
         ("writelock-guard", WriteLockProbe.RunGuard),
+        // #225 dry_run= on the write tools — the real pipeline HALTED before serialize, nothing written: refusal
+        // parity with the real call, prediction parity (path/After/masters), the pre-empted missing-master failure,
+        // the read-only in-place consent axis, and the DRY RUN render honesty.
+        ("dry-run-guard", DryRunProbe.RunGuard),
         ("inplace-guard", InPlaceProbe.RunGuard),
         ("subclass-remove-guard", SubclassRemoveGuardProbe.RunGuard),
         ("perk-refs-guard", PerkRefsProbe.RunGuard),
@@ -98,6 +115,10 @@ public static class CiAll
         ("sameshape-agree-guard", SameShapeAgreeProbe.RunGuard),
         ("corpus-hygiene-guard", CorpusHygieneProbe.RunGuard),
         ("plugin-validate-guard", PluginValidateProbe.RunGuard),
+        // Codex umbrella coverage: the single hand-maintained Codex router (plugin/codex/housecarl/SKILL.md) must
+        // reference every current MCP tool (reflected off [McpServerTool]) and every .claude/skills/* folder, or
+        // allow-list the omission — turns the silent 45→9 drift into a RED arm naming exactly what's unrouted.
+        ("codex-umbrella-coverage-guard", CodexUmbrellaCoverageProbe.RunGuard),
         ("nullarm-guard", NullArmGuardProbe.RunGuard),
         ("formlink-null-guard", FormLinkNullProbe.RunGuard),
         ("formlink-remove-guard", FormLinkRemoveProbe.RunGuard),
@@ -108,12 +129,27 @@ public static class CiAll
         ("flags-bit-verb-guard", FlagsBitVerbProbe.RunGuard),
         ("gendered-nav-guard", GenderedNavProbe.RunGuard),
         ("loadorder-status-guard", LoadOrderStatusProbe.RunGuard),
+        // SKSE config audit (tier B, #199): the reference EXTRACTOR pinned against every §3 evidence shape (both token
+        // orders, ESL FExxxYYY vs low-24 masking via the shared FormIdRange home, tilde form, path-segment gate, comment/
+        // overflow/no-ref accounting) PLUS the service VERDICTS (OK/PLUGIN-MISSING/DANGLING/UNPARSEABLE + ESL FE-prefix
+        // resolve) driven through LoadOrderService.Adjudicate over a synthetic full+light order. Self-contained.
+        ("skse-config-audit-guard", SkseConfigAuditProbe.RunGuard),
+        // Native-function pairing audit guard: the pure pex native-class extractor (raw-bit1 off-by-one pin), the
+        // provenance anchor (official archives / chain presence), the §4c ladder, the runtime compare, and the wire
+        // renderer arms (dead-vs-verify adjudication, unpaired framing, baseline accounting, filter + did-you-mean).
+        ("native-pairing-guard", NativePairingProbe.RunGuard),
         ("compile-ergonomics-guard", CompileErgonomicsProbe.RunGuard),
         ("setup-update-lock-guard", SetupUpdateLockProbe.RunGuard),
         ("import-order-guard", ImportOrderProbe.RunGuard),
         ("render-clamp-guard", RenderClampProbe.RunGuard),
         ("decompile-guard", DecompileGuardProbe.RunGuard),
         ("bsa-contract-guard", BsaContractProbe.RunGuard),
+        // BSA extract read path (#217): housecarl_bsa_extract / _list read through Mutagen's in-process BSA reader
+        // (Archive.CreateReader) instead of shelling BSArch — BSArch's unpacker is stricter than its lister + the game,
+        // so a non-BSArch-written archive could list yet unpack to nothing. Self-contained — hand-authors valid uncompressed
+        // v105/v104 archives Mutagen reads: byte-correct round-trip, content-aware idempotence, path-traversal refusal,
+        // and loud failure on a non-archive. (Real-BSArch + compressed-archive byte parity lives in the opt-in bsa-probe.)
+        ("bsa-extract-guard", BsaExtractProbe.RunGuard),
         ("hierarchy-cache-guard", HierarchyCacheProbe.RunGuard),
         ("write-mutex-guard", WriteMutexProbe.RunGuard),
         // NOTE: freshness-capture-guard is deliberately NOT in the runner — its deferral arm needs a write slow
@@ -127,6 +163,12 @@ public static class CiAll
         // reverse-engineered offset map — supportEmail is 252, not 256 — + the flag/version/compat interpretation) and
         // the honest-degrade paths (real-PE Read → NotSkse; non-PE / missing → Unreadable, never a throw).
         ("skse-reader-guard", SkseReaderProbe.RunGuard),
+        // SKSE tier D (static peek): the string extraction (ASCII *and* UTF-16LE — an ASCII-only scan is a confident
+        // half-blind answer), the classification filter that keeps compiler noise out of a DLL's "config surface", the
+        // PE import walk + its empty-vs-unknown tri-state, the CURATED Debug-CRT list (a d-suffix is a convention, not a
+        // loader rule), and the render arms — load-order cross-check, the machine-checked "will not load" wording, the
+        // framing line, and the bare-peek loud error.
+        ("skse-peek-guard", SksePeekProbe.RunGuard),
         ("mo2instance-probe", Mo2InstanceProbe.RunProbe),
         ("amethyst-layout-guard", AmethystLayoutProbe.RunGuard),
         ("amethyst-load-order-guard", AmethystLoadOrderProbe.RunGuard),
@@ -154,6 +196,15 @@ public static class CiAll
         // RED-prove they catch a collateral/no-op write, and every can't-do is a named refusal. Self-contained; the
         // set_path success arm is corpus-gated (nifly's read-only TextureSetRef blocks synthesizing a texture set).
         ("nif-set-guard", NifSetGuardProbe.RunGuard),
+        // nif_inspect batch wire (#229 — mesh_paths array, asset_status parity): input order, per-path error
+        // isolation (one bad path never aborts the batch), batch-level alarms once + first, explicit omitted-mesh
+        // cut notice. Self-contained (constructed results through the real NifWire renderer).
+        ("nif-inspect-batch-guard", NifInspectBatchGuardProbe.RunGuard),
+        // nif_inspect sections= parsing (#247): the JSON-array-as-string form (["shapes","paths"]) now parses (bracket
+        // + quote are delimiters too) instead of tokenizing to garbage and QUIETLY rendering the default summary; an
+        // all-unrecognized sections= is a LOUD error, not a silent fallback; the known-sections hint points texture-set
+        // slot paths at where they live ('shapes'/'paths'). Drives NifTools.ParseSections/SectionsError/hint directly.
+        ("nif-sections-guard", NifSectionsProbe.RunGuard),
         ("strings-decision-guard", StringsDecisionProbe.RunGuard),
         ("assetlink-write-guard", AssetLinkWriteProbe.RunGuard),
         // The two coercion COMPLETENESS proofs, now CI guards (were manual-only — the coerce-audit blind spot that
@@ -203,6 +254,11 @@ public static class CiAll
         // whole-record dump that overflowed the host token cap and spilled to a file (reading as "only some ops applied").
         // full_readback=true still gives the deep dump, now bounded under the host limit with an explicit truncation note.
         ("compact-readback-guard", CompactReadbackProbe.RunGuard),
+        // bulk_apply composes= Add read-back count (#259): appending N elements in ONE composes= op reported the
+        // verify line as "(+1), new [last]" (the Add renderer hardcoded a +1 delta); it now carries the op's
+        // appended count and reports the whole run "(+N), new [a..b]". Drives the real in-place write; a 1-element
+        // compose still reads (+1), new [0] = <element> (count wired from Structs.Count, not a constant).
+        ("readback-count-guard", ReadbackCountProbe.RunGuard),
         // STANDALONE-COPY CHAIN Stage 1 — housecarl_read_plugin_file: a RAW, out-of-load-order read of ONE plugin file
         // straight off disk (INCLUDING one DISABLED in MO2), the enabler for forking a donor you're removing from the
         // order. Pins: locate+read a disabled plugin by filename, enumerate a type, whole-file summary, direct-path

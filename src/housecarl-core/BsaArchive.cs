@@ -1,141 +1,211 @@
 using System.Diagnostics;
-using System.Text.RegularExpressions;
+using System.IO.Abstractions;
+using Mutagen.Bethesda;
+using Mutagen.Bethesda.Archives;
 
 namespace HousecarlCore;
 
-/// <summary>The parsed result of a BSArch -list. <see cref="RunError"/> non-null ⇒ BSArch couldn't be RUN (bad path /
-/// timeout). <see cref="Success"/> means the archive was read and the file list matched its declared count.</summary>
+/// <summary>The result of listing an archive. <see cref="RunError"/> non-null ⇒ the archive couldn't be opened/read
+/// (bad path, not a Bethesda archive, corrupt header); otherwise <see cref="Success"/> and <see cref="Files"/> hold the
+/// contained paths.</summary>
 public sealed record BsaListResult(
     bool Success, string? Format, int DeclaredCount, IReadOnlyList<string> Files, string Raw, string? RunError)
 {
-    /// <summary>Whether BSArch started and returned output, regardless of archive validity.</summary>
+    /// <summary>Whether the archive operation ran, regardless of whether its content was valid.</summary>
     public bool Ran => RunError is null;
 }
 
-/// <summary>The result of a BSArch unpack/pack. <see cref="RunError"/> non-null ⇒ the operation never ran BSArch
-/// (bad path / timeout / a stuck stale scratch refused up front); otherwise <see cref="Success"/> is decided by
-/// THIS-RUN artifact provenance (unpack: entries added or changed since the pre-run snapshot; pack: a fresh,
-/// non-empty scratch written at/after the run baseline), never by the exit code alone.</summary>
+/// <summary>The result of an unpack (Mutagen) or pack (BSArch). <see cref="RunError"/> non-null ⇒ the operation never
+/// really ran (archive couldn't be opened / BSArch couldn't be launched / a stuck stale scratch refused up front);
+/// otherwise <see cref="Success"/> reflects what was actually written this run.</summary>
 public sealed record BsaResult(bool Success, string Raw, string? RunError)
 {
-    /// <summary>Whether BSArch started; operation success is reported separately by <see cref="Success"/>.</summary>
+    /// <summary>Whether the operation ran; success is reported separately by <see cref="Success"/>.</summary>
     public bool Ran => RunError is null;
 }
 
 /// <summary>
-/// Drives BSArch to list, unpack, or pack Bethesda archives through a bounded, argument-safe process.
-/// Native archive reads elsewhere use Mutagen; this wrapper remains for whole-archive unpacking and
-/// archive creation. Linux execution is deferred until the post-v1 structured Proton-command milestone.
-/// The argument shapes were measured against BSArch v0.9c:
-///   • list  : `BSArch &lt;archive&gt; -list`  → banner + info block (incl. "Files: N"), a blank line, then N file paths.
-///   • unpack: `BSArch unpack &lt;archive&gt; &lt;folder&gt; -mt`  (WHOLE archive — BSArch has no per-file extract).
-///   • pack  : `BSArch pack &lt;folder&gt; &lt;archive&gt; -sse [-z] -mt`  (-sse = Skyrim SE; -z compresses but BREAKS
+/// The engine behind the housecarl_bsa_* tools. READS (list + extract) go through <b>Mutagen's own BSA reader</b>
+/// (<see cref="Archive.CreateReader"/> in Mutagen.Bethesda.Core — a maintained, in-process parser that handles every
+/// version, compression, and embedded-name layout, and returns each file's decompressed bytes). No external tool is
+/// needed to list or extract. WRITES (repack) still drive <b>BSArch</b> (zilav/ElminsterAU/Sheson; ships with xEdit),
+/// because Mutagen 0.53.1 exposes a reader but no BSA writer.
+///
+/// This replaces the earlier design that shelled BSArch for reads too: BSArch's unpacker is stricter than its own
+/// lister and the game engine, so an archive written by a non-BSArch tool could list + load in-game yet unpack to
+/// nothing (#217). Mutagen's reader matches BSArch byte-for-byte on conformant archives (verified in bsa-probe) and
+/// reads the archives BSArch's unpacker rejects, so the whole read path is both simpler and more robust.
+///   • list  : Archive.CreateReader(SkyrimSE, path).Files → the contained paths + count.
+///   • unpack: same, writing each IArchiveFile's bytes to the dest (path-traversal-guarded, content-aware/idempotent).
+///   • pack  : `BSArch pack &lt;folder&gt; &lt;archive&gt; -sse [-z] -mt` (-sse = Skyrim SE; -z compresses but BREAKS
 ///             sounds/voices, so uncompressed is the safe default).
-/// Pure (no DI): the build-time probe drives this exact code against real BSArch + real .bsa.
+/// Listing and extraction are fully Linux-native. Packing remains unavailable in the v1 Linux product until
+/// the post-v1 structured Proton-command runner replaces the direct executable configuration.
+/// Pure (no DI): the build-time probes drive this exact code.
 /// </summary>
 public static class BsaArchive
 {
-    static readonly Regex FilesCount = new(@"^\s*Files:\s*(\d+)\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
-    static readonly Regex FormatLine = new(@"^\s*Format:\s*(.+?)\s*$", RegexOptions.Multiline | RegexOptions.Compiled);
+    // houseCARL is Skyrim SE; the reader keys off the header version, so this also reads v103/v104 archives.
+    static readonly IFileSystem Fs = new FileSystem();
 
-    /// <summary>List an archive's contents. BSArch prints "Files: N" in the info block, then the N paths as the final
-    /// block, so the file list is taken as the LAST N non-empty lines. NOTE (hunt H4 — parse fix DEFERRED, needs real
-    /// BSArch output to fix safely): this is immune to LEADING banner/info-block growth, but NOT to the path block
-    /// UNDER-producing — if BSArch prints fewer than N path lines, the last-N window slides UP into the info block and
-    /// absorbs banner/"Files:" lines AS paths (files.Count still == declared, so it reads as success). The real fix is
-    /// a delimiter-anchored parse (the paths after the last blank line) + a LOUD count-mismatch, landed against a
-    /// captured real-BSArch fixture; it is intentionally not attempted blind here.</summary>
-    /// <param name="bsarchExe">Configured BSArch executable or future runner target.</param>
+    // A single archived entry is read into memory in-process (f.GetBytes). Bound that allocation: a corrupt/hostile
+    // header declaring a multi-GB entry must fail LOUD, not OOM the whole single-process server (the out-of-process
+    // BSArch path used to be killed on a timeout; this is the in-process equivalent). No real Skyrim asset approaches
+    // this, and it sits at the ~2GB .NET single-array ceiling GetBytes would throw at anyway.
+    const long MaxEntryBytes = 2L * 1024 * 1024 * 1024;
+
+    /// <summary>List an archive's contents via Mutagen, cross-checked against the header's OWN declared file count so a
+    /// reader mis-parse can't render a quietly-short list (Q3). On an unreadable/corrupt/non-archive file the failure is
+    /// surfaced in <see cref="BsaListResult.RunError"/> (Ran=false); a count mismatch surfaces as Ran-but-not-Success
+    /// with the discrepancy in <see cref="BsaListResult.Raw"/> — never a silent empty list.</summary>
     /// <param name="archive">Native path to the BSA to inspect.</param>
-    /// <param name="timeoutMs">Positive process timeout in milliseconds.</param>
-    /// <returns>Parsed archive metadata, raw output, and any process-launch failure.</returns>
-    public static BsaListResult List(string bsarchExe, string archive, int timeoutMs = 60_000)
+    /// <returns>Parsed archive metadata and a named read error when the archive is unusable.</returns>
+    public static BsaListResult List(string archive)
     {
-        var run = Run(bsarchExe, new[] { archive, "-list" }, timeoutMs);
-        if (run.runError is not null)
-            return new BsaListResult(false, null, 0, Array.Empty<string>(), run.stdout + run.stderr, run.runError);
-
-        var format = FormatLine.Match(run.stdout) is { Success: true } fm2 ? fm2.Groups[1].Value.Trim() : null;
-        var fm = FilesCount.Match(run.stdout);
-        if (!fm.Success)   // no "Files: N" ⇒ not a readable archive (BSArch printed an error / usage)
-            return new BsaListResult(false, format, 0, Array.Empty<string>(), (run.stdout + "\n" + run.stderr).Trim(), null);
-
-        int declared = int.Parse(fm.Groups[1].Value);
-        var nonEmpty = run.stdout.Replace("\r", "").Split('\n').Where(l => l.Trim().Length > 0).ToList();
-        var files = declared > 0 && declared <= nonEmpty.Count
-            ? nonEmpty.Skip(nonEmpty.Count - declared).ToList()
-            : new List<string>();
-        return new BsaListResult(files.Count == declared, format, declared, files, run.stdout, null);
+        var hdr = ReadBsaHeader(archive);   // independent of Mutagen — the public IArchiveReader doesn't expose the count
+        IArchiveReader reader;
+        try { reader = Archive.CreateReader(GameRelease.SkyrimSE, archive, Fs); }
+        catch (Exception ex) { return new BsaListResult(false, null, 0, Array.Empty<string>(), "", OpenError(archive, ex)); }
+        try
+        {
+            var files = reader.Files.Select(f => f.Path).ToList();
+            if (hdr is { fileCount: var declared } && declared != (uint)files.Count)
+                return new BsaListResult(false, VersionLabel(hdr), (int)declared, files,
+                    $"'{Path.GetFileName(archive)}': header declares {declared} file(s) but the reader enumerated {files.Count} — the archive may be corrupt or unsupported.", null);
+            return new BsaListResult(true, VersionLabel(hdr), hdr is { fileCount: var c } ? (int)c : files.Count, files, "", null);
+        }
+        catch (Exception ex)
+        {
+            return new BsaListResult(false, null, 0, Array.Empty<string>(), "",
+                $"could not read the file list of '{Path.GetFileName(archive)}' ({ex.GetType().Name}: {ex.Message}).");
+        }
+        finally { (reader as IDisposable)?.Dispose(); }
     }
 
-    /// <summary>Unpack the WHOLE archive into <paramref name="destFolder"/> (created if absent). Success = THIS RUN
-    /// added or changed entries, not "the folder is non-empty afterwards": the managed flow PRE-SEEDS the folder (the
-    /// meta.ini ownership marker is written before BSArch runs) and a caller-supplied dest may hold anything, so the
-    /// old test was satisfiable with zero extracted files and reported every BSArch failure as a successful extract
-    /// (2026-06-12 adversarial hunt, MUST-FIX). New entries are detected by PATH (robust to extractors that restore
-    /// archived timestamps); changed ones by size/mtime. Honest residual edge: re-extracting byte-identical content
-    /// over an existing dest with restored timestamps can read as "nothing new" — that direction fails LOUD with
-    /// BSArch's raw output attached, never falsely succeeds. "Read a file inside" = unpack, then read it.</summary>
-    /// <param name="bsarchExe">Configured BSArch executable or future runner target.</param>
-    /// <param name="archive">Native path to the BSA to unpack.</param>
+    /// <summary>Unpack the WHOLE archive into <paramref name="destFolder"/> (created if absent) via Mutagen. Each file's
+    /// DECOMPRESSED bytes are written to dest/{file path}. Writes are:
+    ///   • path-traversal-guarded — an entry resolving outside the dest refuses loud (Q3), never writes out-of-tree;
+    ///   • content-aware/idempotent — a file already present byte-identical is skipped, so re-extracting into a
+    ///     populated dest reports "already present" rather than a spurious rewrite (this is why the managed flow's
+    ///     pre-seeded meta.ini marker is left untouched).
+    /// An archive that can't be opened/read fails with a named reason. "Read a file inside" = unpack, then read it.</summary>
+    /// <param name="archive">Native path to the BSA to extract.</param>
     /// <param name="destFolder">Destination directory, created when absent.</param>
-    /// <param name="timeoutMs">Positive process timeout in milliseconds.</param>
-    /// <returns>Provenance-checked success, combined output, and any process-launch failure.</returns>
-    public static BsaResult Unpack(string bsarchExe, string archive, string destFolder, int timeoutMs = 300_000)
+    /// <returns>Content-aware extraction result and any named archive-read failure.</returns>
+    public static BsaResult Unpack(string archive, string destFolder)
     {
         Directory.CreateDirectory(destFolder);
-        var before = SnapshotEntries(destFolder);
-        var run = Run(bsarchExe, new[] { "unpack", archive, destFolder, "-mt" }, timeoutMs);
-        if (run.runError is not null) return new BsaResult(false, (run.stdout + run.stderr).Trim(), run.runError);
-        bool ok = AnyNewOrChangedEntries(destFolder, before);
-        return new BsaResult(ok, (run.stdout + "\n" + run.stderr).Trim(), null);
+        var hdr = ReadBsaHeader(archive);
+        IArchiveReader reader;
+        try { reader = Archive.CreateReader(GameRelease.SkyrimSE, archive, Fs); }
+        catch (Exception ex) { return new BsaResult(false, "", OpenError(archive, ex)); }
+
+        string destFull = Path.GetFullPath(destFolder);
+        int written = 0, already = 0;
+        try
+        {
+            foreach (var f in reader.Files)
+            {
+                if (f.Size > MaxEntryBytes)   // corrupt/hostile header — refuse loud rather than OOM the server (Q3)
+                    return new BsaResult(false,
+                        $"archive entry '{f.Path}' declares {f.Size:N0} bytes, over the {MaxEntryBytes:N0}-byte safety ceiling — refusing to read it in-process (the archive header may be corrupt).", null);
+                string outPath = Path.GetFullPath(Path.Combine(destFull, f.Path));
+                if (!IsUnder(destFull, outPath))
+                    return new BsaResult(false,
+                        $"archive entry '{f.Path}' resolves outside the destination folder (path traversal) — refusing after {written} file(s).", null);
+                byte[] body = f.GetBytes();
+                if (SameOnDisk(outPath, body)) { already++; continue; }
+                Directory.CreateDirectory(Path.GetDirectoryName(outPath)!);
+                File.WriteAllBytes(outPath, body);
+                written++;
+            }
+        }
+        catch (Exception ex)
+        {
+            return new BsaResult(false,
+                $"failed while extracting '{Path.GetFileName(archive)}' ({ex.GetType().Name}: {ex.Message}); {written} file(s) written before the error.", null);
+        }
+        finally { (reader as IDisposable)?.Dispose(); }
+
+        int total = written + already;
+        // Cross-check against the header's own count. If the reader enumerated FEWER files than the archive declares
+        // (a mis-parse down to zero being the worst case), the old BSArch provenance would have caught it — fail loud
+        // here rather than report a partial/empty extract as success (Q3, #217's silent-wrong-output class).
+        if (hdr is { fileCount: var declared } && declared != (uint)total)
+            return new BsaResult(false,
+                $"extracted {total} file(s) from '{Path.GetFileName(archive)}' but its header declares {declared} — the archive may be corrupt or unsupported; refusing to report it as success.", null);
+
+        string note = written > 0
+            ? $"extracted {written} file(s)" + (already > 0 ? $" ({already} already present byte-identical)" : "") + "."
+            : already > 0 ? $"all {already} file(s) were already present byte-identical — nothing to extract."
+                          : "the archive contained no files.";
+        return new BsaResult(true, note, null);
     }
 
-    /// <summary>Snapshot a folder's files (recursive): relative path → (size, mtimeUtc). The Unpack provenance
-    /// baseline — and the bsa-contract-guard probe's seam.</summary>
-    /// <param name="folder">Native directory to inspect recursively.</param>
-    /// <returns>Case-insensitive relative-path map; empty when the directory is absent.</returns>
-    public static Dictionary<string, (long Size, DateTime MtimeUtc)> SnapshotEntries(string folder)
+    /// <summary>Formats a named archive-open failure without exposing a stack trace.</summary>
+    static string OpenError(string archive, Exception ex) =>
+        $"could not open '{Path.GetFileName(archive)}' as a Bethesda archive ({ex.GetType().Name}: {ex.Message}). " +
+        "Is it a real .bsa (not a .ba2 / renamed file), and not truncated?";
+
+    /// <summary>Read the version + folder/file counts straight from the 24-byte BSA header — an oracle INDEPENDENT of
+    /// Mutagen's reader (whose public IArchiveReader exposes neither), used to cross-check the enumerated file count and
+    /// to label the format. Null if the file can't be read or isn't a "BSA\0" archive.</summary>
+    static (uint version, uint folderCount, uint fileCount)? ReadBsaHeader(string archive)
     {
-        var map = new Dictionary<string, (long, DateTime)>(StringComparer.OrdinalIgnoreCase);
-        if (!Directory.Exists(folder)) return map;
-        foreach (var f in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+        try
         {
-            var fi = new FileInfo(f);
-            map[Path.GetRelativePath(folder, f)] = (fi.Length, fi.LastWriteTimeUtc);
+            using var fs = new FileStream(archive, FileMode.Open, FileAccess.Read, FileShare.Read);
+            var h = new byte[24];
+            if (fs.Read(h, 0, 24) < 24) return null;
+            if (h[0] != 0x42 || h[1] != 0x53 || h[2] != 0x41 || h[3] != 0x00) return null;   // not "BSA\0"
+            static uint U(byte[] b, int o) => (uint)(b[o] | (b[o + 1] << 8) | (b[o + 2] << 16) | (b[o + 3] << 24));
+            return (U(h, 4), U(h, 16), U(h, 20));   // version @4, folderCount @16, fileCount @20
         }
-        return map;
+        catch { return null; }
     }
 
-    /// <summary>Did anything appear or change under <paramref name="folder"/> since <paramref name="before"/>?
-    /// A path absent from the baseline = new (timestamp-independent); a present path with a different size or
-    /// mtime = changed.</summary>
-    /// <param name="folder">Directory to compare with the pre-run snapshot.</param>
-    /// <param name="before">Relative file sizes and timestamps captured before extraction.</param>
-    /// <returns>True when at least one current file is new or observably changed.</returns>
-    public static bool AnyNewOrChangedEntries(string folder, Dictionary<string, (long Size, DateTime MtimeUtc)> before)
+    /// <summary>A cosmetic format label for the list output, derived from the already-read header. Null if unread.</summary>
+    static string? VersionLabel((uint version, uint folderCount, uint fileCount)? hdr) => hdr?.version switch
     {
-        if (!Directory.Exists(folder)) return false;
-        foreach (var f in Directory.EnumerateFiles(folder, "*", SearchOption.AllDirectories))
+        null => null,
+        103 => "BSA v103 (Oblivion)",
+        104 => "BSA v104 (Skyrim LE / Fallout 3 / NV)",
+        105 => "BSA v105 (Skyrim SE/AE)",
+        var v => $"BSA v{v}",
+    };
+
+    /// <summary>Is <paramref name="candidate"/> strictly inside <paramref name="root"/>? Both are already full paths.
+    /// Because <c>Path.GetFullPath</c> resolves any <c>..</c> before this check, it catches both relative traversal and
+    /// absolute/rooted entry paths.</summary>
+    static bool IsUnder(string root, string candidate)
+    {
+        root = root.TrimEnd(Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar);
+        return candidate.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>True iff <paramref name="path"/> already holds exactly <paramref name="body"/> (content-aware skip).</summary>
+    static bool SameOnDisk(string path, byte[] body)
+    {
+        try
         {
-            var rel = Path.GetRelativePath(folder, f);
-            if (!before.TryGetValue(rel, out var b)) return true;
-            var fi = new FileInfo(f);
-            if (fi.Length != b.Size || fi.LastWriteTimeUtc != b.MtimeUtc) return true;
+            var fi = new FileInfo(path);
+            if (!fi.Exists || fi.Length != body.Length) return false;
+            return File.ReadAllBytes(path).AsSpan().SequenceEqual(body);
         }
-        return false;
+        catch { return false; }
     }
 
     /// <summary>Pack <paramref name="srcFolder"/> into a .bsa at <paramref name="archive"/> with the given format flag
-    /// (e.g. "-sse") and optional compression. NON-DESTRUCTIVE (Aaron 2026-06-06): an existing archive at the target is
-    /// NEVER overwritten unless this run successfully packs a new one — BSArch writes to a houseCARL-internal temp beside
-    /// the target, and only a clean pack THIS RUN (temp exists, non-empty, AND written at/after the run's mtime baseline)
-    /// is moved over the target; a stale scratch from a previous run that cannot be removed REFUSES up front (nothing
-    /// runs, the prior .bsa untouched), and any failure (BSArch error, timeout, empty output, stale-mtime scratch)
-    /// deletes the temp and leaves the prior .bsa untouched. The mtime gate assumes an NTFS-class timestamp resolution —
-    /// on a FAT-class target a same-second pack could read as stale and fail LOUD (never falsely succeed). NOTE the
-    /// caller must surface BSArch's caveat: a COMPRESSED archive breaks any sounds/voices it contains.</summary>
-    /// <param name="bsarchExe">Configured BSArch executable or future runner target.</param>
+    /// (e.g. "-sse") and optional compression, via BSArch (Mutagen has no BSA writer). NON-DESTRUCTIVE (Aaron 2026-06-06):
+    /// an existing archive at the target is NEVER overwritten unless this run successfully packs a new one — BSArch writes
+    /// to a houseCARL-internal temp beside the target, and only a clean pack THIS RUN (temp exists, non-empty, AND written
+    /// at/after the run's mtime baseline) is moved over the target; a stale scratch from a previous run that cannot be
+    /// removed REFUSES up front (nothing runs, the prior .bsa untouched), and any failure (BSArch error, timeout, empty
+    /// output, stale-mtime scratch) deletes the temp and leaves the prior .bsa untouched. The mtime gate assumes an
+    /// NTFS-class timestamp resolution — on a FAT-class target a same-second pack could read as stale and fail LOUD (never
+    /// falsely succeed). NOTE the caller must surface BSArch's caveat: a COMPRESSED archive breaks any sounds/voices it
+    /// contains.</summary>
+    /// <param name="bsarchExe">Configured BSArch executable or future structured-runner target.</param>
     /// <param name="srcFolder">Directory tree to package.</param>
     /// <param name="archive">Final BSA path; replaced only after a proven successful pack.</param>
     /// <param name="formatFlag">Validated BSArch game-format flag such as <c>-sse</c>.</param>

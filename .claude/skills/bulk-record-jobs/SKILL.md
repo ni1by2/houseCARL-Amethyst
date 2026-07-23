@@ -1,7 +1,7 @@
 ---
 name: bulk-record-jobs
 description: >-
-  Plan and run bulk record jobs over the Skyrim load order via houseCARL — catalogues, audits, item/recipe/link graphs, conflict surveys, and batch patch rebuilds: any job that turns MANY records into ONE structured deliverable. Routes per-record loops to the bulk primitives (defined_in= scope, list-valued references=, group_by= counts, winner_fields=, resolve_names=, format=json, housecarl_resolve, housecarl_diff_record, CopyFrom/composes= batch writes) and standardizes the deliverable on one canonical JSON shape instead of an invented schema. Use when the user wants a catalogue, index, spreadsheet, audit, or book of armors/weapons/NPCs/recipes/spells, asks what crafts or references what across plugins, who wins contested records, wants a compatibility patch rebuilt against a new mod version — and in ANY fan-out subagent task told to "extract X and return JSON/a table". Load this BEFORE the first query or the first line of an output schema — per-record loops and schema drift are locked in by the first call, not discovered at the end.
+  Plan and run bulk record jobs over the Skyrim load order via houseCARL — catalogues, audits, item/recipe/link graphs, conflict surveys, and batch patch rebuilds: any job that turns MANY records into ONE structured deliverable. Routes per-record loops to the bulk primitives (defined_in= scope, list-valued references=, group_by= counts, winner_fields=, resolve_names=, format=json, housecarl_resolve, housecarl_diff_record, CopyFrom/composes= batch writes) and standardizes on one canonical JSON shape. Use when the user wants a catalogue, index, spreadsheet, audit, or book of armors/weapons/NPCs/recipes/spells, asks what crafts or references what across plugins, who wins contested records, wants a compatibility patch rebuilt against a new mod version — and in ANY fan-out subagent task told to "extract X and return JSON/a table". Load BEFORE the first query or the first line of an output schema — per-record loops and schema drift are locked in by the first call.
 ---
 
 # Bulk Record Jobs
@@ -59,6 +59,43 @@ corrupt the deliverable.
   deliverable claiming live stats, pass `winner_fields=true`; the scoped-values default exists for
   the other question ("what did THIS plugin set").
 
+## Getting a big enumeration out — page it, or persist it
+
+A bulk read stops for one of two independent reasons. They carry different accounting and different
+fixes; conflating them is how a "complete" catalogue silently ships short.
+
+- **Row cap — `limit=` → `capped=true`.** `limit=` bounds how many rows *render* (default 500).
+  `group_by=` counts are never capped by it — size with those.
+- **Output cap — `max_chars` → `truncated=true`.** The document renders until it hits the per-call
+  output budget, then stops mid-stream. On a whole-load-order sweep this is the cap that actually bites.
+
+**Primary lane — page with `offset=` (`housecarl_cross_plugin_query`).** `offset=` skips the first N
+post-filter matches, so `offset=0/500/1000…` walks a big enumeration in exact windows; scan order is
+deterministic while the load order is unchanged, so windows tile with no gaps or overlaps, and the
+render prints the next offset to continue with. `total` always counts every match, so you know when
+you've walked them all. (Not valid with `group_by=` — a count table has no window.)
+
+**Complementary lane — raise `max_chars`, let the result persist to a file.** When you want the
+*entire* result as one document to post-process with scripts — rather than walking windows into
+context — raise `max_chars` far past its default so it all renders in one call, let that oversized
+document persist to a file, and run scripts against the file. Never read a multi-MB document into
+context. One real run: a 7,479-NPC / ~15,000-path facegen scan that rendered ~117 rows/call at the
+default became **one call per plugin at `max_chars=4000000`** — a ~3.6 MB, 5,118-row JSON document,
+complete and self-accounting. This is also the only lane for tools without `offset=` (e.g.
+`housecarl_batch_record_detail` — its only paging is to split its input `formids=` list; a size-cap
+stop there has no continuation, #254).
+
+**Guardrail — verify, never assume.** A persisted document is trustworthy only once you've checked,
+*in the file itself*, that it did not truncate (`truncated == false`) and that its own accounting says
+it is whole — `rendered == total` on `cross_plugin_query`, or the `count` covering every input on the
+batch tools (`housecarl_batch_record_detail` / `housecarl_resolve`). A file that quietly hit even a
+raised cap is a silent short-ship — the exact failure this lane exists to prevent. `format="json"`
+keeps the accounting in-band for a one-line check.
+
+**Inputs cap too.** A huge *input* array — multi-thousand FormIDs into `references=` /
+`housecarl_resolve` / `housecarl_batch_record_detail` — is its own failure mode: it must transit model
+context, and an oversized emission can stall the call. Batch inputs to a few hundred elements per call.
+
 ## The loop-killer map
 
 Reach for the primitive, never the loop. Each row below was a real improvisation in a real fleet
@@ -90,14 +127,16 @@ run before the primitive existed:
        fields=["Name", "ArmorRating"], winner_fields=true, format="json")
    ```
 
-3. **Expand list-bearing rows in a second, batched pass.** `housecarl_cross_plugin_query` has no
-   `depth=` — a list field renders as a count note (`[list: 5 item(s)]`). Feed the enumerated
-   FormIDs to `housecarl_batch_record_detail` with `depth=2`, `resolve_names=true`,
-   `format="json"`: each list element comes back indexed (`Keywords[0]`…) with a structured
-   `link` sibling (`{resolved, type, editorid, name}`) beside the raw token.
+3. **Expand list-bearing rows in the same scan.** Pass `depth=` with `fields=` —
+   `fields=["Keywords"], depth=2` returns each element indexed (`Keywords[0]`…) across every
+   match, and `resolve_names=true` adds the structured `link` sibling
+   (`{resolved, type, editorid, name}`) beside the raw token. `format="dense"` stays depth-1
+   (its columnar cells are positional) — use `format="json"` for expanded scans, or hop the
+   flagged subset to `housecarl_batch_record_detail` when only a few matches need expanding.
 4. **Respect the accounting.** Every JSON document carries `total` / `rendered` / `capped` /
-   `truncated` / `notes` in-band. `capped=true` means raise `limit=` or page by narrowing scope —
-   never ship a deliverable whose `total` exceeds its row count without saying so.
+   `truncated` / `notes` in-band. `capped=true` means page with `offset=` or narrow the scope;
+   `truncated=true` means raise `max_chars` (see "Getting a big enumeration out" above) — never ship
+   a deliverable whose `total` exceeds its row count without saying so.
 
 ## Recipe: the link graph
 
@@ -283,9 +322,10 @@ For crafting-graph jobs specifically, the blessed per-recipe entry:
 
 ## Notes
 
-- `housecarl_cross_plugin_query` has no `depth=` — list expansion always goes through
-  `housecarl_batch_record_detail` (or `housecarl_read_record` for one record). Budget the second
-  call into any list-bearing catalogue plan.
+- `housecarl_cross_plugin_query` takes `depth=` (with `fields=`; text/json formats) — list
+  expansion rides the scan itself, no second call. `housecarl_batch_record_detail` remains the
+  lever when only a subset of matches needs expanding, and under `format="dense"` (depth-1 by
+  design — positional cells).
 - `where=` accepts FormLink equality against a wire token (e.g.
   `"WorkbenchKeyword = 088108:Skyrim.esm"`) — a station filter is one predicate, no post-filtering.
 - Off-order (disabled, on-disk) plugins are first-class poles for `housecarl_diff_record`,

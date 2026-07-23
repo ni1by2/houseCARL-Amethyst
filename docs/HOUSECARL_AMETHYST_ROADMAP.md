@@ -256,56 +256,44 @@ manual release gate.
 ## Current status
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
-  setup documentation completed alongside the Linux setup rewrite.
-- Last completed checkpoint: the inherited asset/archive layer now documents
-  every function and public member in `AssetResolver`, `ArchiveDiscovery`, and
-  `BsaArchive`. Product-mode comments explain authoritative Amethyst loose
-  winners, Data_Core precedence, injected BSA ranks, pinned snapshots, failure
-  completeness, and zero archive handles at rest. Legacy root walking and the
-  external BSArch boundary are explicitly labeled as probe/deferred seams rather
-  than Linux product behavior.
-- Verification performed: the .NET 9 Linux solution builds successfully after
-  the first documentation slice (pre-existing nullable/obsolete warnings, zero
-  errors), and `git diff --check` passes. A second build with XML documentation
-  generation enabled, while suppressing only missing-member warning CS1591,
-  succeeds with no XML reference, parameter, or malformed-comment warnings. The focused
-  `amethyst-layout-guard`, `amethyst-load-order-guard`,
-  `amethyst-filemap-guard`, `amethyst-runtime-guard`, and
-  `amethyst-redeploy-guard` pass. The strict build reports no documentation
-  warnings; the asset/archive files also pass with CS1591 enabled. The
-  `asset-resolver-guard`, `asset-status-guard`, `amethyst-filemap-guard`, and
-  `place-asset-guard` pass. `bsa-contract-guard` still stops at its validated
-  Linux baseline assumption because it tries to copy `where.exe`; it does not
-  reach the reviewed code. Before this documentation work, the generator build passed and
-  `amethyst-redeploy-guard` proves that an atomic staging replacement leaves an
-  existing deployed hardlink on its old inode, then clears pending state only
-  after newer filemap/deploy timestamps and matching deployed content or link
-  identity. Inactive/stale/profile-mismatched/content-changed states retain the
-  marker. Symlink and copy smoke modes pass without production branches.
-  Existing in-place, NIF and compact service guards pass. Full `ci-all` is
-  90/99; its nine failures exactly match the validated upstream Linux baseline.
-- Files/components changed: documentation standard and roadmap;
-  `BethesdaPath`, `IModManagerLayout`/`ManagerSnapshot`, `AmethystLayout`,
-  `AmethystLoadOrder`, `AmethystFileMap`, `UserConfigStore`, `AmethystRedeploy`,
-  the Amethyst write/redeploy and manager-lifecycle seams in `LoadOrderService`,
-  `AmethystTools`, `SetupTools`, `StatusTools`, `Guard`, `AssetResolver`,
-  `ArchiveDiscovery`, `BsaArchive`, and their focused probes.
+  setup documentation to be completed alongside the Linux setup rewrite.
+- Last completed checkpoint: merged upstream houseCARL through
+  `c305b07da937d44d113a058f89d5292670ddcc0e` (v1.9.0 plus 58 later commits)
+  into the Amethyst integration branch. The fork now carries upstream native BSA
+  list/extract, SKSE audit and peek, NIF batch/section inspection, dry-run,
+  manifest-backed bulk writes, readback counts, native pairing, and the latest
+  provenance corrections. Amethyst plugin provenance resolves only from
+  `ManagerSnapshot`, `filemap.txt`, `modindex.bin`, and `Data_Core`; it never
+  reintroduces an MO2 folder scan or deployed-Data fallback.
+- Verification performed: the .NET 9 Linux solution builds with zero errors.
+  The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
+  BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
+  native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
+  and Codex umbrella guards pass. Full `ci-all` is 104/111; its seven failures
+  match the established Linux baseline. XML-document generation succeeds while
+  suppressing only missing-member warning CS1591; inherited unresolved-cref
+  warnings remain queued for the declaration-by-declaration documentation pass.
+  `git diff --check` passes and no merge-conflict markers remain.
+- Files/components changed: the upstream v1.9/post-v1.9 source, probes, skills,
+  notices, changelog, and metadata; Amethyst conflict resolutions in
+  `ArchiveDiscovery`, `AssetResolver`, `BsaArchive`, `LoadOrderService`,
+  `Program`, and write/BSA/NIF tool surfaces; Linux-neutral BSA, binding, and
+  SKSE probe fixtures; Codex umbrella routing and agent metadata.
 - Decisions made: staging is the only write target; deployed `Data/` is used
-  solely for later verification. A pending marker is keyed by profile and
-  canonical Data path, includes the expected content hash and pre/post inode
-  data, and cannot clear if staging changed again. Hardlinks are the v1 target;
-  symlink and copy verification use the same identity-or-content gate. Code
-  documentation is a contract review, not a syntax narration pass: every
-  declaration is documented, while inline comments explain only non-obvious
-  reasoning and safety boundaries.
+  solely for later verification. Upstream native archive reads replace the
+  Windows-only BSArch dependency for list/extract; archive packing remains the
+  explicitly deferred external-command seam. Upstream dry-run may bypass the
+  Amethyst redeploy confirmation only because it performs no write. Real
+  in-place writes still require both consent and
+  `confirm_amethyst_redeploy=true`. Legacy MO2 provenance code remains only for
+  inherited probes; connected product mode uses authoritative Amethyst winners.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
   declaration-by-declaration review is still incomplete even though the strict
-  XML build is clean; CS1591 remains intentionally suppressed until each
-  component has been reviewed. The nine
-  baseline failures are `writelock`, `upsert`, `binding-shim`,
-  `compile-ergonomics`, `setup-update-lock`, `bsa-contract`, `atomic-commit`,
+  XML build succeeds; CS1591 remains intentionally suppressed until each
+  component has been reviewed. The seven baseline failures are `writelock`,
+  `upsert`, `compile-ergonomics`, `setup-update-lock`, `atomic-commit`,
   `seq-regen`, and `skypatcher-conflicts`.
 - Exact next action: continue the inherited `housecarl-core` pass with
   `LoadOrderResolver` and its directly coupled result/snapshot records, then run
@@ -318,6 +306,8 @@ manual release gate.
   standard and first slice), `196df59` (Amethyst foundation contracts),
   `efacda9` (foundation checkpoint), `1b4c7e8` (Amethyst MCP lifecycle),
   `95f9a83` (asset resolution contracts), `e3ec7a1` (external archive boundary).
+  The upstream `c305b07` merge commit is recorded after this checkpoint is
+  committed.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

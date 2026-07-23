@@ -5,45 +5,32 @@ using ModelContextProtocol.Server;
 namespace HousecarlMcp;
 
 /// <summary>
-/// houseCARL BSA riders — list / extract / repack Bethesda .bsa archives by driving BSArch (via
-/// <see cref="HousecarlCore.BsaArchive"/>; Mutagen has no archive surface). All three ride the external-tool bridge: the
-/// BSArch path comes from <see cref="ToolPathResolver"/> (auto-prompts via the forcing function if unset — BSArch ships
-/// with xEdit). Reading a file INSIDE an archive = extract it, then read it (BSArch has no per-file extract). Extract +
-/// repack land their output in a reviewable houseCARL mod folder (folder-per-patch; originals untouched).
+/// Lists and extracts Bethesda archives natively through Mutagen. Repacking remains a separate BSArch-backed
+/// operation until the post-v1 structured Proton runner is implemented. Managed outputs go to Amethyst staging;
+/// originals are not modified.
 /// </summary>
 [McpServerToolType]
 public static class BsaTools
 {
     [McpServerTool(Name = "housecarl_bsa_list", ReadOnly = true, Title = "List a .bsa archive's contents"),
      Description(
-         "List the files inside a Bethesda .bsa archive (via BSArch). Returns the archive format + the contained file " +
-         "paths. Read-only — extracts nothing. To read a file's CONTENTS, use housecarl_bsa_extract then read the file. " +
-         "Needs the BSArch path; if it isn't set yet houseCARL tells you exactly what to ask for and how to set it " +
-         "(BSArch ships with xEdit).")]
+         "List the files inside a Bethesda .bsa archive. Returns the archive format + the contained file paths. " +
+         "Read-only — extracts nothing. Reads the archive directly (via Mutagen) — no external tool needed. To read a " +
+         "file's CONTENTS, use housecarl_bsa_extract then read the file.")]
     public static string BsaList(
-        ToolPathResolver bridge,
         [Description("Full path to the .bsa archive to list.")]
             string archive,
         [Description("Optional. Max characters before the file list is cut with an explicit notice. 0 = the server default (~80k).")]
             int max_chars = 0) => Guard.Tool("housecarl_bsa_list", () =>
     {
         if (string.IsNullOrWhiteSpace(archive)) return "error: no archive given. Pass the full path to the .bsa.";
-        // GetFullPath: BSArch resolves relative paths against ITS OWN folder (the child's working dir),
-        // not the server's — a relative path that passed File.Exists here could list a DIFFERENT
-        // same-named archive sitting beside BSArch (2026-06-12 adversarial hunt).
         try { archive = Path.GetFullPath(archive.Trim().Trim('"')); }
         catch (Exception ex) { return $"error: '{archive}' is not a usable path ({ex.Message})."; }
         if (!File.Exists(archive)) return $"error: no such file: '{archive}'.";
-        if (bridge.RequireOrPrompt(ToolDependency.Bsarch, out var bsarch) is { } prompt) return prompt;
 
-        var r = HousecarlCore.BsaArchive.List(bsarch!, archive);
+        var r = HousecarlCore.BsaArchive.List(archive);
         if (!r.Ran) return "error: " + r.RunError;
-        if (!r.Success)
-            // Covers BOTH unreadable (no "Files: N" at all) and aborted-mid-list (declared N, listed
-            // fewer) — the old guard only caught the first, rendering "N file(s)" over an empty list.
-            return r.DeclaredCount == 0
-                ? $"error: BSArch could not read '{Path.GetFileName(archive)}' as an archive. Raw output:\n" + r.Raw
-                : $"error: BSArch declared {r.DeclaredCount} file(s) in '{Path.GetFileName(archive)}' but listed {r.Files.Count} — the listing aborted or the archive is damaged. Raw output:\n" + r.Raw;
+        if (!r.Success) return "error: " + r.Raw;   // header-vs-reader file-count mismatch (possible corruption)
 
         int cap = max_chars > 0 ? max_chars : 80_000;
         var sb = new StringBuilder();
@@ -60,32 +47,29 @@ public static class BsaTools
 
     [McpServerTool(Name = "housecarl_bsa_extract", Title = "Extract a .bsa archive to a folder"),
      Description(
-         "Extract a Bethesda .bsa archive's contents to a folder (via BSArch), so you can read the files. BSArch unpacks " +
-         "the WHOLE archive (it has no per-file extract). Pass dest= a folder to unpack into; OMIT dest to let houseCARL " +
-         "unpack into a NEW reviewable mod folder under your mods directory (reported back) — that needs houseCARL pointed " +
-         "at your MO2 instance. Needs the BSArch path (auto-prompts if unset). Originals are never modified.")]
+         "Extract a Bethesda .bsa archive's contents to a folder so you can read the files. Reads the archive directly " +
+         "(via Mutagen — handles compressed archives too) — no external tool needed. Unpacks the WHOLE archive. Pass " +
+         "dest= a folder to unpack into; OMIT dest to let houseCARL unpack into a NEW reviewable mod folder under your " +
+         "mods directory (reported back) — that requires an Amethyst connection. Originals are never modified.")]
     public static string BsaExtract(
         LoadOrderService svc,
-        ToolPathResolver bridge,
         [Description("Full path to the .bsa archive to extract.")]
             string archive,
         [Description("Optional. Folder to unpack into. If omitted, houseCARL creates a NEW mod folder under your mods directory and reports its path.")]
             string? dest = null) => Guard.Tool("housecarl_bsa_extract", () =>
     {
         if (string.IsNullOrWhiteSpace(archive)) return "error: no archive given. Pass the full path to the .bsa.";
-        // GetFullPath: BSArch resolves relative paths against ITS OWN folder, not the server's (see BsaList).
         try { archive = Path.GetFullPath(archive.Trim().Trim('"')); }
         catch (Exception ex) { return $"error: '{archive}' is not a usable path ({ex.Message})."; }
         if (!File.Exists(archive)) return $"error: no such file: '{archive}'.";
-        if (bridge.RequireOrPrompt(ToolDependency.Bsarch, out var bsarch) is { } prompt) return prompt;
 
         string target;
         bool managed = string.IsNullOrWhiteSpace(dest);
         if (managed)
         {
             if (svc.ConfigPromptOrNull() is { } cfg) return cfg;   // need ModsDir for the default managed folder
-            // Extract keeps its own #49 residue contract (snapshot-provenance + the "left at X" message below) — out
-            // of H2's delete-if-empty scope, which Aaron set to repack/compile/decompile. Just take the output dir.
+            // Extract keeps its own #49 residue contract (the "left at X" message below) — out of H2's delete-if-empty
+            // scope, which Aaron set to repack/compile/decompile. Just take the output dir.
             try { target = svc.ResolvePatchModFolder(Path.GetFileNameWithoutExtension(archive) + " (extracted)", into: null, "houseCARL_Extract").OutputDir; }
             catch (InvalidOperationException ex) { return "error: " + ex.Message; }
         }
@@ -94,26 +78,17 @@ public static class BsaTools
             target = Path.GetFullPath(dest!.Trim().Trim('"'));
         }
 
-        var r = HousecarlCore.BsaArchive.Unpack(bsarch!, archive, target);
-        if (!r.Ran) return "error: " + r.RunError;
-        if (!r.Success)
-            // BSArch RAN (we returned above on !Ran) but wrote nothing. Two real causes, named so the failure is
-            // self-explanatory (Q3): (1) BSArch's unpacker is stricter than the game engine, so an archive written by
-            // a non-standard tool can list + load in-game yet unpack to nothing — re-pack it with BSArch or the CK's
-            // Archive.exe/CAO to get a conformant archive; (2) the dest already holds byte-identical files with
-            // restored timestamps, which reads as "nothing new". The raw output below distinguishes them.
-            return $"extract FAILED: '{Path.GetFileName(archive)}' produced no new or changed files in '{target}' this run." +
-                   (managed ? $" The freshly created mod folder (with only houseCARL's meta.ini marker) was left at '{target}' — delete it or retry into it." : "") +
-                   "\nBSArch ran but extracted nothing. Most likely the archive is non-standard: BSArch's unpacker is " +
-                   "stricter than the game, so an archive written by a custom tool can list and load in-game yet fail to " +
-                   "unpack — re-pack it with BSArch or the CK's Archive.exe. (If the dest already holds identical files, " +
-                   "that also reads as 'nothing new'.)" +
-                   "\nRaw BSArch output:\n" + r.Raw;
+        string residue = managed ? $"\nThe freshly created mod folder was left at '{target}' — delete it or retry into it." : "";
+        var r = HousecarlCore.BsaArchive.Unpack(archive, target);
+        if (!r.Ran) return "error: " + r.RunError + residue;   // archive couldn't be opened/read
+        if (!r.Success)                                          // path-traversal refusal or a mid-extract error (Q3)
+            return "extract FAILED: " + r.Raw + residue;
 
         var sb = new StringBuilder();
         sb.Append("extracted ").Append(Path.GetFileName(archive)).Append(" → ").Append(target).Append('\n');
+        sb.Append(r.Raw).Append('\n');   // e.g. "extracted 5826 file(s)."
         sb.Append(managed
-            ? "(a new houseCARL mod folder — read the files you need from it; enable it in MO2 only if you want the loose files in your load order.)"
+            ? "(a new Amethyst staging mod — read the files you need from it; enable and deploy it only if you want the loose files in your load order.)"
             : "(read the files you need from that folder.)");
         return sb.ToString();
     });
@@ -121,10 +96,10 @@ public static class BsaTools
     [McpServerTool(Name = "housecarl_bsa_repack", Title = "Pack a folder into a .bsa archive"),
      Description(
          "Pack a folder of loose files into a Bethesda .bsa archive (via BSArch), placed in a NEW reviewable houseCARL mod " +
-         "folder under your mods directory (originals untouched; enable it in MO2 to use). format defaults to 'sse' (Skyrim " +
+         "folder under your Amethyst staging directory (originals untouched; refresh, enable, and deploy it to use). format defaults to 'sse' (Skyrim " +
          "Special Edition). compress defaults to FALSE — a compressed archive is smaller but BREAKS any sounds/voices it " +
          "contains (a BSArch limitation), so only compress archives with no audio. Needs the BSArch path (auto-prompts if " +
-         "unset) and houseCARL pointed at your MO2 instance (for the output folder).")]
+         "unset) and an Amethyst connection (for the output folder).")]
     public static string BsaRepack(
         LoadOrderService svc,
         ToolPathResolver bridge,
@@ -138,7 +113,7 @@ public static class BsaTools
             bool compress = false,
         [Description("Optional. Base name for the NEW mod folder the .bsa lands in (default 'houseCARL_Archive'); auto-suffixed if taken.")]
             string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL patch mod to place the .bsa into instead of a fresh folder. Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing houseCARL patch mod to place the .bsa into instead of a fresh folder. Found by plugin filename even if its Amethyst mod folder was renamed; for duplicate filenames, pass the mod-folder name.")]
             string? into = null) => Guard.Tool("housecarl_bsa_repack", () =>
     {
         if (string.IsNullOrWhiteSpace(source_folder)) return "error: no source_folder given.";
@@ -178,7 +153,7 @@ public static class BsaTools
 
         var sb = new StringBuilder();
         sb.Append("packed ").Append(name).Append(" (").Append(fmtFlag.TrimStart('-')).Append(compress ? ", compressed" : ", uncompressed").Append(") → ").Append(archive).Append('\n');
-        sb.Append("(a new houseCARL mod folder — enable it in MO2 to use the archive.)");
+        sb.Append("(a new Amethyst staging mod — refresh, enable, rebuild the filemap, and deploy it to use the archive.)");
         if (compress) sb.Append("\nNOTE: compressed — any sounds/voices in it will not work in-game (BSArch limitation).");
         return sb.ToString();
     });

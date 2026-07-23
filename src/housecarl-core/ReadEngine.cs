@@ -168,9 +168,10 @@ public static class ReadEngine
     /// <summary>The depth-1 container hint (HCBR-2026-07-12): appended to an unexpanded container/substruct summary so
     /// an agent turns the depth= knob instead of inventing a param or hand-rolling a parser. It names <c>depth=2</c>,
     /// which is only honest on a surface that HAS a depth= parameter (read_record / batch_record_detail /
-    /// read_plugin_file / the CLI) — a caller whose surface has no depth= passes its own redirect via
-    /// <c>containerHint</c> (cross_plugin_query names the batch-read hop) or null to suppress (write read-backs,
-    /// where the count IS the confirmation and there is no knob to turn).</summary>
+    /// read_plugin_file / cross_plugin_query text+json (#231) / the CLI) — a caller whose surface refuses depth
+    /// passes its own redirect via <c>containerHint</c> (cross_plugin_query's DENSE render names the text/json
+    /// format hop — its positional cells refuse depth&gt;1) or null to suppress (write read-backs, where the count
+    /// IS the confirmation and there is no knob to turn).</summary>
     public const string DepthExpandHint = " — pass depth=2 to expand";
 
     /// <summary>Read a located record's fields as round-trippable tokens — the public, structured entry the MCP
@@ -203,7 +204,7 @@ public static class ReadEngine
                 // FieldsDiff runs never sees the hint (it reads at expansion depth, a different summary path).
                 // The hint text is the caller's (containerHint): depth=2 is only a real knob on some surfaces.
                 if (note is { Length: > 0 } && note[0] == '[' && !string.IsNullOrEmpty(containerHint)) note += containerHint;
-                fields.Add(new FieldValue(p, r.HasValue, r.HasValue ? r.Token : null, note, FlagSlotDisplay(r)));
+                fields.Add(new FieldValue(p, r.HasValue, r.HasValue ? r.Token : null, note, FlagDisplay(r)));
             }
         }
         else
@@ -338,7 +339,7 @@ public static class ReadEngine
     {
         if (budget < 0) return;
         var leaf = EmitToken(val, declaredType, parent);
-        if (leaf.HasValue) { Emit(sink, ref budget, new FieldValue(path, true, leaf.Token, null, FlagSlotDisplay(leaf))); return; }
+        if (leaf.HasValue) { Emit(sink, ref budget, new FieldValue(path, true, leaf.Token, null, FlagDisplay(leaf))); return; }
         if (val is null) { Emit(sink, ref budget, new FieldValue(path, false, null, leaf.Note)); return; }
         // a link (incl. a null FormKey, or an FLOI) is a note, not an openable container/substruct.
         if (val is IFormLinkGetter || WriteEngine.IsFormLinkOrIndex(Nullable.GetUnderlyingType(declaredType) ?? declaredType))
@@ -357,17 +358,24 @@ public static class ReadEngine
         // a container or substruct — summarise (with an element identity where we can), then maybe open it.
         if (!Emit(sink, ref budget, new FieldValue(path, false, null, ElementSummary(val, isDict)))) return;
 
-        // A VMAD script property normally stops here at its identity summary (e.g. "[ScriptObjectProperty]
-        // Name=DAK_HorseBuyPerk"), hiding its VALUE. Surface that value ONE bounded level deeper even at the
-        // depth floor — the Object FormLink (incl. a declared-but-null link, the signal the quest-fragment
-        // linter keys on), the Data scalar, the Alias — so a read reaches parity with the write surface. A
-        // property's direct members are leaves (a *ListProperty arm shows as a count at the floor; raise
-        // depth= to enumerate it), so this opens exactly one level and never unbounded-descends a fat VMAD
-        // (1.3.1 item 2). EVERY OTHER substruct still stops at the floor, byte-for-byte unchanged.
+        // Two POLYMORPHIC-ARM families normally stop here at their identity summary, hiding their VALUE, and both
+        // surface it ONE bounded level deeper even at the depth floor so a read reaches parity with the write
+        // surface and with a direct per-arm path:
+        //   * a VMAD script property (e.g. "[ScriptObjectProperty] Name=DAK_HorseBuyPerk") — its Object FormLink
+        //     (incl. a declared-but-null link, the signal the quest-fragment linter keys on), Data scalar, Alias
+        //     (1.3.1 item 2);
+        //   * a Conditions[].Data arm (e.g. "[GetFactionRankConditionData]") — its parameter fields (Faction,
+        //     Global, Reference, RunOnType…), which otherwise appear ONLY when Data is addressed directly, never
+        //     via a Conditions-list dump (#258 — the arm consumed a "summary-only" level, so depth=3 stopped at the
+        //     bare arm type and you needed depth=4 or a per-row path).
+        // Each family's direct members are leaves/links (a VMAD *ListProperty arm shows as a count at the floor;
+        // raise depth= to enumerate it), so this opens exactly one level and never unbounded-descends. EVERY OTHER
+        // substruct still stops at the floor, byte-for-byte unchanged — the exception is these two arm families
+        // only, matched by their shared getter interface (no per-arm list).
         int childDepth = depth - 1;
         if (depth <= 1)
         {
-            if (!IsScriptProperty(val.GetType())) return;
+            if (!IsScriptProperty(val.GetType()) && !IsConditionData(val.GetType())) return;
             childDepth = 1;
         }
 
@@ -480,14 +488,16 @@ public static class ReadEngine
     }
 
     /// <summary>Best-effort COMPACT identity of the element a list/dict verb just acted on — the write-verify's
-    /// "what landed" line (HCBR-2026-06-28-01, the compact in-place readback). For a list <c>Add</c>, the new last
-    /// element + the new count (<c>now 29 (+1), new [28] = …</c>); for a keyed <c>SetAtIndex</c>/<c>Remove</c>, the
-    /// touched key + new count; else the new count. Names the element as specifically as the model allows — a
+    /// "what landed" line (HCBR-2026-06-28-01, the compact in-place readback). For a single list <c>Add</c>, the new
+    /// last element + the new count (<c>now 29 (+1), new [28] = …</c>); for a batch <c>composes=</c> Add of N, the
+    /// whole appended run (<c>now 34 (+6), new [28..33]</c> — <paramref name="added"/> carries how many the op
+    /// appended, #259); for a keyed <c>SetAtIndex</c>/<c>Remove</c>, the touched key + new count; else the new count.
+    /// Names the element as specifically as the model allows — a
     /// formlink element renders its FormKey, an identity-bearing struct its Name/EditorID, an anonymous struct (a
     /// condition) its <c>[Type]</c>. Read-only; NEVER throws (null on any difficulty) — a display nicety on an
     /// ALREADY-succeeded write, never load-bearing. <paramref name="leafPath"/> is the verb's path to the collection
     /// (the engine's <see cref="WriteRequest.Path"/>); <paramref name="key"/> its list index / dict key, if any.</summary>
-    internal static string? TouchedElement(object record, string[] leafPath, string verb, string? key)
+    internal static string? TouchedElement(object record, string[] leafPath, string verb, string? key, int added = 1)
     {
         try
         {
@@ -497,7 +507,7 @@ public static class ReadEngine
             foreach (var e in en) { count++; last = e; }
             return verb switch
             {
-                "Add"        => last is null ? $"now {count} item(s)" : $"now {count} (+1), new [{count - 1}] = {ElementId(last, record)}",
+                "Add"        => AddLanded(record, count, last, added),
                 "ReplaceAll" => $"now {count} item(s) (replaced)",
                 "SetAtIndex" => key is not null ? $"now {count} item(s), set [{key}]" : $"now {count} item(s)",
                 "Remove"     => key is not null ? $"now {count} item(s), removed [{key}]" : $"now {count} item(s) (-1)",
@@ -505,6 +515,21 @@ public static class ReadEngine
             };
         }
         catch { return null; }
+    }
+
+    /// <summary>The list-<c>Add</c> "what landed" line, honest about the appended count. A SINGLE append names the
+    /// new element (<c>now 29 (+1), new [28] = …</c>); a BATCH <c>composes=</c> Add of N names the whole appended run
+    /// of indices (<c>now 34 (+6), new [28..33]</c>) instead of reporting only the last element as a "(+1)" — the
+    /// #259 misleading-output bug, where a 6-element compose read as "(+1), new [36]" and cost real mid-session doubt
+    /// that all six landed. <paramref name="added"/> is the op's appended count (composes.Count, else 1), clamped to
+    /// the live count so a display nicety on an already-succeeded write can never throw or under-run the range.</summary>
+    static string AddLanded(object record, int count, object? last, int added)
+    {
+        if (last is null) return $"now {count} item(s)";
+        int n = Math.Clamp(added, 1, count);
+        return n <= 1
+            ? $"now {count} (+1), new [{count - 1}] = {ElementId(last, record)}"
+            : $"now {count} (+{n}), new [{count - n}..{count - 1}]";
     }
 
     /// <summary>The compact identity of ONE element for <see cref="TouchedElement"/>: a value/formlink element via its
@@ -525,6 +550,15 @@ public static class ReadEngine
         if (val is System.Collections.IEnumerable && val is not string) return SummariseContainer(val, isDict);
         var t = val.GetType();
         var typeName = RecordNaming.StripGetterInterface(RecordNaming.StripOverlay(t.Name));
+        // An owned child RECORD element (an IMajorRecordGetter — a DIAL's Responses hold DialogResponses/INFO
+        // records, a CELL's references hold placed records; each owns its own FormKey) leads with its FormKey the
+        // way a top-level read does — #252, the #198 family carried to records. Checked BEFORE the Name/EditorID/
+        // Title scan: for an owned record the FormKey IS the canonical identity (an INFO has no Name and usually no
+        // EditorID — the exact case #198's lone-FormLink path can't reach), and EditorID rides along when present,
+        // so a depth=2 owned-record list reads "[DialogResponses 4D9A74:Plugin.esp editorid=…]" — its own id — not
+        // a bare opaque [Type] (or an EditorID-only line) one level longer than the depth "index + identity" implies.
+        if (val is IMajorRecordGetter mr)
+            return $"[{typeName} {mr.FormKey}{(string.IsNullOrEmpty(mr.EditorID) ? "" : $" editorid={mr.EditorID}")}]";
         foreach (var idName in IdentityFieldNames)
         {
             var p = t.GetProperty(idName, BindingFlags.Public | BindingFlags.Instance);
@@ -732,6 +766,50 @@ public static class ReadEngine
         return (slots.Count == 1 ? "slot " : "slots ") + string.Join(", ", slots);
     }
 
+    /// <summary>The DISPLAY-ONLY annotation for a <c>[Flags]</c> enum leaf — the human-readable decode that rides
+    /// <see cref="FieldValue.Display"/> without touching the round-trip <see cref="LeafRead.Token"/>. A biped-slot
+    /// flags leaf gets the slot-number decode (<see cref="FlagSlotDisplay"/>); every OTHER flags enum gets the
+    /// unknown-bits decode (<see cref="FlagBitsDisplay"/>), which fires only when unnamed bits are present. The two
+    /// are mutually exclusive by construction — a biped leaf with any bit set already yields a slot decode, and one
+    /// with no bit set has no unknown bits either — so the <c>??</c> never double-annotates. Null when neither
+    /// applies (a non-flags leaf, or a flags leaf whose every set bit is already named).</summary>
+    internal static string? FlagDisplay(LeafRead leaf) => FlagSlotDisplay(leaf) ?? FlagBitsDisplay(leaf);
+
+    /// <summary>The DISPLAY-ONLY decode for a <c>[Flags]</c> enum leaf carrying bits the catalog does NOT name — the
+    /// case where <c>[Flags].ToString()</c> abandons the name list and renders a bare decimal (e.g. an NPC
+    /// <c>Configuration.Flags</c> whose value includes an unnamed modder/game-version bit), silently losing even the
+    /// KNOWN bits a consumer needs (gender / uniqueness / ghost state — #255). This surfaces the known bits by NAME
+    /// plus the unnamed remainder as an explicit hex mask — <c>&lt;known flag names&gt; (+unknown bits 0x…)</c> — so
+    /// the common bits stay directly consumable and the presence of unknown bits is STATED, not hidden. Rides
+    /// <see cref="FieldValue.Display"/>, so the round-trip <see cref="LeafRead.Token"/> (the bare decimal, which
+    /// <c>Enum.Parse</c> re-accepts) is untouched — write / read-proof / diff never see it, exactly like the
+    /// biped-slot decode. Null when the leaf is not a flags enum OR every set bit is already named (ToString gave
+    /// the full name list — nothing to recover).</summary>
+    internal static string? FlagBitsDisplay(LeafRead leaf)
+    {
+        if (!leaf.HasValue || leaf.Flags is not { } fb) return null;
+        // Peel the NAMEABLE bits exactly the way .NET's [Flags].ToString() does: greedily apply each named member that
+        // is FULLY contained (largest value first, so a multi-bit COMBO member wins over its constituent bits), and
+        // whatever bits no member can cover are the unknown remainder. Do NOT just OR every member's bits into one
+        // "known" mask: a bit that exists ONLY inside a multi-bit combo member (e.g. Package.Flag.WearSleepOutfit)
+        // would count as "known" yet ToString can't name it on its own, so the "known names" slot would itself render
+        // a bare decimal — the very thing this decode exists to avoid (PR #261 review).
+        var members = new List<ulong>();
+        foreach (var member in Enum.GetValues(fb.EnumType))
+            if (TryEnumBits(member, fb.EnumType, out var mb) && mb != 0) members.Add(mb);
+        members.Sort((a, b) => b.CompareTo(a));   // descending (unsigned) — a combo before its constituent bits
+        ulong remainder = fb.Bits;
+        foreach (var mb in members) if ((remainder & mb) == mb) remainder &= ~mb;
+        if (remainder == 0) return null;   // every set bit is nameable — ToString already gave the full name list
+        // The nameable bits are exactly a union of whole members, so ToString renders them as clean names (never a
+        // decimal); state the remainder as an explicit hex mask so nothing is silently dropped.
+        ulong nameable = fb.Bits & ~remainder;
+        var names = nameable == 0 ? null : Enum.ToObject(fb.EnumType, nameable).ToString();
+        return string.IsNullOrEmpty(names) || names == "0"
+            ? $"unknown bits 0x{remainder:X}"
+            : $"{names} (+unknown bits 0x{remainder:X})";
+    }
+
     // -- primitive family (mirror TryPrimitive) --------------------------------
     static bool TryEmitPrimitive(object val, out string token)
     {
@@ -906,9 +984,19 @@ public static class ReadEngine
     /// ScriptInt/Float/Bool/StringProperty arms, and the *ListProperty arms) — recognised by the shared getter
     /// interface, so every arm matches by construction with no per-arm list, on the overlay getter or the
     /// mutable type alike. The depth walker opens such a property's direct value members one bounded level past
-    /// the depth floor (1.3.1 item 2 — read parity with the write surface); every other substruct stops at the
-    /// floor, so this is the one type-targeted exception to the depth gate.</summary>
+    /// the depth floor (1.3.1 item 2 — read parity with the write surface). One of TWO type-targeted exceptions
+    /// to the depth gate (the other is <see cref="IsConditionData"/>); every other substruct stops at the floor.</summary>
     static bool IsScriptProperty(Type t) => typeof(IScriptPropertyGetter).IsAssignableFrom(t);
+
+    /// <summary>True if <paramref name="t"/> is a polymorphic CONDITION-DATA arm (GetActorValueConditionData,
+    /// GetFactionRankConditionData — every <c>ConditionData</c> subtype) — recognised by the shared
+    /// <c>IConditionDataGetter</c> interface, so every arm matches by construction with no per-arm list, on the
+    /// overlay getter or the mutable type alike. Like <see cref="IsScriptProperty"/> the depth walker opens such an
+    /// arm's parameter fields one bounded level past the depth floor so a <c>Conditions</c>-list dump reaches the
+    /// arm's params (Faction/Global/Reference/RunOnType…) without an extra depth level or a per-row <c>Data</c> path
+    /// (#258 — the params surfaced ONLY via a direct arm path before). An arm's direct members are leaves/links, so
+    /// this opens exactly one level and never unbounded-descends; every non-arm substruct still stops at the floor.</summary>
+    static bool IsConditionData(Type t) => typeof(IConditionDataGetter).IsAssignableFrom(t);
 
     static byte[] MemorySliceBytes(object slice)
     {

@@ -43,6 +43,9 @@ public sealed record ArchiveDiscoveryResult(IReadOnlyList<ActiveArchive> Archive
 /// </summary>
 public static class ArchiveDiscovery
 {
+    /// <summary>The owner marker for a base archive loaded from Skyrim.ini rather than through a plugin.</summary>
+    public const string IniArchiveOwner = "Skyrim.ini [Archive]";
+
     /// <summary>
     /// Discover archives from Amethyst's authoritative loose-file winners. Only top-level
     /// BSA files can participate in Skyrim's archive loading rules.
@@ -132,7 +135,7 @@ public static class ArchiveDiscovery
         foreach (var fn in ReadBaseArchiveNames(profileDir, gamePath, warnings))
         {
             if (archiveMap.TryGetValue(fn, out var path))
-                archives.Add(new ActiveArchive(path, "Skyrim.ini [Archive]", rank));
+                archives.Add(new ActiveArchive(path, IniArchiveOwner, rank));
             rank++;   // a distinct rank per INI entry (later in the list = later loaded); absent-on-disk just isn't added
         }
 

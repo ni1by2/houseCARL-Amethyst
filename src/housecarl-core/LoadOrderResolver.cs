@@ -77,6 +77,18 @@ public sealed class LoadOrderResolver : IDisposable
     DateTime[] _mtimes;                                // last-write at the last index build, per path (freshness baseline)
     readonly string? _dataDir;                         // real game-Data folder (Skyrim.esm's dir) — localized-strings fallback source (OpenOverlay)
 
+    /// <summary>Optional: given a plugin filename this index does NOT contain, a clause saying WHY it isn't in the
+    /// active order — or null if the injector can't say. Every "not in the load order" refusal below is a dead end for
+    /// the reader as it stands: the commonest cause by far is a plugin that IS installed and IS in an enabled mod but
+    /// sits unticked in MO2's right pane, and a flat not-found sends an agent searching for a file that is right there
+    /// (#271). The resolver cannot answer that itself and must not learn how: it is built from a bare ordered path list
+    /// and knows nothing of MO2 — explicit-paths mode has no profile at all. So the ANSWER is injected by whoever does
+    /// know (the MCP service, from the MO2 profile), and null here simply restores the previous wording. Null is what
+    /// the direct <c>Build(paths)</c> callers get — the guard seam and the probes; BOTH service modes (MO2-instance and
+    /// explicit-paths) supply an explainer, since explicit-paths mode is given a profile directory too and it is the
+    /// explainer's own missing-profile guard, not the wiring, that handles a profile it cannot read.</summary>
+    readonly Func<string, string?>? _explainAbsence;
+
     /// <summary>One index build's ENTIRE output, swapped in as a SINGLE reference write. The service refreshes the
     /// index under its own gate, but READERS run outside that gate (concurrent tool calls hold the resolver while a
     /// sibling call's freshness check may rebuild) — when the per-build state lived in five separate fields, a reader
@@ -232,12 +244,38 @@ public sealed class LoadOrderResolver : IDisposable
         }
     }
 
-    LoadOrderResolver(string[] paths, string[] names, Dictionary<string, int> nameToIdx, DateTime[] mtimes)
+    LoadOrderResolver(string[] paths, string[] names, Dictionary<string, int> nameToIdx, DateTime[] mtimes,
+                      Func<string, string?>? explainAbsence)
     {
         _paths = paths; _names = names; _nameToIdx = nameToIdx; _mtimes = mtimes;
+        _explainAbsence = explainAbsence;
         _dataDir = ComputeDataDir(nameToIdx, paths);
         _snap = BuildIndex();
     }
+
+    /// <summary>The trailing clause for a refusal naming a plugin this order does not contain. Prefers the injected
+    /// EXPLANATION (<see cref="_explainAbsence"/>) — a real cause with a real remedy — and falls back to the
+    /// did-you-mean suggester when nothing can be explained, which is the right split: a name that resolves to a real
+    /// installed plugin should never be answered with a spelling guess, and a genuine typo has no cause to state.
+    /// One home, so the refusal sites below cannot drift apart on the wording.</summary>
+    internal string AbsenceClause(string pluginName)
+        => ExplainAbsence(pluginName) is { } why ? " " + why : NameSuggestion(pluginName);
+
+    /// <summary>ONLY the injected explanation, or null when there is none — the half a caller needs when the presence
+    /// of a real CAUSE changes more than one sentence (read_record drops its generic posture tail once a specific cause
+    /// has been stated, and the did-you-mean is not a cause). Kept separate from <see cref="AbsenceClause"/> because
+    /// that one deliberately returns a non-empty string in BOTH cases, so its length says nothing about which
+    /// happened.</summary>
+    internal string? ExplainAbsence(string pluginName)
+    {
+        try { return _explainAbsence?.Invoke(pluginName); }
+        catch { return null; }   /* an explainer that throws (an unreadable profile mid-call) must never turn a clean
+                                    refusal into a crash — fall through to the suggester, the pre-injection behaviour (Q3). */
+    }
+
+    /// <summary>The did-you-mean for a name nothing can explain — the fallback half of <see cref="AbsenceClause"/>,
+    /// exposed so a caller that already asked for the explanation need not re-invoke the explainer to get it.</summary>
+    internal string NameSuggestion(string pluginName) => PluginNameSuggest.DidYouMean(pluginName, _names);
 
     /// <summary>The real game-Data directory — the folder holding the vanilla BSAs (<c>Skyrim - Interface.bsa</c> et al.,
     /// which carry the base AND DLC <c>.STRINGS</c>). Derived as the folder of the resolved <c>Skyrim.esm</c>: the base
@@ -301,7 +339,11 @@ public sealed class LoadOrderResolver : IDisposable
     /// name="orderedPluginPaths"/> = masters → … → highest priority (the order is INJECTED; §8.5 supplies the true
     /// active order). Per-plugin open failures are collected into <see cref="LoadFailures"/> at index time (Q3), never
     /// silently skipped.</summary>
-    public static LoadOrderResolver Build(IReadOnlyList<string> orderedPluginPaths)
+    /// <param name="orderedPluginPaths">Physical plugin sources ordered from masters to highest priority.</param>
+    /// <param name="explainAbsence">Optional injected answer to "why is this name not in the order?" — see
+    /// <see cref="_explainAbsence"/>. Omit (the default) and refusals read exactly as they did before.</param>
+    public static LoadOrderResolver Build(IReadOnlyList<string> orderedPluginPaths,
+                                          Func<string, string?>? explainAbsence = null)
     {
         var paths = new string[orderedPluginPaths.Count];
         var names = new string[orderedPluginPaths.Count];
@@ -320,7 +362,7 @@ public sealed class LoadOrderResolver : IDisposable
             mtimes[i] = SafeMtime(p);
         }
 
-        return new LoadOrderResolver(paths, names, nameToIdx, mtimes);
+        return new LoadOrderResolver(paths, names, nameToIdx, mtimes, explainAbsence);
     }
 
     /// <summary>Enumerate every plugin once (low→high), ONE AT A TIME (open → enumerate → dispose), building the
@@ -453,6 +495,20 @@ public sealed class LoadOrderResolver : IDisposable
         /// for both (HCBR-2026-06-11-02 verify-loop wave (a)).</summary>
         public bool ContainsPlugin(string pluginName) => _r._nameToIdx.ContainsKey(pluginName);
 
+        /// <summary>The trailing clause for a refusal naming a plugin <see cref="ContainsPlugin"/> just returned false
+        /// for: WHY it isn't in the order (injected — typically "installed, but UNTICKED in plugins.txt"), else a
+        /// did-you-mean. Always safe to append; returns "" when there is nothing to add. Every ContainsPlugin-false
+        /// refusal should carry it — a bare not-found makes the reader re-derive a fact the tool already had (#271).</summary>
+        public string AbsenceClause(string pluginName) => _r.AbsenceClause(pluginName);
+
+        /// <summary>Only the injected CAUSE (null when there is none) — see
+        /// <see cref="LoadOrderResolver.ExplainAbsence"/>; pair with <see cref="NameSuggestion"/> to rebuild the full
+        /// clause without invoking the explainer twice.</summary>
+        public string? ExplainAbsence(string pluginName) => _r.ExplainAbsence(pluginName);
+
+        /// <summary>The did-you-mean fallback — see <see cref="LoadOrderResolver.NameSuggestion"/>.</summary>
+        public string NameSuggestion(string pluginName) => _r.NameSuggestion(pluginName);
+
         /// <summary>The on-disk PATH of the active plugin named <paramref name="pluginName"/> (a filename like
         /// "MyMod.esp"), or null if no such plugin is in the order. The minimal name→path exposure the dialogue
         /// validator's SEQ lint needs to stat the quest's defining plugin (mtime) and read its master list; the
@@ -544,7 +600,7 @@ public sealed class LoadOrderResolver : IDisposable
     {
         var s = _snap;                                                 // ONE build, captured for the whole enumeration
         if (!_nameToIdx.TryGetValue(pluginName, out int idx))
-            throw new ArgumentException($"plugin not in the load order: {pluginName}.{PluginNameSuggest.DidYouMean(pluginName, _names)}");
+            throw new ArgumentException($"plugin not in the load order: {pluginName}.{AbsenceClause(pluginName)}");
         if (s.Excluded.Contains(idx))
             throw new ArgumentException($"plugin '{pluginName}' was excluded from this session: {s.ExcludedPlugins[pluginName]}");
         var ov = OpenOverlay(_paths[idx], _dataDir);
@@ -590,7 +646,7 @@ public sealed class LoadOrderResolver : IDisposable
     IReadOnlyList<string> DeclaredMasters(string pluginName, IndexSnapshot s)
     {
         if (!_nameToIdx.TryGetValue(pluginName, out int idx))
-            throw new ArgumentException($"plugin not in the load order: {pluginName}.{PluginNameSuggest.DidYouMean(pluginName, _names)}");
+            throw new ArgumentException($"plugin not in the load order: {pluginName}.{AbsenceClause(pluginName)}");
         if (s.Excluded.Contains(idx))
             throw new ArgumentException($"plugin '{pluginName}' was excluded from this session: {s.ExcludedPlugins[pluginName]}");
         var ov = OpenOverlay(_paths[idx], _dataDir);
@@ -684,7 +740,7 @@ public sealed class LoadOrderResolver : IDisposable
         foreach (var name in scopePlugins)
         {
             if (!_nameToIdx.TryGetValue(name, out int i))
-                throw new ArgumentException($"plugin not in the load order: {name}.{PluginNameSuggest.DidYouMean(name, _names)}");
+                throw new ArgumentException($"plugin not in the load order: {name}.{AbsenceClause(name)}");
             if (s.Excluded.Contains(i))                                    // explicitly scoped to an excluded plugin → fail loud with the reason (Q3), don't silently scan nothing
                 throw new ArgumentException($"plugin '{name}' was excluded from this session: {s.ExcludedPlugins[name]}");
             idxs.Add(i);

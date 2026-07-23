@@ -4,6 +4,340 @@ All notable changes to houseCARL are documented here. Versioning is [semantic](h
 the `version` in `.claude-plugin/plugin.json` is bumped on each release, so installed users update only
 when it changes.
 
+## Unreleased
+
+*Accumulating notes for the next cut — not yet released; `plugin.json` still reads the last shipped version.*
+
+**A plugin addressed by its file path is no longer mislabeled off-order and disabled (#269).**
+`diff_record` stamped `OUT-OF-LOAD-ORDER (direct path, disabled)` on a plugin that is enabled and winning whenever it
+was passed as an absolute path instead of a filename — the diff values were right, but the provenance line said the
+live file wasn't live, which is exactly the claim a diff is consulted for. Two causes, both fixed: the shared on-disk
+locate asserted "not enabled" for every direct path instead of computing it, and `diff_record` routed poles by plugin
+NAME only, so a path could never match the active order. Enabled-ness now comes from the same enumerator the filename
+lane uses (so the two can't disagree about one file), and a path that IS the copy the order loads resolves back to its
+plugin name and diffs as `active order`.
+
+The flag a located plugin carries — what `read_plugin_file` renders as `NOT active` and `diff_record` as `disabled` —
+now means one thing in every lane: **the game loads this file**. That needs both halves, and each was wrong before:
+
+- **The right copy.** Judged by full path against the copy the install actually serves (the first hit from an enabled
+  layer — the same rule that builds the real load order). An archived backup sharing a filename stays
+  `OUT-OF-LOAD-ORDER`, so the old-version-vs-live diff is unchanged; a copy shadowed by a higher-priority mod is not
+  called active merely because its own mod is enabled; and a plugin served from game `Data` is not called inactive
+  merely because some disabled mod holds the same filename.
+- **Ticked.** A plugin sitting in an *enabled mod* but *unchecked in MO2's right pane* is no longer reported as
+  active — the game does not load it. Implicit base/CC masters, which are force-loaded and never listed in
+  `plugins.txt`, still count as active. This half applies to the filename and `mod=` lanes too, so all three now
+  state the same fact.
+
+Reported by a houseCARL user. (The banner wording and the one-flag-many-causes question this left open are resolved by
+the next entry.)
+
+**Every "not active" now says WHY, and so does every refusal that turns one away (#271).**
+`NOT active` / `disabled` named the state but never the cause — and the causes have different fixes: the plugin is
+unticked in `plugins.txt`, its mod is switched off, a higher-priority mod shadows this copy, or MO2 has not registered
+it. Reading `[mod 'X' (enabled); NOT active]`, you could not tell which, so the answer had to be rediscovered by hand
+every time. Two things changed:
+
+- **The located-plugin flag became two facts** — *is this the copy the install serves* and *is this plugin ticked* —
+  carried separately so each renderer can explain rather than classify. `read_plugin_file`, `diff_record`'s off-order
+  pole, and `copy_npc_appearance`'s donor line now state the cause, from one shared composer so they cannot drift
+  apart; the JSON lane gains a `why_not_active` field beside `enabled`. A file the game *does* load now says so
+  positively instead of saying nothing. Vocabulary is consistent throughout: a **mod** is enabled/disabled, a
+  **plugin** is active/inactive — `diff_record` no longer calls an unticked plugin "disabled".
+- **Refusals explain themselves.** A tool that reads *through* the load order still refuses on a plugin the game does
+  not load — that guard is the point — but instead of a flat "not in the load order", it now says the plugin is
+  installed and unticked (or that its mod is off), and points at `read_plugin_file` for a raw read. This covers
+  `read_record`, `check_errors`, `validate_scripts`, `merge_plugins`, every in-place write target, and the forward
+  source check. A genuine typo still gets its "did you mean" — the explanation replaces the spelling guess only when
+  there is a real cause to state. The four not-loaded causes each carry their own remedy, and the two that look
+  alike from outside — a mod switched **off** versus a folder MO2 has **never registered** (where there is nothing
+  to switch on) — are told apart from MO2's own mod list rather than guessed.
+
+**The `read_plugin_file` banner no longer overclaims.** It read `OUT-OF-LOAD-ORDER (raw file read; the game does not
+load this file)` — true of the read, false about the file whenever the one you passed IS the live plugin. It now reads
+`(raw file read — not resolved through the load order)`, which holds in every case; what the game does with the file
+is stated separately, per file, with its reason. The same sentence is gone from `read_plugin_file`'s own tool
+description and from `copy_npc_appearance`'s donor line, where it was asserted even for a donor the game does load.
+
+**The Codex umbrella router now covers the whole tool surface, and a CI guard keeps it that way (Codex parity).**
+The Codex packaging ships one umbrella routing skill (`plugin/codex/housecarl/SKILL.md`); it had drifted to naming
+only 9 of the ~45 MCP tools and 5 of the 13 helper skills, so a Codex user asking about facegen, Nexus, BSA
+archives, dialogue, SKSE audits, or plugin compaction got no routing from it. It now carries a capability-grouped
+map of **all 45 tools** and routes to **all 13 helper skills** (the discrete skills themselves already install to
+Codex under `~/.agents/skills/`, so this restores the router, not the skills). A new `codex-umbrella-coverage`
+CI guard reflects the real `[McpServerTool]` names and the `.claude/skills/*` folders and fails if any is unrouted
+by the umbrella (or explicitly allow-listed) — so the drift cannot silently recur: adding a tool or skill without
+updating the Codex router turns CI red. Codex packaging + CI only; no change to Claude Code behavior.
+
+**The `bulk-record-jobs` skill now teaches how to get a big enumeration out — paging vs. persist-to-file (#249).**
+A new section distinguishes the two independent caps a bulk read hits — the row cap (`limit=` → `capped`) and the
+per-call output cap (`max_chars` → `truncated`) — and names the two lanes for clearing them: `offset=` paging on
+`cross_plugin_query` (deterministic tiling windows; the primary lane, previously undocumented in the skill) and, as the
+complement, raising `max_chars` so an oversized result **persists to a file** to post-process with scripts instead of
+reading it into context (the move that made a 7,479-NPC facegen sweep single-session — one call per plugin, a 5,118-row
+JSON document). Both come with the mandatory guardrail (verify `truncated == false` and `rendered == total` in the
+persisted file) and a caution that huge tool *inputs* are their own stall risk (batch to a few hundred per call).
+Skill documentation only; no tool behavior changed.
+
+**The 13 bundled skills' descriptions were trimmed to cut always-loaded startup context (#256).**
+A skill's `name` + `description` frontmatter load into every session's context — they are not Tool-Search-deferrable —
+and the 13 descriptions totalled ~3,650 tokens. Each carried, past its trigger surface, a trailing
+"Load this before X — <counter-intuitive mechanics>" rationale and grammar detail that is already spelled out in full
+in the skill body (lazy-loaded, free at rest). Those tails and the "using the bundled reference rather than invented
+syntax" boilerplate were trimmed while **every "Use when…" trigger cue and every not-this-other-skill disambiguation
+line was kept**, so trigger accuracy is unchanged and ~590 tokens (16%) come off the always-resident cost. Descriptions
+only — no skill body, reference, or behavior changed; every trimmed frontmatter still parses (the `plugin-validate`
+CI guard, which exists because a colon-space once silently dropped a whole skill, stays green).
+
+**houseCARL's MCP server instructions now orient tool discovery across the whole surface, not just Nexus (#257).**
+The server's `initialize` `instructions` blurb — always resident in the agent's context — was ~90% a Nexus how-to that
+duplicated each Nexus tool's own description and named none of houseCARL's core capabilities, so an agent relying on
+Tool Search had nothing telling it houseCARL could read inactive plugins, see through the SKSE/SkyPatcher runtime
+layers, author dialogue, or compact/merge/decompile. It now leads with the data-layer / MO2 domain and an explicit
+"reach for these tools when…" cue, then sweeps the real surface in five groups (read/query, write, fix,
+reshape/drive-tools, Nexus). Per-tool parameter detail was dropped from the blurb — each tool carries its own,
+fetched on demand — leaving the string broader yet slightly leaner (1,902 bytes, within the ~2 KB per-server budget)
+and ordered so any truncation loses only the least load-bearing Nexus tail.
+
+**`housecarl_nif_inspect` `sections=` now accepts the JSON-array form and fails loud on an all-unrecognized value (#247).**
+Passing `sections` as a JSON array — the natural MCP way to send a list — arrived as the literal string
+`["shapes","paths"]`, and, split only on comma/space, tokenized to `["shapes` / `"paths"]` (brackets and quotes glued
+on), read as unrecognized, and the tool **quietly fell back to rendering the default summary** — so a batch could run
+with the wrong sections while the warning scrolled off the top of a large persisted file. The tokenizer now treats
+bracket and quote as delimiters too, so `["shapes","paths"]` parses; and a `sections=` in which **nothing** is
+recognized is now a loud error naming the tokens, never a silent summary (a partial request still renders the valid
+sections plus a warning). The unrecognized-section message — and the tool description — now also point out there is no
+`textures` section: a mesh's embedded texture-set slot paths appear under `shapes` (per-shape detail) and `paths`.
+
+**`housecarl_bulk_apply` read-back now reports the true count for a `composes=` Add of N — no more misleading `(+1)` (#259).**
+Appending N elements to a list field in one op via `composes=` rendered a verify line that reported only the last element,
+as if a single element was added — `✓ … Add Conditions: now 37 (+1), new [36] = [ConditionFloat]` for a six-element
+compose — because the Add read-back hardcoded a `+1` delta and the single last index. The data on disk was correct (the
+list total was the only clue all six landed), but the summary contradicted the op and cost real mid-session doubt. The
+read-back now carries the op's appended count and reports the whole run: `now 37 (+6), new [31..36]`. A single-element
+Add is unchanged (`now 29 (+1), new [28] = …`).
+
+**A `[Flags]` enum field with unknown bits now decodes the known bits instead of collapsing to a bare decimal (#255).**
+When a flags field carries a bit the record catalog doesn't name (a modded slot, or a game-version bit houseCARL's
+Mutagen build predates), `.NET`'s `[Flags].ToString()` abandons the name list and renders the whole value as one
+decimal — e.g. `Configuration.Flags = 2490402` on Dawnguard vampire NPCs — silently losing even the *known* bits
+(gender, uniqueness, ghost state) a consumer needs. A read now appends a display-only decode of the form
+`2490402   (<known flag names> (+unknown bits 0x…))` — the known bits by name, the unnamed remainder as an explicit hex
+mask, so the common bits stay directly consumable and the presence of unknown bits is stated rather than hidden. The
+known bits are peeled the way `[Flags].ToString()` itself names them (fully-contained members, combos before their
+constituent bits), so the name slot is never itself a bare decimal. The round-trip token is unchanged (the bare decimal
+still round-trips through `Enum.Parse`, so write / read-proof / diff are untouched) — the decode rides the same display
+channel as the existing biped-slot annotation, which keeps its slot-number decode.
+
+**`housecarl_read_record` / `housecarl_batch_record_detail` `depth=2` now surfaces an owned-record list element's own FormID (#252).**
+A list whose elements are themselves owned records — most commonly a DIAL topic's `Responses` (each element an INFO record) —
+surfaced no FormID at `depth=2`: an element rendered a bare `[DialogResponses]` (or `[DialogResponses] EditorID=…` when the INFO
+carried an EditorID), never the FormKey that is an owned record's canonical identity. Mapping topics to their child INFOs meant a
+second call with explicit `[i].FormKey` paths (and you couldn't enumerate those paths without first reading the element count).
+The `depth=2` "index + identity" contract now holds for owned-record elements the way it already did for lone-FormLink structs
+(#198): each leads with `[DialogResponses 000ABC:Plugin.esp editorid=…]` — its own FormKey, plus EditorID when present. Applies
+wherever `depth=` expands (text and `format=json`).
+
+**`Conditions[].Data` arm parameters now expand in a `Conditions` list dump (#258).** A polymorphic condition-data arm reached by
+expanding a `Conditions` list stopped at its bare `[GetFactionRankConditionData]` type — its parameter fields (`Faction`, `Global`,
+`Reference`, `RunOnType`, …) surfaced only when `Data` was addressed directly (`fields=["Conditions[2].Data"]`) or at an extra depth
+level, so a `fields=["Conditions"] depth=3` dump silently stopped one level short of the params. The depth-floor "open one bounded
+level" exception — previously VMAD-script-property-only — now also opens a condition arm's parameters, so a whole condition stack
+(function + params) reads in one call at the natural depth. Bounded to one level (an arm's members are leaves/links) and
+type-targeted (every other substruct still stops at the floor, unchanged).
+
+**`housecarl_cross_plugin_query` `group_by=` now case-folds plugin keys — case-variant spellings of one plugin no
+longer split into separate groups (#248).** A load-order-wide `group_by=defined_in` counted the same plugin twice when
+different plugins spelled a shared master with different casing — e.g. `ccBGSSSE025-AdvDSGS.esm = 40` *and*
+`ccbgssse025-advdsgs.esm = 35` as two rows — because a defining-plugin key carries each plugin's own master-list
+spelling. Any consumer summing per-plugin counts silently double-grouped. Plugin filenames are case-insensitive
+identifiers everywhere else in houseCARL (and in the game); group keys now match, merging the counts (first-seen casing
+is displayed). The same case-fold covers `group_by=winner` for consistency (its keys come from one canonical name array,
+so they don't vary in casing the way `defined_in` keys do); `group_by=type` is unaffected (record-type names never
+differ only by case).
+
+**`housecarl_cross_plugin_query` gains `where_source=winner` — filter on the live winner, not the scoped body (#233).**
+Under a `plugins=` scope the body filters (`where=`, `references=`, `editorid_contains=`) decided the match against
+each match's *scoped* plugin body, even with `winner_fields=true` — so a post-patch audit like "Bruma-defined NPCs
+whose live winner still uses a PC-level multiplier" returned every record that *ever* had one (259), not the 82 whose
+winner *still* does. `winner_fields=` only changed what was *displayed*, never what *matched*. Now `where_source=winner`
+retargets the whole match onto the live load-order winner: `plugins=[…] defined_in=true where=["Configuration.Level.LevelMult >= 0"]
+where_source=winner` returns exactly the winners still on the multiplier, server-side, in one call — no more scanning every
+winner in the order and filtering FormKeys by hand. (It re-fetches each candidate's winner body, so a very *broad*
+winner-source scan is not yet as fast as it can be — an O(order) fetch is tracked in #251; correctness is unaffected.)
+It stays decoupled
+from `winner_fields=` (DISPLAY), so `where_source=winner winner_fields=false` matches on the winner while showing the
+scoped origin body — a real audit. Loud refusals (Q3): an unknown value names `scoped`/`winner`; `where_source=winner`
+with no body filter to retarget is refused; and under a `type=`-only scope (already the winner) it's accepted with a
+"redundant" note, never a silent no-op. Default (`scoped`) is unchanged.
+
+**`housecarl_cross_plugin_query` learns `depth=` (#231).** Nested list contents were unreachable in a scan:
+`fields=["Effects"]` rendered only `[list: N item(s)]`, and the workaround — hand-written bracket paths like
+`Effects[2].Data.Magnitude` — meant guessing the longest list up front and eating an out-of-bounds error triple
+for every shorter record (66 spells → hundreds of wasted lines, twice past the token cap). Now `depth=` rides the
+scan with the same semantics as `housecarl_read_record` / `batch_record_detail`: `fields=["Effects"], depth=4`
+expands every match's per-effect Data in one call — each record shows exactly its OWN elements, no index guessing,
+no out-of-bounds noise — and `resolve_names=` composes with the expansion. Works in `format=text` and `json`;
+`dense` refuses `depth>1` loud (its columnar cells align 1:1 with the requested paths — the container cells name
+the text/json hop), and `depth=` without `fields=` is refused loud too. The old container hint ("cross_plugin_query
+has no depth=; expand via batch_record_detail") is retired with the gap it described.
+
+**`housecarl_nif_inspect` goes batch — `mesh_paths` takes one or many (#229).** The last per-file loop in a
+load-order-wide dark-face scan is gone: `mesh_path` is now `mesh_paths`, an `asset_status`-style array (a single
+path is simply a batch of one). One call resolves the whole flagged subset — **one load-order resolution for the
+entire batch** instead of one per mesh — with results in input order, `sections=` / `mod=` / `max_chars` applying
+batch-wide, and every per-path failure (ABSENT, bad path, a `mod=` that doesn't provide it, unreadable bytes, a
+parse refusal) reported LOUD on **that** path without aborting the rest (Q3). The batch-level caveats (unreadable
+archives, discovery warnings) render once, first, so a long batch can't truncate them away — and every ABSENT is
+additionally **hedged at point of use** when the scan behind it was incomplete (`asset_status` parity: a bare
+"absent" is never over-trusted just because the top-of-output alarm scrolled away). An over-cap output is cut with
+the omitted-mesh count named, never silently — and `max_chars` can never starve a single-path call of its core
+answer (the first mesh's resolution/error always renders). The `facegen-diagnostics` batch flow no longer needs to
+sample the flagged subset — inspect all of it in one call.
+
+**`resolve_names` / `housecarl_resolve` no longer call PlayerRef "unresolved" (#230).** The engine-implicit forms —
+PlayerRef (`000014:Skyrim.esm`) and the Player base NPC (`000007:Skyrim.esm`) — are hardcoded engine references no
+plugin defines, so the identity resolver flagged every condition or link pointing at them as
+`unresolved: target not in the active order` (67 false suspects in one 67-record audit), while `check_errors`
+correctly called the same links clean. The resolver now applies the same precise two-form exemption the integrity
+sweep and dialogue lints already share: those links annotate `→ PlayerRef` / `→ Player` (winner `<engine>` in a
+`housecarl_resolve` row), and any OTHER sub-0x800 form still reports unresolved — the exemption is the two known
+forms, never the whole reserved range.
+
+**`housecarl_bulk_apply` learns manifest files — `from_file=` (#224).** A big write job used to mean pasting the
+whole ops array inline (the 745-record stress test generated 20 local `ops_*.json` chunk files and fed them through
+piecewise). Now `from_file=<absolute path>` reads the SAME operations array as a JSON manifest on disk: generate
+the manifest once, validate the **whole file** with `dry_run=true` before the first write, apply it in one call —
+and re-run the same manifest to recover an interrupted write (overrides are idempotent). The parsed ops ride the
+identical pipeline as inline ones (every lane and `dry_run` compose by construction; the dry-run report is
+string-identical to the same ops inline). The file contract is all named refusals (Q3): `operations` XOR
+`from_file`, absolute path required, invalid JSON named with line+column, a non-array root, an empty array, and —
+stricter than inline binding, which silently drops unknown members — a misspelled op member (`feild_path`) is
+refused **by name at its element** instead of becoming a null-field op whose downstream error points away from the
+typo.
+
+**Dry-run mode for the write tools (#225).** `housecarl_set_field`, `housecarl_bulk_apply`, and
+`housecarl_forward_record` gain `dry_run=true`: the **full real write pipeline** runs — winner resolve, schema
+pre-flight, every op applied to the in-memory would-be plugin, a reference-resolution check that pre-empts the
+serialize's missing-master failure — and stops at the point of no return, so **nothing touches disk** (no patch
+file, no mod folder, no in-place rewrite). The report says what *would* change (per-op would-be values, the
+expected master set, `full_readback=true` for the full in-memory record preview), and a bad batch gets **exactly
+the all-or-nothing refusal the real call would give** — so a wrong field path in a 700-op batch is caught before
+the first write, not diagnosed after the last. Works on every lane: fresh patch, `into=`, and `in_place` (an
+in-place dry run needs no `acknowledge` and never records consent — it's read-only; the pending consent is noted
+so the real write's one-time prompt isn't a surprise).
+
+**BSA reads move in-process — `housecarl_bsa_list` / `housecarl_bsa_extract` (#217).** Listing and extracting a
+`.bsa` no longer shell out to BSArch; they read through Mutagen's own in-process BSA reader. This fixes an archive
+class BSArch's *unpacker* rejected: an archive written by a non-BSArch tool could list and load in-game yet extract
+to **zero files**. It also now handles **compressed** archives, and was verified byte-for-byte identical to BSArch's
+own unpack (uncompressed *and* compressed). Consequences:
+
+- **No external tool is needed to list or extract** — only `housecarl_bsa_repack` still calls BSArch, because Mutagen
+  ships a BSA reader but no writer (confirmed by exhaustive reflection over its archive surface). Repack is now the
+  one BSA operation that still prompts for the BSArch path.
+- Extraction gains two safety properties the BSArch path never had: it is **path-traversal-guarded** (an entry
+  resolving outside the destination is refused) and **content-aware/idempotent** (a byte-identical file already
+  present is skipped).
+- A per-entry size ceiling and a header-vs-reader file-count cross-check keep a corrupt or hostile archive to a
+  **loud, named failure** rather than an out-of-memory or a silent empty extract.
+
+**Wrong-type arguments are now named (#222).** Passing an argument of the wrong type — an object where a number
+is expected, a string where a boolean is — used to surface as a raw `JsonException … BytePositionInLine: 34`: a
+byte offset with no parameter name, forcing you to bisect which argument was at fault. The argument-binding shim
+now catches the type mismatch *before* binding and names the offender, its expected type, and the kind received
+(e.g. `parameter whose type could not be bound: conflicts_only (expects boolean, received string)`) — the same
+named-and-actionable style the missing-parameter and unknown-parameter paths already use. Obvious-intent shapes
+(a bare string for an array, a quoted number or boolean) are still auto-coerced, so well-formed calls are
+unaffected.
+
+**Obvious parameter aliases now bind (#221).** Tool parameters aren't uniformly named — one tool takes `plugins`,
+another `plugin`, another `plugin_name` — so a first-guess miss (`form_id` for `formid`, `plugin` for a tool's
+`plugins`) cost a round-trip. The argument-binding shim now recognizes an obvious synonym of a declared parameter
+and renames it to the canonical one, so the call binds instead of erroring. It's deliberately conservative: it
+resolves an underscore/case variant (`form_id` ≡ `formid`) or a known singular/plural synonym, and **only** when
+exactly one declared, not-already-supplied parameter matches — an ambiguous or unmatched name still gets the named
+unknown-parameter error, a declared parameter is never treated as an alias (a tool's real `plugin=` is untouched),
+and an explicit canonical value is never overwritten. The published schema still advertises only the canonical
+name.
+
+**`cross_plugin_query` learns identity membership — `formid in` / `formid not in` a supplied list (#226).** The
+reconciliation subtraction — "every record of these types in plugin X, *minus* these ~1,200 already-claimed
+FormIDs" — used to run client-side over verbose enumerations because `where=` had no exclusion predicate. It now
+does: `where=["formid not in [XXXXXX:A.esp, YYYYYY:B.esp]"]` (inline, comma-separated — spaces in plugin
+filenames are safe, and a pasted JSON array works as-is) or `where=["formid not in @C:\\work\\claimed.txt"]` (an
+absolute-path file of FormIDs, comma- or newline-separated). `formid in` is the symmetric keep-only form, and both
+AND with the existing value predicates. The list is fully validated before any scan — a malformed FormID, an
+unreadable or relative file path, or an empty list refuses the call by name, never a silent wrong result.
+
+**`cross_plugin_query` learns bulk-enumeration economy — `format="dense"` + `offset=` pagination (#223).** A
+whole-mod enumeration used to be the context-budget drain: `format="json"` repeated the identity envelope and a
+`{path, value}` object per field on every match (~80 records per 40k chars at two fields), and with `limit` but no
+offset, paging meant slicing by `editorid_contains`. Now:
+
+- **`format="dense"`** renders one columnar document — a `columns` array once, then one positional row per match
+  (`[formid, editorid, field values…]`; summary rows are `[formid, type, editorid, winner, override_depth]`; under
+  a `plugins=` scope, detail rows gain a `source` column naming the body each row's values came from). Same
+  read path and accounting as the other formats; a no-value field shows its note (`"(absent)"`) in-cell, a failed
+  row lands in a separate `errors` array, and `resolve_names` annotations still work. In the probe's own
+  measurement the same one-field query renders **2.6× smaller** than `format="json"` — and the gap widens with
+  more fields.
+- **`offset=`** skips the first N matches, so `offset=0/500/1000…` + `limit=` pages an enumeration in windows that
+  tile exactly (scan order is deterministic while the load order is unchanged). The true total always counts all
+  matches; the text header names the window and the next offset (`showing matches 501–1000; continue with
+  offset=1000`), and json/dense carry `offset` in-band. Negative offsets and `offset=` under `group_by=` (a count
+  table has no window) are refused by name.
+
+## 1.9.0 — 2026-07-17
+
+houseCARL's view of the **SKSE-plugin layer** grows from *inventory* into *diagnosis*: two new audit tools
+that catch a broken native pairing or a dead config reference statically — before the game fails silently on
+it — completing the SKSE layer-visibility ladder (tiers A→D, #199). **Two new tools (→ 45), no new skills
+(still 13).**
+
+**SKSE layer diagnosis — two new audit tools**
+
+- **`housecarl_native_pairing_audit` — the native functions your scripts declare vs the DLLs that must
+  implement them.** A native Papyrus function is one thing declared in two files that ship and fail
+  independently: a `.pex` class flags the function, and an SKSE DLL registers the implementation at runtime.
+  When the halves don't meet, the engine logs a cryptic "unable to bind" and the calls silently no-op. This
+  scans the winning copy of every compiled script (loose + BSA) and pairs each native-declaring class to the
+  DLLs its mod ships under `SKSE\Plugins`, leading with the findings: **PAIRED-BUT-DEAD** — scripts installed,
+  but every candidate DLL statically will not load (wrong game runtime for a version-locked plugin, BSA-only,
+  shipped in a subfolder, 32-bit, unreadable, or built against the debug CRT) — and **UNPAIRED** — no DLL in
+  sight, a VERIFY flag, typically a declaration copy of a framework you don't have. It keeps the engine
+  baseline honest by construction (a class carried by an official archive is the engine's, even when an SKSE
+  loose override wins the file), and answers "is the pairing plausible and healthy", never "does the DLL
+  register exactly these functions" — runtime behaviour, the honest tier-E ceiling it never crosses.
+- **`housecarl_skse_config_audit` — the form references your SKSE configs declare vs your real load order.**
+  Reads the winning copy of every `.ini` / `.toml` / `.json` / `.yaml` config across the full depth of
+  `Data\SKSE\Plugins`, extracts every form-shaped reference (a hex FormID paired with a plugin name in either
+  order — the DSD/po3, SkyPatcher, and tilde forms — plus plugin-named folder gates), and resolves each to a
+  verdict: **OK**, **PLUGIN MISSING**, **DANGLING** (plugin present but no such record), or **UNPARSEABLE**.
+  The summary separates **BROKEN** (dangling / unparseable — actionable) from **INERT** (a plugin you don't
+  have installed — usually optional support), so a genuinely broken patch is caught by houseCARL instead of by
+  a silent in-game failure. Framework-agnostic: it checks reference *validity*, never what a reference is
+  *for* (that's per-framework skill territory) or what the DLL *does* with it (the honest ceiling).
+
+**Enhancement**
+
+- **`housecarl_skse_inventory` gains `peek=` — a static peek inside a specific DLL's image.** With `filter=`
+  naming a DLL, `peek=true` reports the DLL's imports and the config paths and plugin names it embeds —
+  answering "what does this unfamiliar DLL touch" without loading it. Per-DLL by design (a whole-layer peek
+  would read every image and drown signal in noise), so a bare `peek=true` fails loud asking for a filter.
+
+**Fixes**
+
+- **`check_errors` no longer false-flags a faction owner's required rank as a dangling reference.** A record
+  owned by a faction at a required rank was misread as carrying a broken link; the rank is a valid part of the
+  ownership structure, not a form reference, and is now recognized. (#207)
+- **`bulk_create` / `create_record` now fill a dialogue branch's `Flags` (DNAM).** Mutagen omits a null
+  optional subrecord, and the engine reads an absent DNAM as **top-level** — so a `DialogBranch` you never
+  marked top-level was silently published to the player's dialogue menu: byte-valid, passing every check, wrong
+  only once the game loaded it. The CK-parity auto-fill now seeds `Flags` (matching how it already handles
+  `Category`), surfaced as an explicit op, and `validate_dialogue` warns when a branch carries no DNAM. (#212)
+
 ## 1.8.1 — 2026-07-16
 
 A small read/query-surface patch: two refinements that let a whole-plugin audit and a record read land the

@@ -1,8 +1,10 @@
-# Codex skill metadata for the houseCARL umbrella skill (schema reviewed by Codex, 2026-06-04).
+# Codex skill metadata for the houseCARL umbrella skill. Schema first reviewed 2026-06-04; re-verified
+# 2026-07-21 against Codex's Build-skills docs (interface/policy/dependencies fields, ~/.agents/skills
+# discovery, MCP-via-config.toml) — still current.
 interface:
-  display_name: "houseCARL"
-  short_description: "Skyrim SE / MO2 data-layer modding."
-  default_prompt: "Use $housecarl to inspect or patch my Skyrim load order with the houseCARL MCP server."
+  display_name: "houseCARL-Amethyst"
+  short_description: "Skyrim SE / Amethyst data-layer modding."
+  default_prompt: "Use $housecarl to inspect or patch my Amethyst Skyrim load order."
 
 policy:
   allow_implicit_invocation: true
