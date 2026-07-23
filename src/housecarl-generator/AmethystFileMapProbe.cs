@@ -8,6 +8,9 @@ namespace HousecarlGenerator;
 /// <summary>Locks Amethyst v4 winners, exclusions, raw casing, and stripped-wrapper lookup.</summary>
 public static class AmethystFileMapProbe
 {
+    /// <summary>Runs authoritative-winner and fail-loud filemap scenarios.</summary>
+    /// <param name="args">Reserved common probe arguments; currently unused.</param>
+    /// <returns>Zero when every invariant holds; one after printing a failure.</returns>
     public static int RunGuard(string[] args)
     {
         var root = Path.Combine(Path.GetTempPath(), "hc-amethyst-filemap-" + Guid.NewGuid().ToString("N"));
@@ -26,6 +29,11 @@ public static class AmethystFileMapProbe
         finally { try { Directory.Delete(root, true); } catch { } }
     }
 
+    /// <summary>
+    /// Proves winner priority, exclusions, strip prefixes, raw casing, overwrite, vanilla fallback,
+    /// archive discovery, loose-over-BSA conflict ordering, and vanished-source refusal.
+    /// </summary>
+    /// <param name="root">Parent temporary directory for the complete winner scenario.</param>
     static void WinnerFixture(string root)
     {
         var profile = Path.Combine(root, "profile");
@@ -112,6 +120,8 @@ public static class AmethystFileMapProbe
             "a vanished indexed winner fails instead of falling back");
     }
 
+    /// <summary>Proves version mismatch, stale state, traversal, and missing-map refusals.</summary>
+    /// <param name="root">Parent temporary directory for isolated invalid states.</param>
     static void RefusalFixtures(string root)
     {
         var profile = Path.Combine(root, "refusals", "profile");
@@ -140,6 +150,10 @@ public static class AmethystFileMapProbe
         Check(!AmethystFileMap.Load(profile, mods, overwrite, filemap, index).Ready, "missing filemap is explicit");
     }
 
+    /// <summary>Writes the exact MessagePack shape Amethyst uses for synthetic modindex fixtures.</summary>
+    /// <param name="path">Destination modindex.bin path.</param>
+    /// <param name="version">Schema version written to the root <c>v</c> field.</param>
+    /// <param name="mods">Providers and their normalized-key/raw-path/kind entries.</param>
     internal static void WriteIndex(
         string path, int version,
         params (string Mod, (string Key, string Path, string Kind)[] Files)[] mods)
@@ -169,6 +183,9 @@ public static class AmethystFileMapProbe
         File.WriteAllBytes(path, buffer.WrittenSpan.ToArray());
     }
 
+    /// <summary>Creates an empty staged/vanilla source and returns its physical path.</summary>
+    /// <param name="path">Destination path whose actual spelling matters to the scenario.</param>
+    /// <returns>The unchanged path for fixture composition.</returns>
     static string Touch(string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
@@ -176,17 +193,28 @@ public static class AmethystFileMapProbe
         return path;
     }
 
+    /// <summary>Asserts scalar equality and names the scenario arm on failure.</summary>
+    /// <typeparam name="T">Non-null comparable value type.</typeparam>
+    /// <param name="expected">Required value.</param>
+    /// <param name="actual">Observed value.</param>
+    /// <param name="arm">Scenario name included in failures.</param>
     static void Equal<T>(T expected, T actual, string arm) where T : notnull
     {
         if (!EqualityComparer<T>.Default.Equals(expected, actual))
             throw new InvalidOperationException($"{arm}: expected '{expected}', got '{actual}'");
     }
 
+    /// <summary>Asserts a boolean filemap invariant.</summary>
+    /// <param name="value">Condition that must be true.</param>
+    /// <param name="message">Failure explanation.</param>
     static void Check(bool value, string message)
     {
         if (!value) throw new InvalidOperationException(message);
     }
 
+    /// <summary>Asserts a named Amethyst configuration refusal containing the expected text.</summary>
+    /// <param name="action">Operation expected to reject invalid manager state.</param>
+    /// <param name="text">Required error fragment.</param>
     static void Throws(Action action, string text)
     {
         try { action(); }
@@ -194,6 +222,10 @@ public static class AmethystFileMapProbe
         throw new InvalidOperationException($"expected AmethystConfigurationException containing '{text}'");
     }
 
+    /// <summary>Asserts a runtime asset refusal after an authoritative source disappears.</summary>
+    /// <param name="action">Asset operation expected to fail.</param>
+    /// <param name="text">Required error fragment.</param>
+    /// <param name="arm">Scenario explanation used when the expected refusal is absent.</param>
     static void ThrowsInvalid(Action action, string text, string arm)
     {
         try { action(); }

@@ -7,7 +7,12 @@ namespace HousecarlCore;
 /// </summary>
 public static class BethesdaPath
 {
-    /// <summary>Validate and canonicalize a Data-relative path.</summary>
+    /// <summary>Validates and canonicalizes an untrusted Data-relative path.</summary>
+    /// <param name="path">Slash- or backslash-separated logical path supplied by a caller or manager file.</param>
+    /// <returns>The same logical segments joined with Bethesda backslashes.</returns>
+    /// <exception cref="ArgumentException">
+    /// The path is empty, absolute, drive-rooted, NUL-containing, contains empty segments, or can escape its root.
+    /// </exception>
     public static string Normalize(string path)
     {
         if (string.IsNullOrWhiteSpace(path)) throw Invalid(path, "the path is empty");
@@ -22,10 +27,18 @@ public static class BethesdaPath
         return string.Join('\\', segments);
     }
 
-    /// <summary>Normalize a trusted archive-table entry without applying host-path rules.</summary>
+    /// <summary>Normalizes a trusted archive-table entry without applying untrusted host-path rules.</summary>
+    /// <param name="path">Path read from an already parsed BSA directory table.</param>
+    /// <returns>A backslash-separated archive lookup key without leading separators.</returns>
+    /// <remarks>
+    /// BSA readers need their original internal namespace. Use <see cref="Normalize"/> for any path
+    /// that may reach the host filesystem; this helper is deliberately not a traversal validator.
+    /// </remarks>
     public static string NormalizeArchiveEntry(string path) => (path ?? "").Replace('/', '\\').TrimStart('\\');
 
-    /// <summary>Return the canonical parent path, or an empty string for a top-level file.</summary>
+    /// <summary>Returns the canonical parent path, or an empty string for a top-level file.</summary>
+    /// <param name="path">Validated or untrusted Bethesda-relative path.</param>
+    /// <returns>The canonical parent portion without a trailing separator.</returns>
     public static string DirectoryName(string path)
     {
         var canonical = Normalize(path);
@@ -33,7 +46,9 @@ public static class BethesdaPath
         return separator < 0 ? "" : canonical[..separator];
     }
 
-    /// <summary>Return the final canonical path segment.</summary>
+    /// <summary>Returns the final canonical path segment.</summary>
+    /// <param name="path">Validated or untrusted Bethesda-relative path.</param>
+    /// <returns>The file or directory name after the last Bethesda separator.</returns>
     public static string FileName(string path)
     {
         var canonical = Normalize(path);
@@ -41,19 +56,36 @@ public static class BethesdaPath
         return separator < 0 ? canonical : canonical[(separator + 1)..];
     }
 
-    /// <summary>Convert a canonical path to a relative path using native separators.</summary>
+    /// <summary>Converts a canonical path to a relative path using native host separators.</summary>
+    /// <param name="path">Validated or untrusted Bethesda-relative path.</param>
+    /// <returns>A relative host path that remains safe to place beneath a chosen root.</returns>
     public static string ToHostRelative(string path) => Path.Combine(Normalize(path).Split('\\'));
 
-    /// <summary>Place a canonical path beneath a native root.</summary>
+    /// <summary>Places a canonical Bethesda path beneath a native root.</summary>
+    /// <param name="root">Trusted absolute or relative host root chosen by the caller.</param>
+    /// <param name="path">Untrusted Data-relative Bethesda path.</param>
+    /// <returns>The combined native host path.</returns>
     public static string Under(string root, string path) => Path.Combine(root, ToHostRelative(path));
 
-    /// <summary>Convert a native relative path to canonical Skyrim form.</summary>
+    /// <summary>Converts a native relative path to canonical Skyrim form.</summary>
+    /// <param name="path">Relative path produced by host filesystem enumeration.</param>
+    /// <returns>The same segments joined by Bethesda backslashes.</returns>
     public static string FromHostRelative(string path) => Normalize(path.Replace(Path.DirectorySeparatorChar, '\\'));
 
     /// <summary>
     /// Resolve an existing path segment-by-segment with case-insensitive Skyrim semantics,
     /// returning the actual host casing required by case-sensitive Linux filesystems.
     /// </summary>
+    /// <param name="root">Trusted existing directory from which resolution begins.</param>
+    /// <param name="path">Untrusted Data-relative Bethesda path to resolve.</param>
+    /// <param name="resolved">
+    /// Actual-cased existing path on success; the safely combined expected path on failure for diagnostics.
+    /// </param>
+    /// <returns>True only when every segment was enumerated and matched case-insensitively.</returns>
+    /// <remarks>
+    /// Enumeration errors fail closed. The method never substitutes a differently cased guessed path as
+    /// proof that the source exists on Linux.
+    /// </remarks>
     public static bool TryResolveExisting(string root, string path, out string resolved)
     {
         var current = root;
@@ -83,6 +115,10 @@ public static class BethesdaPath
         return true;
     }
 
+    /// <summary>Creates the consistent caller-facing error used by every Bethesda-path guard.</summary>
+    /// <param name="path">Rejected caller value.</param>
+    /// <param name="reason">Specific violated path rule.</param>
+    /// <returns>An argument exception naming the Data-relative contract.</returns>
     static ArgumentException Invalid(string? path, string reason) =>
         new($"Expected a Data-relative Bethesda path, but {reason}: '{path}'", nameof(path));
 }

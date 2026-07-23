@@ -46,15 +46,24 @@ public sealed class UserConfig
 ///     note, never silently treated as blank (the old path silently wiped every saved setting on the next Update).
 /// Best-effort + HONEST: a write failure (e.g. a read-only data dir) is RETURNED, not thrown or swallowed, so the
 /// calling tool can tell the user the choice won't survive a restart. One instance is registered as a singleton and
-/// shared by <see cref="LoadOrderService"/> + the tool bridge.
+/// shared by the MCP load-order service and tool bridge.
 /// </summary>
 public sealed class UserConfigStore
 {
+    /// <summary>Absolute or caller-selected path to the one configuration file this store owns.</summary>
     readonly string _path;
+
+    /// <summary>Fast in-process serialization gate used before the cross-process mutex.</summary>
     readonly object _gate = new();      // process-local fast path; the named mutex below adds the cross-process half
+
+    /// <summary>Per-config named mutex shared by concurrent Codex/Claude server processes.</summary>
     readonly Mutex _mutex;              // named per-file: CLI + desktop server processes serialize on the same config
+
+    /// <summary>Stable human-readable serialization settings for persisted user state.</summary>
     static readonly JsonSerializerOptions Json = new() { WriteIndented = true };
 
+    /// <summary>Creates the sole read/write owner for one user configuration file.</summary>
+    /// <param name="path">Native path to houseCARL.user.json; the file may not exist yet.</param>
     public UserConfigStore(string path)
     {
         _path = path;
@@ -65,7 +74,9 @@ public sealed class UserConfigStore
     public string FilePath => _path;
 
     /// <summary>A stable, legal mutex name for the config file: same file (case-insensitively) ⇒ same mutex in any
-    /// process of this session. Local\ scope — both server hosts (CLI plugin, desktop app) run in the user's session.</summary>
+    /// process of this session. The stable prefix keeps Codex and Claude server instances on the same lock.</summary>
+    /// <param name="path">Configuration path whose normalized identity scopes the lock.</param>
+    /// <returns>A short deterministic name that does not expose the user's full filesystem path.</returns>
     static string MutexName(string path)
     {
         var hash = SHA256.HashData(Encoding.UTF8.GetBytes(Path.GetFullPath(path).ToLowerInvariant()));
@@ -76,6 +87,9 @@ public sealed class UserConfigStore
     /// counts as acquired — the file itself stays consistent because writes are atomic renames. A timeout proceeds
     /// WITHOUT the cross-process half rather than deadlocking a tool call forever; the process-local gate still holds,
     /// and the atomic rename bounds the damage to last-write-wins (never a torn file).</summary>
+    /// <typeparam name="T">Value produced while both gates are held.</typeparam>
+    /// <param name="body">Read or read-modify-write operation to serialize.</param>
+    /// <returns>The operation's value.</returns>
     T WithLocks<T>(Func<T> body)
     {
         lock (_gate)
@@ -91,6 +105,8 @@ public sealed class UserConfigStore
     /// <summary>Read the current config. A missing file yields a fresh blank <see cref="UserConfig"/>; a CORRUPT file is
     /// backed up beside itself and reported via <paramref name="note"/> (Q3 — never silently "nothing saved yet"), then
     /// also yields blank so a tool call still proceeds.</summary>
+    /// <param name="note">Recovery/read warning for the caller to surface, or null after a normal read.</param>
+    /// <returns>The parsed configuration or an explicitly reported blank fallback.</returns>
     public UserConfig Load(out string? note)
     {
         var (cfg, n) = WithLocks(() => { var c = ReadOrRecover(out var rn); return (c, rn); });
@@ -100,6 +116,7 @@ public sealed class UserConfigStore
 
     /// <summary>Read the current config, discarding any recovery note — for callers that only need the values and a
     /// later <see cref="Update"/> (which re-reports) or the boot path's noted Load owns the loudness.</summary>
+    /// <returns>The parsed configuration or blank fallback.</returns>
     public UserConfig Load() => Load(out _);
 
     /// <summary>Apply <paramref name="mutate"/> to the CURRENT on-disk config and write it back ATOMICALLY (temp +
@@ -107,6 +124,8 @@ public sealed class UserConfigStore
     /// note): a write failure is reported in <c>error</c>, not thrown (Q3 — "works this session, won't persist"); a
     /// corrupt prior file is backed up and named in <c>note</c> even when the write itself succeeds, so a recovery is
     /// never silent. The whole read-modify-write runs under the cross-process lock.</summary>
+    /// <param name="mutate">In-memory change applied to the latest state while both locks are held.</param>
+    /// <returns>Persistence success, write error, and any corrupt-file recovery note.</returns>
     public (bool ok, string? error, string? note) Update(Action<UserConfig> mutate)
     {
         return WithLocks<(bool, string?, string?)>(() =>
@@ -132,6 +151,8 @@ public sealed class UserConfigStore
     /// the same way it was recorded regardless of the caller's path spelling. FAIL-SAFE (Q3): a missing / unreadable /
     /// corrupt config reads as NOT acknowledged, so the handshake re-prompts rather than silently proceeding to write a
     /// user's original. Waives the CONSENT axis only — the touched-record verify still runs.</summary>
+    /// <param name="pluginPath">Physical staging plugin path proposed for in-place editing.</param>
+    /// <returns>True only when an equivalent path is present in persisted consent state.</returns>
     public bool IsInPlaceAcknowledged(string pluginPath)
     {
         var key = NormalizePath(pluginPath);
@@ -143,6 +164,8 @@ public sealed class UserConfigStore
     /// through the same atomic read-modify-write as every other field so it can never clobber the connection or tool
     /// paths sharing this file. Returns (ok, error): a write failure is RETURNED, not thrown (Q3 — the caller can tell
     /// the user the edit proceeded but the acknowledgement won't survive a restart, so the next session re-prompts).</summary>
+    /// <param name="pluginPath">Physical staging plugin whose risk the user acknowledged.</param>
+    /// <returns>Persistence success and an actionable write error.</returns>
     public (bool ok, string? error) RecordInPlaceAcknowledged(string pluginPath)
     {
         var key = NormalizePath(pluginPath);
@@ -155,7 +178,9 @@ public sealed class UserConfigStore
         return (ok, error);
     }
 
-    /// <summary>Add or replace one pending write for the same profile and Data path.</summary>
+    /// <summary>Adds or replaces one pending write for the same profile and Data path.</summary>
+    /// <param name="pending">Completed staging write awaiting manager-visible verification.</param>
+    /// <returns>Persistence success and an actionable error when saving failed.</returns>
     public (bool ok, string? error) RecordPendingAmethystWrite(PendingAmethystWrite pending)
     {
         var (ok, error, _) = Update(cfg =>
@@ -169,7 +194,9 @@ public sealed class UserConfigStore
         return (ok, error);
     }
 
-    /// <summary>Clear only writes proven visible after a later Amethyst deployment.</summary>
+    /// <summary>Clears only writes proven visible after a later Amethyst deployment.</summary>
+    /// <param name="snapshot">Fresh complete manager state used by the fail-closed verification gate.</param>
+    /// <returns>Counts cleared/remaining plus an error when updated state could not be persisted.</returns>
     public (int cleared, int remaining, string? error) VerifyPendingAmethystWrites(ManagerSnapshot snapshot)
     {
         var current = Load().PendingAmethystWrites;
@@ -184,13 +211,16 @@ public sealed class UserConfigStore
         return (cleared, remaining, ok ? null : error);
     }
 
-    /// <summary>Return a detached view for status rendering; callers cannot mutate the stored list.</summary>
+    /// <summary>Returns a detached view for status rendering; callers cannot mutate the stored list.</summary>
+    /// <returns>Snapshot array of pending writes, or an empty array when none are stored.</returns>
     public IReadOnlyList<PendingAmethystWrite> PendingAmethystWrites() =>
         Load().PendingAmethystWrites?.ToArray() ?? Array.Empty<PendingAmethystWrite>();
 
     /// <summary>Canonical identity for an in-place acknowledgement: the full, lower-cased path, so the same on-disk file
     /// matches whatever path spelling reaches the check. Best-effort — an un-rootable string falls back to a trimmed
     /// lower-case compare rather than throwing (the worst case is a redundant re-prompt, never a wrong waiver).</summary>
+    /// <param name="p">Plugin path from a call or persisted acknowledgement.</param>
+    /// <returns>Best-effort stable comparison key.</returns>
     static string NormalizePath(string p)
     {
         try { return Path.GetFullPath(p).ToLowerInvariant(); }
@@ -201,6 +231,8 @@ public sealed class UserConfigStore
     /// beside itself (.corrupt.bak — kept until the user deletes it; re-copied while the corrupt file persists) and
     /// return blank with a note naming the backup and what was lost. The corrupt original is COPIED, not moved, so a
     /// read never destroys evidence; the next successful <see cref="Update"/> replaces it with a clean file.</summary>
+    /// <param name="note">Recovery or read-failure explanation; null for a normal read.</param>
+    /// <returns>Parsed configuration, or a blank configuration after an explicitly reported failure.</returns>
     UserConfig ReadOrRecover(out string? note)
     {
         note = null;
