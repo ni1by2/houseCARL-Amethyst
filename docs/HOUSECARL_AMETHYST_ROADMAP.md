@@ -174,6 +174,7 @@ non-obvious invariant has been reviewed.
 - [x] Document the fork's hardlink redeployment model and its safety probe.
 - [x] Review all fork-authored Amethyst layout, filemap, load-order and path code.
 - [x] Review the fork-authored Amethyst MCP connection, status and refresh seams.
+- [x] Review the inherited asset resolution and archive-discovery boundary.
 - [ ] Review all inherited `housecarl-core` declarations and reasoning seams.
 - [ ] Review all inherited and fork-authored `housecarl-mcp` declarations.
 - [ ] Review all `housecarl-setup` declarations during the Linux rewrite.
@@ -256,13 +257,13 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation completed alongside the Linux setup rewrite.
-- Last completed checkpoint: the fork-authored Amethyst MCP connection, status,
-  refresh, load-order lifecycle, and manager-specific service seams now document
-  purpose, inputs, outputs, state changes, failure behavior, and safety
-  boundaries. Product descriptions now name Amethyst's profile and authoritative
-  winner inputs; remaining MO2/explicit paths are labeled as temporary inherited
-  probe seams. Earlier slices cover the complete Amethyst layout/filemap/path
-  foundation and hardlink-safe writes.
+- Last completed checkpoint: the inherited asset/archive layer now documents
+  every function and public member in `AssetResolver`, `ArchiveDiscovery`, and
+  `BsaArchive`. Product-mode comments explain authoritative Amethyst loose
+  winners, Data_Core precedence, injected BSA ranks, pinned snapshots, failure
+  completeness, and zero archive handles at rest. Legacy root walking and the
+  external BSArch boundary are explicitly labeled as probe/deferred seams rather
+  than Linux product behavior.
 - Verification performed: the .NET 9 Linux solution builds successfully after
   the first documentation slice (pre-existing nullable/obsolete warnings, zero
   errors), and `git diff --check` passes. A second build with XML documentation
@@ -271,7 +272,11 @@ manual release gate.
   `amethyst-layout-guard`, `amethyst-load-order-guard`,
   `amethyst-filemap-guard`, `amethyst-runtime-guard`, and
   `amethyst-redeploy-guard` pass. The strict build reports no documentation
-  warnings. Before this documentation work, the generator build passed and
+  warnings; the asset/archive files also pass with CS1591 enabled. The
+  `asset-resolver-guard`, `asset-status-guard`, `amethyst-filemap-guard`, and
+  `place-asset-guard` pass. `bsa-contract-guard` still stops at its validated
+  Linux baseline assumption because it tries to copy `where.exe`; it does not
+  reach the reviewed code. Before this documentation work, the generator build passed and
   `amethyst-redeploy-guard` proves that an atomic staging replacement leaves an
   existing deployed hardlink on its old inode, then clears pending state only
   after newer filemap/deploy timestamps and matching deployed content or link
@@ -283,8 +288,8 @@ manual release gate.
   `BethesdaPath`, `IModManagerLayout`/`ManagerSnapshot`, `AmethystLayout`,
   `AmethystLoadOrder`, `AmethystFileMap`, `UserConfigStore`, `AmethystRedeploy`,
   the Amethyst write/redeploy and manager-lifecycle seams in `LoadOrderService`,
-  `AmethystTools`, `SetupTools`, `StatusTools`, `Guard`, and their five focused
-  probes.
+  `AmethystTools`, `SetupTools`, `StatusTools`, `Guard`, `AssetResolver`,
+  `ArchiveDiscovery`, `BsaArchive`, and their focused probes.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. A pending marker is keyed by profile and
   canonical Data path, includes the expected content hash and pre/post inode
@@ -302,17 +307,17 @@ manual release gate.
   baseline failures are `writelock`, `upsert`, `binding-shim`,
   `compile-ergonomics`, `setup-update-lock`, `bsa-contract`, `atomic-commit`,
   `seq-regen`, and `skypatcher-conflicts`.
-- Exact next action: begin the inherited `housecarl-core` pass with the
-  asset/archive layer (`AssetResolver`, `ArchiveDiscovery`, and their directly
-  coupled records), because it contains both inherited winner-resolution logic
-  and Amethyst filemap integration. Document setup code alongside its Session 6
-  Linux rewrite rather than preserving stale Windows contracts.
+- Exact next action: continue the inherited `housecarl-core` pass with
+  `LoadOrderResolver` and its directly coupled result/snapshot records, then run
+  its strict CS1591 build and resolver guards. Document setup code alongside its
+  Session 6 Linux rewrite rather than preserving stale Windows contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
   resolution), `5cbda36` (hardlink-safe redeployment), `0928140` (documentation
   standard and first slice), `196df59` (Amethyst foundation contracts),
-  `efacda9` (foundation checkpoint), `1b4c7e8` (Amethyst MCP lifecycle).
+  `efacda9` (foundation checkpoint), `1b4c7e8` (Amethyst MCP lifecycle),
+  `95f9a83` (asset resolution contracts), `e3ec7a1` (external archive boundary).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
