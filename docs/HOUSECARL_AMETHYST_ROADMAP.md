@@ -172,7 +172,7 @@ non-obvious invariant has been reviewed.
 
 - [x] Define the plain-English code documentation standard and completion gate.
 - [x] Document the fork's hardlink redeployment model and its safety probe.
-- [ ] Review all fork-authored Amethyst layout, filemap, load-order and path code.
+- [x] Review all fork-authored Amethyst layout, filemap, load-order and path code.
 - [ ] Review all inherited `housecarl-core` declarations and reasoning seams.
 - [ ] Review all inherited and fork-authored `housecarl-mcp` declarations.
 - [ ] Review all `housecarl-setup` declarations during the Linux rewrite.
@@ -255,21 +255,22 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation completed alongside the Linux setup rewrite.
-- Last completed checkpoint: the documentation contract now explicitly covers
-  every inherited and fork-authored declaration. The first reviewed slice covers
-  the hardlink identity ABI, pending-write state, verification rules, MCP staging
-  gate, and redeployment safety probe. Function inputs, outputs, null meanings,
-  failure behavior, and non-obvious invariants are stated in plain English.
-  Separately, every native patch/asset write records a pending
-  Amethyst deployment. Guarded in-place calls require the explicit redeploy
-  confirmation, refuse non-staging targets, and capture the pre-write Linux
-  device/inode identity before atomic replacement.
+- Last completed checkpoint: every declaration in the fork-authored Amethyst
+  layout, filemap, load-order, Bethesda-path, manager-snapshot, and user-config
+  foundation now documents purpose, inputs, outputs, null/absent states, failure
+  behavior, and safety invariants. The four matching probes document the risk and
+  contract of each scenario. The earlier slice covers hardlink identity,
+  pending-write verification, the MCP staging gate, and redeployment probing.
 - Verification performed: the .NET 9 Linux solution builds successfully after
   the first documentation slice (pre-existing nullable/obsolete warnings, zero
   errors), and `git diff --check` passes. A second build with XML documentation
   generation enabled succeeds with no malformed-XML warnings after repairing
   inherited escaping defects in ten core, MCP, and generator files. The focused
-  `amethyst-redeploy-guard` also passes. Before this documentation work, the
+  `amethyst-layout-guard`, `amethyst-load-order-guard`,
+  `amethyst-filemap-guard`, `amethyst-runtime-guard`, and
+  `amethyst-redeploy-guard` pass. The strict build reports no documentation
+  warning in this checkpoint's files; 15 inherited reference/parameter warnings
+  remain queued in other components. Before this documentation work, the
   generator build passed and
   `amethyst-redeploy-guard` proves that an atomic staging replacement leaves an
   existing deployed hardlink on its old inode, then clears pending state only
@@ -279,14 +280,18 @@ manual release gate.
   Existing in-place, NIF and compact service guards pass. Full `ci-all` is
   90/99; its nine failures exactly match the validated upstream Linux baseline.
 - Files/components changed: documentation standard and roadmap;
-  `AmethystRedeploy`, the Amethyst write/redeploy helpers in `LoadOrderService`,
-  and `AmethystRedeployProbe`. Session 5 previously changed `UserConfigStore`,
-  Amethyst/NIF/write/SEQ tool output, and the generated-plugin outcome.
+  `BethesdaPath`, `IModManagerLayout`/`ManagerSnapshot`, `AmethystLayout`,
+  `AmethystLoadOrder`, `AmethystFileMap`, `UserConfigStore`, `AmethystRedeploy`,
+  the Amethyst write/redeploy helpers in `LoadOrderService`, and their five
+  focused probes.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. A pending marker is keyed by profile and
   canonical Data path, includes the expected content hash and pre/post inode
   data, and cannot clear if staging changed again. Hardlinks are the v1 target;
-  symlink and copy verification use the same identity-or-content gate.
+  symlink and copy verification use the same identity-or-content gate. Code
+  documentation is a contract review, not a syntax narration pass: every
+  declaration is documented, while inline comments explain only non-obvious
+  reasoning and safety boundaries.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. Enabling XML
@@ -296,14 +301,16 @@ manual release gate.
   baseline failures are `writelock`, `upsert`, `binding-shim`,
   `compile-ergonomics`, `setup-update-lock`, `bsa-contract`, `atomic-commit`,
   `seq-regen`, and `skypatcher-conflicts`.
-- Exact next action: continue the documentation pass through the remaining
-  fork-authored Amethyst layout, filemap, load-order, path, and configuration
-  components before moving into inherited core engines. Start Session 6 after
-  those components are reviewed; document setup code as it is rewritten.
+- Exact next action: document the remaining fork-authored MCP integration surface
+  (`AmethystTools`, `SetupTools`, `StatusTools`, and the manager-specific seams in
+  `LoadOrderService`) before beginning the inherited core-engine pass. Document
+  setup code alongside its Session 6 Linux rewrite rather than preserving stale
+  Windows contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
-  resolution), `5cbda36` (hardlink-safe redeployment).
+  resolution), `5cbda36` (hardlink-safe redeployment), `0928140` (documentation
+  standard and first slice), `196df59` (Amethyst foundation contracts).
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
