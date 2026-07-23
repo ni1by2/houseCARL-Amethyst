@@ -257,25 +257,30 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: normalized every inherited Linux CI failure
-  without unconditional skips. Windows mandatory-lock and metadata probes now
-  have explicit Linux open-inode/replacement assertions; SkyPatcher uses the
-  canonical Bethesda filename helper; compile output-path tests use native
-  Amethyst staging; Linux installer sharing conflicts are recognized narrowly;
-  and PapyrusCompiler execution is honestly deferred pending the post-v1
-  structured Proton runner.
+- Last completed checkpoint: reviewed and documented every declaration in
+  `LoadOrderResolver` and its coupled conflict, winner, status, snapshot, view,
+  and overlay-session records. The resolver now states its manager-neutral
+  boundary explicitly: Amethyst supplies ordered native plugin paths and
+  manager freshness, while the core owns only indexing, short-lived overlay
+  access, plugin-file freshness, and record resolution. Historical Windows
+  mapped-file reasoning is retained where it explains a current invariant, but
+  Linux old-inode behavior and `Data_Core` string lookup are now stated
+  directly.
 - Verification performed: the .NET 9 Linux solution builds with zero errors.
   The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
   BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
   native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
-  and Codex umbrella guards pass. Full `ci-all` is 111/111 on Linux. XML-document generation succeeds while
-  suppressing only missing-member warning CS1591; inherited unresolved-cref
-  warnings remain queued for the declaration-by-declaration documentation pass.
+  and Codex umbrella guards pass. Resolver-specific snapshot-view, verify-loop,
+  conflict-diff, load-order-status, Amethyst load-order, and Amethyst runtime
+  guards pass. The timing-sensitive cold `freshness-capture-guard` passes.
+  Full `ci-all` remains 111/111 on Linux. XML-document generation succeeds
+  while suppressing only missing-member warning CS1591; `LoadOrderResolver`
+  contributes no XML warnings, and the inherited warnings in other components
+  remain queued for their declaration-by-declaration passes.
   `git diff --check` passes and no merge-conflict markers remain.
-- Files/components changed: `AtomicFile` portable contract; write-lock, upsert,
-  atomic-commit, SEQ, SkyPatcher-conflict, compile-ergonomics, and setup
-  update-lock probes; native compile output-path/render wording; Linux
-  sharing-conflict classification.
+- Files/components changed: `LoadOrderResolver`, its result records,
+  `IndexSnapshot`, `IndexView`, and `OverlaySession`; the roadmap and
+  user-facing checkpoint.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. Upstream native archive reads replace the
   Windows-only BSArch dependency for list/extract; archive packing remains the
@@ -289,14 +294,19 @@ manual release gate.
   remaining Windows installer/runtime surface and MO2 terminology. The
   declaration-by-declaration review is still incomplete even though the strict
   XML build succeeds; CS1591 remains intentionally suppressed until each
-  component has been reviewed. The Linux suite has no accepted red baseline.
+  component has been reviewed. `LoadOrderResolver` is complete, but its
+  historical service consumers still include inherited MO2-named fixtures and
+  terminology that must be removed at the product boundary. The Linux suite
+  has no accepted red baseline.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
-- Exact next action: resume the inherited `housecarl-core` documentation pass
-  with `LoadOrderResolver` and its directly coupled result/snapshot records.
-  Rewrite setup documentation with the Session 6 Linux installer rather than
-  preserving transitional contracts.
+- Exact next action: continue the inherited `housecarl-core` documentation pass
+  with `ReadEngine` and its directly coupled read-result/token contracts. Keep
+  behavior unchanged, fix any XML references exposed by the strict build, and
+  run the focused read/depth/round-trip guards plus full `ci-all`. Rewrite setup
+  documentation with the Session 6 Linux installer rather than preserving
+  transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
