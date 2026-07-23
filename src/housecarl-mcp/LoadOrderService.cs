@@ -15,31 +15,34 @@ namespace HousecarlMcp;
 ///   a mid-session plugin edit auto-rebuilds (~11s), no restart needed.
 /// • THREAD-SAFE — the HTTP server is concurrent; build + refresh are serialized on one gate.
 ///
-/// ORDER is the TRUE active order (§8.5), read statically from the MO2 profile's loadorder.txt + modlist.txt +
-/// plugins.txt via <see cref="Mo2LoadOrder"/> — masters first → highest-priority winner last, the ~110 duplicate-name
-/// plugins resolved by mod priority. No USVFS, no live MO2 state (both failed in the legacy build); the server reads
-/// REAL plugin paths and runs standalone. Freshness is AUTONOMOUS + lazy: the cheap mtime sweep re-reads the profile on
-/// the NEXT tool call whenever the user's MO2 edits changed it — no restart, no manual refresh step. See memory
-/// project_mo2_load_order_resolution.
+/// ORDER comes from the active Amethyst profile's loadorder.txt/plugins.txt activation state and its authoritative
+/// filemap/modindex winners. The server reads real native staging paths; deployed Data is never scanned to infer
+/// provenance. Freshness is autonomous and lazy: each tool call checks manager-owned inputs and rebuilds only when
+/// profile, winner, or deployment state changed. Legacy MO2/explicit constructors remain temporarily for inherited
+/// probes and are removed by the Linux packaging milestone.
 /// </summary>
 public sealed class LoadOrderService : IDisposable
 {
-    // INSTANCE mode (the product default): one configured path — the MO2 instance folder — from which ProfileDir/ModsDir/
-    // DataDir + the active profile are DERIVED (via Mo2Instance, reading ModOrganizer.ini), and a profile SWITCH is picked
-    // up on the next tool call. EXPLICIT mode (dev / non-portable override): the three paths are configured directly and
-    // _instanceDir stays null (no ini watch). UNCONFIGURED: neither was set — the server still BOOTS; every tool returns the
-    // trained prompt (so houseCARL asks the user for the path) until housecarl_set_mo2_instance is called.
-    string? _instanceDir;                          // INSTANCE-mode source of truth; null in explicit/unconfigured mode
+    // AMETHYST mode (the Linux product): the stable manifest selects an IModManagerLayout. Each freshness
+    // check re-reads deploy_state.json, so profile switches update every effective root without a restart.
+    // EXPLICIT and legacy INSTANCE modes remain only for inherited regression probes until Session 6 removes
+    // their public/packaging surface. UNCONFIGURED mode still boots and returns the connection prompt.
+    string? _instanceDir;                          // legacy probe seam; null in Amethyst product mode
+    /// <summary>Validated manifest path selecting Amethyst product mode; null in legacy/explicit probes.</summary>
     string? _manifestPath;
+
+    /// <summary>Manager-specific snapshot provider, created lazily from <see cref="_manifestPath"/>.</summary>
     IModManagerLayout? _layout;
+
+    /// <summary>Last complete Amethyst state installed into the service's manager-neutral fields.</summary>
     ManagerSnapshot? _managerSnapshot;
-    string _dataDir;                               // DERIVED (instance mode) or configured (explicit); mutable for a live profile switch
+    string _dataDir;                               // effective vanilla Data_Core/Data source; mutable across profile switches
     string _modsDir;
     string _profileDir;
-    string _profileName;                           // the active profile (instance mode: from selected_profile)
-    string _overwriteDir = "";                     // MO2's overwrite layer (instance mode: derived; explicit mode: none) — hunt F9
+    string _profileName;                           // active manager profile captured with the effective roots
+    string _overwriteDir = "";                     // highest-priority manager staging layer; empty only in explicit probes
     bool _configured;                              // false ⇒ tools return the trained prompt instead of resolving
-    readonly UserConfigStore _store;               // the sole owner of houseCARL.user.json (MO2 instance dir + tool paths)
+    readonly UserConfigStore _store;               // sole owner of manifest, pending writes, consent, and tool paths
     readonly int _maxPlugins;
     readonly object _gate = new();
     // Serializes the WHOLE resolve→stage→commit of every .esp write (2026-06-12 hunt F2): the MCP SDK dispatches tool
@@ -70,6 +73,15 @@ public sealed class LoadOrderService : IDisposable
 
     static readonly string[] ProfileFileNames = { "loadorder.txt", "modlist.txt", "plugins.txt" };
 
+    /// <summary>Creates one service in Amethyst, legacy-instance, explicit-path, or unconfigured mode.</summary>
+    /// <param name="instanceDir">Legacy instance root; null for Amethyst/explicit/unconfigured modes.</param>
+    /// <param name="dataDir">Initial vanilla Data root for explicit mode; otherwise empty until derivation.</param>
+    /// <param name="modsDir">Initial staging root for explicit mode; otherwise empty until derivation.</param>
+    /// <param name="profileDir">Initial profile root for explicit mode; otherwise empty until derivation.</param>
+    /// <param name="configured">Whether tools may attempt layout resolution instead of returning the setup prompt.</param>
+    /// <param name="maxPlugins">Optional positive resolver cap; zero means unlimited.</param>
+    /// <param name="store">Shared atomic owner of persisted user configuration.</param>
+    /// <param name="manifestPath">Amethyst connection manifest, or null outside product mode.</param>
     LoadOrderService(string? instanceDir, string dataDir, string modsDir, string profileDir, bool configured,
                      int maxPlugins, UserConfigStore store, string? manifestPath = null)
     {
@@ -91,7 +103,11 @@ public sealed class LoadOrderService : IDisposable
         => new(string.IsNullOrWhiteSpace(instanceDir) ? null : instanceDir.Trim(),
                "", "", "", configured: !string.IsNullOrWhiteSpace(instanceDir), maxPlugins, store);
 
-    /// <summary>Product mode: derive native Linux roots from the setup manifest and follow profile switches lazily.</summary>
+    /// <summary>Creates Linux product mode from an optional persisted Amethyst manifest.</summary>
+    /// <param name="manifestPath">Manifest to activate lazily, or null/blank for a bootable unconfigured server.</param>
+    /// <param name="maxPlugins">Optional positive resolver cap; zero means unlimited.</param>
+    /// <param name="store">Shared user-configuration store.</param>
+    /// <returns>A service that follows Amethyst profile switches without restarting.</returns>
     public static LoadOrderService WithAmethystConnection(string? manifestPath, int maxPlugins, UserConfigStore store)
         => new(null, "", "", "", configured: !string.IsNullOrWhiteSpace(manifestPath), maxPlugins, store,
                string.IsNullOrWhiteSpace(manifestPath) ? null : manifestPath.Trim());
@@ -282,7 +298,7 @@ public sealed class LoadOrderService : IDisposable
     /// ships, never a hardcoded set) so the renderer can group them compactly, and non-config content (animation data etc.)
     /// is counted in <see cref="SkseInventoryData.OtherFileCount"/>, never silently dropped. DLLs keep their SKSE-loader
     /// truth: a subfolder DLL is SEEN but flagged (SKSE scans Data\SKSE\Plugins*.dll top-level only, so it isn't loaded as a
-    /// plugin). ONE asset capture pins the whole scan (list + <see cref="AssetView.ReadIncomplete"/> caveat = one build); the
+    /// plugin). ONE asset capture pins the whole scan (list + <see cref="AssetResolver.AssetView.ReadIncomplete"/> caveat = one build); the
     /// enumerate + resolve + PE reads run OUTSIDE the gate (the captured view is a handle-free immutable snapshot), so an
     /// inventory never serializes other tool calls behind its file I/O. Distributor INIs (SPID <c>*_DISTR</c>, KID
     /// <c>*_KID</c>) live in Data\ ROOT, not here, and are owned by their authoring skills — out of this scope by design.</summary>
@@ -631,7 +647,7 @@ public sealed class LoadOrderService : IDisposable
     /// disk extraction), and hand them to <see cref="NifService.Inspect"/> for the header / block census / shapes /
     /// partitions / alpha / textures / node tree / string table. Read-only. The asset-tool parity is carried through:
     /// the full winner→loser provider chain (each tagged loose/BSA), the ambiguity flag, and the build-level Q3 caveats
-    /// (<see cref="AssetView.BsaFailures"/> / ReadIncomplete) ride along, so an ABSENT answer is never over-trusted. ONE
+    /// (<see cref="AssetResolver.AssetView.BsaFailures"/> / ReadIncomplete) ride along, so an ABSENT answer is never over-trusted. ONE
     /// asset capture pins the whole call; the resolve + byte read + NIF parse run OUTSIDE <see cref="_gate"/> on the
     /// handle-free captured view, so an inspect never serializes other tool calls behind its file I/O. A parse failure is
     /// a NAMED outcome (<see cref="NifInspectData.Error"/>), never a throw or a half-model (Q3).</summary>
@@ -1214,11 +1230,13 @@ public sealed class LoadOrderService : IDisposable
         ReResolve();
     }
 
-    /// <summary>Instance mode only: if ModOrganizer.ini changed since we last read it AND the user switched profiles (or
-    /// moved the game path), re-derive ProfileDir/ModsDir/DataDir + the active profile and re-resolve against the new
-    /// profile. This is how a mid-session profile switch is followed — lazily, on the NEXT tool call, by the SAME cheap-mtime
-    /// model as the per-profile-file check. Returns true iff it handled a switch (caller then skips the per-file check).
-    /// Tolerates a transient/invalid read (MO2 mid-write): keeps the last good set and retries next call. Caller holds the gate.</summary>
+    /// <summary>Refreshes manager roots when the active profile or manager-owned inputs change.</summary>
+    /// <returns>True when a changed manager snapshot was installed and re-resolution ran.</returns>
+    /// <remarks>
+    /// Amethyst mode delegates freshness and fail-loud validation to <see cref="IModManagerLayout"/>. The
+    /// legacy branch retains its prior best-effort ini behavior only for inherited probes. Caller holds
+    /// <see cref="_gate"/>.
+    /// </remarks>
     bool RederiveIfIniChanged()
     {
         if (_manifestPath is not null)
@@ -1290,10 +1308,12 @@ public sealed class LoadOrderService : IDisposable
         // baseline, so the next tool call re-checks and self-recovers once MO2 finishes writing.
     }
 
-    /// <summary>Instance mode: on the first resolver build, read ModOrganizer.ini and derive ProfileDir/ModsDir/DataDir +
-    /// the active profile — throwing a clear Q3 message (naming what's missing) if the configured instance isn't usable.
-    /// Explicit mode (paths already set) and re-derives (paths already non-empty) are no-ops. Stamps the ini-read baseline
-    /// so the profile-switch check has a reference point. Caller holds the gate.</summary>
+    /// <summary>Derives effective manager paths on first use.</summary>
+    /// <remarks>
+    /// Product mode validates and captures the Amethyst manifest. Explicit mode is already derived. The
+    /// legacy instance branch remains for inherited probes until Session 6 removes it. Caller holds
+    /// <see cref="_gate"/>.
+    /// </remarks>
     void EnsurePathsDerived()
     {
         if (_manifestPath is not null)
@@ -1431,8 +1451,12 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>Returns the writes whose later Amethyst deployment has not yet been verified.</summary>
+    /// <returns>A detached pending-write list safe for status rendering.</returns>
     public IReadOnlyList<PendingAmethystWrite> PendingAmethystWrites() => _store.PendingAmethystWrites();
 
+    /// <summary>Builds physical plugin order through the active manager adapter.</summary>
+    /// <returns>Resolved paths, warnings, and requested active count.</returns>
+    /// <remarks>Amethyst mode requires its authoritative snapshot; it never falls back to deployed Data scanning.</remarks>
     ModOrderResult BuildManagerOrder()
     {
         if (_manifestPath is null)
@@ -1444,20 +1468,28 @@ public sealed class LoadOrderService : IDisposable
             new ManagerFileIndex(snapshot.FilemapReady, snapshot.LooseAssetSources, snapshot.Warnings));
     }
 
+    /// <summary>Reads mod/plugin activation using the active manager's profile grammar.</summary>
+    /// <param name="profileDir">Profile to inspect; it need not be active.</param>
+    /// <param name="warnings">Optional sink for missing or inconsistent profile files.</param>
+    /// <returns>Manager-neutral composition without building the record index.</returns>
     ModComposition ReadManagerComposition(string profileDir, List<string>? warnings = null) =>
         _manifestPath is null
             ? Mo2LoadOrder.ReadComposition(profileDir, warnings)
             : AmethystLoadOrder.ReadComposition(profileDir, warnings);
 
+    /// <summary>Compares manager roots after trimming trailing separators.</summary>
+    /// <param name="a">First native or legacy path spelling.</param>
+    /// <param name="b">Second native or legacy path spelling.</param>
+    /// <returns>True when the normalized spellings compare equal.</returns>
+    /// <remarks>This legacy-compatible comparison is case-insensitive; Amethyst source resolution itself uses actual casing.</remarks>
     static bool PathEq(string a, string b) =>
         string.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Whether houseCARL has an MO2 location to resolve against. False on a fresh install with no config — the
-    /// server still runs; every tool returns the trained prompt until <see cref="SetInstance"/> is called.</summary>
+    /// <summary>Whether houseCARL has a manager connection it can resolve.</summary>
+    /// <remarks>A fresh unconfigured server still boots and returns the Amethyst setup prompt from tools.</remarks>
     public bool IsConfigured { get { lock (_gate) { return _configured; } } }
 
-    /// <summary>The active profile name (instance mode: ModOrganizer.ini selected_profile; explicit mode: the profile folder
-    /// name); "" when unconfigured. For the status surface.</summary>
+    /// <summary>The captured Amethyst profile name, or an empty string while unconfigured.</summary>
     public string ProfileName { get { lock (_gate) { return _profileName; } } }
 
     /// <summary>The game install directory the load order points at — DataDir's PARENT (DataDir = gamePath\Data), the same
@@ -1554,7 +1586,16 @@ public sealed class LoadOrderService : IDisposable
     (bool ok, string? error, string? note) PersistInstanceDir(string instanceDir)
         => (true, null, null); // legacy synthetic-test path; the Linux product persists only Amethyst manifests
 
-    /// <summary>Validate, activate, and persist a schema-v1 Amethyst connection manifest.</summary>
+    /// <summary>Validates, activates, and persists a schema-v1 Amethyst connection manifest.</summary>
+    /// <param name="manifestPath">Absolute native path to connection.json.</param>
+    /// <returns>
+    /// Activated snapshot plus independent persistence success/error/recovery state. A persistence
+    /// failure does not undo the valid live connection and is reported honestly to the caller.
+    /// </returns>
+    /// <remarks>
+    /// Validation and snapshot capture occur before either service caches or user configuration change.
+    /// Both service locks then make the manager switch atomic with respect to reads and writes.
+    /// </remarks>
     public (ManagerSnapshot snapshot, bool persisted, string? persistError, string? persistNote)
         SetAmethystConnection(string manifestPath)
     {
@@ -1579,14 +1620,20 @@ public sealed class LoadOrderService : IDisposable
         return (snapshot, ok, error, note);
     }
 
-    /// <summary>The current manager snapshot without forcing the record index to build.</summary>
+    /// <summary>Returns the current manager snapshot without forcing the record index to build.</summary>
+    /// <returns>Fresh validated Amethyst state.</returns>
     public ManagerSnapshot AmethystSnapshot()
     {
         RefreshAmethyst();
         lock (_gate) return _managerSnapshot!;
     }
 
-    /// <summary>Refresh manager state explicitly; normal tool calls also refresh lazily.</summary>
+    /// <summary>Refreshes manager state explicitly; normal tool calls also refresh lazily.</summary>
+    /// <returns>True when semantic manager state or freshness inputs changed.</returns>
+    /// <remarks>
+    /// A changed snapshot invalidates record/asset caches; an unchanged snapshot may still clear a
+    /// pending redeployment marker after <see cref="Apply"/> verifies a later deployment.
+    /// </remarks>
     public bool RefreshAmethyst()
     {
         lock (_writeGate)
@@ -1607,9 +1654,10 @@ public sealed class LoadOrderService : IDisposable
         }
     }
 
-    /// <summary>The trained prompt shown while unconfigured: tells houseCARL to ask the user which MO2 instance to use (not
-    /// silently pick among several) and call the setup tool. Tools RETURN this (so the client SEES it) via <see cref="ConfigPromptOrNull"/>; the <see cref="Resolver"/>
-    /// getter also THROWS it as a backstop. The two must say the same thing, hence one shared string.</summary>
+    /// <summary>
+    /// Shared visible guidance returned while no Amethyst manifest is configured. Tools return this
+    /// text directly; resolver access throws it only as a defensive backstop.
+    /// </summary>
     const string NotConfiguredText =
         "houseCARL-Amethyst is not connected yet. Ask for the schema-v1 connection.json exported for Skyrim Special " +
         "Edition, then call housecarl_set_amethyst_connection with its absolute native Linux path.";
