@@ -258,29 +258,30 @@ manual release gate.
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
 - Last completed checkpoint: reviewed and documented every declaration in
-  `LoadOrderResolver` and its coupled conflict, winner, status, snapshot, view,
-  and overlay-session records. The resolver now states its manager-neutral
-  boundary explicitly: Amethyst supplies ordered native plugin paths and
-  manager freshness, while the core owns only indexing, short-lived overlay
-  access, plugin-file freshness, and record resolution. Historical Windows
-  mapped-file reasoning is retained where it explains a current invariant, but
-  Linux old-inode behavior and `Data_Core` string lookup are now stated
-  directly.
+  `ReadEngine` and its public/internal field, reference, record, leaf, and flag
+  result contracts. Parameters now state null/empty meanings, path/depth
+  domains, output ownership, bounded expansion, fault isolation, and the
+  display-only versus round-trip-token boundary. Previously implicit helpers
+  for primitive/value emission, reflection variants, identity summaries,
+  FormLinkOrIndex values, byte slices, and modeled-content recursion now have
+  plain-English contracts without changing behavior.
 - Verification performed: the .NET 9 Linux solution builds with zero errors.
   The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
   BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
   native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
-  and Codex umbrella guards pass. Resolver-specific snapshot-view, verify-loop,
-  conflict-diff, load-order-status, Amethyst load-order, and Amethyst runtime
-  guards pass. The timing-sensitive cold `freshness-capture-guard` passes.
+  and Codex umbrella guards pass. Read-specific depth-leak, VMAD-property,
+  condition-arm, element/owned-record identity, flag-display, FLOI read/field,
+  structured/text parity, conflict-diff, verify-loop, readback-count, and
+  raw-plugin-read guards pass. The timing-sensitive cold
+  `freshness-capture-guard` remains green from the resolver checkpoint.
   Full `ci-all` remains 111/111 on Linux. XML-document generation succeeds
-  while suppressing only missing-member warning CS1591; `LoadOrderResolver`
-  contributes no XML warnings, and the inherited warnings in other components
-  remain queued for their declaration-by-declaration passes.
+  while suppressing only missing-member warning CS1591; neither
+  `LoadOrderResolver` nor `ReadEngine` contributes XML warnings, and inherited
+  warnings in other components remain queued for their declaration passes.
   `git diff --check` passes and no merge-conflict markers remain.
-- Files/components changed: `LoadOrderResolver`, its result records,
-  `IndexSnapshot`, `IndexView`, and `OverlaySession`; the roadmap and
-  user-facing checkpoint.
+- Files/components changed: `ReadEngine`, `FieldValue`, `ResolvedRef`,
+  `RecordFields`, `LeafRead`, and `FlagBits`; the roadmap and user-facing
+  checkpoint.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. Upstream native archive reads replace the
   Windows-only BSArch dependency for list/extract; archive packing remains the
@@ -294,19 +295,19 @@ manual release gate.
   remaining Windows installer/runtime surface and MO2 terminology. The
   declaration-by-declaration review is still incomplete even though the strict
   XML build succeeds; CS1591 remains intentionally suppressed until each
-  component has been reviewed. `LoadOrderResolver` is complete, but its
-  historical service consumers still include inherited MO2-named fixtures and
-  terminology that must be removed at the product boundary. The Linux suite
-  has no accepted red baseline.
+  component has been reviewed. `LoadOrderResolver` and `ReadEngine` are
+  complete, but historical service consumers and some probe text still include
+  inherited MO2-named fixtures and terminology that must be removed at the
+  product boundary. The Linux suite has no accepted red baseline.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  with `ReadEngine` and its directly coupled read-result/token contracts. Keep
-  behavior unchanged, fix any XML references exposed by the strict build, and
-  run the focused read/depth/round-trip guards plus full `ci-all`. Rewrite setup
-  documentation with the Session 6 Linux installer rather than preserving
-  transitional contracts.
+  with `FieldsDiff` and `FieldPredicate`, the compact consumers of structured
+  read tokens. Keep behavior unchanged, fix XML references exposed by the
+  strict build, and run focused conflict/query predicate guards plus full
+  `ci-all`. Rewrite setup documentation with the Session 6 Linux installer
+  rather than preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -316,7 +317,8 @@ manual release gate.
   `95f9a83` (asset resolution contracts), `e3ec7a1` (external archive boundary).
   `27ba3d4` merges upstream through `c305b07` while retaining the Amethyst
   safety and path contracts; `abaa5a1` records the Linux failure audit;
-  `80c10c4` normalizes those probes and establishes the 111/111 Linux suite.
+  `80c10c4` normalizes those probes and establishes the 111/111 Linux suite;
+  `b41069c` completes the `LoadOrderResolver` documentation checkpoint.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
