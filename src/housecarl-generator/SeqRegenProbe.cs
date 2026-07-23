@@ -250,9 +250,15 @@ public static class SeqRegenProbe
                     var o = svc.CompactPlugin("SeqWarn.esp", inPlace: true, acknowledge: true);
                     var sr = o.SeqRegen;
                     var rendered = WriteTools.RenderCompact(o);           // the WARN must reach the user-visible output, not just the outcome
-                    Check(o.Success && sr is { Written: false, SgeQuestCount: 1 } && sr.Failures.Count >= 1
-                          && rendered.Contains("SEQ WARN") && rendered.Contains("could not write") && !rendered.StartsWith("error:"),
-                          $"SEQ-WARN locked .seq dest → named write-failure WARN, compact STILL succeeds (success {o.Success}, written {sr?.Written}, warns {sr?.Failures.Count}, rendered-warn {rendered.Contains("SEQ WARN")}{(o.Success ? "" : "; ERR " + o.Error)})");
+                    bool expected = OperatingSystem.IsWindows()
+                        ? o.Success && sr is { Written: false, SgeQuestCount: 1 } && sr.Failures.Count >= 1
+                          && rendered.Contains("SEQ WARN") && rendered.Contains("could not write") && !rendered.StartsWith("error:")
+                        : o.Success && sr is { Written: true, SgeQuestCount: 1 } && sr.Failures.Count == 0
+                          && !rendered.Contains("SEQ WARN");
+                    Check(expected,
+                          OperatingSystem.IsWindows()
+                              ? $"SEQ-WARN Windows lock → named write warning, compact succeeds (success {o.Success}, written {sr?.Written}, warns {sr?.Failures.Count})"
+                              : $"SEQ Linux open-inode replacement → refresh succeeds without a false warning (success {o.Success}, written {sr?.Written}, warns {sr?.Failures.Count})");
                 }
             }
         }

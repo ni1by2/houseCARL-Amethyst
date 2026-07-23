@@ -258,14 +258,17 @@ public static class Program
         catch (UnauthorizedAccessException) { return true; } // locked / read-only -> can't overwrite either
     }
 
-    // ERROR_SHARING_VIOLATION (32) / ERROR_LOCK_VIOLATION (33): the file-in-use cases. We re-stamp ONLY these
-    // as "server in use" so an unrelated IOException (disk full, path too long) still surfaces as the honest
-    // generic failure rather than a misleading "quit Claude" message (Q3 — no silently wrong diagnosis).
+    // Windows reports sharing/lock violations as HRESULTs; .NET on Linux reports its in-process FileShare
+    // conflict as EAGAIN (11). Re-stamp only those known lock values so disk-full and path failures retain
+    // their real diagnosis.
     private const int HrSharingViolation = unchecked((int)0x80070020);
     private const int HrLockViolation    = unchecked((int)0x80070021);
+    private const int UnixWouldBlock     = 11;
 
     private static bool IsSharingViolation(IOException ex)
-        => ex.HResult == HrSharingViolation || ex.HResult == HrLockViolation;
+        => ex.HResult == HrSharingViolation
+           || ex.HResult == HrLockViolation
+           || (!OperatingSystem.IsWindows() && ex.HResult == UnixWouldBlock);
 
     // ---- server runtime preflight ------------------------------------------
 

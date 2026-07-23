@@ -7,7 +7,7 @@ namespace HousecarlGenerator;
 /// Compile-rider ergonomics guard (HCBR-2026-06-15-01 / PR-J, items 6.2 + 6.3). The service-layer (housecarl-mcp) half of
 /// the compiler/BSA ergonomics work — the pure-core ToolBridge half (auto-detect candidates, the looked-here prompt, the
 /// cross-instance sharing lock) lives in <see cref="ToolBridgeProbe"/>. Two LoadOrderService seams, both asserted on
-/// SYNTHETIC paths — no MO2 instance, no game data, no record index:
+/// Synthetic native host paths — no Amethyst installation, game data, or record index:
 ///
 ///   A  <see cref="LoadOrderService.GameDirOrNull"/> (6.2 auto-detect hint) — NULL-SAFE by contract: it feeds the compiler
 ///      auto-detect, so a failure must fall through to the forcing prompt, never throw and abort the compile.
@@ -18,8 +18,8 @@ namespace HousecarlGenerator;
 ///      output_dir is a mod-folder ROOT and houseCARL appends Scripts\ (so the .pex deploys), with a double-Scripts guard
 ///      and a Q3 deployability warning. PURE (no I/O) so the riskiest change's only proof isn't punted:
 ///        • a bare root gets Scripts\ appended; a root already ending in Scripts\ does NOT get a second one (any case);
-///        • a path under the MO2 mods dir or a game Data\Scripts is deployable (no warning); one outside any deploy root
-///          still lands but carries the Q3 note (never a clean "done" for a .pex MO2 won't deploy);
+///        • a path under Amethyst staging or game Data/Scripts is deployable (no warning); one outside any deploy root
+///          still lands but carries the Q3 note (never a clean "done" for a .pex Amethyst will not deploy);
 ///        • the output path is the chosen contract WITHOUT calling ResolvePatchModFolder (no houseCARL mod folder cut),
 ///          and the rider's RiderFolder is user-owned (CreatedFresh=false) so residue cleanup never deletes it.
 ///
@@ -36,7 +36,12 @@ internal static class CompileErgonomicsProbe
         int fail = 0;
         void Check(bool c, string label) { Console.WriteLine((c ? "  PASS  " : "  FAIL  ") + label); if (!c) fail++; }
 
-        var tmpStore = Path.Combine(Path.GetTempPath(), "hc-comperg-store-" + Guid.NewGuid().ToString("N") + ".json");
+        var pathRoot = Path.Combine(Path.GetTempPath(), "hc-comperg-paths-" + Guid.NewGuid().ToString("N"));
+        var game = Path.Combine(pathRoot, "game");
+        var data = Path.Combine(game, "Data");
+        var mods = Path.Combine(pathRoot, "staging", "mods");
+        var profile = Path.Combine(pathRoot, "profile");
+        var tmpStore = Path.Combine(pathRoot, "user.json");
         try
         {
             var store = new UserConfigStore(tmpStore);
@@ -45,8 +50,8 @@ internal static class CompileErgonomicsProbe
             Console.WriteLine("--- A: LoadOrderService.GameDirOrNull — game dir derived; null-safe when it can't be ---");
 
             // explicit-paths mode: DataDir is set directly, so the game dir = DataDir's parent (no ini read, no instance).
-            var explicitSvc = LoadOrderService.WithExplicitPaths(@"C:\Game\Skyrim Special Edition\Data", @"C:\Mods", @"C:\Profile", 0, store);
-            Check(explicitSvc.GameDirOrNull() == @"C:\Game\Skyrim Special Edition",
+            var explicitSvc = LoadOrderService.WithExplicitPaths(data, mods, profile, 0, store);
+            Check(explicitSvc.GameDirOrNull() == game,
                   "explicit mode: GameDirOrNull = DataDir's parent (the game install dir)");
 
             // unconfigured: no instance, not configured → null (not a throw).
@@ -68,7 +73,7 @@ internal static class CompileErgonomicsProbe
             // end to end: the GameFinder/registry call is wrapped, so a hiccup yields fewer hints, never throws.
             bool hintsThrew = false; IReadOnlyList<string>? hints = null;
             try { hints = explicitSvc.CompilerGameDirHints(); } catch { hintsThrew = true; }
-            Check(!hintsThrew && hints is not null && hints.Contains(@"C:\Game\Skyrim Special Edition"),
+            Check(!hintsThrew && hints is not null && hints.Contains(game),
                   "CompilerGameDirHints includes the load-order game dir as the first hint, and never throws (locator is best-effort)");
             bool unconfHintsThrew = false; IReadOnlyList<string>? unconfHints = null;
             try { unconfHints = unconfigured.CompilerGameDirHints(); } catch { unconfHintsThrew = true; }
@@ -80,37 +85,38 @@ internal static class CompileErgonomicsProbe
         // ---------------------------------------------------------- B) output_dir= contract (6.3): pure double-Scripts guard
         Console.WriteLine();
         Console.WriteLine("--- B1: ScriptOutputContract (pure) — append Scripts\\ with the double-Scripts guard + deployability ---");
-        const string mods = @"C:\MO2\mods", data = @"C:\Game\Skyrim Special Edition\Data";
+        var chosen = Path.Combine(pathRoot, "chosen", "MyMod");
+        var scripts = Path.Combine(chosen, "Scripts");
+        var bare = LoadOrderService.ScriptOutputContract(chosen, mods, data);
+        Check(bare.scriptsDir == scripts && bare.appendedScripts, "a bare mod-folder root gets Scripts appended");
 
-        var bare = LoadOrderService.ScriptOutputContract(@"C:\MyMod", mods, data);
-        Check(bare.scriptsDir == @"C:\MyMod\Scripts" && bare.appendedScripts, "a bare mod-folder root gets Scripts\\ appended");
+        var already = LoadOrderService.ScriptOutputContract(scripts, mods, data);
+        Check(already.scriptsDir == scripts && !already.appendedScripts, "double-Scripts guard: a root already ending in Scripts is NOT doubled");
 
-        var already = LoadOrderService.ScriptOutputContract(@"C:\MyMod\Scripts", mods, data);
-        Check(already.scriptsDir == @"C:\MyMod\Scripts" && !already.appendedScripts, "double-Scripts guard: a root already ending in Scripts is NOT doubled");
+        var lowerScripts = Path.Combine(chosen, "scripts");
+        var lower = LoadOrderService.ScriptOutputContract(lowerScripts, mods, data);
+        Check(lower.scriptsDir == lowerScripts && !lower.appendedScripts, "double-Scripts guard accepts the canonical segment case-insensitively");
 
-        var lower = LoadOrderService.ScriptOutputContract(@"C:\MyMod\scripts", mods, data);
-        Check(lower.scriptsDir == @"C:\MyMod\scripts" && !lower.appendedScripts, "double-Scripts guard is case-insensitive (…\\scripts not doubled)");
-
-        var trailing = LoadOrderService.ScriptOutputContract(@"C:\MyMod\Scripts\", mods, data);
-        Check(trailing.scriptsDir == @"C:\MyMod\Scripts" && !trailing.appendedScripts, "double-Scripts guard tolerates a trailing separator");
+        var trailing = LoadOrderService.ScriptOutputContract(scripts + Path.DirectorySeparatorChar, mods, data);
+        Check(trailing.scriptsDir == scripts && !trailing.appendedScripts, "double-Scripts guard tolerates a trailing host separator");
 
         Console.WriteLine();
         Console.WriteLine("--- B2: ScriptOutputContract — deployability warning (Q3: never a clean done for a .pex that won't load) ---");
         Check(bare.deployWarning is not null, "a path under NEITHER mods nor Data carries the Q3 deploy warning");
         // DEPLOYABLE (no warning): exactly <mods>\<modFolder>\Scripts, or <data>\Scripts.
-        Check(LoadOrderService.ScriptOutputContract(@"C:\MO2\mods\MyPatch", mods, data).deployWarning is null,
-              "a real mod folder (<mods>\\MyPatch) is deployable (no warning)");
+        Check(LoadOrderService.ScriptOutputContract(Path.Combine(mods, "MyPatch"), mods, data).deployWarning is null,
+              "a real Amethyst staging mod folder is deployable (no warning)");
         Check(LoadOrderService.ScriptOutputContract(data, mods, data).deployWarning is null,
               "the game's Data folder (-> <data>\\Scripts) is deployable (no warning)");
         // NON-deployable (warns) — the tightened rule (review nit): "under mods" alone is not enough.
-        Check(LoadOrderService.ScriptOutputContract(@"C:\MO2\mods", mods, data).deployWarning is not null,
-              "the mods ROOT itself (-> <mods>\\Scripts, no mod folder) WARNS — MO2 won't deploy it (tightened nit)");
-        Check(LoadOrderService.ScriptOutputContract(@"C:\MO2\mods\X\Sub", mods, data).deployWarning is not null,
-              "a NESTED path (<mods>\\X\\Sub\\Scripts -> Data\\Sub\\Scripts) WARNS — not Data\\Scripts (tightened nit)");
-        Check(LoadOrderService.ScriptOutputContract(@"C:\Game\Skyrim Special Edition\Data\Sub", mods, data).deployWarning is not null,
-              "a nested Data path (<data>\\Sub\\Scripts) WARNS — the game loads only <data>\\Scripts");
-        Check(LoadOrderService.ScriptOutputContract(@"C:\MO2\modsX\Foo", mods, data).deployWarning is not null,
-              "segment-boundary safe: C:\\MO2\\modsX is NOT 'under' C:\\MO2\\mods (still warns)");
+        Check(LoadOrderService.ScriptOutputContract(mods, mods, data).deployWarning is not null,
+              "the mods root itself has no provider folder and therefore warns");
+        Check(LoadOrderService.ScriptOutputContract(Path.Combine(mods, "X", "Sub"), mods, data).deployWarning is not null,
+              "a nested staging path warns because it would not land at Data/Scripts");
+        Check(LoadOrderService.ScriptOutputContract(Path.Combine(data, "Sub"), mods, data).deployWarning is not null,
+              "a nested Data path warns because the game loads only Data/Scripts");
+        Check(LoadOrderService.ScriptOutputContract(Path.Combine(pathRoot, "staging", "modsX", "Foo"), mods, data).deployWarning is not null,
+              "segment-boundary safe: a modsX sibling is not inside the mods root");
 
         // ---------------------------------------------------------- B3: ResolveExplicitScriptFolder — no patch folder cut
         Console.WriteLine();
@@ -142,7 +148,7 @@ internal static class CompileErgonomicsProbe
             // A path UNDER the mods tree is deployable → no warning.
             var rfIn = svc.ResolveExplicitScriptFolder(Path.Combine(tMods, "MyPatch"), out var warnIn);
             Check(rfIn.OutputDir == Path.Combine(tMods, "MyPatch", "Scripts") && warnIn is null,
-                  "an output_dir under the MO2 mods folder deploys cleanly (no warning)");
+                  "an output_dir under Amethyst staging deploys cleanly (no warning)");
 
             // review nit #4: if <output_dir>\Scripts already exists AS A FILE, the create throws IOException — it must be
             // re-stamped as a friendly InvalidOperationException (which the rider renders as a clean "error: ...") rather
@@ -162,12 +168,12 @@ internal static class CompileErgonomicsProbe
         Console.WriteLine();
         Console.WriteLine("--- C: CompileTools.Render — the success line names the RIGHT destination (review nit #1) ---");
         var ok = new HousecarlCore.CompileResult(
-            Success: true, ObjectName: "MyScript", PexPath: @"C:\out\Scripts\MyScript.pex",
+            Success: true, ObjectName: "MyScript", PexPath: Path.Combine(pathRoot, "out", "Scripts", "MyScript.pex"),
             Diagnostics: Array.Empty<HousecarlCore.PapyrusDiagnostic>(), Stdout: "", Stderr: "", ExitCode: 0, RunError: null);
         var defaultMsg = CompileTools.Render(ok, Array.Empty<string>(), userChoseOutputDir: false);
         var outDirMsg = CompileTools.Render(ok, Array.Empty<string>(), userChoseOutputDir: true);
-        Check(defaultMsg.Contains("houseCARL patch-mod folder") && defaultMsg.Contains("enable it in MO2"),
-              "default destination: success names the houseCARL patch-mod folder + the MO2-enable step");
+        Check(defaultMsg.Contains("houseCARL staging mod folder") && defaultMsg.Contains("refresh Amethyst"),
+              "default destination: success names the staging mod folder and Amethyst refresh step");
         Check(outDirMsg.Contains("output folder you chose") && !outDirMsg.Contains("houseCARL patch-mod folder"),
               "output_dir= destination: success names the user's chosen folder, NOT a houseCARL patch folder (no over-claim)");
 
@@ -186,7 +192,8 @@ internal static class CompileErgonomicsProbe
         Check(!HousecarlCore.PapyrusCompile.IsUnresolvedSymbol("Unknown user flag papyrus"), "syntax (NOT import): 'Unknown user flag …'");
 
         // D2: a FAILED compile whose diagnostics are the real missing-import avalanche → Render LEADS with the banner + count.
-        HousecarlCore.PapyrusDiagnostic Diag(string msg) => new(@"C:\mod\Scripts\HCMissingImports.psc", 8, 1, msg);
+        HousecarlCore.PapyrusDiagnostic Diag(string msg) =>
+            new(Path.Combine(pathRoot, "mod", "Scripts", "HCMissingImports.psc"), 8, 1, msg);
         var missingImports = new HousecarlCore.CompileResult(
             Success: false, ObjectName: "HCMissingImports", PexPath: null,
             Diagnostics: new[]

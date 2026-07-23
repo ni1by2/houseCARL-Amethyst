@@ -201,7 +201,14 @@ public static class WriteLockProbe
                                                .WithLoadOrder(new ISkyrimModGetter[] { ov }).Write(), out controlErr);
             Dispose(ov);
         }
-        Console.WriteLine($"   CONTROL (bug reproduces here)   : {(controlLocked ? "PASS — direct serialize onto a mapped target FAILED as expected" : "FAIL — NO lock; can't prove the fix on this platform")}  [{controlErr}]");
+        bool controlExpected = OperatingSystem.IsWindows() ? controlLocked : !controlLocked;
+        Console.WriteLine($"   CONTROL (platform semantics)    : {(controlExpected
+            ? OperatingSystem.IsWindows()
+                ? "PASS — Windows blocked replacement of the mapped target"
+                : "PASS — Linux replaced the mapped pathname while the old inode stayed open"
+            : OperatingSystem.IsWindows()
+                ? "FAIL — Windows did not reproduce the mandatory lock"
+                : "FAIL — Linux unexpectedly blocked pathname replacement")}  [{controlErr}]");
 
         // --- FIX: the product path — RemoveRecords writes INTO a patch that is ACTIVE in the resolver's order (target is in
         //     the order), routing the serialize through AllMastersExcept so the target is never mapped. Assert it SUCCEEDS. ---
@@ -255,7 +262,7 @@ public static class WriteLockProbe
         Console.WriteLine($"   edited value landed (damage==777): {(dmgBack == 777 ? "PASS" : $"FAIL (damage={dmgBack})")}");
         Console.WriteLine();
 
-        bool pass = controlLocked && fixWrote && remaining == 1 && afterFix == 1 && applyWrote && dmgBack == 777;
+        bool pass = controlExpected && fixWrote && remaining == 1 && afterFix == 1 && applyWrote && dmgBack == 777;
         Console.WriteLine($"=== writelock-guard: {(pass ? "PASS" : "FAIL")} ===");
         try { Directory.Delete(tmpDir, recursive: true); } catch { /* a lingering lock would itself be telling */ }
         return pass ? 0 : 1;

@@ -92,7 +92,10 @@ internal static class AtomicCommitProbe
                 AtomicFile.Commit(staged, final);
                 Check(File.ReadAllBytes(final).SequenceEqual(newBytes), "overwrite content is byte-exact the new staged bytes");
                 Check(!File.Exists(staged), "staged temp consumed (overwrite case)");
-                if (tunnelingMasks)
+                if (!OperatingSystem.IsWindows())
+                    Check(File.GetCreationTimeUtc(final) != oldCreate,
+                          "Linux replacement installs the staged inode; destination creation time is not preserved");
+                else if (tunnelingMasks)
                     Console.WriteLine("  SKIP  destination creation-time preserved — UNPROVABLE on a tunneling host (Q3, not a pass)");
                 else
                     Check(File.GetCreationTimeUtc(final) == oldCreate,
@@ -125,13 +128,26 @@ internal static class AtomicCommitProbe
                 File.WriteAllBytes(final, prior);
                 File.WriteAllBytes(staged, new byte[] { 8, 8 });
                 bool threw = false;
-                using (new FileStream(final, FileMode.Open, FileAccess.Read, FileShare.None))   // an external holder
+                using (var held = new FileStream(final, FileMode.Open, FileAccess.Read, FileShare.None))
                 {
                     try { AtomicFile.Commit(staged, final); } catch { threw = true; }
+                    if (!OperatingSystem.IsWindows())
+                    {
+                        held.Position = 0;
+                        var heldBytes = new byte[prior.Length];
+                        int read = held.Read(heldBytes, 0, heldBytes.Length);
+                        Check(!threw && File.ReadAllBytes(final).SequenceEqual(new byte[] { 8, 8 }),
+                              "Linux atomically replaces the pathname even while the old inode is open");
+                        Check(read == prior.Length && heldBytes.SequenceEqual(prior),
+                              "the pre-existing Linux handle remains attached to the complete old inode");
+                    }
                 }
-                Check(threw, "a mid-swap failure on a locked target THROWS (never a silent no-op)");
-                Check(File.Exists(final) && File.ReadAllBytes(final).SequenceEqual(prior),
-                      "prior target survives the failed mid-swap byte-for-byte");
+                if (OperatingSystem.IsWindows())
+                {
+                    Check(threw, "a mid-swap failure on a locked target THROWS (never a silent no-op)");
+                    Check(File.Exists(final) && File.ReadAllBytes(final).SequenceEqual(prior),
+                          "prior target survives the failed mid-swap byte-for-byte");
+                }
             }
         }
         finally

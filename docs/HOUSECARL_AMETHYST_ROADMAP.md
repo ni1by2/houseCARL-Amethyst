@@ -257,28 +257,25 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: merged upstream houseCARL through
-  `c305b07da937d44d113a058f89d5292670ddcc0e` (v1.9.0 plus 58 later commits)
-  into the Amethyst integration branch. The fork now carries upstream native BSA
-  list/extract, SKSE audit and peek, NIF batch/section inspection, dry-run,
-  manifest-backed bulk writes, readback counts, native pairing, and the latest
-  provenance corrections. Amethyst plugin provenance resolves only from
-  `ManagerSnapshot`, `filemap.txt`, `modindex.bin`, and `Data_Core`; it never
-  reintroduces an MO2 folder scan or deployed-Data fallback.
+- Last completed checkpoint: normalized every inherited Linux CI failure
+  without unconditional skips. Windows mandatory-lock and metadata probes now
+  have explicit Linux open-inode/replacement assertions; SkyPatcher uses the
+  canonical Bethesda filename helper; compile output-path tests use native
+  Amethyst staging; Linux installer sharing conflicts are recognized narrowly;
+  and PapyrusCompiler execution is honestly deferred pending the post-v1
+  structured Proton runner.
 - Verification performed: the .NET 9 Linux solution builds with zero errors.
   The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
   BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
   native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
-  and Codex umbrella guards pass. Full `ci-all` is 104/111; its seven failures
-  match the established Linux baseline. XML-document generation succeeds while
+  and Codex umbrella guards pass. Full `ci-all` is 111/111 on Linux. XML-document generation succeeds while
   suppressing only missing-member warning CS1591; inherited unresolved-cref
   warnings remain queued for the declaration-by-declaration documentation pass.
   `git diff --check` passes and no merge-conflict markers remain.
-- Files/components changed: the upstream v1.9/post-v1.9 source, probes, skills,
-  notices, changelog, and metadata; Amethyst conflict resolutions in
-  `ArchiveDiscovery`, `AssetResolver`, `BsaArchive`, `LoadOrderService`,
-  `Program`, and write/BSA/NIF tool surfaces; Linux-neutral BSA, binding, and
-  SKSE probe fixtures; Codex umbrella routing and agent metadata.
+- Files/components changed: `AtomicFile` portable contract; write-lock, upsert,
+  atomic-commit, SEQ, SkyPatcher-conflict, compile-ergonomics, and setup
+  update-lock probes; native compile output-path/render wording; Linux
+  sharing-conflict classification.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. Upstream native archive reads replace the
   Windows-only BSArch dependency for list/extract; archive packing remains the
@@ -292,14 +289,14 @@ manual release gate.
   remaining Windows installer/runtime surface and MO2 terminology. The
   declaration-by-declaration review is still incomplete even though the strict
   XML build succeeds; CS1591 remains intentionally suppressed until each
-  component has been reviewed. The seven remaining failures have now been
-  audited below; none implicates Amethyst layout, filemap, load order, staging
-  writes, or hardlink redeployment.
-- Exact next action: complete the Linux test-normalization checkpoint described
-  below and establish a meaningful green Linux suite. Then resume the inherited
-  `housecarl-core` documentation pass with `LoadOrderResolver`. Rewrite setup
-  documentation with the Session 6 Linux installer rather than preserving stale
-  Windows contracts.
+  component has been reviewed. The Linux suite has no accepted red baseline.
+  The current setup implementation is still transitional; Session 6 must
+  replace it with versioned Linux installation, atomic activation, rollback,
+  and self-contained bundle tests.
+- Exact next action: resume the inherited `housecarl-core` documentation pass
+  with `LoadOrderResolver` and its directly coupled result/snapshot records.
+  Rewrite setup documentation with the Session 6 Linux installer rather than
+  preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -313,20 +310,19 @@ manual release gate.
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
 
-## Linux failure audit and normalization checkpoint
+## Linux failure audit and normalization checkpoint — complete
 
-The 104/111 full-suite result was investigated on 2026-07-23. The seven red
-probes are not one undifferentiated accepted baseline:
+The 104/111 full-suite result was investigated and normalized on 2026-07-23:
 
-| Probe | Finding | Required treatment |
+| Probe | Finding | Resolution |
 | --- | --- | --- |
-| `writelock-guard` | Its red control requires Windows mandatory sharing behaviour. Linux permits replacement of an open or mapped pathname; the real remove/apply writes pass. | Keep the Windows arm and add a Linux arm proving replacement plus old-inode handle semantics. |
-| `upsert-guard` | Its final arm expects a read handle to block replacement. Linux correctly installs the new inode and leaves no temporary residue. | Assert successful replacement, new content, and clean staging on Linux. |
-| `compile-ergonomics-guard` | The fixture and implementation use `C:\...`, backslash splitting, MO2 roots, and MO2 deployment wording. | Port native output-path handling to Amethyst staging, or explicitly remove/defer this external-tool surface for v1. Proton-backed PapyrusCompiler execution remains post-v1. |
-| `setup-update-lock-guard` | The installer catches only Windows sharing HRESULTs, so a Linux `IOException` from a held sibling DLL escapes. | Replace this surface during Session 6 with Linux versioned installation, atomic activation, rollback, and Linux-specific tests. |
-| `atomic-commit-guard` | Creation-time preservation and `FileShare.None` failure are Windows invariants. Linux replacement changes inode/metadata and is not blocked by an open descriptor. Byte correctness, temp consumption, and pre-swap non-destruction pass. | Document the portable old-or-new content contract; test Linux inode replacement and use deterministic failure injection instead of mandatory locks. |
-| `seq-regen-guard` | All functional SEQ cases pass. Only the forced-failure arm is ineffective because `FileShare.None` does not block Linux replacement. | Add deterministic write-failure injection, or keep that arm Windows-only. |
-| `skypatcher-conflicts-guard` | Duplicate detection succeeds, but the assertion uses Linux `Path.GetFileName` on canonical backslash paths and therefore misreads `a.ini`/`m.ini`. | Use `BethesdaPath.FileName` or the equivalent canonical-path helper. |
+| `writelock-guard` | Its red control required Windows mandatory sharing behaviour. | Windows retains the lock assertion; Linux proves mapped-path replacement succeeds. |
+| `upsert-guard` | Its final arm expected a read handle to block replacement. | Linux proves the new record lands and staging residue is removed. |
+| `compile-ergonomics-guard` | Fixtures and output logic used Windows/MO2 paths. | Tests use native host paths, staging deployability is Amethyst-specific, comparisons respect Linux case, and compiler execution is explicitly deferred. |
+| `setup-update-lock-guard` | Linux reports an in-process sharing conflict as EAGAIN/11 rather than a Windows HRESULT. | Only that Linux lock value and the two Windows lock HRESULTs map to `ServerInUse`; unrelated I/O errors remain distinct. Full installer replacement remains Session 6. |
+| `atomic-commit-guard` | Creation-time preservation and mandatory locks are Windows invariants. | The portable contract is documented; Linux proves new-path/old-handle inode semantics plus byte-exact staging. |
+| `seq-regen-guard` | `FileShare.None` does not block Linux replacement. | Windows proves the warning lane; Linux proves successful refresh without a false warning. |
+| `skypatcher-conflicts-guard` | Linux `Path.GetFileName` cannot split canonical backslash paths. | The assertion uses `BethesdaPath.FileName`; duplicate detection is green. |
 
 Normalization exit gate:
 
@@ -337,9 +333,9 @@ Normalization exit gate:
 - SkyPatcher duplicate detection is green with canonical Bethesda paths.
 - Compilation is either honestly excluded/deferred or has a native Amethyst
   output-path contract.
-- The Windows setup probe is replaced by the Session 6 Linux installer suite.
-- `ci-all` is green on Ubuntu before v1; no permanent red-baseline allowance
-  remains.
+- The transitional setup lock probe is green; Session 6 replaces the installer
+  and its suite rather than treating this as final packaging evidence.
+- `ci-all` is 111/111 on Linux; no permanent red-baseline allowance remains.
 
 ## Session update template
 

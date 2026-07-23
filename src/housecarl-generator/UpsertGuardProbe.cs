@@ -208,8 +208,15 @@ public static class UpsertGuardProbe
             bool intact = before.AsSpan().SequenceEqual(File.ReadAllBytes(pPath));
             bool noResidue = !Directory.EnumerateDirectories(tmpDir, ".housecarl-tmp", SearchOption.AllDirectories).Any();
             bool named = error is not null && error.Contains("writing the patch after create failed", StringComparison.OrdinalIgnoreCase);
-            lockedOk = failed && named && intact && noResidue;
-            Console.WriteLine($"   LOCKED commit fails loud + intact   : {(lockedOk ? "PASS — loud refusal, old bytes intact, no temp residue" : $"FAIL — failed={failed} named={named} intact={intact} noResidue={noResidue} error=[{error}]")}");
+            bool newRecordLanded = ContainsEditorId(pPath, "HcUpsGdKwLocked");
+            lockedOk = OperatingSystem.IsWindows()
+                ? failed && named && intact && noResidue
+                : !failed && !intact && newRecordLanded && noResidue;
+            Console.WriteLine($"   OPEN-HANDLE commit semantics      : {(lockedOk
+                ? OperatingSystem.IsWindows()
+                    ? "PASS — Windows refused loudly, retained old bytes, and cleaned staging"
+                    : "PASS — Linux replaced the pathname, landed the new record, and cleaned staging"
+                : $"FAIL — failed={failed} named={named} intact={intact} landed={newRecordLanded} noResidue={noResidue} error=[{error}]")}");
         }
 
         Console.WriteLine();
@@ -225,6 +232,19 @@ public static class UpsertGuardProbe
     {
         ISkyrimModGetter? ov = null;
         try { ov = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE); return ov.ModHeader.Stats.NextFormID; }
+        finally { (ov as IDisposable)?.Dispose(); }
+    }
+
+    /// <summary>Reopens the completed plugin and checks whether one top-level record carries the requested EditorID.</summary>
+    static bool ContainsEditorId(string path, string editorId)
+    {
+        ISkyrimModGetter? ov = null;
+        try
+        {
+            ov = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+            return ov.EnumerateMajorRecords().Any(record =>
+                string.Equals(record.EditorID, editorId, StringComparison.Ordinal));
+        }
         finally { (ov as IDisposable)?.Dispose(); }
     }
 }

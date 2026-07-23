@@ -6,26 +6,19 @@ namespace HousecarlCore;
 /// A complete file is first STAGED into a temp on the SAME volume as its final path (the caller's job), then handed
 /// here. <see cref="Commit"/> swaps it into place with NO unlink-then-rename window:
 ///
-///  • target EXISTS  → <c>File.Replace</c> (the Win32 <c>ReplaceFile</c> primitive): an atomic content swap that
-///    keeps the destination's on-disk IDENTITY (its NTFS file record). A crash mid-commit leaves either the OLD
-///    complete file or the NEW complete file — never a missing or half-written one. This is the crash-ATOMIC
-///    guarantee, stronger than the crash-TEAR safety a staged write already buys.
+///  • target EXISTS  → <c>File.Replace</c>: an atomic content swap. A crash mid-commit leaves either the OLD
+///    complete file or the NEW complete file — never a missing or half-written one. Windows may preserve destination
+///    metadata and may refuse a sharing-locked target. Linux installs the staged inode; existing handles and Amethyst
+///    hardlinks continue to reference the old inode until they are reopened or redeployed.
 ///  • target ABSENT  → <c>File.Move</c> (an atomic rename onto a free name): <c>File.Replace</c> cannot create — it
 ///    requires an existing target — so the fresh-file case it throws on is served by a rename, itself atomic.
 ///
-/// This REPLACES the product-wide <c>File.Move(overwrite: true)</c> (MoveFileEx MOVEFILE_REPLACE_EXISTING), which the
-/// in-place-write-lane review named as not crash-atomic: it can unlink the destination BEFORE the rename commits, and
-/// it discards the destination's identity (the result becomes the SOURCE file). Same-volume staging is the caller's
+/// This replaces the former product-wide <c>File.Move(overwrite: true)</c>. Same-volume staging is the caller's
 /// invariant — <c>File.Replace</c> THROWS across volumes (a loud, correct refusal) rather than silently degrading to a
-/// non-atomic copy (Q3). An EFS-encrypted or specially-ACL'd target can likewise make <c>File.Replace</c> throw a
-/// metadata-merge error where <c>File.Move</c> would not — also surfaced loud, original byte-intact; the 3-arg overload
-/// is deliberate (the 4-arg <c>ignoreMetadataErrors: true</c> would silently swallow that failure, violating Q3).
+/// non-atomic copy. Platform-specific permission or metadata failures also surface instead of silently degrading.
 ///
-/// Holds NO handle at rest: it opens nothing it keeps. Proven by the atomic-commit guard, whose overwrite arm is
-/// RED-sensitive to a <c>File.Move(overwrite)</c> regression via the destination's PRESERVED creation time
-/// (<c>File.Replace</c> keeps the replaced file's creation time; <c>File.Move</c> resets it). The guard self-calibrates:
-/// on a host where file-system tunneling would restore the creation time under <c>File.Move</c> too, that one check
-/// self-skips with a loud note rather than false-pass (the distinction is unprovable in-process there).
+/// Holds no handle at rest. The atomic-commit guard verifies Windows replacement metadata separately from Linux
+/// open-inode semantics, while both platforms prove byte-exact output, consumed staging, and loud pre-swap failure.
 /// </summary>
 // PUBLIC (facegen-diagnostics Phase 3): place_asset writes from the MCP layer (not a core friend), so the primitive is
 // public. <see cref="Commit"/> is the low-level swap (caller stages same-volume); <see cref="WriteAllBytes"/> is the

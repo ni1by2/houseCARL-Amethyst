@@ -5,29 +5,23 @@ using ModelContextProtocol.Server;
 namespace HousecarlMcp;
 
 /// <summary>
-/// houseCARL compile rider — housecarl_compile_script. Drives the Creation Kit's PapyrusCompiler.exe (via
-/// <see cref="HousecarlCore.PapyrusCompile"/>; NOT Mutagen) to turn a .psc into a .pex, and lands the .pex in a reviewable
-/// houseCARL patch-mod folder (originals untouched — same folder-per-patch model as every other write). It rides the
-/// external-tool bridge: the compiler path comes from <see cref="ToolPathResolver"/> (auto-prompts via the forcing
-/// function if unset). The structured pass/fail return — per-line {file,line,col,message} diagnostics — is the point: it
-/// feeds the AI fix-loop (compile-fail → look the symbol up with the papyrus-reference skill → fix the .psc → recompile).
+/// Reserved post-v1 Papyrus compile surface. Native Amethyst output-path handling is retained and tested, but executing
+/// Bethesda's Windows-only compiler is refused on Linux until the structured Proton command runner is implemented.
 /// </summary>
 [McpServerToolType]
 public static class CompileTools
 {
     [McpServerTool(Name = "housecarl_compile_script", Title = "Compile a Papyrus script (.psc → .pex)"),
      Description(
-         "Compile a Papyrus script (.psc) to .pex using the Creation Kit's PapyrusCompiler.exe, landing the .pex in a NEW " +
-         "houseCARL patch-mod folder you review and enable in MO2 (originals untouched) — or pass output_dir= to land it in a " +
-         "folder you choose (houseCARL appends Scripts\\ so MO2 deploys it). Pass script= the full path to the " +
+         "Post-v1 reserved tool for compiling a Papyrus script (.psc) with Bethesda's Windows-only PapyrusCompiler. " +
+         "Execution is currently unavailable in this Linux fork until the structured Proton runner is implemented. " +
+         "The retained output contract will place successful results in a new Amethyst staging mod, or in output_dir=. Pass script= the full path to the " +
          ".psc to compile; houseCARL adds the script's own folder and the vanilla source folder (derived from the compiler's " +
          "game dir) to the import path automatically — pass import_dirs= (';'-separated) for any extra dependency sources " +
          "(SKSE, other mods); your folders are searched BEFORE the vanilla sources, so mod-extended copies of vanilla " +
          "scripts (SKSE's Actor.psc etc.) win. On a compile FAILURE it returns the per-line errors as 'name(line,col): message' so you can fix " +
          "the .psc and recompile (look unfamiliar functions up with the papyrus-reference skill); on SUCCESS it returns the " +
-         ".pex path. Needs houseCARL pointed at your MO2 instance (for the output folder) and the Papyrus compiler path — if " +
-         "the compiler isn't set yet, houseCARL tells you exactly what to ask for and how to set it. The CK compiler ships " +
-         "with the vanilla Steam game install, NOT a Wabbajack 'Stock Game' copy.")]
+         ".pex path.")]
     public static string CompileScript(
         LoadOrderService svc,
         ToolPathResolver bridge,
@@ -37,12 +31,17 @@ public static class CompileTools
             string? import_dirs = null,
         [Description("Optional. Base name for the NEW patch-mod folder the .pex lands in (default 'houseCARL_Scripts'); auto-suffixed if taken.")]
             string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL patch mod to add the .pex into instead of creating a fresh folder (accumulate compiled scripts). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing houseCARL staging mod to add the .pex into instead of creating a fresh folder.")]
             string? into = null,
-        [Description("Optional. Land the .pex in a folder of YOUR choosing instead of a fresh houseCARL patch folder — pass the mod-folder ROOT; houseCARL appends Scripts\\ (and won't double it if you already point at a ...\\Scripts folder). When set, patch_name=/into= are ignored. If the folder is under neither your MO2 mods folder nor the game's Data, the .pex still compiles but you're warned it won't deploy automatically.")]
+        [Description("Optional. Future output override: pass a native mod-folder root; houseCARL appends Scripts without doubling an existing Scripts segment.")]
             string? output_dir = null) => Guard.Tool("housecarl_compile_script", () =>
     {
-        // 1) MO2 must be configured — the .pex lands under the instance's mods folder.
+        if (!OperatingSystem.IsWindows())
+            return "error: PapyrusCompiler execution is deferred in houseCARL-Amethyst. The compiler is Windows-only; " +
+                   "native Linux support requires the planned structured Proton runner. Record, archive-read, PEX-decompile, " +
+                   "NIF, and Amethyst staging features remain available without Proton.";
+
+        // Legacy execution remains reachable only on Windows while the post-v1 runner is being designed.
         if (svc.ConfigPromptOrNull() is { } cfgPrompt) return cfgPrompt;
 
         // 2) validate the script path.
@@ -153,7 +152,7 @@ public static class CompileTools
             // output_dir= target is appended by the caller as deployWarning.
             sb.Append(userChoseOutputDir
                 ? "the .pex is in the output folder you chose (path above)."
-                : "the .pex is in a houseCARL patch-mod folder — enable it in MO2 to use it.");
+                : "the .pex is in a houseCARL staging mod folder — refresh Amethyst, enable the mod, rebuild the filemap, and deploy.");
             if (r.Diagnostics.Count > 0)   // a .pex WAS produced but the compiler emitted notes → surface them as warnings
             {
                 sb.Append('\n').Append(r.Diagnostics.Count).Append(" warning(s) (the .pex compiled anyway):");

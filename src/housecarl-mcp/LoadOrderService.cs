@@ -5210,10 +5210,10 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>PURE (no filesystem access) resolution of the output_dir= contract, so the riskiest 6.3 change is provable in
-    /// CI without an MO2 instance. Appends Scripts\ to a mod-folder root, with the DOUBLE-SCRIPTS GUARD (a root already ending
+    /// CI without an Amethyst installation. Appends Scripts to a mod-folder root, with the DOUBLE-SCRIPTS GUARD (a root already ending
     /// in a Scripts segment — any case, trailing separator tolerated — is taken as-is, never doubled). <paramref name="outputDir"/>
     /// is expected absolute (the caller GetFullPaths it). Returns the final Scripts dir, whether Scripts\ was appended, and a
-    /// Q3 deployWarning when the result is under neither <paramref name="modsDir"/> (a mod's Scripts\ is VFS-deployed) nor
+    /// Q3 deployWarning when the result is under neither <paramref name="modsDir"/> (a staged mod's Scripts folder is deployed) nor
     /// <paramref name="dataDir"/> (a direct game install) — the one "this won't load" case the contract can't fix by
     /// construction, so it's surfaced rather than reported as a clean success.</summary>
     internal static (string scriptsDir, bool appendedScripts, string? deployWarning) ScriptOutputContract(
@@ -5222,21 +5222,21 @@ public sealed class LoadOrderService : IDisposable
         var root = outputDir.TrimEnd('\\', '/');
         bool alreadyScripts = Path.GetFileName(root).Equals("Scripts", StringComparison.OrdinalIgnoreCase);
         var scriptsDir = alreadyScripts ? root : Path.Combine(root, "Scripts");
-        // Deployable = the .pex will ACTUALLY auto-load. MO2 overlays a mod folder's CONTENTS onto the game Data root, so a
+        // Deployable = the .pex will actually load. Amethyst deploys a mod folder's contents onto the game Data root, so a
         // deployable mod Scripts\ is EXACTLY <mods>\<modFolder>\Scripts (mod folder a direct child of mods; Scripts directly
         // under it). A bare <mods>\Scripts (no mod folder) and a nested <mods>\X\Sub\Scripts (lands at Data\Sub\Scripts, not
         // Data\Scripts) do NOT load — so they correctly WARN (review nit: "under mods" alone was too loose). A direct game
         // install loads exactly <data>\Scripts.
         bool deployable = IsModScriptsFolder(scriptsDir, modsDir) || IsDataScriptsFolder(scriptsDir, dataDir);
         string? warn = deployable ? null :
-            $"note: '{scriptsDir}' isn't a folder MO2 (or the game) auto-loads scripts from, so the compiled .pex won't " +
+            $"note: '{scriptsDir}' is not a folder Amethyst (or the game) loads scripts from, so the compiled .pex will not " +
             "deploy on its own — it compiled fine, but you must place it where the game loads scripts yourself: a mod's " +
-            "own Scripts\\ folder (<mods>\\<YourMod>\\Scripts) or the game's <Data>\\Scripts.";
+            $"own Scripts folder ({Path.Combine("<mods>", "<YourMod>", "Scripts")}) or the game's {Path.Combine("<Data>", "Scripts")}.";
         return (scriptsDir, !alreadyScripts, warn);
     }
 
-    /// <summary>A Scripts\ folder MO2 actually deploys: <c>&lt;modsDir&gt;\&lt;modFolder&gt;\Scripts</c> exactly — the mod
-    /// folder a DIRECT child of the mods root, Scripts directly under it (MO2 maps a mod folder's contents onto the Data
+    /// <summary>A Scripts folder Amethyst actually deploys: <c>&lt;modsDir&gt;/&lt;modFolder&gt;/Scripts</c> exactly — the mod
+    /// folder a DIRECT child of the mods root, Scripts directly under it (Amethyst maps a mod folder's contents onto the Data
     /// root, so <c>&lt;mods&gt;\Scripts</c> has no mod and <c>&lt;mods&gt;\X\Sub\Scripts</c> lands at Data\Sub\Scripts). Empty
     /// mods root (unconfigured) → false. Case-insensitive, normalized.</summary>
     static bool IsModScriptsFolder(string scriptsDir, string modsDir)
@@ -5259,7 +5259,8 @@ public sealed class LoadOrderService : IDisposable
     static bool PathEquals(string? a, string b)
     {
         if (a is null) return false;
-        return Path.GetFullPath(a).TrimEnd('\\', '/').Equals(Path.GetFullPath(b).TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
+        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        return Path.GetFullPath(a).TrimEnd('\\', '/').Equals(Path.GetFullPath(b).TrimEnd('\\', '/'), comparison);
     }
 
     /// <summary>The <c>Source\Scripts\</c> output folder for a DECOMPILED .psc (the decompile rider) — the SE-canonical
