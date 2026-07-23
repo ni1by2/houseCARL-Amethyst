@@ -16,7 +16,7 @@ namespace HousecarlGenerator;
 ///   SEQ-MISSING       — an SGE quest whose defining plugin has NO .seq → SeqExists=false (the coverage teeth).
 ///   SEQ-NOT-LISTED    — an SGE quest absent from its plugin's (present) .seq → SeqContainsQuest=false.
 ///   SEQ-STALE         — an SGE quest listed in a .seq OLDER than the plugin → SeqNewerThanPlugin=false (mtime teeth).
-///   SEQ-COVERED-OK    — an SGE quest listed in a FRESH .seq → exists & contains & newer (no warning; the positive lock).
+///   SEQ-COVERED-OK    — an SGE quest listed in a FRESH .seq → exists &amp; contains &amp; newer (no warning; the positive lock).
 ///   SEQ-CLEAN-NO-FLAG — a NON-SGE quest yields NO lint (SeqLint null) — fires ONLY for SGE quests, never nags.
 ///   SEQ-OVERRIDE-AMBIGUOUS — an override that ADDS SGE the master lacks → winner != defining, so the render softens
 ///                    to a [?] ambiguity instead of a false "dormant" against the defining master (Q3, review fold).

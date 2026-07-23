@@ -15,6 +15,13 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class StatusTools
 {
+    /// <summary>Reports active or named-profile composition without changing Amethyst state.</summary>
+    /// <param name="svc">Singleton service that supplies fresh manager and resolver status.</param>
+    /// <param name="tools">External-path resolver used only to report log-folder locations.</param>
+    /// <param name="lookup">Optional mod folder or plugin filename to classify.</param>
+    /// <param name="profile">Optional profile to inspect without switching the active profile.</param>
+    /// <param name="max_chars">Positive output cap, or zero for the server default.</param>
+    /// <returns>Guarded, explicitly truncated status text or an actionable configuration prompt.</returns>
     [McpServerTool(Name = "housecarl_load_order_status", ReadOnly = true, Title = "Load-order status (enabled/disabled mods & plugins)"),
      Description(
          "Report what houseCARL sees in the active Amethyst profile: enabled vs disabled mods, active vs inactive plugins, " +

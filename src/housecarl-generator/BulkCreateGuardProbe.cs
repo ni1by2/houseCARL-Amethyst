@@ -19,15 +19,15 @@ namespace HousecarlGenerator;
 ///
 /// Arms (ALL required):
 ///   FLAT       — a single flat Keyword create still works (the wire didn't break the existing flat path).
-///   SINGLE-PARENT — a single create with parent=<an existing master topic's FormID> nests an INFO under it
+///   SINGLE-PARENT — a single create with <c>parent=&lt;an existing master topic's FormID&gt;</c> nests an INFO under it
 ///                (proves parent/collection passthrough through the service to the core).
-///   ONESHOT    — bulk_create of [DialogTopic, DialogResponses parent=<the topic's editorid>] in one call: both
+///   ONESHOT    — bulk_create of <c>[DialogTopic, DialogResponses parent=&lt;the topic's editorid&gt;]</c> in one call: both
 ///                created, the INFO under the NEW topic (the same-call sibling one-shot, through the batch wire).
 ///   BATCH-AON  — a batch whose 2nd spec is un-createable (a nested type with no parent) refuses the WHOLE call,
 ///                naming the problem, with the valid 1st spec NOT written and no orphan folder (all-or-nothing, Q3).
 ///   GUIDANCE   — a single nested create with no parent refuses loud and the message guides to parent= / bulk_create
 ///                (the refreshed CanCreateType copy reaches the user).
-///   EXTERIOR-WIRE — create_record 'Cell' with parent=<worldspace> + grid= creates an exterior cell AND the CellShell
+///   EXTERIOR-WIRE — create_record 'Cell' with <c>parent=&lt;worldspace&gt;</c> + grid= creates an exterior cell AND the CellShell
 ///                report rides back (the §4-(b) coordinate-keyed wire: grid= threads service→core; the "you must still
 ///                provide lighting/terrain/navmesh" teeth fire).
 ///   INTERIOR-WIRE — create_record 'Cell' with NO parent + NO grid creates an interior cell with its INTERIOR shell report.

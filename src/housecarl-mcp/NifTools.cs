@@ -121,7 +121,9 @@ public static class NifTools
         [Description("Optional, default false. IN-PLACE LANE (opt-in): OVERWRITE the winning LOOSE file where it sits instead of writing a new folder — NO backup. Requires acknowledge=true (see below). OMIT (the default) to write a new winning override and leave the original untouched.")]
             bool in_place = false,
         [Description("Optional, default false. Confirms the one-time in-place trade-off for this file — needed only on the FIRST in-place edit of a given mesh, never again for it. Waives the consent to overwrite your original ONLY; it NEVER skips the mesh verification.")]
-            bool acknowledge = false) => Guard.Tool("housecarl_nif_set", () =>
+            bool acknowledge = false,
+        [Description("Amethyst in-place safety gate. Set true to confirm staging-only write plus a required Amethyst redeploy.")]
+            bool confirm_amethyst_redeploy = false) => Guard.Tool("housecarl_nif_set", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
         if (string.IsNullOrWhiteSpace(mesh_path)) return "error: mesh_path is empty. Pass a Data-relative mesh path.";
@@ -135,7 +137,7 @@ public static class NifTools
             string.IsNullOrWhiteSpace(mod) ? null : mod,
             string.IsNullOrWhiteSpace(patch_name) ? null : patch_name,
             string.IsNullOrWhiteSpace(into) ? null : into,
-            in_place, acknowledge);
+            in_place, acknowledge, confirm_amethyst_redeploy);
         return NifSetWire.Render(data);
     });
 
@@ -377,7 +379,10 @@ static class NifWire
         return bits.Count == 0 ? "none" : string.Join(",", bits);
     }
 
-    /// <summary>Append "<label><a, b, c>" as one line, cut with an explicit notice if it would blow the cap (Q3).</summary>
+    /// <summary>
+    /// Appends <c>&lt;label&gt;&lt;a, b, c&gt;</c> as one line and adds an explicit notice if the
+    /// output limit truncates the list (Q3).
+    /// </summary>
     static void AppendClampedList(StringBuilder sb, string label, IEnumerable<string> items, int cap)
     {
         sb.Append(label);
@@ -479,13 +484,13 @@ static class NifSetWire
         {
             sb.Append("\n  IN-PLACE: overwrote ").Append(d.InPlacePath).Append(" (your original — no houseCARL backup).");
             sb.Append(d.EditedIsWinner
-                ? " The edit is live where the file already wins the VFS.\n"
+                ? " The winning staging file changed, but the game copy is not verified until Amethyst redeploys it.\n"
                 : " NOTE: you edited a copy that another provider currently SHADOWS (you passed mod=), so this is not the winning copy in game until that changes.\n");
         }
         else
         {
             sb.Append("\n  wrote the verified mesh into a new mod folder: ").Append(d.OutputModFolder).Append('\n');
-            sb.Append("  TO MAKE IT WIN: enable this folder in MO2 and sort it ABOVE ")
+            sb.Append("  TO MAKE IT WIN: refresh Amethyst, enable this folder, rebuild the filemap, and deploy it above ")
               .Append(d.CurrentWinner ?? "the current winner")
               .Append(" (loose beats BSA; among loose, the later mod wins). 'Wrote it' is not 'it wins' until you do.\n");
         }

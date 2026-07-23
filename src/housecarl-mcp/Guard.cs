@@ -2,7 +2,7 @@ namespace HousecarlMcp;
 
 /// <summary>
 /// The last-line tool-body guard (Q3 hardening, HCBR-2026-06-11-01 follow-through). Every MCP tool body runs
-/// inside <see cref="Tool(string,System.Func{string})"/>: an exception the body's own handling didn't convert to
+/// inside <see cref="Tool(string, Func{string}, CancellationToken)"/>: an exception the body's own handling didn't convert to
 /// a named error — the unguarded residue was the <see cref="LoadOrderService"/> resolver getter (freshness/IO
 /// throws during a mid-call profile re-read) and the render layer's per-match reads — returns a NAMED error
 /// string instead of escaping to the SDK, whose own catch genericizes to "An error occurred invoking '…'."
@@ -34,6 +34,13 @@ internal static class Guard
         catch (Exception ex) { return Named(tool, ex); }
     }
 
+    /// <summary>
+    /// Logs the complete unexpected exception to the MCP error stream and returns a short,
+    /// explicitly named error that is safe to send to the caller.
+    /// </summary>
+    /// <param name="tool">The public MCP tool name, used to identify which call failed.</param>
+    /// <param name="ex">The unexpected exception raised while the tool body was running.</param>
+    /// <returns>A single-line error message containing enough detail for a useful bug report.</returns>
     static string Named(string tool, Exception ex)
     {
         Console.Error.WriteLine($"[houseCARL] {tool} unhandled exception: {ex}");   // full stack → stderr (the MCP log), never stdout (the protocol channel)

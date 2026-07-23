@@ -5,6 +5,9 @@ namespace HousecarlGenerator;
 /// <summary>Locks Amethyst's priority, activation, locking, casing, and source rules.</summary>
 public static class AmethystLoadOrderProbe
 {
+    /// <summary>Runs the synthetic priority/activation/source scenario.</summary>
+    /// <param name="args">Reserved common probe arguments; currently unused.</param>
+    /// <returns>Zero when every invariant holds; one after printing a failure.</returns>
     public static int RunGuard(string[] args)
     {
         var root = Path.Combine(Path.GetTempPath(), "hc-amethyst-order-" + Guid.NewGuid().ToString("N"));
@@ -59,36 +62,57 @@ public static class AmethystLoadOrderProbe
         }
     }
 
+    /// <summary>Writes one profile text file, creating its parent directory.</summary>
+    /// <param name="path">Destination path.</param>
+    /// <param name="value">Exact profile-file content.</param>
     static void Write(string path, string value)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, value);
     }
 
+    /// <summary>Creates an empty physical plugin fixture at the requested actual casing.</summary>
+    /// <param name="path">Physical source path.</param>
     static void Touch(string path)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, Array.Empty<byte>());
     }
 
+    /// <summary>Asserts scalar equality and names the scenario arm on failure.</summary>
+    /// <typeparam name="T">Non-null comparable value type.</typeparam>
+    /// <param name="expected">Required value.</param>
+    /// <param name="actual">Observed value.</param>
+    /// <param name="arm">Scenario name included in failures.</param>
     static void Equal<T>(T expected, T actual, string arm) where T : notnull
     {
         if (!EqualityComparer<T>.Default.Equals(expected, actual))
             throw new InvalidOperationException($"{arm}: expected '{expected}', got '{actual}'");
     }
 
+    /// <summary>Asserts ordinal list content and ordering.</summary>
+    /// <param name="expected">Required ordered names.</param>
+    /// <param name="actual">Observed ordered names.</param>
+    /// <param name="arm">Scenario name included in failures.</param>
     static void Equal(IReadOnlyList<string> expected, IReadOnlyList<string> actual, string arm)
     {
         if (!expected.SequenceEqual(actual, StringComparer.Ordinal))
             throw new InvalidOperationException($"{arm}: expected [{string.Join(", ", expected)}], got [{string.Join(", ", actual)}]");
     }
 
+    /// <summary>Asserts a portable normalized source-path suffix.</summary>
+    /// <param name="actual">Observed native path.</param>
+    /// <param name="suffix">Forward-slash suffix required after normalization.</param>
+    /// <param name="arm">Scenario name included in failures.</param>
     static void EndsWith(string actual, string suffix, string arm)
     {
         if (!actual.Replace('\\', '/').EndsWith(suffix, StringComparison.Ordinal))
             throw new InvalidOperationException($"{arm}: '{actual}' does not end with '{suffix}'");
     }
 
+    /// <summary>Asserts a boolean load-order invariant.</summary>
+    /// <param name="value">Condition that must be true.</param>
+    /// <param name="message">Failure explanation.</param>
     static void True(bool value, string message)
     {
         if (!value) throw new InvalidOperationException(message);

@@ -14,14 +14,14 @@ namespace HousecarlGenerator;
 ///   2. SURROGATE-SAFE CLAMP (StripMarkup cap path) — same property through the description-body
 ///      truncation, with no space in the last 200 chars so the word-boundary backup is skipped and the
 ///      raw char clamp is what runs.
-///   3. ENTITY DECODE ORDER (&amp; LAST) — a double-encoded "&amp;lt;" (author wanted the visible text
-///      "&lt;") must decode to "&lt;", not "<": &amp; is undone after every other entity so a decoded
-///      entity's '&' can never re-trigger another replacement.
-///   4. ENTITY REGRESSION — the common single-encoded "Mod A &amp; Mod B" still renders "Mod A & Mod B"
+///   3. ENTITY DECODE ORDER (&amp; LAST) — a double-encoded <c>"&amp;amp;lt;"</c> (author wanted the visible text
+///      <c>"&amp;lt;"</c>) must decode to <c>"&amp;lt;"</c>, not <c>"&lt;"</c>: &amp; is undone after every other entity so a decoded
+///      entity's '&amp;' can never re-trigger another replacement.
+///   4. ENTITY REGRESSION — the common single-encoded <c>"Mod A &amp;amp; Mod B"</c> still renders <c>"Mod A &amp; Mod B"</c>
 ///      (passes under both orders; proves the reorder didn't regress the ordinary case).
 ///
 /// Teeth (mutation-RED, verified at authoring): revert ClampChars to a naive s[..n] → arms 1+2 FAIL;
-/// move ".Replace(\"&amp;\", \"&\")" back to the FRONT of the entity chain → arm 3 FAILS.
+/// move <c>.Replace("&amp;amp;", "&amp;")</c> back to the FRONT of the entity chain → arm 3 FAILS.
 /// </summary>
 internal static class RenderClampProbe
 {

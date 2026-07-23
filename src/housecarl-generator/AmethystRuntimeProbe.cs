@@ -10,6 +10,9 @@ namespace HousecarlGenerator;
 /// <summary>Locks the public connection, persistence, status, and refresh contract.</summary>
 public static class AmethystRuntimeProbe
 {
+    /// <summary>Runs the public MCP connection, persistence, status, resolver, and refresh scenario.</summary>
+    /// <param name="args">Reserved common probe arguments; currently unused.</param>
+    /// <returns>Zero when every invariant holds; one after printing a failure.</returns>
     public static int RunGuard(string[] args)
     {
         var root = Path.Combine(Path.GetTempPath(), "hc-amethyst-runtime-" + Guid.NewGuid().ToString("N"));
@@ -58,6 +61,11 @@ public static class AmethystRuntimeProbe
         finally { try { Directory.Delete(root, true); } catch { } }
     }
 
+    /// <summary>Creates a complete Amethyst fixture containing one real Mutagen plugin.</summary>
+    /// <param name="root">Unique temporary scenario root.</param>
+    /// <param name="profileRoot">Receives the shared Amethyst staging root.</param>
+    /// <param name="deploy">Receives deploy_state.json for the profile-switch step.</param>
+    /// <returns>Schema-v1 connection manifest path.</returns>
     static string CreateFixture(string root, out string profileRoot, out string deploy)
     {
         var config = Path.Combine(root, "config", "games", "Skyrim Special Edition");
@@ -100,12 +108,18 @@ public static class AmethystRuntimeProbe
         return manifest;
     }
 
+    /// <summary>Writes one synthetic manager JSON object, creating its parent directory.</summary>
+    /// <param name="path">Destination path.</param>
+    /// <param name="value">Anonymous/object value to serialize.</param>
     static void Write(string path, object value)
     {
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, JsonSerializer.Serialize(value));
     }
 
+    /// <summary>Asserts a public runtime contract.</summary>
+    /// <param name="value">Condition that must be true.</param>
+    /// <param name="message">Failure explanation.</param>
     static void Check(bool value, string message)
     {
         if (!value) throw new InvalidOperationException(message);

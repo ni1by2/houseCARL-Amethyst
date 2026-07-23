@@ -67,9 +67,9 @@ namespace HousecarlGenerator;
 ///   COND-GETISID-PLACED— GetIsID pointed at a PLACED reference WARNs ('placed reference'), NOT the dangling-param lint (item 4).
 ///   TEXT-MOJIBAKE— a line whose player-facing text carries non-ASCII chars (ellipsis/em-dash) WARNs, naming them (item 1).
 ///   TEXT-CLEAN   — pure-ASCII player-facing text is NOT flagged — the lint keys on >0x7F, not "has text" (item 1).
-///   GLOBAL-TAG-OK — a <Global=X> whose X IS in the owning quest's TextDisplayGlobals is NOT flagged (the no-false-positive lock).
-///   GLOBAL-TAG-MISSING— a <Global=X> whose X is NOT in TextDisplayGlobals WARNs (naming it) — the [...]-in-game teeth (Track B).
-///   GLOBAL-TAG-SUBTAG — a CK formatting-subtag form <Global.Time=X> (modifier before the =) with an uncovered global ALSO WARNs (regex covers the pre-= subtag; PR #139 review).
+///   GLOBAL-TAG-OK — a <c>&lt;Global=X&gt;</c> whose X IS in the owning quest's TextDisplayGlobals is NOT flagged (the no-false-positive lock).
+///   GLOBAL-TAG-MISSING— a <c>&lt;Global=X&gt;</c> whose X is NOT in TextDisplayGlobals WARNs (naming it) — the [...]-in-game teeth (Track B).
+///   GLOBAL-TAG-SUBTAG — a CK formatting-subtag form <c>&lt;Global.Time=X&gt;</c> (modifier before the =) with an uncovered global ALSO WARNs (regex covers the pre-= subtag; PR #139 review).
 ///   PLAYERREF-WHITELIST— Run On the engine-implicit PlayerRef (000014:Skyrim.esm), absent from the order, is NOT flagged (the sub-0x800 whitelist, Junti false-positive fix).
 ///   PLAYERREF-CONTROL— Run On a NON-whitelisted missing reference still WARNs — the whitelist is a precise 2-form set, not the whole reserved range.
 ///   QUEST-FANOUT — validating a QUEST fans out to EXACTLY the topics it owns (2 here), kind="quest".

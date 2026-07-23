@@ -15,31 +15,34 @@ namespace HousecarlMcp;
 ///   a mid-session plugin edit auto-rebuilds (~11s), no restart needed.
 /// • THREAD-SAFE — the HTTP server is concurrent; build + refresh are serialized on one gate.
 ///
-/// ORDER is the TRUE active order (§8.5), read statically from the MO2 profile's loadorder.txt + modlist.txt +
-/// plugins.txt via <see cref="Mo2LoadOrder"/> — masters first → highest-priority winner last, the ~110 duplicate-name
-/// plugins resolved by mod priority. No USVFS, no live MO2 state (both failed in the legacy build); the server reads
-/// REAL plugin paths and runs standalone. Freshness is AUTONOMOUS + lazy: the cheap mtime sweep re-reads the profile on
-/// the NEXT tool call whenever the user's MO2 edits changed it — no restart, no manual refresh step. See memory
-/// project_mo2_load_order_resolution.
+/// ORDER comes from the active Amethyst profile's loadorder.txt/plugins.txt activation state and its authoritative
+/// filemap/modindex winners. The server reads real native staging paths; deployed Data is never scanned to infer
+/// provenance. Freshness is autonomous and lazy: each tool call checks manager-owned inputs and rebuilds only when
+/// profile, winner, or deployment state changed. Legacy MO2/explicit constructors remain temporarily for inherited
+/// probes and are removed by the Linux packaging milestone.
 /// </summary>
 public sealed class LoadOrderService : IDisposable
 {
-    // INSTANCE mode (the product default): one configured path — the MO2 instance folder — from which ProfileDir/ModsDir/
-    // DataDir + the active profile are DERIVED (via Mo2Instance, reading ModOrganizer.ini), and a profile SWITCH is picked
-    // up on the next tool call. EXPLICIT mode (dev / non-portable override): the three paths are configured directly and
-    // _instanceDir stays null (no ini watch). UNCONFIGURED: neither was set — the server still BOOTS; every tool returns the
-    // trained prompt (so houseCARL asks the user for the path) until housecarl_set_mo2_instance is called.
-    string? _instanceDir;                          // INSTANCE-mode source of truth; null in explicit/unconfigured mode
+    // AMETHYST mode (the Linux product): the stable manifest selects an IModManagerLayout. Each freshness
+    // check re-reads deploy_state.json, so profile switches update every effective root without a restart.
+    // EXPLICIT and legacy INSTANCE modes remain only for inherited regression probes until Session 6 removes
+    // their public/packaging surface. UNCONFIGURED mode still boots and returns the connection prompt.
+    string? _instanceDir;                          // legacy probe seam; null in Amethyst product mode
+    /// <summary>Validated manifest path selecting Amethyst product mode; null in legacy/explicit probes.</summary>
     string? _manifestPath;
+
+    /// <summary>Manager-specific snapshot provider, created lazily from <see cref="_manifestPath"/>.</summary>
     IModManagerLayout? _layout;
+
+    /// <summary>Last complete Amethyst state installed into the service's manager-neutral fields.</summary>
     ManagerSnapshot? _managerSnapshot;
-    string _dataDir;                               // DERIVED (instance mode) or configured (explicit); mutable for a live profile switch
+    string _dataDir;                               // effective vanilla Data_Core/Data source; mutable across profile switches
     string _modsDir;
     string _profileDir;
-    string _profileName;                           // the active profile (instance mode: from selected_profile)
-    string _overwriteDir = "";                     // MO2's overwrite layer (instance mode: derived; explicit mode: none) — hunt F9
+    string _profileName;                           // active manager profile captured with the effective roots
+    string _overwriteDir = "";                     // highest-priority manager staging layer; empty only in explicit probes
     bool _configured;                              // false ⇒ tools return the trained prompt instead of resolving
-    readonly UserConfigStore _store;               // the sole owner of houseCARL.user.json (MO2 instance dir + tool paths)
+    readonly UserConfigStore _store;               // sole owner of manifest, pending writes, consent, and tool paths
     readonly int _maxPlugins;
     readonly object _gate = new();
     // Serializes the WHOLE resolve→stage→commit of every .esp write (2026-06-12 hunt F2): the MCP SDK dispatches tool
@@ -70,6 +73,15 @@ public sealed class LoadOrderService : IDisposable
 
     static readonly string[] ProfileFileNames = { "loadorder.txt", "modlist.txt", "plugins.txt" };
 
+    /// <summary>Creates one service in Amethyst, legacy-instance, explicit-path, or unconfigured mode.</summary>
+    /// <param name="instanceDir">Legacy instance root; null for Amethyst/explicit/unconfigured modes.</param>
+    /// <param name="dataDir">Initial vanilla Data root for explicit mode; otherwise empty until derivation.</param>
+    /// <param name="modsDir">Initial staging root for explicit mode; otherwise empty until derivation.</param>
+    /// <param name="profileDir">Initial profile root for explicit mode; otherwise empty until derivation.</param>
+    /// <param name="configured">Whether tools may attempt layout resolution instead of returning the setup prompt.</param>
+    /// <param name="maxPlugins">Optional positive resolver cap; zero means unlimited.</param>
+    /// <param name="store">Shared atomic owner of persisted user configuration.</param>
+    /// <param name="manifestPath">Amethyst connection manifest, or null outside product mode.</param>
     LoadOrderService(string? instanceDir, string dataDir, string modsDir, string profileDir, bool configured,
                      int maxPlugins, UserConfigStore store, string? manifestPath = null)
     {
@@ -91,7 +103,11 @@ public sealed class LoadOrderService : IDisposable
         => new(string.IsNullOrWhiteSpace(instanceDir) ? null : instanceDir.Trim(),
                "", "", "", configured: !string.IsNullOrWhiteSpace(instanceDir), maxPlugins, store);
 
-    /// <summary>Product mode: derive native Linux roots from the setup manifest and follow profile switches lazily.</summary>
+    /// <summary>Creates Linux product mode from an optional persisted Amethyst manifest.</summary>
+    /// <param name="manifestPath">Manifest to activate lazily, or null/blank for a bootable unconfigured server.</param>
+    /// <param name="maxPlugins">Optional positive resolver cap; zero means unlimited.</param>
+    /// <param name="store">Shared user-configuration store.</param>
+    /// <returns>A service that follows Amethyst profile switches without restarting.</returns>
     public static LoadOrderService WithAmethystConnection(string? manifestPath, int maxPlugins, UserConfigStore store)
         => new(null, "", "", "", configured: !string.IsNullOrWhiteSpace(manifestPath), maxPlugins, store,
                string.IsNullOrWhiteSpace(manifestPath) ? null : manifestPath.Trim());
@@ -282,7 +298,7 @@ public sealed class LoadOrderService : IDisposable
     /// ships, never a hardcoded set) so the renderer can group them compactly, and non-config content (animation data etc.)
     /// is counted in <see cref="SkseInventoryData.OtherFileCount"/>, never silently dropped. DLLs keep their SKSE-loader
     /// truth: a subfolder DLL is SEEN but flagged (SKSE scans Data\SKSE\Plugins*.dll top-level only, so it isn't loaded as a
-    /// plugin). ONE asset capture pins the whole scan (list + <see cref="AssetView.ReadIncomplete"/> caveat = one build); the
+    /// plugin). ONE asset capture pins the whole scan (list + <see cref="AssetResolver.AssetView.ReadIncomplete"/> caveat = one build); the
     /// enumerate + resolve + PE reads run OUTSIDE the gate (the captured view is a handle-free immutable snapshot), so an
     /// inventory never serializes other tool calls behind its file I/O. Distributor INIs (SPID <c>*_DISTR</c>, KID
     /// <c>*_KID</c>) live in Data\ ROOT, not here, and are owned by their authoring skills — out of this scope by design.</summary>
@@ -631,7 +647,7 @@ public sealed class LoadOrderService : IDisposable
     /// disk extraction), and hand them to <see cref="NifService.Inspect"/> for the header / block census / shapes /
     /// partitions / alpha / textures / node tree / string table. Read-only. The asset-tool parity is carried through:
     /// the full winner→loser provider chain (each tagged loose/BSA), the ambiguity flag, and the build-level Q3 caveats
-    /// (<see cref="AssetView.BsaFailures"/> / ReadIncomplete) ride along, so an ABSENT answer is never over-trusted. ONE
+    /// (<see cref="AssetResolver.AssetView.BsaFailures"/> / ReadIncomplete) ride along, so an ABSENT answer is never over-trusted. ONE
     /// asset capture pins the whole call; the resolve + byte read + NIF parse run OUTSIDE <see cref="_gate"/> on the
     /// handle-free captured view, so an inspect never serializes other tool calls behind its file I/O. A parse failure is
     /// a NAMED outcome (<see cref="NifInspectData.Error"/>), never a throw or a half-model (Q3).</summary>
@@ -707,8 +723,11 @@ public sealed class LoadOrderService : IDisposable
     ///     that refuses with the default-lane guidance.
     /// Serialized on the write gate. Q3 honesty: for the default lane "wrote it" ≠ "it wins" — the render says to enable +
     /// sort the fresh mod; this never claims the fix took effect on write.</summary>
-    public NifSetResult NifSet(string relPath, IReadOnlyList<NifSetOp> ops, string? mod, string? patchName, string? into, bool inPlace, bool acknowledge)
+    public NifSetResult NifSet(string relPath, IReadOnlyList<NifSetOp> ops, string? mod, string? patchName, string? into, bool inPlace, bool acknowledge,
+        bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return NifSetResult.Fail(redeploy);
         var rel = (relPath ?? "").Trim();
         if (rel.Length == 0) return NifSetResult.Fail("no mesh path given. Pass a Data-relative path, e.g. 'meshes\\armor\\iron\\cuirass_1.nif'.");
         if (ops is null || ops.Count == 0) return NifSetResult.Fail("no write op given — pass at least one op (e.g. set_flags, rename_shape).");
@@ -761,6 +780,8 @@ public sealed class LoadOrderService : IDisposable
                         "Drop in_place to write a loose winning override into a new houseCARL folder instead (the default lane).", providers, profileName);
                 var targetPath = chosen.LooseFilePath!;
                 var meshName = Path.GetFileName(targetPath);
+                if (!PrepareAmethystWrite(targetPath, rel, out var before, out var stagingError))
+                    return NifSetResult.Fail(stagingError!, providers, profileName);
 
                 bool already = _store.IsInPlaceAcknowledged(targetPath);
                 if (!already && !acknowledge)
@@ -779,8 +800,9 @@ public sealed class LoadOrderService : IDisposable
                 if (sz != editedBytes.Length)
                     return NifSetResult.Fail($"wrote '{meshName}' but its on-disk size ({sz}) does not match the {editedBytes.Length} verified byte(s) — verify before relying on it.", providers, profileName);
 
+                var redeployNote = RecordAmethystWrite(targetPath, rel, "nif_in_place", before);
                 return NifSetResult.OkInPlace(rel, chosenProv, providers, place.Ambiguous, editedIsWinner, report, targetPath,
-                    MergeWarnings(report.Warnings, warnings, ackNote), profileName);
+                    MergeWarnings(report.Warnings, warnings, JoinNotes(ackNote, redeployNote)), profileName);
             }
 
             // ---- DEFAULT (new-folder) lane ----
@@ -804,7 +826,8 @@ public sealed class LoadOrderService : IDisposable
             }
 
             string? winner = providers.Count > 0 ? $"{providers[0].Name} ({providers[0].Kind})" : null;
-            return NifSetResult.OkNewFolder(rel, chosenProv, providers, place.Ambiguous, report, rf.ModFolder, winner, MergeWarnings(report.Warnings, warnings, null), profileName);
+            var pendingNote = RecordAmethystWrite(dest, rel, "nif_override");
+            return NifSetResult.OkNewFolder(rel, chosenProv, providers, place.Ambiguous, report, rf.ModFolder, winner, MergeWarnings(report.Warnings, warnings, pendingNote), profileName);
         }
     }
 
@@ -879,7 +902,13 @@ public sealed class LoadOrderService : IDisposable
             // Nothing placed into a FRESH folder → remove the orphan (the .esp F4 / rider H2 principle). A reused into=
             // folder (the user owns it) is never touched. A partial fresh folder is kept and its path surfaced.
             string? leftover = placed == 0 ? RemoveOrNameRiderResidue(rf) : null;
-            return new PlaceOutcome(results, placed > 0 ? rf.ModFolder : null, warnings, leftover, null);
+            var allWarnings = warnings.ToList();
+            foreach (var result in results.Where(r => r.Placed))
+            {
+                var note = RecordAmethystWrite(BethesdaPath.Under(rf.OutputDir, result.AssetPath), result.AssetPath, "asset_override");
+                if (note is not null && !allWarnings.Contains(note, StringComparer.Ordinal)) allWarnings.Add(note);
+            }
+            return new PlaceOutcome(results, placed > 0 ? rf.ModFolder : null, allWarnings, leftover, null);
         }
     }
 
@@ -1201,11 +1230,13 @@ public sealed class LoadOrderService : IDisposable
         ReResolve();
     }
 
-    /// <summary>Instance mode only: if ModOrganizer.ini changed since we last read it AND the user switched profiles (or
-    /// moved the game path), re-derive ProfileDir/ModsDir/DataDir + the active profile and re-resolve against the new
-    /// profile. This is how a mid-session profile switch is followed — lazily, on the NEXT tool call, by the SAME cheap-mtime
-    /// model as the per-profile-file check. Returns true iff it handled a switch (caller then skips the per-file check).
-    /// Tolerates a transient/invalid read (MO2 mid-write): keeps the last good set and retries next call. Caller holds the gate.</summary>
+    /// <summary>Refreshes manager roots when the active profile or manager-owned inputs change.</summary>
+    /// <returns>True when a changed manager snapshot was installed and re-resolution ran.</returns>
+    /// <remarks>
+    /// Amethyst mode delegates freshness and fail-loud validation to <see cref="IModManagerLayout"/>. The
+    /// legacy branch retains its prior best-effort ini behavior only for inherited probes. Caller holds
+    /// <see cref="_gate"/>.
+    /// </remarks>
     bool RederiveIfIniChanged()
     {
         if (_manifestPath is not null)
@@ -1277,10 +1308,12 @@ public sealed class LoadOrderService : IDisposable
         // baseline, so the next tool call re-checks and self-recovers once MO2 finishes writing.
     }
 
-    /// <summary>Instance mode: on the first resolver build, read ModOrganizer.ini and derive ProfileDir/ModsDir/DataDir +
-    /// the active profile — throwing a clear Q3 message (naming what's missing) if the configured instance isn't usable.
-    /// Explicit mode (paths already set) and re-derives (paths already non-empty) are no-ops. Stamps the ini-read baseline
-    /// so the profile-switch check has a reference point. Caller holds the gate.</summary>
+    /// <summary>Derives effective manager paths on first use.</summary>
+    /// <remarks>
+    /// Product mode validates and captures the Amethyst manifest. Explicit mode is already derived. The
+    /// legacy instance branch remains for inherited probes until Session 6 removes it. Caller holds
+    /// <see cref="_gate"/>.
+    /// </remarks>
     void EnsurePathsDerived()
     {
         if (_manifestPath is not null)
@@ -1302,6 +1335,12 @@ public sealed class LoadOrderService : IDisposable
         InvalidateClassParents();                                // _modsDir just gained a value — a cache built before derivation is baseline-only (hunt F1)
     }
 
+    /// <summary>Installs a freshly captured manager snapshot as the service's active path and deployment state.</summary>
+    /// <param name="snapshot">A complete, already validated view of the active Amethyst profile.</param>
+    /// <remarks>
+    /// Pending writes are checked only after all active paths have moved to the new snapshot. This
+    /// prevents a profile switch from verifying a write against stale roots from the prior profile.
+    /// </remarks>
     void Apply(ManagerSnapshot snapshot)
     {
         _managerSnapshot = snapshot;
@@ -1310,8 +1349,114 @@ public sealed class LoadOrderService : IDisposable
         _dataDir = snapshot.VanillaDataDir;
         _profileName = snapshot.ActiveProfileName;
         _overwriteDir = snapshot.OverwriteDir;
+        _store.VerifyPendingAmethystWrites(snapshot);
     }
 
+    /// <summary>Filesystem identity captured before an atomic staging replacement.</summary>
+    /// <param name="StagingIdentity">The old staging inode, or null when it could not be read.</param>
+    /// <param name="DeployedWasSameHardlink">
+    /// True when deployed Data shared that inode, false when both identities proved they differed,
+    /// or null when either identity was unavailable.
+    /// </param>
+    sealed record AmethystWriteBefore(LinuxFileIdentity? StagingIdentity, bool? DeployedWasSameHardlink);
+
+    /// <summary>Explains the extra confirmation required before an Amethyst in-place write.</summary>
+    /// <param name="inPlace">Whether the caller requested the guarded in-place lane.</param>
+    /// <param name="confirmed">Whether the caller acknowledged the required later redeployment.</param>
+    /// <returns>An actionable refusal message when confirmation is missing; otherwise null.</returns>
+    string? AmethystRedeployConfirmation(bool inPlace, bool confirmed) =>
+        _manifestPath is not null && inPlace && !confirmed
+            ? "in_place=true on Amethyst also requires confirm_amethyst_redeploy=true. houseCARL writes staging only; " +
+              "after atomic replacement the deployed Data copy may still be the old hardlink until Amethyst rebuilds " +
+              "filemap.txt and deploys again. Nothing was written."
+            : null;
+
+    /// <summary>Validates the staging target and captures its pre-write hardlink relationship.</summary>
+    /// <param name="stagingPath">Absolute native path that the write intends to replace.</param>
+    /// <param name="dataRelativePath">Canonical Bethesda path used to locate the deployed counterpart.</param>
+    /// <param name="before">Captured state on success; null outside Amethyst mode.</param>
+    /// <param name="error">Actionable refusal on failure; otherwise null.</param>
+    /// <returns>True when the write may proceed, including the legacy non-Amethyst path.</returns>
+    bool PrepareAmethystWrite(string stagingPath, string dataRelativePath, out AmethystWriteBefore? before, out string? error)
+    {
+        before = null; error = null;
+        if (_manifestPath is null) return true;
+        var snapshot = _managerSnapshot!;
+        if (!Under(stagingPath, snapshot.ModsDir) && !Under(stagingPath, snapshot.OverwriteDir))
+        {
+            error = $"refused — Amethyst in-place writes may target staging only, but '{stagingPath}' is outside the active mods/overwrite roots. Nothing was written.";
+            return false;
+        }
+        var rel = BethesdaPath.Normalize(dataRelativePath);
+        var deployed = BethesdaPath.Under(Path.Combine(snapshot.GamePath, "Data"), rel);
+        var stagingIdentity = LinuxFileIdentity.Read(stagingPath);
+        var deployedIdentity = LinuxFileIdentity.Read(deployed);
+        before = new(stagingIdentity,
+            stagingIdentity is null || deployedIdentity is null ? null : stagingIdentity == deployedIdentity);
+        return true;
+    }
+
+    /// <summary>Records a completed staging write as pending a later Amethyst deployment.</summary>
+    /// <param name="stagingPath">Absolute native path that was successfully written.</param>
+    /// <param name="dataRelativePath">Canonical Bethesda path represented by the output.</param>
+    /// <param name="kind">Short write category shown by status tools.</param>
+    /// <param name="before">Optional pre-write identity captured for an in-place replacement.</param>
+    /// <returns>
+    /// User-facing redeployment instructions in Amethyst mode; null in the legacy path. Persistence
+    /// failures are appended to the instructions because they must be visible but cannot undo a
+    /// write that already completed atomically.
+    /// </returns>
+    string? RecordAmethystWrite(string stagingPath, string dataRelativePath, string kind, AmethystWriteBefore? before = null)
+    {
+        if (_manifestPath is null) return null;
+        const string instruction = "PendingAmethystRefreshEnableDeploy: refresh Amethyst, enable the generated mod when applicable, " +
+                                   "rebuild the filemap, and deploy. Game-visible verification is refused until that later deployment is proven.";
+        try
+        {
+            var rel = BethesdaPath.Normalize(dataRelativePath);
+            var snapshot = _managerSnapshot!;
+            if (!Under(stagingPath, snapshot.ModsDir) && !Under(stagingPath, snapshot.OverwriteDir))
+                return instruction + $" Pending state was not recorded because the output is outside Amethyst staging: '{stagingPath}'.";
+            var pending = new PendingAmethystWrite
+            {
+                ProfileName = snapshot.ActiveProfileName,
+                StagingPath = Path.GetFullPath(stagingPath),
+                DataRelativePath = rel,
+                ContentSha256 = AmethystRedeploy.Hash(stagingPath),
+                WrittenUtc = DateTime.UtcNow,
+                Kind = kind,
+                StagingIdentity = LinuxFileIdentity.Read(stagingPath),
+                PreviousStagingIdentity = before?.StagingIdentity,
+                DeployedWasSameHardlink = before?.DeployedWasSameHardlink
+            };
+            var (ok, error) = _store.RecordPendingAmethystWrite(pending);
+            var note = instruction;
+            if (before?.DeployedWasSameHardlink == true)
+                note += " The deployed Data copy still references the pre-write inode until redeploy.";
+            return ok ? note : note + $" Pending state could not be saved ({error}).";
+        }
+        catch (Exception ex) { return instruction + $" Pending state could not be recorded ({ex.Message})."; }
+    }
+
+    /// <summary>Checks whether a candidate is a descendant of a staging root.</summary>
+    /// <remarks>
+    /// Appending the host separator to the normalized root prevents sibling prefixes such as
+    /// <c>mods-old</c> from being accepted as descendants of <c>mods</c>.
+    /// </remarks>
+    static bool Under(string path, string root)
+    {
+        var candidate = Path.GetFullPath(path);
+        var parent = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return candidate.StartsWith(parent, StringComparison.Ordinal);
+    }
+
+    /// <summary>Returns the writes whose later Amethyst deployment has not yet been verified.</summary>
+    /// <returns>A detached pending-write list safe for status rendering.</returns>
+    public IReadOnlyList<PendingAmethystWrite> PendingAmethystWrites() => _store.PendingAmethystWrites();
+
+    /// <summary>Builds physical plugin order through the active manager adapter.</summary>
+    /// <returns>Resolved paths, warnings, and requested active count.</returns>
+    /// <remarks>Amethyst mode requires its authoritative snapshot; it never falls back to deployed Data scanning.</remarks>
     ModOrderResult BuildManagerOrder()
     {
         if (_manifestPath is null)
@@ -1323,20 +1468,28 @@ public sealed class LoadOrderService : IDisposable
             new ManagerFileIndex(snapshot.FilemapReady, snapshot.LooseAssetSources, snapshot.Warnings));
     }
 
+    /// <summary>Reads mod/plugin activation using the active manager's profile grammar.</summary>
+    /// <param name="profileDir">Profile to inspect; it need not be active.</param>
+    /// <param name="warnings">Optional sink for missing or inconsistent profile files.</param>
+    /// <returns>Manager-neutral composition without building the record index.</returns>
     ModComposition ReadManagerComposition(string profileDir, List<string>? warnings = null) =>
         _manifestPath is null
             ? Mo2LoadOrder.ReadComposition(profileDir, warnings)
             : AmethystLoadOrder.ReadComposition(profileDir, warnings);
 
+    /// <summary>Compares manager roots after trimming trailing separators.</summary>
+    /// <param name="a">First native or legacy path spelling.</param>
+    /// <param name="b">Second native or legacy path spelling.</param>
+    /// <returns>True when the normalized spellings compare equal.</returns>
+    /// <remarks>This legacy-compatible comparison is case-insensitive; Amethyst source resolution itself uses actual casing.</remarks>
     static bool PathEq(string a, string b) =>
         string.Equals(a.TrimEnd('\\', '/'), b.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Whether houseCARL has an MO2 location to resolve against. False on a fresh install with no config — the
-    /// server still runs; every tool returns the trained prompt until <see cref="SetInstance"/> is called.</summary>
+    /// <summary>Whether houseCARL has a manager connection it can resolve.</summary>
+    /// <remarks>A fresh unconfigured server still boots and returns the Amethyst setup prompt from tools.</remarks>
     public bool IsConfigured { get { lock (_gate) { return _configured; } } }
 
-    /// <summary>The active profile name (instance mode: ModOrganizer.ini selected_profile; explicit mode: the profile folder
-    /// name); "" when unconfigured. For the status surface.</summary>
+    /// <summary>The captured Amethyst profile name, or an empty string while unconfigured.</summary>
     public string ProfileName { get { lock (_gate) { return _profileName; } } }
 
     /// <summary>The game install directory the load order points at — DataDir's PARENT (DataDir = gamePath\Data), the same
@@ -1433,7 +1586,16 @@ public sealed class LoadOrderService : IDisposable
     (bool ok, string? error, string? note) PersistInstanceDir(string instanceDir)
         => (true, null, null); // legacy synthetic-test path; the Linux product persists only Amethyst manifests
 
-    /// <summary>Validate, activate, and persist a schema-v1 Amethyst connection manifest.</summary>
+    /// <summary>Validates, activates, and persists a schema-v1 Amethyst connection manifest.</summary>
+    /// <param name="manifestPath">Absolute native path to connection.json.</param>
+    /// <returns>
+    /// Activated snapshot plus independent persistence success/error/recovery state. A persistence
+    /// failure does not undo the valid live connection and is reported honestly to the caller.
+    /// </returns>
+    /// <remarks>
+    /// Validation and snapshot capture occur before either service caches or user configuration change.
+    /// Both service locks then make the manager switch atomic with respect to reads and writes.
+    /// </remarks>
     public (ManagerSnapshot snapshot, bool persisted, string? persistError, string? persistNote)
         SetAmethystConnection(string manifestPath)
     {
@@ -1458,14 +1620,20 @@ public sealed class LoadOrderService : IDisposable
         return (snapshot, ok, error, note);
     }
 
-    /// <summary>The current manager snapshot without forcing the record index to build.</summary>
+    /// <summary>Returns the current manager snapshot without forcing the record index to build.</summary>
+    /// <returns>Fresh validated Amethyst state.</returns>
     public ManagerSnapshot AmethystSnapshot()
     {
         RefreshAmethyst();
         lock (_gate) return _managerSnapshot!;
     }
 
-    /// <summary>Refresh manager state explicitly; normal tool calls also refresh lazily.</summary>
+    /// <summary>Refreshes manager state explicitly; normal tool calls also refresh lazily.</summary>
+    /// <returns>True when semantic manager state or freshness inputs changed.</returns>
+    /// <remarks>
+    /// A changed snapshot invalidates record/asset caches; an unchanged snapshot may still clear a
+    /// pending redeployment marker after <see cref="Apply"/> verifies a later deployment.
+    /// </remarks>
     public bool RefreshAmethyst()
     {
         lock (_writeGate)
@@ -1486,9 +1654,10 @@ public sealed class LoadOrderService : IDisposable
         }
     }
 
-    /// <summary>The trained prompt shown while unconfigured: tells houseCARL to ask the user which MO2 instance to use (not
-    /// silently pick among several) and call the setup tool. Tools RETURN this (so the client SEES it) via <see cref="ConfigPromptOrNull"/>; the <see cref="Resolver"/>
-    /// getter also THROWS it as a backstop. The two must say the same thing, hence one shared string.</summary>
+    /// <summary>
+    /// Shared visible guidance returned while no Amethyst manifest is configured. Tools return this
+    /// text directly; resolver access throws it only as a defensive backstop.
+    /// </summary>
     const string NotConfiguredText =
         "houseCARL-Amethyst is not connected yet. Ask for the schema-v1 connection.json exported for Skyrim Special " +
         "Edition, then call housecarl_set_amethyst_connection with its absolute native Linux path.";
@@ -2113,8 +2282,11 @@ public sealed class LoadOrderService : IDisposable
     /// <paramref name="fullReadback"/> additionally reads every touched record back IN FULL off the written file
     /// (the pre-enable verify loop — wishlist #3 re-scoped / HCBR-2026-06-11-02 wave (b)).</summary>
     public WritePatchBuilder.PatchOutcome ApplyEdits(IReadOnlyList<BulkOp> ops, string? patchName, string? into,
-        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false)
+        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false,
+        bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.PatchOutcome.Fail(redeploy);
         if (ops.Count == 0)
             return WritePatchBuilder.PatchOutcome.Fail("no operations supplied.");
 
@@ -2174,7 +2346,9 @@ public sealed class LoadOrderService : IDisposable
             {
                 var outcome = WritePatchBuilder.Apply(resolver, rulebook, edits, outPath, extend, fullReadback, copyFromSources);
                 if (!outcome.Success && created) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused write leaves no orphan
-                return outcome;
+                if (!outcome.Success) return outcome;
+                var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+                return pendingNote is null ? outcome : outcome with { Note = JoinNotes(outcome.Note, pendingNote) };
             }
             finally { if (offOrderOverlays is not null) foreach (var d in offOrderOverlays) d.Dispose(); }
         }
@@ -2264,6 +2438,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.PatchOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.PatchOutcome.Fail(stagingError!);
+
         // (4) The write — touched-record verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.ApplyInPlace(resolver, rulebook, edits, targetPath, targetName, fullReadback: true);
 
@@ -2274,8 +2451,9 @@ public sealed class LoadOrderService : IDisposable
         {
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
             var seqNote = SeqStaleInPlaceNote(targetPath, targetName);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
             // outcome.Note first — the core's master-grow re-sort note (PR #163 review #1) must survive the merge.
-            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote);
+            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote, redeployNote);
             if (note is not null) return outcome with { Note = note };
         }
         else if (ackNote is not null)
@@ -2459,8 +2637,10 @@ public sealed class LoadOrderService : IDisposable
     /// → mod.Remove → re-serialize, with clean-masters riding along). The default lane never touches originals (only the
     /// patch folder is written).</summary>
     public WritePatchBuilder.RemovalOutcome RemoveRecords(IReadOnlyList<string> formids, string? patch,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.RemovalOutcome.Fail(redeploy);
         if (formids is null || formids.Count == 0)
             return WritePatchBuilder.RemovalOutcome.Fail("no formids supplied — pass the FormID(s) of the record(s) to remove.");
 
@@ -2507,7 +2687,10 @@ public sealed class LoadOrderService : IDisposable
             try { outPath = ResolveOutputPath(patchName: null, into: patch, out _, out _); }
             catch (Exception ex) { return WritePatchBuilder.RemovalOutcome.Fail(ex.Message); }
 
-            return WritePatchBuilder.RemoveRecords(resolver, keys, outPath);
+            var outcome = WritePatchBuilder.RemoveRecords(resolver, keys, outPath);
+            if (!outcome.Success) return outcome;
+            var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), "patch_update");
+            return pendingNote is null ? outcome : outcome with { Note = JoinNotes(outcome.Note, pendingNote) };
         }
     }
 
@@ -2550,6 +2733,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.RemovalOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.RemovalOutcome.Fail(stagingError!);
+
         // (4) The write — absence verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.RemoveRecordsInPlace(resolver, keys, targetPath, targetName);
 
@@ -2560,8 +2746,9 @@ public sealed class LoadOrderService : IDisposable
         {
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
             var seqNote = SeqStaleInPlaceNote(targetPath, targetName);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
             // outcome.Note first — the core's master-grow re-sort note (PR #163 review #1) must survive the merge.
-            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote);
+            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote, redeployNote);
             if (note is not null) return outcome with { Note = note };
         }
         else if (ackNote is not null)
@@ -2583,8 +2770,11 @@ public sealed class LoadOrderService : IDisposable
     /// write lane; HCBR-2026-07-08-01 F4) — forward INTO an existing plugin's own file, consent-gated like the sibling
     /// write tools — see <see cref="ForwardRecordsInPlace"/>.</summary>
     public WritePatchBuilder.ForwardOutcome ForwardRecords(IReadOnlyList<string> formids, string fromPlugin, string? patchName, string? into,
-        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false)
+        bool fullReadback = false, string? target = null, bool inPlace = false, bool acknowledge = false,
+        bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.ForwardOutcome.Fail(redeploy);
         if (string.IsNullOrWhiteSpace(fromPlugin))
             return WritePatchBuilder.ForwardOutcome.Fail(
                 "from_plugin is required — name the plugin whose version of the record(s) to forward (the earlier override, or a master to revert to vanilla).");
@@ -2632,7 +2822,9 @@ public sealed class LoadOrderService : IDisposable
 
             var outcome = WritePatchBuilder.ForwardRecords(resolver, specs, outPath, extend, fullReadback);
             if (!outcome.Success && created) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused forward leaves no orphan
-            return outcome;
+            if (!outcome.Success) return outcome;
+            var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+            return pendingNote is null ? outcome : outcome with { Note = JoinNotes(outcome.Note, pendingNote) };
         }
     }
 
@@ -2673,6 +2865,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.ForwardOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.ForwardOutcome.Fail(stagingError!);
+
         // (4) The write — touched-record verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.ForwardRecordsInPlace(resolver, specs, targetPath, targetName, fullReadback: true);
 
@@ -2682,8 +2877,9 @@ public sealed class LoadOrderService : IDisposable
         {
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
             var seqNote = SeqStaleInPlaceNote(targetPath, targetName);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
             // outcome.Note first — the core's master-grow re-sort note (PR #163 review #1) must survive the merge.
-            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote);
+            var note = JoinNotes(outcome.Note, ackNote, markerNote, seqNote, redeployNote);
             if (note is not null) return outcome with { Note = note };
         }
         else if (ackNote is not null)
@@ -2744,7 +2940,9 @@ public sealed class LoadOrderService : IDisposable
 
             var outcome = WritePatchBuilder.CreatePlugin(outPath, esl, author, description);
             if (!outcome.Success) RemoveFolderCreatedThisCall(outPath);   // hunt F4: a refused create leaves no orphan
-            return outcome;
+            if (!outcome.Success) return outcome;
+            var pendingNote = RecordAmethystWrite(outPath, plugin, "new_plugin");
+            return pendingNote is null ? outcome : outcome with { Note = pendingNote };
         }
     }
 
@@ -2775,8 +2973,10 @@ public sealed class LoadOrderService : IDisposable
     /// write gate; the identify-pass is one whole-order link walk (~25s at full scale — a deliberate, one-shot operation).</para></summary>
     public WritePatchBuilder.CompactOutcome CompactPlugin(
         string pluginName, bool esl = true, bool inPlace = false, bool repointExternals = false,
-        bool acknowledge = false, string? patchName = null)
+        bool acknowledge = false, string? patchName = null, bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace || repointExternals, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.CompactOutcome.Fail(redeploy);
         if (string.IsNullOrWhiteSpace(pluginName))
             return WritePatchBuilder.CompactOutcome.Fail("plugin is required — name the plugin filename to compact (e.g. 'CoolMod.esp').");
 
@@ -2922,6 +3122,20 @@ public sealed class LoadOrderService : IDisposable
                 outPath = Path.Combine(rf.OutputDir, name);
             }
 
+            AmethystWriteBefore? compactBefore = null;
+            string? stagingError = null;
+            if (inPlace && !PrepareAmethystWrite(srcPath, name, out compactBefore, out stagingError))
+                return WritePatchBuilder.CompactOutcome.Fail(stagingError!);
+            var repointBefore = new Dictionary<string, (string Path, AmethystWriteBefore? Before)>(StringComparer.OrdinalIgnoreCase);
+            if (willRepoint)
+                foreach (var ext in id.ExternalPlugins)
+                {
+                    var path = view.PluginPath(ext);
+                    if (path is null || !PrepareAmethystWrite(path, ext, out var prior, out stagingError))
+                        return WritePatchBuilder.CompactOutcome.Fail(stagingError ?? $"could not resolve staging path for '{ext}'. Nothing was written.");
+                    repointBefore[ext] = (path, prior);
+                }
+
             // 6. build + write the compacted plugin.
             var build = WritePatchBuilder.CompactBuild(srcPath, modKey, remapDict, view.PluginPath, outPath, esl, floor);
             if (!build.Success)
@@ -3008,6 +3222,14 @@ public sealed class LoadOrderService : IDisposable
                 var rp = view.PluginPath(r.Plugin);
                 if (rp is not null) { var n = MergeEditedInPlaceMarker(Path.GetDirectoryName(rp)); if (n is not null) markerNotes.Add(n); }
             }
+            var compactPending = RecordAmethystWrite(outPath, name, inPlace ? "compact_in_place" : "new_compact", compactBefore);
+            if (compactPending is not null) markerNotes.Add(compactPending);
+            foreach (var r in repointed.Where(r => r.Success))
+                if (repointBefore.TryGetValue(r.Plugin, out var prior))
+                {
+                    var pending = RecordAmethystWrite(prior.Path, r.Plugin, "compact_repoint", prior.Before);
+                    if (pending is not null) markerNotes.Add(pending);
+                }
 
             return new WritePatchBuilder.CompactOutcome(
                 true, null, false, outPath, name, inPlace, esl, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
@@ -3199,6 +3421,7 @@ public sealed class LoadOrderService : IDisposable
                 ? "the regenerated .seq lists EVERY start-game-enabled quest in the merge — including any from a donor that " +
                   "shipped no .seq of its own (such quests were NOT auto-starting before the merge; they will now)."
                 : null;
+            note = JoinNotes(note, RecordAmethystWrite(outPath, outName, "new_merge"));
 
             return new WritePatchBuilder.MergeOutcome(
                 true, null, outPath, outName, donorNames, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
@@ -3467,7 +3690,8 @@ public sealed class LoadOrderService : IDisposable
                     assets = new NpcAssetOutcome(Array.Empty<CarriedAsset>(), Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>(),
                         new[] { $"asset carry skipped — the asset layer could not be built ({ex.Message}); carry the facegen pair with housecarl_place_asset and verify in-game." }, false, false);
                 }
-                return outcome with { Assets = assets };
+                var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+                return outcome with { Assets = assets, Warning = JoinNotes(outcome.Warning, pendingNote) };
             }
             finally { (donorOverlay as IDisposable)?.Dispose(); (widenOverlay as IDisposable)?.Dispose(); }
         }
@@ -3486,14 +3710,14 @@ public sealed class LoadOrderService : IDisposable
     /// child's parent= naming a same-call sibling), see <see cref="CreateRecordsBatch"/>.</summary>
     public WritePatchBuilder.CreateOutcome CreateRecords(string recordType, string editorid, IReadOnlyList<BulkOp> operations,
         string? patchName, string? into, bool fullReadback = false, string? parent = null, string? collection = null, string? grid = null,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
         var problems = new List<string>();
         var spec = BuildCreateSpec(recordType, editorid, operations, parent, collection, grid, where: null, problems);
         if (spec is null)
             return WritePatchBuilder.CreateOutcome.Fail(
                 $"refused — {problems.Count} problem(s) creating the record; NOTHING created:\n  - " + string.Join("\n  - ", problems));
-        return CommitCreate(new[] { spec }, patchName, into, fullReadback, target, inPlace, acknowledge);
+        return CommitCreate(new[] { spec }, patchName, into, fullReadback, target, inPlace, acknowledge, confirmAmethystRedeploy);
     }
 
     /// <summary>Create MANY new records in ONE patch (housecarl_bulk_create) — the batch sibling of
@@ -3503,7 +3727,7 @@ public sealed class LoadOrderService : IDisposable
     /// spec refuses the whole call (with per-record reasons) and the core <see cref="WritePatchBuilder.CreateRecords"/>
     /// likewise refuses the whole batch on any creatability/parent problem. One serialize for the lot.</summary>
     public WritePatchBuilder.CreateOutcome CreateRecordsBatch(IReadOnlyList<CreateOp> records, string? patchName, string? into, bool fullReadback = false,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
         if (records is null || records.Count == 0)
             return WritePatchBuilder.CreateOutcome.Fail("no records to create supplied — pass one or more {record_type, editorid, operations?, parent?, collection?} specs.");
@@ -3519,7 +3743,7 @@ public sealed class LoadOrderService : IDisposable
         if (problems.Count > 0)
             return WritePatchBuilder.CreateOutcome.Fail(
                 $"refused — {problems.Count} problem(s) across {records.Count} record(s); NOTHING created:\n  - " + string.Join("\n  - ", problems));
-        return CommitCreate(specs, patchName, into, fullReadback, target, inPlace, acknowledge);
+        return CommitCreate(specs, patchName, into, fullReadback, target, inPlace, acknowledge, confirmAmethystRedeploy);
     }
 
     /// <summary>Build ONE core <see cref="WritePatchBuilder.CreateSpec"/> from wire parts (shared by the single create and
@@ -3574,8 +3798,10 @@ public sealed class LoadOrderService : IDisposable
     /// then drive the core multi-record create + serialize under the write gate (hunt F2: one write at a time). A refused
     /// create that just created the output folder leaves no orphan (hunt F4). Shared by the single + batch create.</summary>
     WritePatchBuilder.CreateOutcome CommitCreate(IReadOnlyList<WritePatchBuilder.CreateSpec> specs, string? patchName, string? into, bool fullReadback,
-        string? target = null, bool inPlace = false, bool acknowledge = false)
+        string? target = null, bool inPlace = false, bool acknowledge = false, bool confirmAmethystRedeploy = false)
     {
+        if (AmethystRedeployConfirmation(inPlace, confirmAmethystRedeploy) is { } redeploy)
+            return WritePatchBuilder.CreateOutcome.Fail(redeploy);
         // In-place is the explicit, named-file opt-in (the SECOND write lane — create into an existing plugin, incl. one
         // houseCARL didn't author, instead of writing a new patch). Validate the contract up front (Q3): it REQUIRES a
         // target=, is mutually exclusive with into= (which EXTENDS a houseCARL patch — a different lane), and target=
@@ -3609,7 +3835,10 @@ public sealed class LoadOrderService : IDisposable
             // CreateRecords path stays untouched): unit B voice (.fuz/.lip) coverage, unit C the result-script binding,
             // then the §4-(b) structural-shell report. Each is a no-op unless the call created the relevant record kind
             // (a dialogue line / a cell); none can fail the create (the write already succeeded).
-            return outcome.Success ? EnrichWithCellShell(EnrichWithScriptCheck(EnrichWithVoiceCheck(outcome, resolver))) : outcome;
+            if (!outcome.Success) return outcome;
+            var enriched = EnrichWithCellShell(EnrichWithScriptCheck(EnrichWithVoiceCheck(outcome, resolver)));
+            var pendingNote = RecordAmethystWrite(outPath, Path.GetFileName(outPath), extend ? "patch_update" : "new_patch");
+            return pendingNote is null ? enriched : enriched with { Note = JoinNotes(enriched.Note, pendingNote) };
         }
     }
 
@@ -3656,6 +3885,9 @@ public sealed class LoadOrderService : IDisposable
         if (InPlaceParentUnwritable(targetPath, out var why))
             return WritePatchBuilder.CreateOutcome.Fail(why);
 
+        if (!PrepareAmethystWrite(targetPath, targetName, out var before, out var stagingError))
+            return WritePatchBuilder.CreateOutcome.Fail(stagingError!);
+
         // (4) The write — created-record verify forced ON (the model-C substitute for the dropped whole-plugin floor).
         var outcome = WritePatchBuilder.CreateRecordsInPlace(resolver, rulebook, specs, targetPath, targetName, fullReadback: true);
 
@@ -3668,7 +3900,8 @@ public sealed class LoadOrderService : IDisposable
         {
             var enriched = EnrichWithCellShell(EnrichWithScriptCheck(EnrichWithVoiceCheck(outcome, resolver)));
             var markerNote = MergeEditedInPlaceMarker(Path.GetDirectoryName(targetPath));
-            var note = JoinNotes(ackNote, markerNote);
+            var redeployNote = RecordAmethystWrite(targetPath, targetName, "plugin_in_place", before);
+            var note = JoinNotes(ackNote, markerNote, redeployNote);
             return note is not null ? enriched with { Note = note } : enriched;
         }
         if (ackNote is not null)
@@ -4252,7 +4485,9 @@ public sealed class LoadOrderService : IDisposable
             if (size != built.Bytes.Length)
                 return SeqOutcome.Fail($"wrote '{seqName}' but its on-disk size ({size}) does not match the {built.Bytes.Length} expected byte(s) — verify before relying on it.");
 
-            return new SeqOutcome(true, null, dest, rf.ModFolder, built.Quests, built.PluginFileName, autoInto is not null);
+            var pendingNote = RecordAmethystWrite(dest, $@"SEQ\{seqName}", "seq");
+            return new SeqOutcome(true, null, dest, rf.ModFolder, built.Quests, built.PluginFileName, autoInto is not null)
+                { Note = pendingNote };
         }
     }
 
@@ -4490,9 +4725,7 @@ public sealed class LoadOrderService : IDisposable
         return false;
     }
 
-    /// <summary>Write the new mod folder's <c>meta.ini</c>: the <c>[houseCARL]</c> ownership marker (MO2-undeployed) plus a
-    /// minimal <c>[General]</c> for MO2's display. Format grounded against real MO2 meta.ini (a minimal one is valid;
-    /// the custom section is ours). A fresh folder has none, so this just writes it.</summary>
+    /// <summary>Write a minimal Amethyst-tolerated <c>meta.ini</c> plus the ownership marker used for safe cleanup.</summary>
     static void WriteOwnerMeta(string folder, string plugin)
     {
         var content =
@@ -4501,7 +4734,7 @@ public sealed class LoadOrderService : IDisposable
             "modid=0\r\n" +
             "version=1.0\r\n" +
             "category=0\r\n" +
-            "comments=Generated by houseCARL - load-order patch\r\n" +
+            "comments=Generated by houseCARL-Amethyst\r\n" +
             "\r\n" +
             HousecarlOwnerMeta.Section + "\r\n" +
             "generated=true\r\n" +
@@ -5130,6 +5363,7 @@ public sealed record SeqOutcome(
     bool Success, string? Error, string? SeqPath, string? ModFolder,
     IReadOnlyList<HousecarlCore.SeqFile.SeqQuest> Quests, string PluginFileName, bool WroteIntoPluginFolder)
 {
+    public string? Note { get; init; }
     public static SeqOutcome Fail(string error)
         => new(false, error, null, null, Array.Empty<HousecarlCore.SeqFile.SeqQuest>(), "", false);
 }

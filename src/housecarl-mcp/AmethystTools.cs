@@ -8,19 +8,30 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class AmethystTools
 {
+    /// <summary>Renders the current Amethyst connection and pending-deployment state.</summary>
+    /// <param name="svc">Singleton service owning the live manager snapshot.</param>
+    /// <returns>Guarded user-facing status text or an actionable configuration error.</returns>
+    /// <remarks>This read may refresh stale manager inputs but never writes Amethyst-owned files.</remarks>
     [McpServerTool(Name = "housecarl_amethyst_status", ReadOnly = true, Title = "Amethyst connection status"),
      Description("Report the active Amethyst profile, native staging roots, deployment state, and freshness inputs. " +
                  "Validates connection.json, paths.json, deploy_state.json, and profile_state.json without writing them.")]
     public static string Status(LoadOrderService svc) =>
-        Guard.Tool("housecarl_amethyst_status", () => Render(svc.AmethystSnapshot()));
+        Guard.Tool("housecarl_amethyst_status", () => Render(svc.AmethystSnapshot(), svc.PendingAmethystWrites()));
 
+    /// <summary>Explicitly re-reads Amethyst state without building the record index.</summary>
+    /// <param name="svc">Singleton service owning the live manager snapshot.</param>
+    /// <returns>Whether manager state changed, or a guarded actionable error.</returns>
     [McpServerTool(Name = "housecarl_refresh", ReadOnly = true, Title = "Refresh Amethyst state"),
      Description("Re-read the Amethyst connection and active profile now. Normal tools also refresh lazily.")]
     public static string Refresh(LoadOrderService svc) =>
         Guard.Tool("housecarl_refresh", () =>
             svc.RefreshAmethyst() ? "refreshed Amethyst state." : "Amethyst state is already current.");
 
-    internal static string Render(ManagerSnapshot s)
+    /// <summary>Formats a complete manager snapshot as stable, scannable diagnostic text.</summary>
+    /// <param name="s">Validated manager state to describe.</param>
+    /// <param name="pending">Optional detached pending-write list; null is rendered as zero.</param>
+    /// <returns>Paths, counts, deployment state, freshness inputs, and warnings.</returns>
+    internal static string Render(ManagerSnapshot s, IReadOnlyList<PendingAmethystWrite>? pending = null)
     {
         var text = new StringBuilder()
             .Append("Amethyst connection — schema ").Append(s.SchemaVersion).Append('\n')
@@ -40,6 +51,12 @@ public static class AmethystTools
             .Append("loose winners: ").Append(s.LooseAssetSources.Count).Append('\n')
             .Append("deployment: ").Append(s.DeploymentActive ? "active" : "inactive");
         if (s.LastDeploymentMode is not null) text.Append(" (").Append(s.LastDeploymentMode).Append(')');
+        text.Append("\npending redeploy: ").Append(pending?.Count ?? 0);
+        if (pending is not null)
+            foreach (var item in pending)
+                text.Append("\n  ").Append(item.WrittenUtc.ToString("O")).Append("  ")
+                    .Append(item.ProfileName).Append("  ").Append(item.Kind).Append("  ")
+                    .Append(item.DataRelativePath);
         text.Append("\nfreshness inputs:\n");
         foreach (var input in s.FreshnessInputs)
             text.Append("  ").Append(input.Value == DateTime.MinValue ? "missing" : input.Value.ToString("O"))

@@ -4,9 +4,14 @@ using MessagePack;
 namespace HousecarlCore;
 
 /// <summary>One authoritative Amethyst loose-file winner.</summary>
+/// <param name="Provider">Amethyst mod name, or the reserved <c>[Overwrite]</c> provider.</param>
+/// <param name="HostPath">Absolute actual-cased source path in staging.</param>
 public sealed record ManagerFileSource(string Provider, string HostPath);
 
 /// <summary>Parsed filemap state. Not-ready state is explicit and never triggers a Data scan.</summary>
+/// <param name="Ready">Whether Sources is a complete authoritative winner set.</param>
+/// <param name="Sources">Canonical Data-relative paths mapped to physical staging winners.</param>
+/// <param name="Warnings">Actionable reasons the index is unavailable or incomplete.</param>
 public sealed record ManagerFileIndex(
     bool Ready,
     IReadOnlyDictionary<string, ManagerFileSource> Sources,
@@ -15,12 +20,31 @@ public sealed record ManagerFileIndex(
 /// <summary>Strict reader for Amethyst filemap.txt and MessagePack modindex.bin v4.</summary>
 public static class AmethystFileMap
 {
+    /// <summary>Private modindex.bin schema emitted by the supported Amethyst release.</summary>
     const int Version = 4;
+
+    /// <summary>Allocation guard for an untrusted or corrupt binary index.</summary>
     const long MaxIndexBytes = 256L * 1024 * 1024;
+
+    /// <summary>Maximum mod entries accepted before refusing a suspicious index.</summary>
     const int MaxMods = 100_000;
+
+    /// <summary>Maximum cumulative file entries accepted before refusing a suspicious index.</summary>
     const int MaxFiles = 5_000_000;
+
+    /// <summary>Reserved filemap provider whose files live directly under overwrite staging.</summary>
     const string Overwrite = "[Overwrite]";
 
+    /// <summary>Parses and cross-validates Amethyst's loose-file winner map and raw-path index.</summary>
+    /// <param name="profileDir">Active profile containing optional strip-prefix configuration.</param>
+    /// <param name="modsDir">Effective mod-staging root.</param>
+    /// <param name="overwriteDir">Effective overwrite staging root.</param>
+    /// <param name="filemapPath">Authoritative tab-separated logical winner map.</param>
+    /// <param name="indexPath">MessagePack v4 provider/path index.</param>
+    /// <returns>
+    /// A ready authoritative index, or an explicit not-ready result when either file is missing or
+    /// filemap predates modindex. Structural disagreement throws rather than guessing winners.
+    /// </returns>
     public static ManagerFileIndex Load(
         string profileDir, string modsDir, string overwriteDir,
         string filemapPath, string indexPath)
@@ -69,6 +93,10 @@ public static class AmethystFileMap
         return new ManagerFileIndex(true, sources, Array.Empty<string>());
     }
 
+    /// <summary>Reads the bounded MessagePack v4 provider-to-raw-path index.</summary>
+    /// <param name="path">Existing modindex.bin path.</param>
+    /// <returns>Case-insensitive providers containing normalized-key to raw-cased Bethesda paths.</returns>
+    /// <exception cref="AmethystConfigurationException">The binary shape, version, counts, or keys are invalid.</exception>
     static Dictionary<string, Dictionary<string, string>> ReadIndex(string path)
     {
         var info = new FileInfo(path);
@@ -110,6 +138,9 @@ public static class AmethystFileMap
         catch (Exception ex) { throw Error($"could not parse modindex.bin at '{path}': {ex.Message}"); }
     }
 
+    /// <summary>Reads the v4 <c>mods</c> array from the current MessagePack reader position.</summary>
+    /// <param name="reader">Reader positioned immediately before the mods array header.</param>
+    /// <returns>Validated providers and their raw-cased paths.</returns>
     static Dictionary<string, Dictionary<string, string>> ReadMods(ref MessagePackReader reader)
     {
         var count = reader.ReadArrayHeader();
@@ -144,6 +175,9 @@ public static class AmethystFileMap
         return result;
     }
 
+    /// <summary>Streams validated logical winner/provider pairs from filemap.txt.</summary>
+    /// <param name="path">Existing native filemap path.</param>
+    /// <returns>Canonical Bethesda paths and validated provider names in file order.</returns>
     static IEnumerable<(string Path, string Provider)> ReadFilemap(string path)
     {
         var lineNumber = 0;
@@ -162,6 +196,16 @@ public static class AmethystFileMap
         }
     }
 
+    /// <summary>Finds the actual-cased staged source represented by one indexed output path.</summary>
+    /// <param name="root">Provider's physical staging root.</param>
+    /// <param name="indexedPath">Raw-cased relative path recorded by modindex.bin.</param>
+    /// <param name="provider">Validated provider name used to select strip-prefix rules.</param>
+    /// <param name="prefixes">Per-mod prefixes Amethyst stripped while producing the logical output.</param>
+    /// <returns>The existing actual-cased native source path.</returns>
+    /// <remarks>
+    /// Candidate order mirrors Amethyst's supported Data wrapping and strip-prefix layouts. Each
+    /// candidate is resolved segment-by-segment; Linux casing is never guessed.
+    /// </remarks>
     static string ResolveSource(
         string root, string indexedPath, string provider,
         IReadOnlyDictionary<string, IReadOnlyList<string>> prefixes)
@@ -185,6 +229,10 @@ public static class AmethystFileMap
         throw Error($"indexed source '{indexedPath}' for '{provider}' is missing under '{root}'; refresh Amethyst's mod index");
     }
 
+    /// <summary>Reads per-mod strip-prefix history from the active profile state.</summary>
+    /// <param name="profileDir">Active Amethyst profile directory.</param>
+    /// <returns>Case-insensitive provider names mapped to validated canonical prefixes.</returns>
+    /// <remarks>An absent file/property means no prefixes; malformed present state fails loudly.</remarks>
     static IReadOnlyDictionary<string, IReadOnlyList<string>> ReadStripPrefixes(string profileDir)
     {
         var path = Path.Combine(profileDir, "profile_state.json");
@@ -213,6 +261,10 @@ public static class AmethystFileMap
         catch (Exception ex) { throw Error($"could not read mod strip prefixes from '{path}': {ex.Message}"); }
     }
 
+    /// <summary>Indexes immediate child directories using Amethyst's case-insensitive mod-name semantics.</summary>
+    /// <param name="root">Effective mods staging root.</param>
+    /// <returns>Actual mod folder names and native paths.</returns>
+    /// <exception cref="AmethystConfigurationException">Two Linux folders differ only by case.</exception>
     static Dictionary<string, string> ChildDirectories(string root)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -223,6 +275,9 @@ public static class AmethystFileMap
         return result;
     }
 
+    /// <summary>Validates a filemap/modindex provider as a single staging-folder name.</summary>
+    /// <param name="value">Untrusted provider text.</param>
+    /// <returns>The unchanged provider name after validation.</returns>
     static string Provider(string? value)
     {
         if (string.IsNullOrWhiteSpace(value) || value.Contains('\0') || value.Contains('/')
@@ -231,11 +286,19 @@ public static class AmethystFileMap
         return value;
     }
 
+    /// <summary>Converts a Bethesda path to Amethyst modindex's normalized lookup-key form.</summary>
+    /// <param name="path">Validated or untrusted Data-relative path.</param>
+    /// <returns>Lower-case, forward-slash key used by modindex.bin.</returns>
     static string Key(string path) => BethesdaPath.Normalize(path).Replace('\\', '/').ToLowerInvariant();
 
+    /// <summary>Creates an empty source map with the same case-insensitive semantics as a ready index.</summary>
+    /// <returns>An empty immutable-facing dictionary.</returns>
     static IReadOnlyDictionary<string, ManagerFileSource> Empty() =>
         new Dictionary<string, ManagerFileSource>(StringComparer.OrdinalIgnoreCase);
 
+    /// <summary>Creates a consistently prefixed actionable filemap configuration error.</summary>
+    /// <param name="message">Specific mismatch and corrective guidance.</param>
+    /// <returns>A user-safe named configuration exception.</returns>
     static AmethystConfigurationException Error(string message) =>
         new($"Amethyst filemap error: {message}");
 }

@@ -13,6 +13,11 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class SetupTools
 {
+    /// <summary>Validates, activates, and persists an Amethyst connection manifest.</summary>
+    /// <param name="svc">Singleton service whose manager state will be replaced after validation.</param>
+    /// <param name="manifest_path">Absolute native path to schema-v1 connection.json.</param>
+    /// <returns>Validated roots and persistence status, or a guarded actionable error.</returns>
+    /// <remarks>Validation completes before live state or user configuration changes.</remarks>
     [McpServerTool(Name = "housecarl_set_amethyst_connection", Title = "Connect houseCARL to Amethyst"),
      Description(
          "Validate and activate a schema-v1 connection.json exported for Amethyst's Skyrim Special Edition profile. " +
@@ -72,7 +77,12 @@ public static class SetupTools
         return sb.ToString();
     });
 
-    /// <summary>Render the validated roots and whether the connection persisted.</summary>
+    /// <summary>Renders validated roots and whether the connection persisted.</summary>
+    /// <param name="p">Snapshot activated by the service.</param>
+    /// <param name="persisted">Whether houseCARL.user.json was updated atomically.</param>
+    /// <param name="persistError">Write failure when persistence was unsuccessful.</param>
+    /// <param name="persistNote">Optional corrupt-config recovery note that must remain visible.</param>
+    /// <returns>Connection confirmation that distinguishes live success from restart persistence.</returns>
     internal static string Render(ManagerSnapshot p, bool persisted, string? persistError, string? persistNote)
     {
         var sb = new StringBuilder();

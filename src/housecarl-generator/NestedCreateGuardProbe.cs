@@ -174,7 +174,7 @@ namespace HousecarlGenerator;
 /// A non-null, non-formlink, MALFORMED coercible element value on list Add/SetAtIndex/ReplaceAll/Remove-by-value and dict
 /// Add/Merge/ReplaceAll passed pre-flight then threw UNNAMED at apply (Coerce -> float.Parse/byte.Parse). dict-Set value
 /// was already gated; the new ValueLegality step-4b block mirrors that CheckValue across those verbs/slots, scoped to
-/// IsValueCoercibleElement && FormLinkTarget is null (formlink elements keep step-4a) and verb/key-faithful to which slot
+/// <c>IsValueCoercibleElement &amp;&amp; FormLinkTarget is null</c> (formlink elements keep step-4a) and verb/key-faithful to which slot
 /// apply coerces (so a Remove-BY-INDEX with a stray value is not over-rejected):
 ///   GAP2-REJ-DICTADD           — a malformed dict Add value ('notabyte' into Dictionary&lt;Skill,Byte&gt;) refuses 'does
 ///                                not coerce to Byte' (RED before: accepted — only dict Set value was gated).

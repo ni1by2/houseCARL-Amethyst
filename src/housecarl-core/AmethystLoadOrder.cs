@@ -6,8 +6,19 @@ namespace HousecarlCore;
 /// </summary>
 public static class AmethystLoadOrder
 {
+    /// <summary>Plugin filename extensions recognized by the shared plugin reader.</summary>
     static readonly string[] PluginExts = PluginFile.Extensions;
 
+    /// <summary>Builds a plugin order by scanning staging roots in Amethyst priority order.</summary>
+    /// <param name="profileDir">Active profile containing modlist/plugins/loadorder files.</param>
+    /// <param name="modsDir">Effective mod-staging root.</param>
+    /// <param name="vanillaDataDir">Unmerged vanilla plugin source.</param>
+    /// <param name="overwriteDir">Highest-priority overwrite staging root.</param>
+    /// <returns>Resolved physical plugin order, warnings, and the requested active count.</returns>
+    /// <remarks>
+    /// This overload supports layout characterization and compatibility probes. Runtime Amethyst
+    /// resolution uses the authoritative <see cref="ManagerFileIndex"/> overload below.
+    /// </remarks>
     public static ModOrderResult Build(
         string profileDir, string modsDir, string vanillaDataDir, string overwriteDir)
     {
@@ -18,6 +29,12 @@ public static class AmethystLoadOrder
         return Resolve(composition, winners, warnings);
     }
 
+    /// <summary>Builds the active plugin order from Amethyst's authoritative filemap winner set.</summary>
+    /// <param name="profileDir">Active profile containing modlist/plugins/loadorder files.</param>
+    /// <param name="vanillaDataDir">Unmerged vanilla plugin source.</param>
+    /// <param name="fileIndex">Validated loose-file winners parsed from filemap and modindex.</param>
+    /// <returns>Resolved physical plugin order, warnings, and the requested active count.</returns>
+    /// <exception cref="AmethystConfigurationException">The winner index is explicitly not ready.</exception>
     public static ModOrderResult Build(
         string profileDir, string vanillaDataDir, ManagerFileIndex fileIndex)
     {
@@ -35,6 +52,12 @@ public static class AmethystLoadOrder
         return Resolve(composition, winners, warnings);
     }
 
+    /// <summary>Maps active ordered plugin names to their physical winning files.</summary>
+    /// <param name="composition">Parsed profile activation and ordering state.</param>
+    /// <param name="winners">Case-insensitive plugin filenames mapped to physical sources.</param>
+    /// <param name="warnings">Mutable warning sink returned with the result.</param>
+    /// <returns>Only resolved active source paths, while preserving the full requested active count.</returns>
+    /// <remarks>Missing winners are reported and omitted; no deployed Data scan or guessed source is attempted.</remarks>
     static ModOrderResult Resolve(
         ModComposition composition, Dictionary<string, string> winners, List<string> warnings)
     {
@@ -63,6 +86,10 @@ public static class AmethystLoadOrder
         return new ModOrderResult(paths, warnings, activeCount) { ResolvedSources = sources };
     }
 
+    /// <summary>Parses Amethyst's three profile lists into manager-neutral composition state.</summary>
+    /// <param name="profileDir">Active profile directory.</param>
+    /// <param name="warnings">Optional sink for missing order/mod files.</param>
+    /// <returns>Enabled, disabled, locked, ordered, active, inactive, and implicit plugin sets.</returns>
     public static ModComposition ReadComposition(string profileDir, List<string>? warnings = null)
     {
         var enabled = new List<string>();
@@ -84,6 +111,12 @@ public static class AmethystLoadOrder
             enabled, disabled, locked, ordered, active, inactive, implicitNames);
     }
 
+    /// <summary>Parses Amethyst mod priority and activation markers from modlist.txt.</summary>
+    /// <param name="path">Native modlist path.</param>
+    /// <param name="enabled">Receives both <c>+</c> enabled and <c>*</c> locked mods in file priority order.</param>
+    /// <param name="disabled">Receives <c>-</c> mods except separator pseudo-mods.</param>
+    /// <param name="locked">Receives the enabled subset marked <c>*</c>.</param>
+    /// <param name="warnings">Optional sink for an absent modlist.</param>
     static void ReadMods(
         string path, List<string> enabled, List<string> disabled,
         List<string> locked, List<string>? warnings)
@@ -111,6 +144,10 @@ public static class AmethystLoadOrder
         }
     }
 
+    /// <summary>Parses Skyrim star-prefixed activation from plugins.txt.</summary>
+    /// <param name="path">Native plugins file path.</param>
+    /// <param name="active">Receives unique star-prefixed plugin names.</param>
+    /// <param name="inactive">Receives non-comment, non-star plugin names.</param>
     static void ReadPlugins(string path, HashSet<string> active, List<string> inactive)
     {
         if (!File.Exists(path)) return;
@@ -127,6 +164,10 @@ public static class AmethystLoadOrder
         }
     }
 
+    /// <summary>Reads authoritative plugin order from loadorder.txt.</summary>
+    /// <param name="path">Native load-order file path.</param>
+    /// <param name="warnings">Optional sink for an absent file.</param>
+    /// <returns>Non-empty, non-comment names in file order.</returns>
     static List<string> ReadOrder(string path, List<string>? warnings)
     {
         if (!File.Exists(path))
@@ -141,6 +182,13 @@ public static class AmethystLoadOrder
             .ToList();
     }
 
+    /// <summary>Characterizes plugin winners by scanning roots from highest to lowest priority.</summary>
+    /// <param name="enabledMods">Enabled mod names in Amethyst priority order, highest first.</param>
+    /// <param name="modsDir">Effective mods staging root.</param>
+    /// <param name="dataDir">Unmerged vanilla Data source.</param>
+    /// <param name="overwriteDir">Highest-priority overwrite source.</param>
+    /// <param name="warnings">Receives missing folders and enumeration failures.</param>
+    /// <returns>Case-insensitive plugin filename-to-source map; first source wins.</returns>
     static Dictionary<string, string> PluginWinners(
         IReadOnlyList<string> enabledMods, string modsDir, string dataDir,
         string overwriteDir, List<string> warnings)
@@ -159,6 +207,10 @@ public static class AmethystLoadOrder
         return winners;
     }
 
+    /// <summary>Indexes immediate mod directories with case-insensitive Amethyst name matching.</summary>
+    /// <param name="root">Effective mods staging root.</param>
+    /// <param name="warnings">Receives enumeration and case-collision diagnostics.</param>
+    /// <returns>Mod folder names mapped to their actual-cased native paths.</returns>
     static Dictionary<string, string> DirectoriesByName(string root, List<string> warnings)
     {
         var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
@@ -173,6 +225,10 @@ public static class AmethystLoadOrder
         return result;
     }
 
+    /// <summary>Adds top-level plugin files from one source without replacing higher-priority winners.</summary>
+    /// <param name="root">Physical directory to enumerate.</param>
+    /// <param name="winners">Winner map already populated by higher-priority sources.</param>
+    /// <param name="warnings">Receives non-fatal enumeration failures.</param>
     static void AddPlugins(
         string root, Dictionary<string, string> winners, List<string> warnings)
     {

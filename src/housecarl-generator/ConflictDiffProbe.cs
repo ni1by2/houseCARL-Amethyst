@@ -27,7 +27,7 @@ namespace HousecarlGenerator;
 ///   J. the contributor RESTATES a field == winner (an ITM override) → no delta, but a positive AgreedCount
 ///      makes it distinguishable from a contributor that simply doesn't carry the field (RED before the fix);
 ///   K. the SYMMETRIC absent case — the contributor carries the link, the WINNER cleared it → the distinct
-///      "<path>=<val> (winner has <path> ABSENT)" render (review finding #3).
+///      <c>&lt;path&gt;=&lt;val&gt; (winner has &lt;path&gt; ABSENT)</c> render (review finding #3).
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator conflict-diff-guard</c>
 /// </summary>

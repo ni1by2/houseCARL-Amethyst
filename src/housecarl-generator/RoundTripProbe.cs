@@ -26,7 +26,7 @@ namespace HousecarlGenerator;
 ///      WritePatchBuilder.cs:247). The SINGLE target plugin only — NEVER the load order (the legacy 12–14 GB
 ///      RAM trap; CLAUDE.md §1). Masters are opened LAZILY as overlays.
 ///   2. NO-OP RE-SERIALIZE — write the loaded mod straight back out with the product incantation MINUS the
-///      FormID floor: .WithLoadOrder(<the plugin's own masters, as overlays>).NoNextFormIDProcessing().Write().
+///      FormID floor: <c>.WithLoadOrder(&lt;the plugin's own masters, as overlays&gt;).NoNextFormIDProcessing().Write()</c>.
 ///      NoNextFormIDProcessing persists the IN-MEMORY counter verbatim, and we deliberately DO NOT call
 ///      EnsureFormIdFloor — so the written HEDR.NextObjectID equals the ORIGINAL. That is EXACTLY the
 ///      §5.1-correct in-place serialize (preserve the author's counter), so any divergence the probe sees is
@@ -39,7 +39,7 @@ namespace HousecarlGenerator;
 ///   • UNLOADABLE       — CreateFromBinary threw (the read-parse residual class, incl. the 2 known unparseable
 ///                        PERKs). In-place would REFUSE this plugin rather than silently re-emit it minus the
 ///                        record Mutagen couldn't parse. Counted, never silently skipped.
-///   • RECORDS-CHANGED  — the on-disk record-header SEQUENCE (sig+FormID, GRUP-recursive) differs between
+///   • RECORDS-CHANGED  — the on-disk record-header SEQUENCE (<c>sig+FormID</c>, GRUP-recursive) differs between
 ///                        original and re-serialized: a dropped / added / reordered record. The dangerous class.
 ///   • HEADER-ONLY      — record sequence identical; first byte divergence falls inside the TES4 header region
 ///                        (master list / ONAM / flags / counter churn) — body records intact.
@@ -47,7 +47,7 @@ namespace HousecarlGenerator;
 ///                        subrecord ordering, OFST regen, terrain/Array2d) — the §5.2 blind-spot territory.
 ///
 /// This is a MANUAL/real-data probe (like esl-real-scan / conflict-diff-proof / perk-refs-proof): it needs real
-/// CK-/xEdit-/Wrye-Bash-authored plugins, which a self-contained CI fixture cannot stand in for (a synthetic
+/// CK-/xEdit-/Wrye-Bash-authored plugins, which a self-contained CI fixture cannot substitute for (a synthetic
 /// plugin round-trips clean by construction and would reveal nothing). It writes ONLY to the system temp dir
 /// and never mutates the real load order (read-only). SKIPs cleanly without --mo2.
 ///

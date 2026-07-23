@@ -61,11 +61,12 @@ public static class SeqTools
               .Append("  →  0x").AppendFormat("{0:X8}", q.OnDiskFormId).Append('\n');
         sb.Append("path: ").Append(o.SeqPath).Append('\n');
         sb.Append(o.WroteIntoPluginFolder
-            ? "the .seq is in the plugin's OWN houseCARL folder — enabling that one mod in MO2 deploys both the .esp and its .seq."
-            : "the .seq is in a houseCARL mod folder — enable it in MO2 (AND make sure the plugin itself is enabled) so the game reads Data\\SEQ\\.");
+            ? "the .seq is in the plugin's OWN houseCARL folder — refresh Amethyst, rebuild the filemap, and deploy that mod to publish both files."
+            : "the .seq is in a houseCARL mod folder — refresh Amethyst, enable it and the plugin, rebuild the filemap, and deploy.");
         // Q3 standing limit: a written .seq makes the quest START; it is not a guarantee the quest/dialogue is otherwise correct.
         sb.Append("\nnote: this makes the quest(s) START at game start; it does not verify the quest or its dialogue is otherwise " +
                   "well-formed (use housecarl_validate_dialogue for the dialogue graph).");
+        if (o.Note is not null) sb.Append("\nnote: ").Append(o.Note);
         return sb.ToString();
     }
 }

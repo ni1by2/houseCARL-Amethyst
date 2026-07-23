@@ -1,10 +1,8 @@
 namespace HousecarlCore;
 
 // ======================================================================
-//  ArchiveDiscovery — build the ACTIVE-ARCHIVE list (the BSAs the game loads, each bound to its
-//  owning plugin and that plugin's load-order rank) for AssetResolver, from the SAME static MO2
-//  profile read Mo2LoadOrder already does (facegen-diagnostics Phase 2; Aaron 2026-06-15: FULL
-//  discovery — both archive sources — not the co-name convention alone).
+//  ArchiveDiscovery — build the active BSA list, binding each physical archive to the plugin
+//  and load-order rank that determines its precedence.
 //
 //  WHICH BSAs LOAD (Skyrim SE has two sources; a COMPLETE answer needs both, or an asset present
 //  only in an un-scanned archive reads as falsely "absent" — a Q3 silent-wrong-answer):
@@ -15,12 +13,9 @@ namespace HousecarlCore;
 //       "X.bsa" and (SE) "X - Textures.bsa" when present. These load in plugin load order, so a
 //       later plugin's archive outranks an earlier one's AND every base archive.
 //
-//  WINNING PHYSICAL PATH (MO2 VFS): a .bsa is itself subject to MO2's overwrite > enabled-mods
-//  (highest priority first) > Data precedence, identical to how Mo2LoadOrder resolves a plugin
-//  filename (a higher-priority mod can ship its own "X - Textures.bsa"). So we resolve each archive
-//  FILENAME through that same VFS map, never by "look beside the .esp" — which would miss an
-//  archive overridden by a higher-priority mod. (AssetResolver.DedupeArchives then collapses a path
-//  bound by more than one plugin to its max-rank binding, so emitting a duplicate is harmless.)
+//  In Amethyst product mode, filemap/modindex supplies each winning staged BSA path. Vanilla
+//  Data_Core archives fill only names not already won by staging. The legacy overload retains
+//  MO2-style root walking solely for inherited probes.
 //
 //  RANK = "higher wins among BSAs" (AssetResolver.ActiveArchive contract). Base archives take the
 //  low block (INI order: later entry = later loaded = higher); plugin archives take ranks above all
@@ -32,22 +27,32 @@ namespace HousecarlCore;
 //  archives weren't scanned. A base archive named in the INI but absent on disk simply isn't loaded
 //  (the INI can list a superset across game variants — not a problem worth a warning).
 //
-//  No game state, no VFS, no live tracking — pure static reads of the profile + mods/overwrite/Data
-//  folders + Skyrim.ini, the same crash-free model as Mo2LoadOrder. See memory
-//  project_facegen_diagnostics_resolver.
+//  No deployed Data scan, VFS, or live game state is used. Missing base-archive metadata is
+//  returned as a warning so callers cannot mistake an incomplete scan for confirmed absence.
 // ======================================================================
 
 /// <summary>The active archives for a profile (feed <see cref="ArchiveDiscoveryResult.Archives"/> straight to
-/// <see cref="AssetResolver.Build"/>'s activeArchives) plus any non-fatal problems (Q3 — e.g. a Skyrim.ini that
+/// <see cref="AssetResolver.Build(IReadOnlyDictionary{string, ManagerFileSource}, string, IReadOnlyList{ActiveArchive})"/>'s
+/// activeArchives) plus any non-fatal problems (Q3 — e.g. a Skyrim.ini that
 /// couldn't be found, so base-game BSAs aren't in the scan).</summary>
 public sealed record ArchiveDiscoveryResult(IReadOnlyList<ActiveArchive> Archives, IReadOnlyList<string> Warnings);
 
+/// <summary>
+/// Combines Skyrim.ini base archives with plugin-associated archives and assigns deterministic
+/// BSA precedence from the active plugin order.
+/// </summary>
 public static class ArchiveDiscovery
 {
     /// <summary>
     /// Discover archives from Amethyst's authoritative loose-file winners. Only top-level
     /// BSA files can participate in Skyrim's archive loading rules.
     /// </summary>
+    /// <param name="profileDir">Active Amethyst profile containing load-order and optional Skyrim.ini files.</param>
+    /// <param name="gamePath">Native game root used as the secondary Skyrim.ini location.</param>
+    /// <param name="vanillaDataDir">Validated Data_Core/Data vanilla root.</param>
+    /// <param name="fileIndex">Authoritative Amethyst loose-file winners.</param>
+    /// <returns>Active physical archives in rank order plus non-fatal completeness warnings.</returns>
+    /// <exception cref="AmethystConfigurationException">The filemap/modindex snapshot is not usable.</exception>
     public static ArchiveDiscoveryResult DiscoverAmethyst(
         string profileDir,
         string gamePath,
@@ -80,6 +85,12 @@ public static class ArchiveDiscovery
     /// through the same overwrite &gt; mods(priority) &gt; Data VFS the loose/plugin layers use. The roots are the
     /// ones <see cref="Mo2LoadOrder.Build"/> already receives; <paramref name="gamePath"/> is only the game-dir
     /// Skyrim.ini fallback (the profile's Skyrim.ini — the MO2 profile-specific INI — is tried first).</summary>
+    /// <param name="profileDir">Legacy profile containing activation files and the preferred Skyrim.ini.</param>
+    /// <param name="modsDir">Legacy staging root containing enabled mod folders.</param>
+    /// <param name="dataDir">Legacy lowest-priority game Data root.</param>
+    /// <param name="overwriteDir">Legacy highest-priority loose root.</param>
+    /// <param name="gamePath">Fallback directory containing Skyrim.ini.</param>
+    /// <returns>Active physical archives plus non-fatal completeness warnings.</returns>
     public static ArchiveDiscoveryResult Discover(
         string profileDir, string modsDir, string dataDir, string overwriteDir, string gamePath)
     {
@@ -95,6 +106,14 @@ public static class ArchiveDiscovery
             warnings);
     }
 
+    /// <summary>Builds base and plugin-associated archive bindings from a physical filename map.</summary>
+    /// <param name="profileDir">Profile containing the preferred Skyrim.ini.</param>
+    /// <param name="gamePath">Fallback Skyrim.ini directory.</param>
+    /// <param name="orderedPlugins">Plugin names in authoritative load order.</param>
+    /// <param name="inactivePlugins">Plugin names that must not load associated archives.</param>
+    /// <param name="archiveMap">Case-insensitive top-level BSA filename to winning host path.</param>
+    /// <param name="warnings">Shared non-fatal diagnostic collector.</param>
+    /// <returns>Archive bindings with monotonically increasing precedence ranks.</returns>
     static ArchiveDiscoveryResult Build(
         string profileDir,
         string gamePath,
@@ -133,6 +152,11 @@ public static class ArchiveDiscovery
     /// <summary>Build archive-filename → winning real path, the .bsa twin of <see cref="Mo2LoadOrder"/>'s plugin
     /// filename map: MO2's overwrite layer first (beats every mod), then enabled mods highest-priority-first
     /// (first sighting wins), then the game Data folder last (base game = lowest). OrdinalIgnoreCase keys.</summary>
+    /// <param name="enabledModsByPriority">Legacy mod folder names in highest-first priority order.</param>
+    /// <param name="modsDir">Legacy staging root.</param>
+    /// <param name="dataDir">Legacy lowest-priority Data root.</param>
+    /// <param name="overwriteDir">Legacy highest-priority overwrite root.</param>
+    /// <returns>Case-insensitive BSA filename map containing only the winning physical copy.</returns>
     static Dictionary<string, string> BuildArchiveMap(
         IReadOnlyList<string> enabledModsByPriority, string modsDir, string dataDir, string overwriteDir)
     {
@@ -155,6 +179,8 @@ public static class ArchiveDiscovery
     /// Yields (filename, full path). Silent on a missing/inaccessible folder — a modlist entry can lack a real
     /// folder. The explicit extension check guards the Windows "*.bsa matches short names" quirk (as
     /// <see cref="Mo2LoadOrder"/>'s plugin enumerator does for *.es*).</summary>
+    /// <param name="dir">Native directory whose immediate files should be inspected.</param>
+    /// <returns>Lazy pairs of raw filename and full host path.</returns>
     static IEnumerable<(string fn, string full)> EnumerateArchives(string dir)
     {
         if (string.IsNullOrWhiteSpace(dir) || !Directory.Exists(dir)) yield break;
@@ -172,6 +198,10 @@ public static class ArchiveDiscovery
     /// Wabbajack/portable setup), so the profile's Skyrim.ini is tried first, then the game-dir copy. The user's
     /// Documents\My Games copy is NOT reachable from the MO2 instance, so if neither is found we surface it LOUD
     /// (Q3) — base-game-only assets then can't be seen, which a caller acting on "absent → fine" must know.</summary>
+    /// <param name="profileDir">Profile directory containing the preferred Skyrim.ini.</param>
+    /// <param name="gamePath">Game root containing the fallback Skyrim.ini.</param>
+    /// <param name="warnings">Collector receiving a named warning when no usable list exists.</param>
+    /// <returns>Archive filenames in engine load order, or an empty list with a warning.</returns>
     static IReadOnlyList<string> ReadBaseArchiveNames(string profileDir, string gamePath, List<string> warnings)
     {
         var candidates = new List<string>(2);
@@ -197,6 +227,8 @@ public static class ArchiveDiscovery
     /// the comma-separated archive filenames in file order (sResourceArchiveList before its "2"). Tolerant of
     /// section/comment lines; returns empty (not an error) for an INI without the section — the caller then tries
     /// the next candidate.</summary>
+    /// <param name="iniPath">Native path to a candidate Skyrim.ini.</param>
+    /// <returns>Trimmed archive filenames in file order; empty when unreadable or unspecified.</returns>
     static IReadOnlyList<string> ParseResourceArchiveList(string iniPath)
     {
         var names = new List<string>();
