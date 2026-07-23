@@ -305,7 +305,8 @@ manual release gate.
   `efacda9` (foundation checkpoint), `1b4c7e8` (Amethyst MCP lifecycle),
   `95f9a83` (asset resolution contracts), `e3ec7a1` (external archive boundary).
   `27ba3d4` merges upstream through `c305b07` while retaining the Amethyst
-  safety and path contracts.
+  safety and path contracts; `abaa5a1` records the Linux failure audit;
+  `80c10c4` normalizes those probes and establishes the 111/111 Linux suite.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
