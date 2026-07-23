@@ -8,6 +8,7 @@ namespace HousecarlCore;
 public sealed record BsaListResult(
     bool Success, string? Format, int DeclaredCount, IReadOnlyList<string> Files, string Raw, string? RunError)
 {
+    /// <summary>Whether BSArch started and returned output, regardless of archive validity.</summary>
     public bool Ran => RunError is null;
 }
 
@@ -17,13 +18,15 @@ public sealed record BsaListResult(
 /// non-empty scratch written at/after the run baseline), never by the exit code alone.</summary>
 public sealed record BsaResult(bool Success, string Raw, string? RunError)
 {
+    /// <summary>Whether BSArch started; operation success is reported separately by <see cref="Success"/>.</summary>
     public bool Ran => RunError is null;
 }
 
 /// <summary>
-/// Drives BSArch (zilav/ElminsterAU/Sheson; ships with xEdit) to list / unpack / pack Bethesda .bsa archives — the engine
-/// behind the housecarl_bsa_* tools. Mutagen has no archive surface, so this wraps the external exe (a bounded
-/// ProcessStartInfo + parser). Grounded against the real BSArch v0.9c CLI (measured 2026-06-05):
+/// Drives BSArch to list, unpack, or pack Bethesda archives through a bounded, argument-safe process.
+/// Native archive reads elsewhere use Mutagen; this wrapper remains for whole-archive unpacking and
+/// archive creation. Linux execution is deferred until the post-v1 structured Proton-command milestone.
+/// The argument shapes were measured against BSArch v0.9c:
 ///   • list  : `BSArch &lt;archive&gt; -list`  → banner + info block (incl. "Files: N"), a blank line, then N file paths.
 ///   • unpack: `BSArch unpack &lt;archive&gt; &lt;folder&gt; -mt`  (WHOLE archive — BSArch has no per-file extract).
 ///   • pack  : `BSArch pack &lt;folder&gt; &lt;archive&gt; -sse [-z] -mt`  (-sse = Skyrim SE; -z compresses but BREAKS
@@ -42,6 +45,10 @@ public static class BsaArchive
     /// absorbs banner/"Files:" lines AS paths (files.Count still == declared, so it reads as success). The real fix is
     /// a delimiter-anchored parse (the paths after the last blank line) + a LOUD count-mismatch, landed against a
     /// captured real-BSArch fixture; it is intentionally not attempted blind here.</summary>
+    /// <param name="bsarchExe">Configured BSArch executable or future runner target.</param>
+    /// <param name="archive">Native path to the BSA to inspect.</param>
+    /// <param name="timeoutMs">Positive process timeout in milliseconds.</param>
+    /// <returns>Parsed archive metadata, raw output, and any process-launch failure.</returns>
     public static BsaListResult List(string bsarchExe, string archive, int timeoutMs = 60_000)
     {
         var run = Run(bsarchExe, new[] { archive, "-list" }, timeoutMs);
@@ -69,6 +76,11 @@ public static class BsaArchive
     /// archived timestamps); changed ones by size/mtime. Honest residual edge: re-extracting byte-identical content
     /// over an existing dest with restored timestamps can read as "nothing new" — that direction fails LOUD with
     /// BSArch's raw output attached, never falsely succeeds. "Read a file inside" = unpack, then read it.</summary>
+    /// <param name="bsarchExe">Configured BSArch executable or future runner target.</param>
+    /// <param name="archive">Native path to the BSA to unpack.</param>
+    /// <param name="destFolder">Destination directory, created when absent.</param>
+    /// <param name="timeoutMs">Positive process timeout in milliseconds.</param>
+    /// <returns>Provenance-checked success, combined output, and any process-launch failure.</returns>
     public static BsaResult Unpack(string bsarchExe, string archive, string destFolder, int timeoutMs = 300_000)
     {
         Directory.CreateDirectory(destFolder);
@@ -81,6 +93,8 @@ public static class BsaArchive
 
     /// <summary>Snapshot a folder's files (recursive): relative path → (size, mtimeUtc). The Unpack provenance
     /// baseline — and the bsa-contract-guard probe's seam.</summary>
+    /// <param name="folder">Native directory to inspect recursively.</param>
+    /// <returns>Case-insensitive relative-path map; empty when the directory is absent.</returns>
     public static Dictionary<string, (long Size, DateTime MtimeUtc)> SnapshotEntries(string folder)
     {
         var map = new Dictionary<string, (long, DateTime)>(StringComparer.OrdinalIgnoreCase);
@@ -96,6 +110,9 @@ public static class BsaArchive
     /// <summary>Did anything appear or change under <paramref name="folder"/> since <paramref name="before"/>?
     /// A path absent from the baseline = new (timestamp-independent); a present path with a different size or
     /// mtime = changed.</summary>
+    /// <param name="folder">Directory to compare with the pre-run snapshot.</param>
+    /// <param name="before">Relative file sizes and timestamps captured before extraction.</param>
+    /// <returns>True when at least one current file is new or observably changed.</returns>
     public static bool AnyNewOrChangedEntries(string folder, Dictionary<string, (long Size, DateTime MtimeUtc)> before)
     {
         if (!Directory.Exists(folder)) return false;
@@ -118,6 +135,13 @@ public static class BsaArchive
     /// deletes the temp and leaves the prior .bsa untouched. The mtime gate assumes an NTFS-class timestamp resolution —
     /// on a FAT-class target a same-second pack could read as stale and fail LOUD (never falsely succeed). NOTE the
     /// caller must surface BSArch's caveat: a COMPRESSED archive breaks any sounds/voices it contains.</summary>
+    /// <param name="bsarchExe">Configured BSArch executable or future runner target.</param>
+    /// <param name="srcFolder">Directory tree to package.</param>
+    /// <param name="archive">Final BSA path; replaced only after a proven successful pack.</param>
+    /// <param name="formatFlag">Validated BSArch game-format flag such as <c>-sse</c>.</param>
+    /// <param name="compress">Whether to request BSArch compression.</param>
+    /// <param name="timeoutMs">Positive process timeout in milliseconds.</param>
+    /// <returns>Provenance-checked success, combined output, and any process-launch failure.</returns>
     public static BsaResult Pack(string bsarchExe, string srcFolder, string archive, string formatFlag, bool compress, int timeoutMs = 600_000)
     {
         // Pack to a scratch sibling (keeps the .bsa extension so BSArch is happy); the real target is touched only on success.
@@ -163,6 +187,8 @@ public static class BsaArchive
     /// <summary>Map a houseCARL format token to a BSArch flag. Null/empty/sse-family = the -sse default (Skyrim SE,
     /// the target). An UNKNOWN token returns null — the caller refuses loud naming <see cref="FormatTokens"/> —
     /// instead of silently packing -sse from a typo (Q3: a silently degraded mode; 2026-06-12 adversarial hunt).</summary>
+    /// <param name="format">User-facing format name or alias.</param>
+    /// <returns>The exact BSArch flag, or null when the token is unsupported.</returns>
     public static string? TryFormatFlag(string? format) => (format?.Trim().ToLowerInvariant()) switch
     {
         null or "" or "sse" or "ae" or "skyrimse" => "-sse",
@@ -178,6 +204,11 @@ public static class BsaArchive
         _ => null,
     };
 
+    /// <summary>Runs BSArch without a shell and bounds both execution and post-exit stream draining.</summary>
+    /// <param name="exe">Executable path passed directly to <see cref="ProcessStartInfo"/>.</param>
+    /// <param name="args">Already separated argument values; no command string is constructed.</param>
+    /// <param name="timeoutMs">Maximum execution time before the process tree is killed.</param>
+    /// <returns>Launch state, exit code, captured streams, and a named execution error when applicable.</returns>
     static (bool ran, int exit, string stdout, string stderr, string? runError) Run(string exe, IReadOnlyList<string> args, int timeoutMs)
     {
         var psi = new ProcessStartInfo
