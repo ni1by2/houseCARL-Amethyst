@@ -292,13 +292,14 @@ manual release gate.
   remaining Windows installer/runtime surface and MO2 terminology. The
   declaration-by-declaration review is still incomplete even though the strict
   XML build succeeds; CS1591 remains intentionally suppressed until each
-  component has been reviewed. The seven baseline failures are `writelock`,
-  `upsert`, `compile-ergonomics`, `setup-update-lock`, `atomic-commit`,
-  `seq-regen`, and `skypatcher-conflicts`.
-- Exact next action: continue the inherited `housecarl-core` pass with
-  `LoadOrderResolver` and its directly coupled result/snapshot records, then run
-  its strict CS1591 build and resolver guards. Document setup code alongside its
-  Session 6 Linux rewrite rather than preserving stale Windows contracts.
+  component has been reviewed. The seven remaining failures have now been
+  audited below; none implicates Amethyst layout, filemap, load order, staging
+  writes, or hardlink redeployment.
+- Exact next action: complete the Linux test-normalization checkpoint described
+  below and establish a meaningful green Linux suite. Then resume the inherited
+  `housecarl-core` documentation pass with `LoadOrderResolver`. Rewrite setup
+  documentation with the Session 6 Linux installer rather than preserving stale
+  Windows contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -311,6 +312,34 @@ manual release gate.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
+
+## Linux failure audit and normalization checkpoint
+
+The 104/111 full-suite result was investigated on 2026-07-23. The seven red
+probes are not one undifferentiated accepted baseline:
+
+| Probe | Finding | Required treatment |
+| --- | --- | --- |
+| `writelock-guard` | Its red control requires Windows mandatory sharing behaviour. Linux permits replacement of an open or mapped pathname; the real remove/apply writes pass. | Keep the Windows arm and add a Linux arm proving replacement plus old-inode handle semantics. |
+| `upsert-guard` | Its final arm expects a read handle to block replacement. Linux correctly installs the new inode and leaves no temporary residue. | Assert successful replacement, new content, and clean staging on Linux. |
+| `compile-ergonomics-guard` | The fixture and implementation use `C:\...`, backslash splitting, MO2 roots, and MO2 deployment wording. | Port native output-path handling to Amethyst staging, or explicitly remove/defer this external-tool surface for v1. Proton-backed PapyrusCompiler execution remains post-v1. |
+| `setup-update-lock-guard` | The installer catches only Windows sharing HRESULTs, so a Linux `IOException` from a held sibling DLL escapes. | Replace this surface during Session 6 with Linux versioned installation, atomic activation, rollback, and Linux-specific tests. |
+| `atomic-commit-guard` | Creation-time preservation and `FileShare.None` failure are Windows invariants. Linux replacement changes inode/metadata and is not blocked by an open descriptor. Byte correctness, temp consumption, and pre-swap non-destruction pass. | Document the portable old-or-new content contract; test Linux inode replacement and use deterministic failure injection instead of mandatory locks. |
+| `seq-regen-guard` | All functional SEQ cases pass. Only the forced-failure arm is ineffective because `FileShare.None` does not block Linux replacement. | Add deterministic write-failure injection, or keep that arm Windows-only. |
+| `skypatcher-conflicts-guard` | Duplicate detection succeeds, but the assertion uses Linux `Path.GetFileName` on canonical backslash paths and therefore misreads `a.ini`/`m.ini`. | Use `BethesdaPath.FileName` or the equivalent canonical-path helper. |
+
+Normalization exit gate:
+
+- No Linux probe relies on Windows drive syntax, mandatory file sharing, NTFS
+  creation-time preservation, or Linux `Path` splitting of Bethesda paths.
+- The five platform-assumption probes have explicit Linux evidence rather than
+  unconditional skips.
+- SkyPatcher duplicate detection is green with canonical Bethesda paths.
+- Compilation is either honestly excluded/deferred or has a native Amethyst
+  output-path contract.
+- The Windows setup probe is replaced by the Session 6 Linux installer suite.
+- `ci-all` is green on Ubuntu before v1; no permanent red-baseline allowance
+  remains.
 
 ## Session update template
 
