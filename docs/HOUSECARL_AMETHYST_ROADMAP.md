@@ -257,35 +257,35 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: reviewed every declaration in `NifService`,
-  `VoiceCheck`, and `DialogueScriptCheck`. Historical header essays have been
-  replaced with local type and member contracts. The documentation now
-  explains NIF input/output ownership, supported SSE edits, block targeting,
-  unknown-block preservation, touched-block and semantic read-back gates,
-  voice asset provenance, FUZ/LIP state reporting, dialogue script-fragment
-  detection, and diagnostic failure isolation.
+- Last completed checkpoint: reviewed every declaration in `DialogueValidate`,
+  `DialogueSubtype`, and `DialogueCkParity`. Historical incident narratives
+  have been replaced with local type and member contracts. The documentation
+  now explains validation scope and severity, winner/session ownership,
+  dialogue graph and condition checks, diagnostic limits, SNAM derivation,
+  non-override default materialization, shared presence predicates, and the
+  distinction between Creation Kit parity and known runtime defects.
 - Verification performed: the serialized .NET 9 Linux solution build succeeds
   with zero errors. A forced unsuppressed XML-documentation rebuild succeeds
-  and reports no warning from the three reviewed files; its 146 warnings
-  belong to components still queued for review. The NIF service, NIF set,
-  batch-inspection, NIF section, nested-create, and dialogue-validation guards
-  all pass. One focused probe caught a changed `should not have touched` alarm
-  phrase, which was restored before the full suite. Full `ci-all` is 111/111
-  on Linux after the final edit. `git diff --check` passes and the reviewed
-  files contain no line longer than 120 characters.
-- Files/components changed: `NifService`, `VoiceCheck`,
-  `DialogueScriptCheck`, the tracked roadmap, and the user-facing roadmap copy.
-- Decisions made: NIF operations remain byte-in and verified-byte-out, without
-  manager or filesystem ownership in the core service. Only supported SSE
-  writes are exposed. Every edit must pass both the untouched-block collateral
-  gate and semantic read-back; unknown blocks are preserved and the block
-  census is checked. Voice and dialogue-script checks are post-write
-  diagnostics and cannot retroactively turn a successful plugin write into a
-  failed transaction. Voice lookup checks the patch before active load-order
-  providers and consumes one pinned asset snapshot. Missing FUZ, LIP, or PEX
-  data is distinguished from a check execution error. Existing alarm phrases
-  remain stable because renderers and regression probes treat them as
-  contract text.
+  and reports no warning from the three reviewed files; its 140 warnings
+  belong to components still queued for review. Dialogue validation,
+  subtype-marker, Creation Kit parity, and nested-create guards all pass. The
+  focused pass caught a changed `Run On a specific reference` contract phrase,
+  which was restored before the full suite. Full `ci-all` is 111/111 on Linux
+  after the final edit. `git diff --check` passes and the reviewed files
+  contain no line longer than 120 characters.
+- Files/components changed: `DialogueValidate`, `DialogueSubtype`,
+  `DialogueCkParity`, the tracked roadmap, and the user-facing roadmap copy.
+- Decisions made: validation consumes one pinned load-order session and asset
+  snapshot and inspects only the winning INFO set visible to the game. It
+  reports structural defects but does not guess condition truth, audio quality,
+  or lip synchronization. Missing owner data suppresses only checks that would
+  otherwise guess. SNAM normalization remains table-driven from xEdit rather
+  than inferred from unreliable enum names or vanilla DATA values. CK parity
+  fills preserve every explicit author value, surface every automatic change,
+  and share presence predicates with read-only gap reporting. Non-nullable
+  topic Priority uses caller intent to distinguish unset from explicit zero.
+  Quest ANAM max-plus-one derivation remains create-only. Existing diagnostic
+  phrases remain stable where regression probes treat them as contract text.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -301,8 +301,9 @@ manual release gate.
   `HousecarlOwnerMeta`, `ModManagerLayout`, `BethesdaPath`, `FaceGenPath`,
   `VoicePath`, `SeqFile`, `AssetResolver`, `ArchiveDiscovery`, `BsaArchive`,
   `NpcAppearanceAssets`, `NpcAppearanceCopy`, `AssetRenameService`,
-  `NifService`, `VoiceCheck`, and `DialogueScriptCheck` are complete; the
-  remaining inherited core components have not yet received the same
+  `NifService`, `VoiceCheck`, `DialogueScriptCheck`, `DialogueValidate`,
+  `DialogueSubtype`, and `DialogueCkParity` are complete; the remaining
+  inherited core components have not yet received the same
   declaration-by-declaration review. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
   BSArch path is supplied; self-contained native archive fixtures cover v1
@@ -313,11 +314,12 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  across `DialogueValidate`, `DialogueSubtype`, and `DialogueCkParity`. Review
-  every declaration and explicitly document validation severity, subtype
-  derivation, Creation Kit parity limits, missing-data semantics, and
-  diagnostic composition. Run the dialogue-validation, subtype-marker,
-  CK-parity, nested-create, strict-XML, and full-CI guards.
+  across `CellShellCheck`, `ScriptPropertyCheck`, `NativePairing`, and
+  `SksePeek`. Review every declaration and explicitly document post-write
+  diagnostic ownership, recursive property traversal, native-plugin metadata
+  limits, binary parsing bounds, and incomplete-read behavior. Run their
+  focused cell-shell, script-property, native-pairing/SKSE, strict-XML, and
+  full-CI guards.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -341,7 +343,9 @@ manual release gate.
   history to `amethyst-main`; `be0e394` completes the canonical asset-path
   documentation checkpoint; `973083e` completes the asset-provider
   documentation checkpoint; `fabf847` completes the asset-carry documentation
-  checkpoint. The NIF and dialogue-diagnostics checkpoint is pending commit.
+  checkpoint; `e3adb8c` completes the NIF and dialogue-diagnostics
+  documentation checkpoint. The dialogue-semantics checkpoint is pending
+  commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
