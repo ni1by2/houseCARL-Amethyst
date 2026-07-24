@@ -56,25 +56,75 @@ public sealed class FieldPredicateSet
     /// read cleave where identity sits beside Fields) and a list operand: inline comma-separated FormIDs, or
     /// <c>@&lt;absolute path&gt;</c> naming a file of them. Restricted to <c>formid</c> at parse (a named refusal on any
     /// other path) so a future generalization to leaf-value membership is an extension, not a behavior change.</summary>
-    enum Op { Eq, Ne, Gt, Ge, Lt, Le, Contains, Has, Exists, Missing, In, NotIn }
+    enum Op
+    {
+        /// <summary>Token-vocabulary equality.</summary>
+        Eq,
+        /// <summary>Token-vocabulary inequality.</summary>
+        Ne,
+        /// <summary>Numeric greater-than.</summary>
+        Gt,
+        /// <summary>Numeric greater-than-or-equal.</summary>
+        Ge,
+        /// <summary>Numeric less-than.</summary>
+        Lt,
+        /// <summary>Numeric less-than-or-equal.</summary>
+        Le,
+        /// <summary>Case-insensitive substring membership.</summary>
+        Contains,
+        /// <summary>Bitwise all-requested-bits-set test.</summary>
+        Has,
+        /// <summary>Path resolves to a scalar, substructure, or non-empty collection.</summary>
+        Exists,
+        /// <summary>Complement of <see cref="Exists"/> for judgeable paths.</summary>
+        Missing,
+        /// <summary>Record identity belongs to the parsed FormKey set.</summary>
+        In,
+        /// <summary>Record identity does not belong to the parsed FormKey set.</summary>
+        NotIn,
+    }
 
     /// <summary>One parsed predicate: the split path segments (fed straight to <see cref="ReadEngine.ReadLeaf"/>),
     /// the operator, the raw operand, and — for a numeric operator — the operand pre-parsed to a double (validated
     /// at parse, so a non-numeric operand under <c>&gt;</c>/<c>&lt;</c> fails the whole call before any scan).
     /// <paramref name="FormIds"/> is the pre-parsed membership set for <see cref="Op.In"/>/<see cref="Op.NotIn"/>
     /// (file already read + every token validated at parse — the scan never does IO), null for every other op.</summary>
+    /// <param name="Text">Normalized complete predicate text for diagnostics.</param>
+    /// <param name="PathSegments">Dotted/bracketed path segments passed to the read engine.</param>
+    /// <param name="PathDisplay">Original path spelling used in user-facing accounting.</param>
+    /// <param name="Op">Parsed comparison operation.</param>
+    /// <param name="Operand">Trimmed raw operand, empty only for presence operators.</param>
+    /// <param name="NumericOperand">Pre-parsed numeric operand for range operators.</param>
+    /// <param name="FormIds">Pre-parsed identity set for membership operators, otherwise null.</param>
     sealed record Predicate(string Text, string[] PathSegments, string PathDisplay, Op Op, string Operand, double NumericOperand,
                             HashSet<FormKey>? FormIds = null);
 
+    /// <summary>Immutable parsed predicates, evaluated in input order.</summary>
     readonly IReadOnlyList<Predicate> _predicates;
-    readonly long[] _valueRead;   // per-predicate: candidates whose path read SOME value
-    readonly long[] _noValue;     // per-predicate: candidates whose path read NO value (any reason below)
-    readonly long[] _noField;     // per-predicate SUBSET of _noValue: the path is not a field on the record (mistyped / wrong for this type)
-    readonly long[] _container;   // per-predicate SUBSET of _noValue: the path resolves to a container/list, not a scalar leaf
-    readonly long[] _unreadable;  // per-predicate SUBSET of _noValue: the path READ FAULTED (Mutagen-unparseable content) — a fault, NOT an unset value
+
+    /// <summary>Per-predicate candidates whose path supplied a judgeable value or presence state.</summary>
+    readonly long[] _valueRead;
+
+    /// <summary>Per-predicate candidates whose path supplied no scalar/judgeable value for any reason below.</summary>
+    readonly long[] _noValue;
+
+    /// <summary>Subset of <see cref="_noValue"/> where the path is not a field on that record type.</summary>
+    readonly long[] _noField;
+
+    /// <summary>Subset of <see cref="_noValue"/> where a value operator targeted a collection/substructure.</summary>
+    readonly long[] _container;
+
+    /// <summary>Subset of <see cref="_noValue"/> where Mutagen/reflection could not read the path.</summary>
+    readonly long[] _unreadable;
+
+    /// <summary>Total candidate bodies passed to <see cref="Matches"/>.</summary>
     long _scanned;
+
+    /// <summary>First value-dependent type error; once set, later candidates are not evaluated.</summary>
     string? _fatal;
 
+    /// <summary>Allocates independent accounting counters for an already validated predicate list.</summary>
+    /// <param name="predicates">Non-empty predicates returned by <see cref="Parse"/>.</param>
     FieldPredicateSet(IReadOnlyList<Predicate> predicates)
     {
         _predicates = predicates;
@@ -103,6 +153,8 @@ public sealed class FieldPredicateSet
     /// <summary>Parse the wire <c>where</c> list into an evaluable set, or return the FIRST parse error (so a
     /// malformed predicate refuses the whole call before scanning — Q3). An empty list is a parse error: a
     /// caller passing <c>where</c> at all means to filter.</summary>
+    /// <param name="where">Ordered predicate strings supplied by the tool caller.</param>
+    /// <returns>A ready evaluator with null error, or null evaluator with one actionable error.</returns>
     public static (FieldPredicateSet? Set, string? Error) Parse(IReadOnlyList<string> where)
     {
         var list = new List<Predicate>(where.Count);
@@ -116,7 +168,11 @@ public sealed class FieldPredicateSet
         return (new FieldPredicateSet(list), null);
     }
 
-    static (Predicate?, string?) ParseOne(string raw)
+    /// <summary>Parses one <c>path operator operand</c> expression using longest operator matching and validates
+    /// all operation-specific requirements before any record scan begins.</summary>
+    /// <param name="raw">One wire predicate; null-like input is treated as empty for defensive diagnostics.</param>
+    /// <returns>The parsed predicate, or a single actionable error.</returns>
+    static (Predicate?, string?) ParseOne(string? raw)
     {
         var text = (raw ?? "").Trim();
         if (text.Length == 0) return (null, "empty predicate in where= (expected \"<path> <op> <value>\").");
@@ -222,7 +278,11 @@ public sealed class FieldPredicateSet
     /// contain them (<c>123456:My Mod.esp</c>) — with optional surrounding brackets and quotes stripped per token,
     /// so a pasted JSON array (<c>["123456:A.esp", "234567:B.esp"]</c>) parses as-is. Every token must be a valid
     /// FormID and the set must be non-empty; any violation names itself and refuses the call (Q3).</summary>
-    static (HashSet<FormKey>?, string?) ParseFormIdList(string raw, string operand)
+    /// <param name="raw">Complete predicate text used to anchor diagnostics; null is retained only for defensive
+    /// malformed-input reporting.</param>
+    /// <param name="operand">Inline list text or an <c>@absolute/path</c> file reference.</param>
+    /// <returns>A non-empty FormKey set, or an actionable parse/read error.</returns>
+    static (HashSet<FormKey>?, string?) ParseFormIdList(string? raw, string operand)
     {
         string content;
         bool fromFile = operand[0] == '@';
@@ -268,8 +328,21 @@ public sealed class FieldPredicateSet
     /// (<c>123456:My Mod.esp</c>), so it can never be a list separator.</summary>
     static readonly char[] ListSeparators = { ',', '\r', '\n' };
 
+    /// <summary>Whether a character can begin a symbolic comparison operator.</summary>
+    /// <param name="c">The current parser character.</param>
+    /// <returns>True for equality/inequality/range operator characters.</returns>
     static bool IsOpChar(char c) => c is '=' or '!' or '<' or '>';
+
+    /// <summary>Whether an operation requires a numeric operand and numeric field value.</summary>
+    /// <param name="op">The parsed operation.</param>
+    /// <returns>True for the four range comparisons.</returns>
     static bool IsNumericOp(Op op) => op is Op.Gt or Op.Ge or Op.Lt or Op.Le;
+
+    /// <summary>Ordinally tests a candidate operator at a parser offset without allocating a substring.</summary>
+    /// <param name="s">Complete normalized predicate text.</param>
+    /// <param name="i">Zero-based candidate offset.</param>
+    /// <param name="op">Operator spelling to test.</param>
+    /// <returns>True when the text contains the complete operator at that offset.</returns>
     static bool StartsWith(string s, int i, string op)
         => i + op.Length <= s.Length && string.CompareOrdinal(s, i, op, 0, op.Length) == 0;
 
@@ -283,6 +356,8 @@ public sealed class FieldPredicateSet
     /// <see cref="FatalError"/> and returns false (the scan aborts and surfaces it on the first value-bearing
     /// candidate). All predicates are read for their accounting even when an earlier one already disqualifies the
     /// AND, so the Q3 no-value signal is correct per predicate.</summary>
+    /// <param name="body">One live candidate record body.</param>
+    /// <returns>True only when every predicate is satisfied and no fatal type error occurred.</returns>
     public bool Matches(IMajorRecordGetter body)
     {
         if (_fatal is not null) return false;
@@ -355,13 +430,25 @@ public sealed class FieldPredicateSet
     /// Present/Absent, or an unjudgeable NoField (the path is not a field on this record) / Unreadable (a Mutagen
     /// read fault). Only Present/Absent decide a match; NoField/Unreadable match NEITHER op and feed the Q3
     /// accounting, so a mistyped presence path still fails loud (never a silent "0 matches").</summary>
-    enum Presence { Present, Absent, NoField, Unreadable }
+    enum Presence
+    {
+        /// <summary>A scalar, substructure, or non-empty collection is available.</summary>
+        Present,
+        /// <summary>The path is valid but carries no value or only an empty collection.</summary>
+        Absent,
+        /// <summary>The path does not name a modeled field on this record.</summary>
+        NoField,
+        /// <summary>The field exists but its value could not be read safely.</summary>
+        Unreadable,
+    }
 
     /// <summary>Map a leaf read to its presence verdict. A round-trippable scalar is Present. A container/substruct
     /// summary (note starts with '[') is Present UNLESS it is an EMPTY list/dict (<see cref="ReadEngine.LeafRead.ContainerCount"/>
     /// == 0) — a modeled-but-empty field carries nothing, so it is Absent (the crucial empty-vs-carried split the
     /// display note alone can't give). A "(no field…" note is NoField, "(unreadable…" is Unreadable, and every other
     /// no-value note ((absent)/(null link)/(unresolved…)) is a valid-but-unset Absent.</summary>
+    /// <param name="leaf">The read-engine result for a requested path.</param>
+    /// <returns>A definite or unjudgeable presence classification.</returns>
     static Presence ClassifyPresence(ReadEngine.LeafRead leaf)
     {
         if (leaf.HasValue) return Presence.Present;
@@ -373,6 +460,11 @@ public sealed class FieldPredicateSet
         return Presence.Absent;   // (absent) / (null link) / (unresolved localized string) — a valid, unset field
     }
 
+    /// <summary>Applies one value operation to a successful scalar leaf, preserving the read engine's token
+    /// vocabulary and returning typed errors for incompatible range/bit operations.</summary>
+    /// <param name="p">The parsed predicate.</param>
+    /// <param name="leaf">A successful scalar leaf from <see cref="ReadEngine.ReadLeaf"/>.</param>
+    /// <returns>Match verdict plus null error, or false plus an actionable type error.</returns>
     static (bool satisfied, string? error) Compare(Predicate p, ReadEngine.LeafRead leaf)
     {
         var token = leaf.Token;
@@ -415,6 +507,10 @@ public sealed class FieldPredicateSet
     /// value) and the range ops miss. On a [Flags] enum the operand is a bit value (decimal or <c>0x</c> hex) or a
     /// flag NAME; on a plain integer leaf it must be a bit value. A non-bitmask field, an unresolvable operand, or
     /// a zero mask is a typed error — never a silent non-match (Q3).</summary>
+    /// <param name="p">The parsed <c>has</c> predicate.</param>
+    /// <param name="token">The unchanged scalar token.</param>
+    /// <param name="flags">Optional flags-enum bit/type metadata.</param>
+    /// <returns>Bit-test verdict or an actionable incompatibility error.</returns>
     static (bool satisfied, string? error) CompareHas(Predicate p, string token, ReadEngine.FlagBits? flags)
     {
         ulong leafBits, opBits;
@@ -440,11 +536,18 @@ public sealed class FieldPredicateSet
     /// <summary>Resolve a <c>has</c>/<c>=</c> operand against a [Flags] enum to its bit pattern: a numeric literal
     /// (decimal or <c>0x</c> hex) is the bits directly; otherwise it is parsed as a flag NAME (or comma-combo)
     /// against that enum. False if it is neither — the caller turns that into a typed error.</summary>
+    /// <param name="operand">Numeric mask or named enum member combination.</param>
+    /// <param name="enumType">The concrete flags-enum type.</param>
+    /// <param name="bits">Receives resolved bits on success.</param>
+    /// <returns>True when either numeric or named parsing succeeds.</returns>
     static bool TryResolveBits(string operand, Type enumType, out ulong bits)
         => TryBits(operand, out bits) || ReadEngine.TryEnumBitsFromName(enumType, operand, out bits);
 
     /// <summary>Parse a bit value — decimal, or <c>0x</c>-prefixed hex (bitmasks read naturally in hex). Unsigned;
     /// a sign or a non-integer is rejected (those fall through to the flag-name path).</summary>
+    /// <param name="s">Candidate numeric mask text.</param>
+    /// <param name="bits">Receives the unsigned mask on success.</param>
+    /// <returns>True for a complete decimal or hexadecimal unsigned integer.</returns>
     static bool TryBits(string s, out ulong bits)
     {
         s = s.Trim();
@@ -456,6 +559,9 @@ public sealed class FieldPredicateSet
     /// <summary>Equality across the token vocabulary: FormKey-canonical if BOTH sides are FormKeys (so a link
     /// compares as a FormKey, not a string), else numeric if both parse as numbers (so <c>0.50</c> matches a
     /// stored <c>0.5</c>), else case-insensitive string (enum names, <c>True</c>/<c>False</c>, plain strings).</summary>
+    /// <param name="token">Value emitted from the record field.</param>
+    /// <param name="operand">Caller-supplied predicate value.</param>
+    /// <returns>True under the first shared comparison vocabulary.</returns>
     static bool ValueEquals(string token, string operand)
     {
         if (TryFormKey(token, out var a) && TryFormKey(operand, out var b)) return a == b;
@@ -463,11 +569,18 @@ public sealed class FieldPredicateSet
         return string.Equals(token, operand, StringComparison.OrdinalIgnoreCase);
     }
 
+    /// <summary>Parses an invariant floating-point token for range/equality comparison.</summary>
+    /// <param name="s">Candidate numeric text.</param>
+    /// <param name="d">Receives the parsed value.</param>
+    /// <returns>True when the complete token is a supported invariant number.</returns>
     static bool TryNum(string s, out double d)
         => double.TryParse(s, NumberStyles.Float | NumberStyles.AllowLeadingSign, CultureInfo.InvariantCulture, out d);
 
     /// <summary>True only for a real FormKey string (<c>XXXXXX:Plugin.esp</c>). A plain number or enum name has no
     /// <c>:Plugin</c> tail, so it never parses here — the FormKey branch can't swallow a numeric/string compare.</summary>
+    /// <param name="s">Candidate FormKey token.</param>
+    /// <param name="fk">Receives the parsed FormKey, or default on failure.</param>
+    /// <returns>True when <c>FormKey.Factory</c> accepts the token.</returns>
     static bool TryFormKey(string s, out FormKey fk)
     {
         try { fk = FormKey.Factory(s.Trim()); return true; }
@@ -487,6 +600,7 @@ public sealed class FieldPredicateSet
     /// <item>A predicate that read no value on MORE THAN HALF the candidates ⇒ a SOFT note (a path wrong for some
     /// scanned types in a mixed scan reads as a non-match there, not an error).</item>
     /// </list></summary>
+    /// <returns>One or more actionable accounting lines, or null when no warning threshold is crossed.</returns>
     public string? AccountingNote()
     {
         if (_scanned == 0) return null;   // nothing reached the predicate (e.g. an empty type group) — no health signal to give
@@ -531,6 +645,9 @@ public sealed class FieldPredicateSet
         return notes is null ? null : string.Join("\n", notes);
     }
 
+    /// <summary>Returns the stable wire spelling used in parser errors and examples.</summary>
+    /// <param name="op">The parsed operation.</param>
+    /// <returns>Its symbolic or word operator spelling.</returns>
     static string OpStr(Op op) => op switch
     {
         Op.Eq => "=", Op.Ne => "!=", Op.Gt => ">", Op.Ge => ">=", Op.Lt => "<", Op.Le => "<=",
@@ -538,5 +655,8 @@ public sealed class FieldPredicateSet
         Op.In => "in", Op.NotIn => "not in", _ => "?",
     };
 
+    /// <summary>Bounds an offending field value embedded in a diagnostic.</summary>
+    /// <param name="s">Untrusted/display token text.</param>
+    /// <returns>The original text up to 60 characters, with an ellipsis when cut.</returns>
     static string Trunc(string s) => s.Length > 60 ? s.Substring(0, 60) + "…" : s;
 }

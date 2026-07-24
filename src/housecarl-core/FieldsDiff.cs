@@ -45,6 +45,10 @@ public static class FieldsDiff
     /// presence bit, so a leaf that EQUALS the winner is counted as agreement (it IS the same modeled value) but
     /// the render never claims the contributor "carries" it as a distinct subrecord — there is no bit to prove
     /// that. The ABSENT render fires only on the explicit sentinels, which only nullable fields produce.</para></summary>
+    /// <param name="Deltas">Display-ready field/list differences relative to the requested reference.</param>
+    /// <param name="Complete">False when either read was truncated and absence/identity claims are unsafe.</param>
+    /// <param name="AgreedCount">Value-leaf paths present and equal on both complete reads.</param>
+    /// <param name="AgreedSample">A bounded illustrative subset of agreed paths.</param>
     public sealed record Result(IReadOnlyList<string> Deltas, bool Complete,
         int AgreedCount, IReadOnlyList<string> AgreedSample);
 
@@ -52,11 +56,17 @@ public static class FieldsDiff
     /// modeled but the contributor carries nothing (absent optional, or a present-but-null link). Treated as a
     /// first-class state, never compared as if it were a real token value. References the <see cref="ReadEngine"/>
     /// constants directly (same assembly) — single source of truth, compile-time coupling, no drift.</summary>
+    /// <param name="val">A cleaned token-or-note string from one field line.</param>
+    /// <returns>True only for the read engine's explicit no-value sentinels.</returns>
     static bool IsAbsentSentinel(string val) =>
         val == ReadEngine.AbsentNote || val == ReadEngine.NullLinkNote || val == ReadEngine.UnresolvedStringNote;
 
     /// <summary>Compare one plugin's deep-read fields against the winner's. Both sides should be read by the
     /// same <see cref="ReadEngine.ReadFields"/> call shape (same paths, same depth) so line sets correspond.</summary>
+    /// <param name="theirs">The contributor/plugin version being described.</param>
+    /// <param name="winner">The reference record, normally the active winner.</param>
+    /// <param name="referenceLabel">Human-readable label inserted into delta text.</param>
+    /// <returns>Observed deltas plus completeness and identical-value evidence.</returns>
     public static Result Compare(RecordFields theirs, RecordFields winner, string referenceLabel = "winner")
     {
         var tValueLeaves = new HashSet<string>(StringComparer.Ordinal);
@@ -171,6 +181,9 @@ public static class FieldsDiff
 
     /// <summary>The root's own container-summary line ("[Type: N item(s)/pair(s)]"), or null when the read
     /// never emitted one (a fields=-bracketed read names element paths directly, skipping the root).</summary>
+    /// <param name="lines">Cleaned path/value lines from one side.</param>
+    /// <param name="root">The candidate collection root path.</param>
+    /// <returns>The root summary value, otherwise null.</returns>
     static string? RootSummary(List<(string path, string val)> lines, string root)
     {
         foreach (var (path, val) in lines)
@@ -183,6 +196,9 @@ public static class FieldsDiff
     /// VALUE (<c>HasValue</c>) — the only lines an agreement count may consider, so a container summary line
     /// ("[3 item(s)]") or an absent/null-link note is never miscounted as a present field. Complete=false iff the
     /// expansion-cap sentinel was present.</summary>
+    /// <param name="rf">One structured deep-read result.</param>
+    /// <param name="valueLeaves">Receives paths backed by real round-trip values.</param>
+    /// <returns>Comparable token/note lines and whether the read reached its natural end.</returns>
     static (List<(string path, string val)> lines, bool complete) CleanLines(RecordFields rf, HashSet<string> valueLeaves)
     {
         var lines = new List<(string, string)>(rf.Fields.Count);
@@ -199,6 +215,8 @@ public static class FieldsDiff
     /// <summary>The path's OUTERMOST positional-list root — the prefix before its first NUMERIC bracket — or
     /// null when it has none (scalars, substructs, and dict keys like Skills[OneHanded], which are semantic
     /// identities and belong in exact-path comparison).</summary>
+    /// <param name="path">A canonical dotted/bracketed read path.</param>
+    /// <returns>The first numeric-bracket prefix, or null when the path has no positional element.</returns>
     internal static string? ListRoot(string path)
     {
         int from = 0;
@@ -219,6 +237,10 @@ public static class FieldsDiff
     /// children and dict-root summaries (a dict bracket is a semantic key — numeric or not — so exact-path is
     /// the correct comparison), excluding only positional-list content and the list roots' own summary lines
     /// (subsumed by the element comparison — including the 0-item side, whose only trace IS its summary).</summary>
+    /// <param name="lines">Cleaned path/value lines from one side.</param>
+    /// <param name="listRoots">Roots proven to represent positional lists.</param>
+    /// <param name="includeListRootSummaries">Keep list count summaries for partial-read comparison.</param>
+    /// <returns>An ordinal path-to-value map for exact comparison.</returns>
     static Dictionary<string, string> ExactPathLines(List<(string path, string val)> lines,
         HashSet<string> listRoots, bool includeListRootSummaries = false)
     {
@@ -233,10 +255,17 @@ public static class FieldsDiff
         return map;
     }
 
+    /// <summary>One positional list element reconstructed from expanded field lines.</summary>
+    /// <param name="Index">The original display index, used only when describing a difference.</param>
+    /// <param name="Content">Relative leaf paths and values belonging to the element.</param>
+    /// <param name="Fingerprint">Order-insensitive normalized content used for multiset equality.</param>
     sealed record Element(int Index, List<(string rel, string val)> Content, string Fingerprint);
 
     /// <summary>Group a root's bracketed lines into whole elements: positional index + (relative path, value)
     /// content + an order-insensitive content fingerprint (nested content included verbatim).</summary>
+    /// <param name="lines">All cleaned lines from one record side.</param>
+    /// <param name="root">The positional list root to reconstruct.</param>
+    /// <returns>Elements ordered by their original numeric index.</returns>
     static List<Element> ElementsOf(List<(string path, string val)> lines, string root)
     {
         var byIndex = new SortedDictionary<int, List<(string rel, string val)>>();
@@ -261,6 +290,8 @@ public static class FieldsDiff
     /// comparison would report a false content delta. Display keeps each side's original token; only equality
     /// checks and element fingerprints use this form. Non-FormKey values pass through untouched (string
     /// content stays case-SENSITIVE).</summary>
+    /// <param name="val">A token or explanatory note.</param>
+    /// <returns>A comparison-only normalized FormKey, or the original non-FormKey text.</returns>
     static string NormalizeForCompare(string val)
     {
         if (val.Length < 8 || val[6] != ':') return val;
@@ -270,6 +301,9 @@ public static class FieldsDiff
 
     /// <summary>Content-keyed multiset difference: elements (with multiplicity) present on one side only.
     /// Equal multisets ⇒ the lists hold the same contents, merely (possibly) reordered ⇒ no delta.</summary>
+    /// <param name="t">Contributor-side elements.</param>
+    /// <param name="w">Reference-side elements.</param>
+    /// <returns>Unmatched elements from each side, preserving source order.</returns>
     static (List<Element> onlyT, List<Element> onlyW) MultisetDiff(List<Element> t, List<Element> w)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -286,6 +320,14 @@ public static class FieldsDiff
         return (onlyT, onlyW);
     }
 
+    /// <summary>Formats one positional-list content/count difference for the conflict renderer.</summary>
+    /// <param name="root">The list's field path.</param>
+    /// <param name="tCount">Contributor element count.</param>
+    /// <param name="wCount">Reference element count.</param>
+    /// <param name="onlyT">Contributor-only elements.</param>
+    /// <param name="onlyW">Reference-only elements.</param>
+    /// <param name="referenceLabel">Human-readable reference label.</param>
+    /// <returns>A bounded, display-ready delta line.</returns>
     static string DescribeListDelta(string root, int tCount, int wCount, List<Element> onlyT, List<Element> onlyW, string referenceLabel = "winner")
     {
         var sb = new StringBuilder();
@@ -298,6 +340,8 @@ public static class FieldsDiff
 
     /// <summary>Up to 2 elements, each as its index plus up to 3 identifying leaf values (emit order — the
     /// model's field order — with the bare element-summary line used only when no real leaves exist).</summary>
+    /// <param name="elems">Unmatched elements from one side.</param>
+    /// <returns>A bounded illustrative summary with omitted counts.</returns>
     static string DescribeElements(List<Element> elems)
     {
         var parts = elems.Take(2).Select(e =>
