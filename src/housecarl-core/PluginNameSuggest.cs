@@ -19,10 +19,15 @@ namespace HousecarlCore;
 /// </summary>
 public static class PluginNameSuggest
 {
+    /// <summary>Shared valid plugin suffixes used when comparing filename stems.</summary>
     static readonly string[] PluginExts = PluginFile.Extensions;   // the one shared home (HousecarlCore.PluginFile) — no divergent copy
 
     /// <summary>Up to <paramref name="max"/> nearest candidate names for a missed <paramref name="query"/>, best first.
     /// Empty when nothing clears the relevance bar (no spurious suggestion). Case-insensitive throughout.</summary>
+    /// <param name="query">Missed plugin spelling to compare after trimming.</param>
+    /// <param name="candidates">Actual plugin filenames; blank, duplicate, and exact matches are ignored.</param>
+    /// <param name="max">Maximum suggestions retained after deterministic ranking.</param>
+    /// <returns>A newly owned best-first list, or an empty list when no candidate is relevant.</returns>
     public static IReadOnlyList<string> Nearest(string query, IEnumerable<string> candidates, int max = 3)
     {
         var q = (query ?? "").Trim();
@@ -52,6 +57,10 @@ public static class PluginNameSuggest
 
     /// <summary>The ready-to-append clause — e.g. " Did you mean 'Sanguine's Trade - An Economy Mod.esp'?" — or "" when
     /// there is no near match. Leads with a space so callers can append it straight onto an existing message.</summary>
+    /// <param name="query">Missed plugin spelling.</param>
+    /// <param name="candidates">Actual plugin filenames considered by <see cref="Nearest"/>.</param>
+    /// <param name="max">Maximum filenames included in the clause.</param>
+    /// <returns>An append-ready question beginning with a space, or an empty string.</returns>
     public static string DidYouMean(string query, IEnumerable<string> candidates, int max = 3)
     {
         var hits = Nearest(query, candidates, max);
@@ -64,6 +73,10 @@ public static class PluginNameSuggest
 
     /// <summary>Relevance score (higher = closer; 0 = not a candidate) + the edit distance used as the tiebreak. The tiers
     /// are gapped (1000/800/600/…) so a stronger match always outranks a weaker one regardless of its distance tiebreak.</summary>
+    /// <param name="q">Trimmed full query spelling.</param>
+    /// <param name="qb">Query with a recognized plugin suffix removed.</param>
+    /// <param name="candidate">Trimmed candidate filename.</param>
+    /// <returns>A positive tier score and tiebreak distance, or zero score when irrelevant.</returns>
     static (int score, int dist) ScoreOne(string q, string qb, string candidate)
     {
         var cb = StripExt(candidate);
@@ -91,6 +104,9 @@ public static class PluginNameSuggest
         return (0, 0);
     }
 
+    /// <summary>Removes one recognized plugin suffix using ordinal case-insensitive comparison.</summary>
+    /// <param name="name">Filename or already extension-free spelling.</param>
+    /// <returns>The filename stem, or the original string when no recognized suffix is present.</returns>
     static string StripExt(string name)
     {
         foreach (var ext in PluginExts)
@@ -101,6 +117,10 @@ public static class PluginNameSuggest
 
     /// <summary>Case-insensitive Levenshtein with an early-out: returns -1 the moment the best possible distance on a row
     /// exceeds <paramref name="max"/>, so a far candidate is abandoned without finishing the matrix.</summary>
+    /// <param name="a">First filename stem.</param>
+    /// <param name="b">Second filename stem.</param>
+    /// <param name="max">Largest distance worth completing.</param>
+    /// <returns>The edit distance when still relevant, or -1 after the early-out.</returns>
     static int Levenshtein(string a, string b, int max)
     {
         a = a.ToLowerInvariant(); b = b.ToLowerInvariant();

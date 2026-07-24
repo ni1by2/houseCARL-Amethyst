@@ -23,6 +23,7 @@ namespace HousecarlCore;
 /// here if more engine-implicit forms surface — one edit updates every tool.</summary>
 public static class EngineImplicit
 {
+    /// <summary>Canonical Skyrim.esm ModKey used to construct the proven hardcoded identities.</summary>
     static readonly ModKey SkyrimBaseMaster = new("Skyrim", ModType.Master);
 
     /// <summary>The precise engine-implicit reference set, each with its known engine identity (Mutagen-style type
@@ -36,11 +37,17 @@ public static class EngineImplicit
 
     /// <summary>True when <paramref name="fk"/> is one of the engine-implicit <see cref="Forms"/> — a hardcoded engine
     /// reference the index can't resolve, so a reference-resolution check must not mistake it for a dangling reference.</summary>
+    /// <param name="fk">FormKey to classify.</param>
+    /// <returns>True only for an exact key in the deliberately narrow implicit-form table.</returns>
     public static bool IsImplicit(FormKey fk) => Forms.ContainsKey(fk);
 
     /// <summary>The engine-implicit form's known identity (type + EditorID from <see cref="Forms"/>), for a resolver
     /// that must report WHAT the hardcoded form is rather than merely skip it. False for every other form — callers
     /// keep their normal dangling-target path.</summary>
+    /// <param name="fk">FormKey whose known engine identity is requested.</param>
+    /// <param name="type">Receives the Mutagen-style type name, or an empty string on failure.</param>
+    /// <param name="editorId">Receives the known EditorID, or an empty string on failure.</param>
+    /// <returns>True when both output values came from the exact implicit-form table.</returns>
     public static bool TryDescribe(FormKey fk, out string type, out string editorId)
     {
         if (Forms.TryGetValue(fk, out var d)) { (type, editorId) = d; return true; }

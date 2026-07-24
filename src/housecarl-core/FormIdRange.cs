@@ -46,6 +46,8 @@ public static class FormIdRange
     /// create-path allocation guard (<see cref="WriteEngine.EnsureAllocatable"/>) and the NPC-appearance batch
     /// allocator — each keeps its OWN error surface (a throw at the create boundary vs a graceful Fail outcome in the
     /// copy flow), only the ceiling comparison is single-sourced here.</summary>
+    /// <param name="nextFormId">Plugin header's next local object-ID counter.</param>
+    /// <returns>True only after the counter has moved beyond the 24-bit object-ID space.</returns>
     public static bool ObjectIdSpaceExhausted(uint nextFormId) => nextFormId > ObjectIdMax;
 
     /// <summary>The high-byte signature of a light-master (ESL) RUNTIME FormID (0xFE000000). At load the engine gives every
@@ -77,6 +79,8 @@ public static class FormIdRange
     /// masks it to 0x123 via the flag, this rule keeps 0x800123. DSD never EMITS that shape (its export trims ESL to
     /// ≤0xFFF), so it can only arise from a hand-authored config — the documented Wave-1 residual; a plugin-flag mask would
     /// close it (a possible refinement, deliberately not adopted under the locked plan).</para></summary>
+    /// <param name="runtimeFormId">Raw config/runtime token that may contain a full or light load-order prefix.</param>
+    /// <returns>The local object ID used with the separately supplied plugin name.</returns>
     public static uint LocalObjectId(uint runtimeFormId) =>
         (runtimeFormId & 0xFF000000) == LightMasterIndexPrefix
             ? runtimeFormId & LightObjectIdMask       // FExxxYYY light runtime FormID → the 12-bit local id (YYY)

@@ -15,12 +15,16 @@ public static class RecordNaming
 {
     /// <summary>A binary overlay loads <c>AttackBinaryOverlay</c> for catalog <c>Attack</c>; strip the suffix.
     /// Leaves a non-overlay name unchanged.</summary>
+    /// <param name="name">Runtime type name to normalize.</param>
+    /// <returns>The name without one exact terminal <c>BinaryOverlay</c> suffix.</returns>
     public static string StripOverlay(string name) =>
         name.EndsWith("BinaryOverlay", StringComparison.Ordinal) ? name[..^"BinaryOverlay".Length] : name;
 
     /// <summary>The Loqui getter-interface convention: <c>INpcGetter → Npc</c>. Strips the leading <c>I</c> and the
     /// trailing <c>Getter</c> only when BOTH are present; any other name passes through unchanged (so callers that
     /// already guarded on the shape, and callers that pass a non-interface name, both behave as before).</summary>
+    /// <param name="name">Potential Loqui getter-interface name.</param>
+    /// <returns>The catalog-style name when both markers are present; otherwise the original name.</returns>
     public static string StripGetterInterface(string name) =>
         name.StartsWith("I", StringComparison.Ordinal) && name.EndsWith("Getter", StringComparison.Ordinal)
             ? name[1..^6] : name;
@@ -29,6 +33,8 @@ public static class RecordNaming
     /// non-Getter interface case <c>IFoo → Foo</c> (strip the leading <c>I</c> alone). A non-interface name passes
     /// through unchanged. A superset of <see cref="StripGetterInterface"/> — it ALSO drops the leading I on a plain
     /// <c>IFoo</c>, which the catalog-name strip deliberately does not. Used by interface→concrete resolution.</summary>
+    /// <param name="name">Potential interface name used for concrete-type lookup.</param>
+    /// <returns>The concrete-class spelling, or the original non-interface name.</returns>
     public static string StripInterfaceToConcrete(string name) =>
         name.StartsWith("I", StringComparison.Ordinal)
             ? (name.EndsWith("Getter", StringComparison.Ordinal) ? name[1..^6] : name[1..])
@@ -37,6 +43,8 @@ public static class RecordNaming
     /// <summary>Getter interface → SETTER interface, keeping the leading <c>I</c>: <c>INpcGetter → INpc</c> (NOT the
     /// catalog name — this is the mutable interface, distinct from <see cref="StripGetterInterface"/>'s <c>Npc</c>).
     /// Strips the trailing <c>Getter</c> only when present; any other name passes through unchanged.</summary>
+    /// <param name="getterInterfaceName">Potential getter-interface name.</param>
+    /// <returns>The mutable-interface spelling with only a terminal <c>Getter</c> removed.</returns>
     public static string GetterToSetterInterface(string getterInterfaceName) =>
         getterInterfaceName.EndsWith("Getter", StringComparison.Ordinal)
             ? getterInterfaceName[..^"Getter".Length] : getterInterfaceName;
