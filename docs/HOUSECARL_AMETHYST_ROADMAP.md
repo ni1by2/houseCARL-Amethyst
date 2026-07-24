@@ -257,20 +257,20 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: completed the public-contract documentation slice
-  of `WritePatchBuilder`. Every public request property, result property, and
-  outcome factory now has local plain-English documentation. The class and its
-  in-place and header-only entry points have concise safety contracts instead
-  of historical design narratives. The internal implementation commentary
-  remains a separate follow-up because this file is 2,531 lines.
-- Verification performed: a forced unsuppressed XML-documentation core rebuild
-  succeeds with zero warning from `WritePatchBuilder`; 64 CS1591 warnings
-  remain in other queued components. Patch-stem collision, plugin creation,
-  forwarding, dry-run, in-place, atomic-commit, write-mutex, bulk-create,
-  compact-service, and merge-service guards all pass. Full `ci-all` is 111/111
-  on Linux after the final edit, and `git diff --check` passes.
-- Files/components changed: `WritePatchBuilder` public documentation, the
-  tracked roadmap, and the user-facing roadmap copy.
+- Last completed checkpoint: completed the first internal `WritePatchBuilder`
+  documentation slice, covering shared patch application, in-place edits,
+  subtype-marker synchronization, dry-run master prediction, and master
+  resolution. Dated incident narratives were replaced by local phase and
+  failure-boundary comments. Four user-visible MO2 instructions in these paths
+  now correctly direct users to Amethyst.
+- Verification performed: the .NET 9 Linux solution build succeeds. Dry-run,
+  in-place, write-lock, write-mutex, batch field-copy, and dialogue subtype
+  guards pass after the terminology changes. Full `ci-all` is 111/111 on Linux
+  after the final edit, and `git diff --check` passes. The preceding public
+  slice's strict build already established zero XML warning from this file.
+- Files/components changed: `WritePatchBuilder` patch-application and in-place
+  implementation comments and messages, the tracked roadmap, and the
+  user-facing roadmap copy.
 - Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
   boundary. Patch operations validate every request before one serialization
   and reopen the result. In-place operations read records from the target
@@ -311,11 +311,11 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  through the internal implementation of `WritePatchBuilder`. Replace dated
-  incident and milestone prose with concise local explanations of each phase,
-  helper, master derivation, readback, and failure boundary. Remove remaining
-  MO2-facing guidance where the message is not a test-pinned compatibility
-  fixture. Re-run the focused write family, strict XML build, and full CI.
+  through the remaining internal implementation of `WritePatchBuilder`,
+  beginning with record removal and forwarding. Replace dated incident and
+  milestone prose with concise local phase and failure-boundary comments, and
+  remove remaining live MO2 guidance. Re-run the corresponding focused write
+  family, strict XML build, and full CI.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -343,8 +343,9 @@ manual release gate.
   documentation checkpoint; `5c0039f` completes the dialogue-semantics
   documentation checkpoint; `a6a8cb1` completes the supporting-diagnostics
   documentation checkpoint; `073d409` completes the Papyrus-toolchain
-  documentation checkpoint. The `WritePatchBuilder` public-contract checkpoint
-  is pending commit.
+  documentation checkpoint; `5274457` completes the `WritePatchBuilder`
+  public-contract checkpoint. The first internal implementation slice is
+  pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

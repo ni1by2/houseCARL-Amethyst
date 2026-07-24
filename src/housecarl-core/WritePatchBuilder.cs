@@ -273,22 +273,17 @@ public static class WritePatchBuilder
             new(false, prompt, "", false, Array.Empty<CreatedRecord>(), Array.Empty<string>(), 0) { NeedsAcknowledge = true };
     }
 
-    /// <summary>How deep the full read-back reads each written record — the same rationale as the conflict diff's
-    /// depth: deep enough to reach every modeled scalar leaf (condition payloads included — the report's otherwise
-    /// unverifiable perk gate), bounded by the modeled-corpus boundary + ReadEngine's expansion cap, whose
-    /// truncation sentinel stays an explicit note (Q3).</summary>
+    /// <summary>Maximum modeled depth used for full post-write record verification.</summary>
     public const int FullReadbackDepth = 16;
 
-    /// <summary>The coordinate-keyed cell-create kind for a spec (the §4-(b) path): <see cref="None"/> = the flat or
-    /// FormKey-nested path (unchanged); <see cref="Exterior"/> = a Cell placed under a Worldspace by grid
-    /// (<c>block=floor(grid/32)</c>, <c>subblock=floor(grid/8)</c>); <see cref="Interior"/> = a parentless Cell self-filed
-    /// into the top-level Cells group by its own FormID digits. See <c>WriteEngine.AddExteriorCell</c>/<c>AddInteriorCell</c>.</summary>
+    /// <summary>Classifies a cell-create request by its required container.</summary>
     enum CellCreate { None, Exterior, Interior }
 
-    /// <summary>Is <paramref name="recordType"/> the <c>Cell</c> record type (case-insensitive — the system's catalog convention)?</summary>
-    static bool IsCellType(string recordType) => string.Equals(recordType, nameof(Cell), StringComparison.OrdinalIgnoreCase);
+    /// <summary>Checks whether a catalog name denotes a Cell record.</summary>
+    static bool IsCellType(string recordType) =>
+        string.Equals(recordType, nameof(Cell), StringComparison.OrdinalIgnoreCase);
 
-    /// <summary>Parse an exterior-cell grid "X,Y" into two ints (whitespace-tolerant). False ⇒ malformed (the call refuses loud, Q3).</summary>
+    /// <summary>Parses a whitespace-tolerant exterior-cell grid in <c>X,Y</c> form.</summary>
     static bool TryParseGrid(string? grid, out int x, out int y)
     {
         x = y = 0;
@@ -299,15 +294,11 @@ public static class WritePatchBuilder
             && int.TryParse(parts[1].Trim(), NumberStyles.Integer, CultureInfo.InvariantCulture, out y);
     }
 
-    /// <summary>Build/extend a patch from <paramref name="edits"/> and serialize it to <paramref name="outPath"/>.
-    /// <paramref name="extend"/>=false writes a fresh patch (the ModKey = the output filename); =true opens the existing
-    /// patch at <paramref name="outPath"/> mutably and adds to it (the <c>into=</c> path). All-or-nothing: any
-    /// resolve/pre-flight rejection refuses the whole call with no file written (Q3). <paramref name="fullReadback"/>
-    /// additionally reads every touched record back IN FULL off the re-opened written file (the pre-enable verify
-    /// loop — see <see cref="FullReadback"/>). <paramref name="dryRun"/> (#225) runs this SAME pipeline — winner
-    /// resolve, pre-flight, every verb applied to the in-memory mod — and stops at the point of no return (the
-    /// Phase-4 serialize), returning what WOULD change with NOTHING written; it is the real path halted, never a
-    /// parallel validate-lite that could drift from the write it predicts.</summary>
+    /// <summary>Applies validated edits to a new or existing patch and atomically serializes the result.</summary>
+    /// <remarks>
+    /// The method uses one load-order snapshot for the call, rejects the entire batch on any invalid edit, and reopens
+    /// the written plugin for verification. A dry run executes the same in-memory pipeline but stops before serialization.
+    /// </remarks>
     public static PatchOutcome Apply(
         LoadOrderResolver resolver, CorpusRulebook rulebook,
         IReadOnlyList<PatchEdit> edits, string outPath, bool extend, bool fullReadback = false,
@@ -315,14 +306,10 @@ public static class WritePatchBuilder
     {
         if (edits.Count == 0) return PatchOutcome.Fail("no edits supplied.");
 
-        // Per-call overlay session (Option B): every source plugin this write reads (winner bodies, the nested link
-        // cache, the known-master set) is opened THROUGH it and disposed when the method returns — no handle held at rest.
+        // Keep every source overlay and link cache inside this call so no mapped file remains open after it returns.
         using var session = resolver.OpenSession();
 
-        // --- Phase 0: open (extend) or create the patch mod BEFORE resolving targets (HCBR-2026-07-10-01 F3, the
-        //     edit-lane twin of CreateRecords' Phase 0): an extend edit may target a record the PATCH ITSELF defines
-        //     (created by a prior into= call, not yet enabled in MO2), so the opened patch must be consultable by the
-        //     resolve loop. The serializer ties the output filename to the ModKey. ---
+        // Open an extended patch before resolution because the edit may target a record defined only by that patch.
         var fileName = Path.GetFileName(outPath);
         SkyrimMod patchMod;
         if (extend)
@@ -339,26 +326,12 @@ public static class WritePatchBuilder
         if (!string.Equals(patchMod.ModKey.FileName.String, fileName, StringComparison.OrdinalIgnoreCase))
             return PatchOutcome.Fail($"patch ModKey '{patchMod.ModKey.FileName}' must match output filename '{fileName}'.");
 
-        // --- Phase 1: resolve winner + derive RecordType + pre-flight EVERY edit. Collect ALL problems (so the caller
-        //     sees every fix at once), then refuse the whole call if any (Q3 — never a silently-partial patch).
-        //     ONE captured view answers EVERY edit (2026-06-12 hunt F5): the per-edit single-shot resolves each took
-        //     a fresh capture, so a freshness rebuild landing mid-loop (a concurrent read's refresh) could resolve
-        //     two edits of ONE call against two different builds' winners — a silently MIXED patch
-        //     (freshness-capture-guard arm 4, RED pre-fix: 2 of 12 hammered multi-op writes mixed). The write is one
-        //     logical operation; it reads one build — the same HCBR-2026-06-11-02 discipline the read service follows.
-        //     A target absent from the load order that the EXTENDED patch itself defines (a record a prior into= call
-        //     created, patch not yet enabled in MO2 — HCBR-2026-07-10-01 F3) resolves to the patch's OWN settable copy
-        //     (patchLocal; Phase 3 edits it directly, no override) — this consults ONLY the named output artifact of
-        //     the current authoring session, never an arbitrary un-enabled plugin, so the Q3 winner-confusion hazard
-        //     the declined read-un-enabled-plugins feature guards against doesn't arise. ---
+        // Resolve and validate every edit against one captured view. Collect all failures before refusing the batch.
+        // Records defined only by the extended patch resolve from that named artifact, not from unrelated inactive mods.
         var view = resolver.Capture();
         var resolved = new List<(PatchEdit edit, IMajorRecordGetter? body, string? winnerPlugin, IMajorRecord? patchLocal, WriteRequest req, string label, IMajorRecordGetter? srcBody)>(edits.Count);
         var problems = new List<string>();
-        // Records the extended patch DEFINES (FormKey in the patch's own master space — created by a prior into=
-        // call), built lazily ONCE on the first load-order miss (PR #166 review finding 3: not a per-miss deep walk).
-        // Deliberately NOT every record the patch contains: an override the patch merely CARRIES resolves via the
-        // load order like any other record, so a target whose defining plugin is disabled stays a loud refusal —
-        // never a silent edit of the patch's possibly-stale override copy (PR #166 review finding 2).
+        // Build the patch-owned record index lazily. Carried overrides still resolve through the active load order.
         Dictionary<FormKey, IMajorRecord>? patchDefined = null;
         foreach (var e in edits)
         {
@@ -393,9 +366,7 @@ public static class WritePatchBuilder
                 }
             }
 
-            // P8b CopyFrom source: from_plugin's version of e.Target — an OFF-ORDER file the SERVICE pre-located (passed in
-            // copyFromSources), ELSE resolved from the ACTIVE order via this same captured view (the forward_record contract:
-            // in the order, defines/overrides the record, and not the output patch itself). Refused loud, all-or-nothing (Q3).
+            // CopyFrom uses a service-resolved off-order source or the named version in this captured active order.
             IMajorRecordGetter? srcBody = null;
             if (string.Equals(e.Verb, "CopyFrom", StringComparison.Ordinal))
             {
@@ -406,12 +377,7 @@ public static class WritePatchBuilder
                 else if (string.Equals(e.FromPlugin, fileName, StringComparison.OrdinalIgnoreCase))
                 { problems.Add($"{e.Target}: CopyFrom from_plugin '{e.FromPlugin}' is the output patch itself — name the OTHER plugin whose version to copy from."); continue; }
                 else if (!view.ContainsPlugin(e.FromPlugin))
-                // Deliberately NO AbsenceClause here (review of PR #274): the service pre-resolves every off-order
-                // CopyFrom source before Apply — a source that is merely unticked / in a disabled mod / shadowed is
-                // LOCATED and supplied via copyFromSources above, and one that cannot be located aborts the whole call
-                // earlier. So the only name reaching this arm has no on-disk copy at all, which is exactly the case the
-                // explainer cannot explain — it would pay a profile parse plus a whole-install sweep, per edit, to
-                // return the did-you-mean the message would have got anyway. The sentence already says what is known.
+                // Off-order discovery already ran in the service, so this branch means no usable file was found.
                 { problems.Add($"{e.Target}: CopyFrom source '{e.FromPlugin}' is not in the load order (and no plugin file by that name was located on disk) — name an active plugin, or a plugin file present on disk."); continue; }
                 else if (view.ExcludedPlugins.TryGetValue(e.FromPlugin, out var why))
                 { problems.Add($"{e.Target}: CopyFrom source '{e.FromPlugin}' was excluded from this session ({why}) — its records aren't resolvable."); continue; }
@@ -438,17 +404,13 @@ public static class WritePatchBuilder
                 $"refused — {problems.Count} of {edits.Count} edit(s) rejected by resolve/pre-flight; NO patch written:\n  - "
                 + string.Join("\n  - ", problems));
 
-        // --- Phase 3: override each winner into the ONE patch mod, then apply. A flat record needs no link cache; a
-        //     NESTED record (Cell/Placed*/INFO/Navmesh/Landscape) gets the winner overlay's cache built on demand
-        //     (costly → only here, never for the flat common case, never held). A throw here AFTER pre-flight passed is
-        //     a real engine inconsistency — fail the WHOLE call (no partial patch), surfaced not swallowed (Q3). ---
+        // Copy winners into the patch and apply edits. Nested records obtain a source link cache only when required.
         var ops = new List<OpResult>(resolved.Count);
         foreach (var (e, body, winnerPlugin, patchLocal, req, label, srcBody) in resolved)
         {
             try
             {
-                // A patch-local target (defined only in the extended patch — HCBR-2026-07-10-01 F3) is already a
-                // settable record IN patchMod: edit it directly, no override and no source link cache needed.
+                // A record defined by the extended patch is already mutable and needs no new override.
                 IMajorRecord ov;
                 if (patchLocal is not null) ov = patchLocal;
                 else
@@ -456,7 +418,7 @@ public static class WritePatchBuilder
                     ILinkCache? cache = WriteEngine.RecordNeedsSourceCache(body!) ? session.LinkCacheFor(winnerPlugin!) : null;
                     ov = WriteEngine.GenericGetOrAddAsOverride(patchMod, body!, cache);
                 }
-                // P8b CopyFrom transplants the field FROM the source body into ov; every other verb applies to ov directly.
+                // CopyFrom transplants a source field; other verbs mutate the destination record directly.
                 if (string.Equals(req.Verb, "CopyFrom", StringComparison.Ordinal))
                     WriteEngine.CopyField(srcBody!, ov, req.Path);
                 else
@@ -466,18 +428,13 @@ public static class WritePatchBuilder
             }
             catch (ExpectedApplyRejectionException ex)
             {
-                // An EXPECTED apply-time refusal pre-flight legitimately can't pre-empt (live state — e.g. a duplicate dict
-                // key): render its clean guidance, NOT the gate/apply-inconsistency wrapper. All-or-nothing still holds —
-                // the whole call is refused and no file is written (gap-audit Finding 3).
+                // Some live-state conflicts, such as duplicate keys, are knowable only during application.
                 return PatchOutcome.Fail(
                     $"refused applying [{label}] to {req.RecordType} {e.Target} — {ex.Message} (no patch written)");
             }
             catch (MalformedTargetDataException ex)
             {
-                // The THIRD category: the TARGET record's own data is malformed (a present-but-null element/entry) — neither
-                // a user input error nor a gate/apply inconsistency. Render it accurately, NOT under the "pre-flight ACCEPTED
-                // … a real inconsistency" wrapper (which would mislabel pre-existing bad source data as an engine bug).
-                // All-or-nothing holds — no file written (PR #83 follow-up Gap 2).
+                // Distinguish malformed source data from both invalid user input and an engine inconsistency.
                 return PatchOutcome.Fail(
                     $"refused applying [{label}] to {req.RecordType} {e.Target} — {ex.Message} (no patch written)");
             }
@@ -489,17 +446,11 @@ public static class WritePatchBuilder
             }
         }
 
-        // #131 F1 — edit-lane intent-following: if this call changed a DialogTopic's Subtype without also setting its
-        // SubtypeName, sync the SNAM marker so the change isn't a silent in-game no-op. Refuses loud on an unmodeled
-        // Subtype (no partial patch written).
+        // Keep the dialogue SNAM marker aligned when this call changes only the modeled subtype.
         if (SyncEditedTopicMarkers(patchMod, edits, ops) is { } syncErr)
             return PatchOutcome.Fail($"refused — {syncErr} (no patch written).");
 
-        // --- #225 DRY RUN: stop AT the point of no return. Everything above ran for real — the same resolve,
-        //     pre-flight, and in-memory apply the write uses — so the report below can't drift from what a real call
-        //     would do. The one Phase-4 hazard the halt skips (a reference to a plugin not in the serialize's
-        //     resolution context → MissingModException) is re-checked here by the same membership test, so a dry run
-        //     that says "would apply" doesn't hide a write that would fail at serialize (Q3). ---
+        // Dry run stops before serialization after checking that every referenced master is resolvable.
         if (dryRun)
         {
             if (DryRunMastersPreview(patchMod, resolver, patchLane: true, out var wouldMasters) is { } dryErr)
@@ -509,21 +460,13 @@ public static class WritePatchBuilder
             return new PatchOutcome(true, null, outPath, extend, wouldMasters, ops, 0) { DryRun = true, ReadBack = dryBack };
         }
 
-        // --- Phase 4: serialize ONCE with the FULL known-master set (multi-master). Mutagen keeps the header lean
-        //     (only-referenced); a referenced master genuinely absent from the order still fails loud (Q3). ---
-        // Two-part active-patch self-lock guard (Heisen 2026-06-08 + PR #24 review): no mapped handle on the file we're
-        // about to write may survive to the serialize, from ANY source. ReleaseOverlay closes one we already hold (Apply's
-        // Phase-1 winner fetch, when re-editing the patch's OWN override — there the winner IS the target); AllMastersExcept
-        // keeps the target out of the master set. (writelock-probe / writelock-apply-probe; both halves guarded.)
+        // Release any overlay on the output, exclude it from the resolution set, and serialize once with active masters.
         session.ReleaseOverlay(patchMod.ModKey.FileName.String);
         try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath); }
         catch (Exception ex)
             { return PatchOutcome.Fail($"writing the patch failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}"); }
 
-        // --- Phase 5: re-open the written patch and report its master header — and, on request, each touched
-        //     record's FULL read-back off that same re-opened file (the on-disk bytes, not the in-memory mod — the
-        //     strongest pre-enable confirmation). Dispose the overlay so the patch file isn't left mmap'd (a later
-        //     extend re-opens it; the server writes many over its lifetime). ---
+        // Reopen the written bytes to report masters and optional full-record verification, then release the mapping.
         IReadOnlyList<string> masters = Array.Empty<string>();
         IReadOnlyList<FullReadback>? readBack = null;
         long bytes = 0;
@@ -542,18 +485,11 @@ public static class WritePatchBuilder
         return new PatchOutcome(true, null, outPath, extend, masters, ops, bytes) { ReadBack = readBack };
     }
 
-    /// <summary>#131 F1 (edit-lane intent-following), shared by <see cref="Apply"/> and <see cref="ApplyInPlace"/>:
-    /// after the edits are applied, for each DialogTopic this call edited where it SET <c>Subtype</c> but NOT
-    /// <c>SubtypeName</c>, sync the SNAM marker to the new Subtype — otherwise the change is a silent in-game no-op
-    /// (the engine buckets topics by the SNAM marker, so a stale marker keeps the old bucket; #131). It fires ONLY
-    /// when Subtype was actively set in THIS call, so it never rewrites the SNAM of a topic whose subtype the call
-    /// didn't touch — which is what keeps it off the countless vanilla topics whose DATA\Subtype is legitimately
-    /// noisy (a blanket "SubtypeName != marker" lint would false-positive on those). Adds a report op on a real
-    /// change (Q3 — never silent); returns a non-null error to FAIL the whole call on an unmodeled Subtype (never
-    /// leave a mismatched/blank marker), else null. <paramref name="mod"/> is the mutable mod the overrides live in.</summary>
+    /// <summary>Synchronizes a dialogue topic's SNAM marker when this call changes only its modeled subtype.</summary>
+    /// <returns>An error for an unmodeled subtype; otherwise null.</returns>
     static string? SyncEditedTopicMarkers(SkyrimMod mod, IReadOnlyList<PatchEdit> edits, List<OpResult> ops)
     {
-        // Which top-level fields did this call edit, per target? (path[0]; Subtype/SubtypeName are scalar leaves.)
+        // Track only top-level fields because Subtype and SubtypeName are scalar leaves.
         var editedTop = new Dictionary<FormKey, HashSet<string>>();
         foreach (var e in edits)
         {
@@ -593,13 +529,11 @@ public static class WritePatchBuilder
     {
         if (edits.Count == 0) return PatchOutcome.Fail("no edits supplied.");
 
-        // Per-call overlay session (Option B), same as Apply: every read (the target's own bodies, the nested link
-        // cache) is opened THROUGH it and disposed when the method returns — no handle held at rest.
+        // Scope the target overlays and nested link caches to this call.
         using var session = resolver.OpenSession();
         var fileName = Path.GetFileName(targetPath);
 
-        // --- Phase 1: resolve each edit's body FROM THE TARGET (not the winner) + derive type + pre-flight. The §4.1
-        //     content-source guard. ONE captured view answers every edit (the hunt-F5 one-view discipline). ---
+        // Resolve every body from the target plugin, not the winner, using one captured view for the whole batch.
         var view = resolver.Capture();
         if (!view.ContainsPlugin(targetName))
             return PatchOutcome.Fail($"in-place target '{targetName}' is not an active plugin in the load order.{view.AbsenceClause(targetName)}");
@@ -634,9 +568,7 @@ public static class WritePatchBuilder
                 $"refused — {problems.Count} of {edits.Count} edit(s) rejected by resolve/pre-flight; '{fileName}' is UNTOUCHED:\n  - "
                 + string.Join("\n  - ", problems));
 
-        // --- Phase 2: open the TARGET mutably. EAGER, the SINGLE plugin only — NEVER the load order (the legacy 12–14 GB
-        //     RAM trap; CLAUDE.md §1). CreateFromBinary is the same call Apply's extend path uses; an unparseable plugin
-        //     throws here and is REFUSED, never silently re-emitted minus the record Mutagen couldn't read (Q3). ---
+        // Load only the target as a mutable plugin. Refuse an unreadable file instead of re-emitting incomplete data.
         if (!File.Exists(targetPath))
             return PatchOutcome.Fail($"in-place target '{fileName}' not found on disk at {targetPath} — the file is untouched.");
         SkyrimMod targetMod;
@@ -645,16 +577,11 @@ public static class WritePatchBuilder
             { return PatchOutcome.Fail($"cannot open '{fileName}' to edit in place ({WriteEngine.Describe(ex)}) — a plugin Mutagen can't parse is refused, not re-emitted minus what it couldn't read (Q3). The file is UNTOUCHED."); }
         if (!string.Equals(targetMod.ModKey.FileName.String, fileName, StringComparison.OrdinalIgnoreCase))
             return PatchOutcome.Fail($"in-place ModKey '{targetMod.ModKey.FileName}' must match the target filename '{fileName}'.");
-        // The author's DECLARED masters, captured before any mutation — the re-opened header is diffed against this
-        // to surface a master GROW as an explicit re-sort note (PR #163 review #1: a grown master is itself a
-        // re-sort trigger — the plugin is invalid until it loads AFTER its new master — independent of winners).
+        // Capture declared masters before mutation so any required load-order change can be reported after writing.
         var mastersBefore = targetMod.ModHeader.MasterReferences
             .Select(m => m.Master.FileName.String).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // --- Phase 3: apply each verb to the TARGET's OWN record. GenericGetOrAddAsOverride on the target's own body
-        //     (already present in targetMod) returns THAT record (get-semantics) — the verb edits the file's own body,
-        //     never a foreign override's. A nested record gets the target overlay's link cache on demand (released in
-        //     Phase 4). A throw after pre-flight passed is a real engine inconsistency — fail the WHOLE call (Q3). ---
+        // Apply each verb to the target's own mutable record. Nested records obtain the target cache on demand.
         var ops = new List<OpResult>(resolved.Count);
         foreach (var (e, body, req, label) in resolved)
         {
@@ -684,15 +611,11 @@ public static class WritePatchBuilder
             }
         }
 
-        // #131 F1 — edit-lane intent-following (same as Apply): a Subtype change without a SubtypeName in this call
-        // syncs the SNAM marker, so the edit isn't a silent in-game no-op. Refuses loud on an unmodeled Subtype (the
-        // original file stays UNTOUCHED — nothing serialized yet).
+        // Keep the dialogue SNAM marker aligned when this call changes only the modeled subtype.
         if (SyncEditedTopicMarkers(targetMod, edits, ops) is { } syncErr)
             return PatchOutcome.Fail($"refused — {syncErr} ('{fileName}' is UNTOUCHED).");
 
-        // --- #225 DRY RUN: stop AT the point of no return (see Apply's twin block). patchLane:false — in-place
-        //     serializes via WriteInPlace (no Skyrim.esm/Update.esm baseline force-include), so the master preview
-        //     must not add one. The would-grow re-sort note is phrased predictively (nothing was added yet). ---
+        // Dry run stops before replacement and previews only masters derived by the in-place serializer.
         if (dryRun)
         {
             if (DryRunMastersPreview(targetMod, resolver, patchLane: false, out var wouldMasters) is { } dryErr)
@@ -705,20 +628,12 @@ public static class WritePatchBuilder
                 DryRun = true, InPlace = true, ReadBack = dryBack,
                 Note = wouldGrow.Count == 0 ? null :
                     $"the real write would ADD {string.Join(", ", wouldGrow)} as master(s) of '{fileName}' — a plugin " +
-                    "loads only if its masters load BEFORE it, so re-sort your load order (LOOT / MO2) after the real write.",
+                    "loads only if its masters load BEFORE it, so re-sort your load order in Amethyst after the real write.",
             };
         }
 
-        // --- Phase 4: re-serialize the WHOLE target back over itself (model C — the probe's incantation via WriteInPlace,
-        //     NOT WritePatch). Release the target overlay first (the winner-IS-the-target common case made common — the
-        //     two-part self-lock guard, here on a FOREIGN target: ReleaseOverlay disposes every session overlay on the
-        //     target, flat via GetRecord and nested via LinkCacheFor, before the File.Replace). The resolution context is
-        //     the WHOLE known-master set (AllMastersExcept — the same context the in-place CREATE lane serializes
-        //     against), NOT just the target's declared masters: an edit that composes a FormLink to an ACTIVE plugin the
-        //     target didn't yet master must GROW the header (Mutagen lean-derives it from the records' actual links —
-        //     exactly how forward_record grows masters), instead of failing MissingModException against a context that
-        //     artificially excluded the referenced plugin (HCBR-2026-07-08-01 F2). A link to a plugin genuinely NOT
-        //     active still fails loud below (Q3), now meaning what it says. ---
+        // Release every mapping on the target, then atomically reserialize it against all other active plugins.
+        // Mutagen derives a lean header, including newly referenced active masters.
         session.ReleaseOverlay(fileName);
         try { WriteEngine.WriteInPlace(targetMod, session.AllMastersExcept(fileName), targetPath); }
         catch (MissingModException ex)
@@ -726,14 +641,12 @@ public static class WritePatchBuilder
             return PatchOutcome.Fail(
                 $"writing '{fileName}' in place failed: the edited records reference a plugin that is NOT active in " +
                 $"the load order ({ex.Message}) — a reference into an inactive plugin can't resolve in game. " +
-                "Enable that plugin in MO2 (or reference an active one) and retry. The existing file is untouched.");
+                "Enable that plugin in Amethyst (or reference an active one) and retry. The existing file is untouched.");
         }
         catch (Exception ex)
             { return PatchOutcome.Fail($"writing '{fileName}' in place failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}"); }
 
-        // --- Phase 5: re-open the now-edited file and report its master header — and the touched-record verify (default
-        //     ON for in-place): each edited record read back IN FULL off the on-disk bytes (the model-C substitute for
-        //     the dropped whole-plugin floor — confirm what you TOUCHED landed; Mutagen is trusted for the rest). ---
+        // Reopen the replacement to report masters and verify each touched record from the on-disk bytes.
         IReadOnlyList<string> masters = Array.Empty<string>();
         IReadOnlyList<FullReadback>? readBack = null;
         long bytes = 0;
@@ -753,28 +666,18 @@ public static class WritePatchBuilder
             { ReadBack = readBack, InPlace = true, Note = MasterGrowNote(fileName, mastersBefore, masters) };
     }
 
-    /// <summary>The explicit re-sort note when an in-place write GREW the target's master header (PR #163 review #1):
-    /// Skyrim loads a plugin only AFTER its masters, so a newly added master — e.g. an edit's FormLink into an
-    /// active-but-undeclared plugin (F2), or a forwarded body's references (F4) — leaves the file invalid until the
-    /// order is re-sorted, independent of any conflict-winner change. Null when nothing was added (the common case,
-    /// and any prune: a shrink never breaks load eligibility).</summary>
+    /// <summary>Builds a load-order warning when an in-place write adds declared masters.</summary>
+    /// <returns>The warning, or null when no master was added.</returns>
     static string? MasterGrowNote(string fileName, HashSet<string> mastersBefore, IReadOnlyList<string> mastersAfter)
     {
         var grown = mastersAfter.Where(m => !mastersBefore.Contains(m)).ToList();
         if (grown.Count == 0) return null;
         return $"{string.Join(", ", grown)} {(grown.Count == 1 ? "was" : "were")} added as a master of '{fileName}' — " +
-               "a plugin loads only if its masters load BEFORE it, so re-sort your load order (LOOT / MO2) before playing.";
+               "a plugin loads only if its masters load BEFORE it, so re-sort your load order in Amethyst before playing.";
     }
 
-    /// <summary>#225 dry run — the pre-serialize reference-resolution check + expected-master preview, run INSTEAD of
-    /// Phase 4. Walks every record the in-memory mod holds and collects each referenced ModKey (a contained record's
-    /// ORIGIN plugin + every FormLink's plugin, minus the mod itself — the same link surface Mutagen lean-derives the
-    /// real header from). A referenced plugin NOT in the active order is the EXACT condition the real serialize fails
-    /// on (its WithLoadOrder resolution context is the active order minus the output — MissingModException), so it is
-    /// a Q3 refusal here too: a dry run must never say "would apply" about a write that would fail. On success,
-    /// <paramref name="masters"/> is the expected master set in load order — link-derived, PLUS the Skyrim.esm/Update.esm
-    /// baseline the patch lane's <c>WritePatch</c> force-includes (<paramref name="patchLane"/>; the in-place lane's
-    /// <c>WriteInPlace</c> deliberately adds none) — a labeled PREVIEW: the real write derives its own lean header.</summary>
+    /// <summary>Validates dry-run references and previews the master list a real serialization would derive.</summary>
+    /// <returns>An unresolved-reference error, or null with <paramref name="masters"/> populated.</returns>
     static string? DryRunMastersPreview(SkyrimMod mod, LoadOrderResolver resolver, bool patchLane, out IReadOnlyList<string> masters)
     {
         masters = Array.Empty<string>();
@@ -793,14 +696,7 @@ public static class WritePatchBuilder
             }
             catch (Exception ex)
             {
-                // A throw here derefs the IN-MEMORY would-be content (already materialized — nothing lazy about a
-                // mutable SkyrimMod). The dominant cause is the SAME class the real serialize re-stamps loud
-                // (HCBR-2026-06-15-01): a COMPOSED record whose REQUIRED polymorphic sub-field was left null (a
-                // Condition without its Data arm) — the walk hits the null exactly as Mutagen's writer would. Detect
-                // it via the SHARED WriteEngine.RootNullArm (so the two paths can't drift) and refuse with the same
-                // named framing, not the opaque bare NRE (PR #240 review). Anything else is named raw (Q3). NOTE the
-                // honest boundary: a required-null sub-field containing NO FormLinks doesn't cross this walk — that
-                // class still surfaces only at the real serialize, which the dry-run footer discloses.
+                // Name required-null polymorphic fields consistently with the serializer instead of exposing a bare NRE.
                 if (WriteEngine.RootNullArm(ex) is not null)
                     return $"dry run caught what the real write would fail on: {rec.FormKey} carries a required modeled " +
                            "sub-field left null (the same null-dereference Mutagen's writer refuses at serialize). The " +
@@ -818,7 +714,8 @@ public static class WritePatchBuilder
             return $"dry run caught what the real write would fail on: the would-be content references " +
                    $"{missing.Count} plugin(s) NOT active in the load order — a reference into an inactive plugin " +
                    $"can't resolve in game, and the real serialize refuses it (MissingModException): " +
-                   $"{string.Join("; ", missing)}. Enable the plugin(s) in MO2 (or reference active ones). Nothing was written.";
+                   $"{string.Join("; ", missing)}. Enable the plugin(s) in Amethyst (or reference active ones). " +
+                   "Nothing was written.";
 
         var set = new HashSet<string>(referenced.Keys.Select(mk => mk.FileName.String), StringComparer.OrdinalIgnoreCase);
         if (patchLane)
@@ -828,12 +725,8 @@ public static class WritePatchBuilder
         return null;
     }
 
-    /// <summary>Resolve the target's OWN declared masters to on-disk overlays in declared order — the load order
-    /// <see cref="WriteEngine.WriteInPlace"/> hands Mutagen (the probe's faithful set). Each master filename resolves to
-    /// its WINNING on-disk path via the order (<see cref="LoadOrderResolver.IndexView.PluginPath"/>); a declared master
-    /// ABSENT from the active order makes <paramref name="missing"/> a loud Q3 refusal (re-serializing would leave the
-    /// target's references unresolvable) rather than emit a broken plugin. Opened overlays are added to
-    /// <paramref name="overlays"/> for the caller to dispose after the write.</summary>
+    /// <summary>Opens a target plugin's declared masters in declared order for faithful reserialization.</summary>
+    /// <returns>Resolved master overlays, or an empty array with <paramref name="missing"/> set.</returns>
     static ISkyrimModGetter[] ResolveOwnMasters(
         LoadOrderResolver.IndexView view, SkyrimMod targetMod, List<IDisposable> overlays, out string? missing)
     {
