@@ -257,32 +257,36 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: replaced the inherited Windows/MO2 root README
-  with a fork-specific Linux/Amethyst guide. It distinguishes completed
-  foundations from unfinished release work, documents the current development
-  build and temporary manual manifest workflow, explains staging-first patch
-  writes and hardlink-safe in-place editing, and states that no Amethyst plugin
-  or connector repository is required. The acknowledgments now prominently
-  credit the original houseCARL project and its developer, Avick3110, without
-  guessing a personal name not published by the project.
-- Verification performed: all README-relative file and directory links resolve
-  in the repository. The documented MCP lifecycle names match their source
-  declarations. Focused contract checks confirm the original houseCARL and
-  Avick3110 links are present and that obsolete active-install instructions
-  such as `houseCARL-Setup.exe`, `%LOCALAPPDATA%`, `winget`,
-  `ModOrganizer.ini`, and a Windows requirement are absent. No README line
-  exceeds 120 characters, and `git diff --check` passes. This checkpoint changes
-  documentation only; the latest source validation remains the preceding .NET
-  9 Linux build and full 111/111 `ci-all` result.
-- Files/components changed: root `README.md`, the tracked roadmap, and the
-  user-facing roadmap copy.
-- Decisions made: the README must describe the repository as active
-  development with no supported binary release yet. Development instructions
-  name the current integration branch until it is merged. The manual
-  `connection.json` procedure is explicitly transitional; Session 6 will put
-  discovery and manifest creation in the main Linux setup command. Attribution
-  uses Avick3110's public GitHub handle and preserves upstream history, GPL
-  licensing, and copyright notices.
+- Last completed checkpoint: reviewed every declaration in `BethesdaPath`,
+  `FaceGenPath`, `VoicePath`, and `SeqFile`. Historical header essays have been
+  replaced with concise type and member contracts. The documentation now
+  explains canonical Bethesda versus native host paths, traversal and casing
+  rules, defining-plugin and local-FormID asset naming, voice EditorID
+  truncation and empty segments, master-relative SEQ encoding, stale-SEQ
+  detection, file-handle lifetime, and failure ownership. Runtime behavior is
+  unchanged; `NormalizeArchiveEntry` now exposes the null input its existing
+  implementation already accepted.
+- Verification performed: the serialized .NET 9 Linux solution build succeeds
+  with zero errors. A forced unsuppressed XML-documentation rebuild succeeds
+  and reports no warning from the four reviewed files; its 168 warnings belong
+  to components still queued for review. The authoritative Amethyst filemap,
+  asset placement, FaceGen carry, nested-create voice, voice carry, SEQ write,
+  SEQ staleness, and SEQ regeneration guards all pass. Full `ci-all` is 111/111
+  on Linux after the final edit. `git diff --check` passes and the reviewed
+  files contain no line longer than 120 characters. This desktop shell's
+  unrestricted parallel solution build returned a diagnostic-free failure;
+  the stable serialized `-m:1` build completed normally, so no source failure
+  is accepted or hidden.
+- Files/components changed: `BethesdaPath`, `FaceGenPath`, `VoicePath`,
+  `SeqFile`, the tracked roadmap, and the user-facing roadmap copy.
+- Decisions made: Bethesda paths remain canonical backslash-separated values
+  until an explicit host conversion. FaceGen and voice paths use the defining
+  FormKey, never a conflict winner or runtime load-order address. Voice-type
+  path-segment validation remains caller-owned because `VoicePath` is a pure
+  naming transform. `SeqFile.OnDiskFormId` documents that an absent ModKey is
+  treated as plugin-owned and requires the caller to rule out an undeclared
+  foreign master. Malformed trailing SEQ bytes remain ignored rather than
+  guessed.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -295,21 +299,22 @@ manual release gate.
   `FieldPredicate`, `EffectChain`, `ErrorCheck`, `RecordNaming`,
   `EngineImplicit`, `FormIdRange`, `PluginNameSuggest`, `PluginFile`, `Schema`,
   `SchemaClassifier`, `EmbeddedJson`, `AtomicFile`, `UserConfig`,
-  `HousecarlOwnerMeta`, and `ModManagerLayout` are complete; the remaining
-  inherited core components have not yet received the same
-  declaration-by-declaration review. The Linux suite has no accepted red
-  baseline.
+  `HousecarlOwnerMeta`, `ModManagerLayout`, `BethesdaPath`, `FaceGenPath`,
+  `VoicePath`, and `SeqFile` are complete; the remaining inherited core
+  components have not yet received the same declaration-by-declaration review.
+  The Linux suite has no accepted red baseline.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  with canonical asset-path utilities in `BethesdaPath`, `FaceGenPath`,
-  `VoicePath`, and `SeqFile`. Review every declaration and explicitly document
-  canonical-versus-host separators, traversal rejection, casing, FormID-derived
-  asset locations, SEQ parsing/writing, and failure ownership without changing
-  behavior. Run their path, asset-carry, voice, SEQ, and full-CI guards plus a
-  strict XML build. Rewrite setup documentation with the Session 6 Linux
-  installer rather than preserving transitional contracts.
+  across the asset-provider boundary in `AssetResolver`, `ArchiveDiscovery`,
+  and `BsaArchive`. Review every declaration and explicitly document
+  authoritative Amethyst winners versus legacy probe-only root walking, loose
+  versus BSA precedence, cache and handle ownership, refresh rules, archive
+  path safety, native read support, and deferred external pack execution. Run
+  the asset-resolver, archive-discovery, BSA contract/extract, at-rest, and
+  full-CI guards plus a strict XML build. Rewrite setup documentation with the
+  Session 6 Linux installer rather than preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -326,7 +331,9 @@ manual release gate.
   `23c7c9a` completes the `EffectChain` and `ErrorCheck` documentation
   checkpoint; `0b85b13` completes the shared identity-utility documentation
   checkpoint; `16b809a` completes the schema-metadata documentation checkpoint;
-  `9c3c5f3` completes the storage and ownership documentation checkpoint.
+  `9c3c5f3` completes the storage and ownership documentation checkpoint;
+  `9a5c4d0` replaces the inherited README; `67bbaf5` publishes the integrated
+  history to `amethyst-main`.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
