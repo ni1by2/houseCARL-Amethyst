@@ -8,61 +8,70 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>
-/// The PUBLIC write cleave (MCP §8.4 Beat C) — the one <c>(edits) → (patch)</c> method both the MCP server
-/// (<c>housecarl_set_field</c> / <c>housecarl_bulk_apply</c>) and the <c>apply-proof</c> harness call, so the
-/// harness proof transfers to the server BY CONSTRUCTION (the same code path). It factors the proven embryo
-/// (<see cref="WriteEngine.RunPatch"/> + <see cref="MultiMasterProof"/>) into a clean reusable surface:
-///
-///   resolve each edit's WINNER across the load order → derive its RecordType from the runtime record →
-///   pre-flight EVERY edit through <see cref="CorpusRulebook"/> (refuse the WHOLE call if ANY rejects — Q3, no
-///   partial patches) → override each winner into ONE patch mod (<see cref="WriteEngine.GenericGetOrAddAsOverride"/>)
-///   → <see cref="WriteEngine.ApplyVerb"/> each → serialize ONCE with the FULL known-master set
-///   (<see cref="WriteEngine.WritePatch(SkyrimMod,System.Collections.Generic.IReadOnlyList{ISkyrimModGetter},string)"/>,
-///   the proven multi-master path) → re-open and report masters.
-///
-/// OUTPUT MODEL (Aaron-locked 2026-06-01): <b>Option 1 — one complete .esp per call</b>. A fresh patch by default;
-/// <see cref="Apply"/> with <c>extend:true</c> opens an EXISTING patch and adds to it — the <c>into=</c> capability
-/// Aaron required for multi-session large-patch building via handoffs. Extend is file-based: the disk <c>.esp</c> IS
-/// the accumulating state, so it survives a server restart / a session boundary with NO server-held state (the locked
-/// <c>Stateless</c> transport stays clean). (Option 2, a server-held accumulating session patch, is a deferred 1.x item.)
-///
-/// ORIGINALS UNTOUCHED is structural (CLAUDE.md §1): this only ever WRITES <paramref name="outPath"/> (sandboxed to the
-/// server's OutputDir by the caller); every original is opened read-only as a lazy overlay by the resolver and never
-/// written. Cross-master is CLOSED — a patch referencing forms across several plugins serializes with a lean
-/// only-referenced master header (proven + xEdit-confirmed 2026-06-01).
-/// </summary>
+/// <summary>Builds, edits, forwards, compacts, and merges Skyrim plugins through guarded write pipelines.</summary>
+/// <remarks>
+/// Patch operations resolve and validate every request before serialization, then write once and reopen the result.
+/// In-place operations target staging files only and require consent in the service layer. All serializers use atomic
+/// replacement so a failed write does not partially replace the prior plugin.
+/// </remarks>
 public static class WritePatchBuilder
 {
-    /// <summary>One edit: locate a record by <see cref="Target"/> (its FormKey), apply <see cref="Verb"/> at
-    /// <see cref="Path"/>. RecordType is NOT declared by the caller — it is derived from the resolved winner's runtime
-    /// type (the record itself is authoritative), so an edit can never disagree with what it targets. Mirrors the
-    /// content of <see cref="WriteRequest"/> minus its RecordType.</summary>
+    /// <summary>Describes one field operation against the resolved record identified by <see cref="Target"/>.</summary>
+    /// <remarks>The record type is derived from the resolved record rather than supplied by the caller.</remarks>
     public sealed record PatchEdit
     {
+        /// <summary>Gets the record FormKey to edit.</summary>
         public required FormKey Target { get; init; }
+
+        /// <summary>Gets the field path within the target record.</summary>
         public required string[] Path { get; init; }
+
+        /// <summary>Gets the write verb understood by <see cref="WriteEngine"/>.</summary>
         public required string Verb { get; init; }
+
+        /// <summary>Gets the optional dictionary key or keyed-list selector.</summary>
         public string? Key { get; init; }
+
+        /// <summary>Gets the optional scalar value.</summary>
         public string? Value { get; init; }
+
+        /// <summary>Gets optional multiple scalar values.</summary>
         public string[]? Values { get; init; }
+
+        /// <summary>Gets optional named structure entries.</summary>
         public Dictionary<string, string>? Entries { get; init; }
+
+        /// <summary>Gets the optional single structured value.</summary>
         public StructSpec? Struct { get; init; }
-        public IReadOnlyList<StructSpec>? Structs { get; init; } // P8a batch struct-list ops (composes=): Add appends each, ReplaceAll clears+appends each.
-        public string? FromPlugin { get; init; } // P8b verb=CopyFrom: the plugin whose version of Target to deep-copy the field FROM (active, or off-order on disk).
+
+        /// <summary>Gets optional structured values for batch add or replace operations.</summary>
+        public IReadOnlyList<StructSpec>? Structs { get; init; }
+
+        /// <summary>Gets the plugin whose field value supplies a <c>CopyFrom</c> operation.</summary>
+        public string? FromPlugin { get; init; }
     }
 
-    /// <summary>Per-edit result. On a successful call every op has <see cref="Applied"/>=true (all-or-nothing);
-    /// <see cref="After"/> is a best-effort read-back of the edited leaf (xEdit remains the authority).
-    /// <see cref="Landed"/> is the compact "what landed" descriptor the in-place verify renders by default
-    /// (HCBR-2026-06-28-01) — the new scalar value, or the touched list element + new count; null when not derivable.</summary>
-    public sealed record OpResult(FormKey Target, string RecordType, string Label, bool Applied, string? Error, string? After, string? Landed = null);
+    /// <summary>Reports one requested edit and its best-effort post-apply value.</summary>
+    /// <param name="Target">Edited record FormKey.</param>
+    /// <param name="RecordType">Resolved record type.</param>
+    /// <param name="Label">Human-readable operation label.</param>
+    /// <param name="Applied">Whether the operation was applied.</param>
+    /// <param name="Error">Operation error, when present.</param>
+    /// <param name="After">Best-effort rendered field value after the edit.</param>
+    /// <param name="Landed">Compact value or list-count description used by verification output.</param>
+    public sealed record OpResult(
+        FormKey Target,
+        string RecordType,
+        string Label,
+        bool Applied,
+        string? Error,
+        string? After,
+        string? Landed = null);
 
-    /// <summary>One record read back IN FULL from the WRITTEN patch file (opt-in — the pre-enable verify loop,
-    /// wishlist #3 re-scoped / HCBR-2026-06-11-02 wave (b)): every modeled field, deep, read off the re-opened
-    /// on-disk file — the same bytes MO2 will load — so the caller can confirm the WHOLE record (untouched fields
-    /// included) landed intact without enabling the patch. <see cref="Error"/> names a record the re-opened file
-    /// failed to yield (a real inconsistency, Q3) — never silently absent.</summary>
+    /// <summary>Reports a complete modeled record read from the written plugin.</summary>
+    /// <param name="Target">Requested record FormKey.</param>
+    /// <param name="Record">Rendered record fields, when found.</param>
+    /// <param name="Error">Named readback failure, when the record could not be confirmed.</param>
     public sealed record FullReadback(FormKey Target, RecordFields? Record, string? Error);
 
     /// <summary>The call outcome. <see cref="Error"/> non-null ⇒ the whole call was refused (no patch written) with a
@@ -73,6 +82,7 @@ public static class WritePatchBuilder
         bool Success, string? Error, string OutputPath, bool Extended,
         IReadOnlyList<string> Masters, IReadOnlyList<OpResult> Ops, long Bytes)
     {
+        /// <summary>Gets optional full-record verification results.</summary>
         public IReadOnlyList<FullReadback>? ReadBack { get; init; }
 
         /// <summary>True ⇒ this outcome came from the IN-PLACE lane (<see cref="Apply"/>'s sibling
@@ -99,6 +109,9 @@ public static class WritePatchBuilder
         /// in-memory mod, not a file. Drives the distinct "DRY RUN — nothing written" confirmation.</summary>
         public bool DryRun { get; init; }
 
+        /// <summary>Creates an unsuccessful outcome without any partial result.</summary>
+        /// <param name="error">Actionable refusal or failure text.</param>
+        /// <returns>The unsuccessful outcome.</returns>
         public static PatchOutcome Fail(string error) =>
             new(false, error, "", false, Array.Empty<string>(), Array.Empty<OpResult>(), 0);
 
@@ -109,8 +122,10 @@ public static class WritePatchBuilder
             new(false, prompt, "", false, Array.Empty<string>(), Array.Empty<OpResult>(), 0) { NeedsAcknowledge = true };
     }
 
-    /// <summary>One record dropped by <see cref="RemoveRecords"/> — its FormKey, the catalog type, and the editorid (if
-    /// any), captured during the present-check so the confirmation says WHAT was removed.</summary>
+    /// <summary>Identifies one record removed from a plugin.</summary>
+    /// <param name="Target">Removed record FormKey.</param>
+    /// <param name="RecordType">Catalog record type.</param>
+    /// <param name="EditorId">Editor ID, when present.</param>
     public sealed record RemovedRecord(FormKey Target, string RecordType, string? EditorId);
 
     /// <summary>The outcome of a <see cref="RemoveRecords"/> call. <see cref="Error"/> non-null ⇒ the whole call was
@@ -138,6 +153,9 @@ public static class WritePatchBuilder
         /// audit marker couldn't be written). Null when there's nothing to add.</summary>
         public string? Note { get; init; }
 
+        /// <summary>Creates an unsuccessful removal outcome.</summary>
+        /// <param name="error">Actionable refusal or failure text.</param>
+        /// <returns>The unsuccessful outcome.</returns>
         public static RemovalOutcome Fail(string error) =>
             new(false, error, "", Array.Empty<RemovedRecord>(), Array.Empty<string>(), 0, 0);
 
@@ -154,8 +172,13 @@ public static class WritePatchBuilder
     /// Unlike <see cref="PatchEdit"/>, RecordType is declared, not derived — there's no existing winner to read it from.</summary>
     public sealed record CreateSpec
     {
+        /// <summary>Gets the catalog type of the record to create.</summary>
         public required string RecordType { get; init; }
+
+        /// <summary>Gets the required Editor ID for the new record.</summary>
         public required string EditorId { get; init; }
+
+        /// <summary>Gets the field operations applied to the new record.</summary>
         public required IReadOnlyList<WriteRequest> Edits { get; init; }
 
         /// <summary>Optional — the PARENT this record nests UNDER (nested-create, Layer A). Either an EXISTING parent's
@@ -197,6 +220,7 @@ public static class WritePatchBuilder
         bool Success, string? Error, string OutputPath, bool Extended,
         IReadOnlyList<CreatedRecord> Created, IReadOnlyList<string> Masters, long Bytes)
     {
+        /// <summary>Gets optional full-record verification results.</summary>
         public IReadOnlyList<FullReadback>? ReadBack { get; init; }
 
         /// <summary>True ⇒ this outcome came from the IN-PLACE create lane (<see cref="CreateRecords"/>'s sibling
@@ -235,6 +259,9 @@ public static class WritePatchBuilder
         /// stays a pure record-write. See <see cref="CellShellCheck"/>.</summary>
         public CellShellReport? CellShell { get; init; }
 
+        /// <summary>Creates an unsuccessful record-creation outcome.</summary>
+        /// <param name="error">Actionable refusal or failure text.</param>
+        /// <returns>The unsuccessful outcome.</returns>
         public static CreateOutcome Fail(string error) =>
             new(false, error, "", false, Array.Empty<CreatedRecord>(), Array.Empty<string>(), 0);
 
@@ -553,29 +580,12 @@ public static class WritePatchBuilder
         return null;
     }
 
-    /// <summary>
-    /// EDIT records IN PLACE inside an EXISTING plugin the user owns — the opt-in second write lane (in-place write
-    /// lane, Wave 1), the sibling of <see cref="Apply"/>. Where <see cref="Apply"/> overrides the load-order WINNER into
-    /// a NEW patch (originals untouched), this opens the TARGET plugin itself mutably, edits the TARGET's OWN record, and
-    /// re-serializes the whole plugin back over itself — the user's original file IS the output. Three deliberate
-    /// divergences from <see cref="Apply"/>, each load-bearing:
-    /// <list type="bullet">
-    /// <item>CONTENT SOURCE (§4.1 winner-injection fix): the body is the TARGET's own record
-    /// (<c>view.GetRecord(session, target, fk)</c>), NEVER the load-order winner — and the call REFUSES loud if the
-    /// target doesn't itself define/override the FormKey ("in-place edits only what the file OWNS"). So pre-flight
-    /// validates the body actually mutated, and another mod's content can never be injected into the user's file.</item>
-    /// <item>DESTINATION: <paramref name="targetPath"/> IS the target's real on-disk path (the caller resolved it via
-    /// the load order, dropping the houseCARL-owned gate); the mutable mod IS the target (CreateFromBinary), so
-    /// <see cref="WriteEngine.GenericGetOrAddAsOverride"/> returns the target's OWN record (get-semantics).</item>
-    /// <item>SERIALIZE (model C — what the Wave 0 probe validated, NOT <see cref="WriteEngine.WritePatch"/>):
-    /// <see cref="WriteEngine.WriteInPlace"/> re-emits with the target's OWN declared masters, no baseline force-include,
-    /// no FormID floor — preserving the author's master list + NextObjectID as xEdit/CK do on save.</item>
-    /// </list>
-    /// The reused full read-back (<paramref name="fullReadback"/>, default ON here) VERIFIES the records actually touched
-    /// landed; Mutagen is trusted for the rest (the xEdit-parity bar). CONSENT + the persistent acknowledge handshake are
-    /// enforced by the SERVICE before this is reached — this is the mechanism. All-or-nothing (Q3): any resolve/pre-flight
-    /// reject, or a serialize failure, leaves the original file UNTOUCHED (staged temp + atomic swap).
-    /// </summary>
+    /// <summary>Edits records owned by an existing staging plugin and atomically replaces that plugin.</summary>
+    /// <remarks>
+    /// The method reads each target from the named plugin, never from the load-order winner. It preserves the plugin's
+    /// declared masters and FormID metadata, verifies touched records after writing, and leaves the prior file intact
+    /// when validation or serialization fails. The service enforces consent and Amethyst redeployment confirmation.
+    /// </remarks>
     public static PatchOutcome ApplyInPlace(
         LoadOrderResolver resolver, CorpusRulebook rulebook,
         IReadOnlyList<PatchEdit> edits, string targetPath, string targetName, bool fullReadback = true,
@@ -1324,17 +1334,21 @@ public static class WritePatchBuilder
     /// decides the content.</summary>
     public sealed record ForwardSpec
     {
+        /// <summary>Gets the record FormKey to forward.</summary>
         public required FormKey Target { get; init; }
+
+        /// <summary>Gets the plugin whose complete record version should be copied.</summary>
         public required string FromPlugin { get; init; }
     }
 
-    /// <summary>One record forwarded by <see cref="ForwardRecords"/> — its FormKey + type + editorid, the source plugin
-    /// whose version was copied, and the load-order winner it will out-rank once the patch is enabled (so the caller
-    /// sees what the forward CHANGES). <see cref="WasAlreadyWinner"/>=true ⇒ the forwarded version WAS already the
-    /// winner, so this override is a redundant no-op copy — surfaced, never silent (Q3).
-    /// <see cref="ReplacedExisting"/>=true ⇒ the patch ALREADY carried this FormKey and its existing record was
-    /// REPLACED by the source's body (the xEdit copy-as-override-into semantic; HCBR-2026-07-08-01 F1 — the old
-    /// GetOrAdd path kept the existing record and skipped the copy while still reporting "forwarded").</summary>
+    /// <summary>Reports one complete record copied from a named plugin.</summary>
+    /// <param name="Target">Forwarded record FormKey.</param>
+    /// <param name="RecordType">Resolved record type.</param>
+    /// <param name="EditorId">Editor ID, when present.</param>
+    /// <param name="FromPlugin">Plugin whose record body was copied.</param>
+    /// <param name="PriorWinner">Load-order winner before the output is enabled.</param>
+    /// <param name="WasAlreadyWinner">Whether the copied source was already the winner.</param>
+    /// <param name="ReplacedExisting">Whether an existing output record was replaced.</param>
     public sealed record ForwardedRecord(
         FormKey Target, string RecordType, string? EditorId, string FromPlugin, string PriorWinner, bool WasAlreadyWinner,
         bool ReplacedExisting = false);
@@ -1349,6 +1363,7 @@ public static class WritePatchBuilder
         bool Success, string? Error, string OutputPath, bool Extended,
         IReadOnlyList<ForwardedRecord> Forwarded, IReadOnlyList<string> Masters, long Bytes)
     {
+        /// <summary>Gets optional full-record verification results.</summary>
         public IReadOnlyList<FullReadback>? ReadBack { get; init; }
 
         /// <summary>True ⇒ the forwards were written INTO the target's own file (<see cref="ForwardRecordsInPlace"/> —
@@ -1370,6 +1385,9 @@ public static class WritePatchBuilder
         /// (link-derived, preview) master set; <see cref="Bytes"/> is 0. Mirrors <see cref="PatchOutcome.DryRun"/>.</summary>
         public bool DryRun { get; init; }
 
+        /// <summary>Creates an unsuccessful forwarding outcome.</summary>
+        /// <param name="error">Actionable refusal or failure text.</param>
+        /// <returns>The unsuccessful outcome.</returns>
         public static ForwardOutcome Fail(string error) =>
             new(false, error, "", false, Array.Empty<ForwardedRecord>(), Array.Empty<string>(), 0);
 
@@ -1390,7 +1408,12 @@ public static class WritePatchBuilder
         bool Success, string? Error, string OutputPath, string PluginName, bool Esl,
         IReadOnlyList<string> Masters, int RecordCount, long Bytes)
     {
+        /// <summary>Gets a successful-write warning or follow-up note.</summary>
         public string? Note { get; init; }
+
+        /// <summary>Creates an unsuccessful plugin-creation outcome.</summary>
+        /// <param name="error">Actionable refusal or failure text.</param>
+        /// <returns>The unsuccessful outcome.</returns>
         public static CreatePluginOutcome Fail(string error) =>
             new(false, error, "", "", false, Array.Empty<string>(), 0, 0);
     }
@@ -1400,7 +1423,7 @@ public static class WritePatchBuilder
     /// reported, never silent; the file is left untouched on failure by <see cref="RemapEngine.RepointInPlace"/>).</summary>
     public sealed record RepointReport(string Plugin, bool Success, string? Error);
 
-    /// <summary>The outcome of a <see cref="LoadOrderService.CompactPlugin"/> call (the compact/ESL-renumber tool).
+    /// <summary>The outcome of a plugin compaction call.
     /// <see cref="NeedsAcknowledge"/> ⇒ a required first-time in-place CONSENT prompt (the operation will overwrite an
     /// existing file — the target in the in-place lane, and/or each external referencer being repointed — so the caller
     /// must re-call with acknowledge=true); it is NOT an error (Q3). <see cref="Error"/> non-null (with NeedsAcknowledge
@@ -1429,9 +1452,16 @@ public static class WritePatchBuilder
         AssetRenameOutcome? AssetRename = null, IReadOnlyList<string>? ExternalOverriders = null,
         VoiceCarryOutcome? VoiceRename = null, SeqRegenOutcome? SeqRegen = null)
     {
+        /// <summary>Creates an unsuccessful compaction outcome.</summary>
+        /// <param name="error">Actionable refusal or failure text.</param>
+        /// <returns>The unsuccessful outcome.</returns>
         public static CompactOutcome Fail(string error) =>
             new(false, error, false, "", "", false, false, Array.Empty<string>(), 0, 0, 0,
                 Array.Empty<string>(), Array.Empty<RepointReport>(), 0, 0, Array.Empty<string>());
+
+        /// <summary>Creates a no-write outcome that requests destructive-operation consent.</summary>
+        /// <param name="prompt">Consent prompt shown to the caller.</param>
+        /// <returns>The confirmation-required outcome.</returns>
         public static CompactOutcome Confirm(string prompt) =>
             new(false, prompt, true, "", "", false, false, Array.Empty<string>(), 0, 0, 0,
                 Array.Empty<string>(), Array.Empty<RepointReport>(), 0, 0, Array.Empty<string>());
@@ -1455,6 +1485,9 @@ public static class WritePatchBuilder
         long Bytes, string? Note = null,
         AssetRenameOutcome? AssetRename = null, VoiceCarryOutcome? VoiceRename = null, SeqRegenOutcome? SeqRegen = null)
     {
+        /// <summary>Creates an unsuccessful merge outcome.</summary>
+        /// <param name="error">Actionable refusal or failure text.</param>
+        /// <returns>The unsuccessful outcome.</returns>
         public static MergeOutcome Fail(string error) =>
             new(false, error, "", "", Array.Empty<string>(), Array.Empty<string>(), 0, 0,
                 Array.Empty<RemapEngine.MergeDonorRemap>(), Array.Empty<RemapEngine.MergeConflict>(),
@@ -1608,28 +1641,13 @@ public static class WritePatchBuilder
         return new ForwardOutcome(true, null, outPath, extend, forwarded, masters, bytes) { ReadBack = readBack };
     }
 
-    /// <summary>
-    /// Create an EMPTY, HEADER-ONLY plugin — a valid <c>TES4</c> header and ZERO records (HCBR-2026-06-19-02). The
-    /// whole point is a plugin that exists purely so its BASENAME resolves: the artifact SKSE configs that bind by
-    /// plugin name need (a CraftingCategories-style trigger that must ship <c>Foo.esp</c> so <c>Foo.json</c> loads), a
-    /// placeholder ESL for FormID reservation, a dummy plugin another mod can list as a master to satisfy a dependency.
-    /// It is the clean primitive behind those: where the record-centric create/forward paths can only materialise a
-    /// plugin by giving it a record (forcing an unwanted conflict-tree participant — the report's redundant backpack
-    /// override), this authors NO record at all.
-    ///
-    /// <para>CORNERSTONE-CLEAN: a <see cref="SkyrimMod"/> with no records added IS a header-only plugin — there is no
-    /// per-type anything here, so it is trivially generic. ZERO MASTERS (Aaron 2026-06-23): an empty plugin references
-    /// nothing, so it carries no masters — passing an EMPTY known-master set means <see cref="WriteEngine.WritePatch"/>
-    /// forces no baseline masters either (its baseline force-include filters to masters present in the set; the empty
-    /// set yields none). That is exactly what the Creation Kit stamps on a truly empty plugin, so it honours the same
-    /// "match the CK" convention the baseline-master rule is built on. The atomic staged write + FormID floor still
-    /// apply (every product write funnels through that one chokepoint).</para>
-    ///
-    /// <para>Q3 — the written file is RE-READ to confirm it is what was promised (0 records, the ESL flag as requested)
-    /// before reporting success; a mismatch refuses loud rather than return a wrong artifact. Caller resolves
-    /// <paramref name="outPath"/> (the service uses an EXACT, never-suffixed name with a loud collision refusal — the
-    /// basename must be precise for the trigger to bind).</para>
-    /// </summary>
+    /// <summary>Creates an empty, header-only plugin and verifies the serialized result.</summary>
+    /// <remarks>
+    /// The plugin contains no records or masters. The method reopens the output to confirm its record count, master
+    /// list, and light-master flag before reporting success. An invalid or unverifiable new artifact is removed.
+    /// The service supplies an exact, collision-checked <paramref name="outPath"/> because some integrations bind by
+    /// plugin basename.
+    /// </remarks>
     public static CreatePluginOutcome CreatePlugin(string outPath, bool esl, string? author, string? description)
     {
         var fileName = Path.GetFileName(outPath);
@@ -1723,6 +1741,9 @@ public static class WritePatchBuilder
     public sealed record CompactBuildResult(
         bool Success, string? Error, IReadOnlyList<string> Masters, int RecordsCopied, int RecordsRenumbered, long Bytes)
     {
+        /// <summary>Creates an unsuccessful core-compaction result.</summary>
+        /// <param name="error">Actionable build failure text.</param>
+        /// <returns>The unsuccessful result.</returns>
         public static CompactBuildResult Fail(string error) => new(false, error, Array.Empty<string>(), 0, 0, 0);
     }
 
@@ -1805,6 +1826,9 @@ public static class WritePatchBuilder
         bool Success, string? Error, IReadOnlyList<string> Masters, int RecordsCopied, int RecordsRenumbered,
         IReadOnlyList<RemapEngine.MergeConflict> Conflicts, long Bytes)
     {
+        /// <summary>Creates an unsuccessful core-merge result.</summary>
+        /// <param name="error">Actionable build failure text.</param>
+        /// <returns>The unsuccessful result.</returns>
         public static MergeBuildResult Fail(string error) =>
             new(false, error, Array.Empty<string>(), 0, 0, Array.Empty<RemapEngine.MergeConflict>(), 0);
     }

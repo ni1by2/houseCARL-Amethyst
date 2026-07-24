@@ -257,32 +257,30 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: reviewed every declaration in `PapyrusCompile`,
-  `ToolBridge`, and `PapyrusDecompiler`. Historical narratives have been
-  replaced with local contracts covering compiler diagnostics, output-based
-  success, bounded process execution, external-tool discovery, PEX statement
-  reconstruction, optimizer hints, and per-function failure isolation.
-- Verification performed: the serialized .NET 9 Linux solution build succeeds
-  with zero errors and five unrelated ordinary warnings. A forced unsuppressed
-  XML-documentation rebuild succeeds with no warning from the three reviewed
-  files; its 104 warnings belong to components still queued for review.
-  `tool-bridge`, `compile-probe`, `compile-ergonomics-guard`, and
-  `decompile-guard` all pass. Full `ci-all` is 111/111 on Linux after the final
-  edit. `git diff --check` passes and the reviewed files contain no line longer
-  than 120 characters.
-- Files/components changed: `PapyrusCompile`, `ToolBridge`,
-  `PapyrusDecompiler`, the tracked roadmap, and the user-facing roadmap copy.
-- Decisions made: native PEX parsing and decompilation remain available without
-  Proton. Unknown control flow fails per function and preserves raw bytecode
-  instead of inventing source. Optimizer hints distinguish semantically correct
-  output from byte-for-byte compiler parity, and class-parent knowledge remains
-  scoped to a decompile call. Compile success means that this run produced a
-  newer output file; it does not trust the compiler exit code. Failed compiles
-  preserve prior output, drain both process streams with a bound, and kill the
-  process tree on timeout. External arguments use `ArgumentList`, never a shell
-  command string. The current direct-executable compiler and BSArch metadata is
-  explicitly transitional: Linux native v1 does not claim those Windows tools
-  until a structured Proton command runner exists.
+- Last completed checkpoint: completed the public-contract documentation slice
+  of `WritePatchBuilder`. Every public request property, result property, and
+  outcome factory now has local plain-English documentation. The class and its
+  in-place and header-only entry points have concise safety contracts instead
+  of historical design narratives. The internal implementation commentary
+  remains a separate follow-up because this file is 2,531 lines.
+- Verification performed: a forced unsuppressed XML-documentation core rebuild
+  succeeds with zero warning from `WritePatchBuilder`; 64 CS1591 warnings
+  remain in other queued components. Patch-stem collision, plugin creation,
+  forwarding, dry-run, in-place, atomic-commit, write-mutex, bulk-create,
+  compact-service, and merge-service guards all pass. Full `ci-all` is 111/111
+  on Linux after the final edit, and `git diff --check` passes.
+- Files/components changed: `WritePatchBuilder` public documentation, the
+  tracked roadmap, and the user-facing roadmap copy.
+- Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
+  boundary. Patch operations validate every request before one serialization
+  and reopen the result. In-place operations read records from the target
+  plugin rather than the load-order winner, preserve that plugin's master and
+  FormID metadata, and rely on the service for consent and Amethyst redeployment
+  confirmation. Atomic replacement preserves the prior file on validation or
+  serialization failure. Header-only plugin creation verifies record count,
+  masters, and ESL state before reporting success. The large file is being
+  reviewed in bounded public and internal slices so documentation changes do
+  not obscure behavioral review.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -313,10 +311,11 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  across `WritePatchBuilder`. Review every declaration and document patch
-  ownership, master derivation, atomic serialization, cleanup, in-place
-  consent, Amethyst redeployment state, and failure boundaries. Run its focused
-  write, dry-run, in-place, atomic-commit, strict-XML, and full-CI guards.
+  through the internal implementation of `WritePatchBuilder`. Replace dated
+  incident and milestone prose with concise local explanations of each phase,
+  helper, master derivation, readback, and failure boundary. Remove remaining
+  MO2-facing guidance where the message is not a test-pinned compatibility
+  fixture. Re-run the focused write family, strict XML build, and full CI.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -343,8 +342,9 @@ manual release gate.
   checkpoint; `e3adb8c` completes the NIF and dialogue-diagnostics
   documentation checkpoint; `5c0039f` completes the dialogue-semantics
   documentation checkpoint; `a6a8cb1` completes the supporting-diagnostics
-  documentation checkpoint. The Papyrus-toolchain checkpoint is pending
-  commit.
+  documentation checkpoint; `073d409` completes the Papyrus-toolchain
+  documentation checkpoint. The `WritePatchBuilder` public-contract checkpoint
+  is pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
