@@ -257,35 +257,35 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: reviewed every declaration in
-  `NpcAppearanceAssets`, `NpcAppearanceCopy`, and `AssetRenameService`.
-  Historical header essays have been replaced with local type and member
-  contracts. The documentation now explains closure collection, dependency
-  internalization, clone stripping, apply-field ownership, asset harvesting,
-  donor fallbacks, destination contention, two-phase alias-safe carry,
-  FaceGen/voice renaming, SEQ refresh-only behavior, post-commit warnings, and
-  partial-failure accounting. The algorithms are unchanged; inherited MO2/VFS
-  wording in the touched production messages now names Amethyst's file index
-  and priority.
+- Last completed checkpoint: reviewed every declaration in `NifService`,
+  `VoiceCheck`, and `DialogueScriptCheck`. Historical header essays have been
+  replaced with local type and member contracts. The documentation now
+  explains NIF input/output ownership, supported SSE edits, block targeting,
+  unknown-block preservation, touched-block and semantic read-back gates,
+  voice asset provenance, FUZ/LIP state reporting, dialogue script-fragment
+  detection, and diagnostic failure isolation.
 - Verification performed: the serialized .NET 9 Linux solution build succeeds
   with zero errors. A forced unsuppressed XML-documentation rebuild succeeds
-  and reports no warning from the three reviewed files; its 161 warnings
-  belong to components still queued for review. Standalone NPC copy, FaceGen
-  carry, voice carry, SEQ regeneration, and merge-service guards all pass.
-  The focused pass initially caught three altered alarm tokens; `ALREADY`,
-  `CONTENT`, and `REQUIRED` were restored before the full suite. Full `ci-all`
-  is 111/111 on Linux after the final edit. `git diff --check` passes and the
-  reviewed files contain no line longer than 120 characters.
-- Files/components changed: `NpcAppearanceAssets`, `NpcAppearanceCopy`,
-  `AssetRenameService`, the tracked roadmap, and the user-facing roadmap copy.
-- Decisions made: the record patch commits before best-effort asset carry, so
-  later failures are explicit warnings rather than false pre-write refusals.
-  Donor-defined or unresolved appearance dependencies are internalized;
-  resolvable shared dependencies remain ordinary master links. Required
-  foreign links refuse clone mode instead of being nulled. FaceGen and voice
-  use one two-phase disk-staging implementation to prevent in-place ID aliasing.
-  SEQ is rebuilt only when the source shipped one. Existing alarm tokens remain
-  stable because renderers and regression probes treat them as contract text.
+  and reports no warning from the three reviewed files; its 146 warnings
+  belong to components still queued for review. The NIF service, NIF set,
+  batch-inspection, NIF section, nested-create, and dialogue-validation guards
+  all pass. One focused probe caught a changed `should not have touched` alarm
+  phrase, which was restored before the full suite. Full `ci-all` is 111/111
+  on Linux after the final edit. `git diff --check` passes and the reviewed
+  files contain no line longer than 120 characters.
+- Files/components changed: `NifService`, `VoiceCheck`,
+  `DialogueScriptCheck`, the tracked roadmap, and the user-facing roadmap copy.
+- Decisions made: NIF operations remain byte-in and verified-byte-out, without
+  manager or filesystem ownership in the core service. Only supported SSE
+  writes are exposed. Every edit must pass both the untouched-block collateral
+  gate and semantic read-back; unknown blocks are preserved and the block
+  census is checked. Voice and dialogue-script checks are post-write
+  diagnostics and cannot retroactively turn a successful plugin write into a
+  failed transaction. Voice lookup checks the patch before active load-order
+  providers and consumes one pinned asset snapshot. Missing FUZ, LIP, or PEX
+  data is distinguished from a check execution error. Existing alarm phrases
+  remain stable because renderers and regression probes treat them as
+  contract text.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -300,9 +300,10 @@ manual release gate.
   `SchemaClassifier`, `EmbeddedJson`, `AtomicFile`, `UserConfig`,
   `HousecarlOwnerMeta`, `ModManagerLayout`, `BethesdaPath`, `FaceGenPath`,
   `VoicePath`, `SeqFile`, `AssetResolver`, `ArchiveDiscovery`, `BsaArchive`,
-  `NpcAppearanceAssets`, `NpcAppearanceCopy`, and `AssetRenameService` are
-  complete; the remaining inherited core components have not yet received the
-  same declaration-by-declaration review. External BSArch execution is not a
+  `NpcAppearanceAssets`, `NpcAppearanceCopy`, `AssetRenameService`,
+  `NifService`, `VoiceCheck`, and `DialogueScriptCheck` are complete; the
+  remaining inherited core components have not yet received the same
+  declaration-by-declaration review. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
   BSArch path is supplied; self-contained native archive fixtures cover v1
   behavior. Some untouched service and probe messages still say MO2 and remain
@@ -312,11 +313,11 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  across `NifService`, `VoiceCheck`, and `DialogueScriptCheck`. Review every
-  declaration and explicitly document native file boundaries, parser limits,
-  snapshot ownership, archive reads, dialogue/voice provenance, missing-data
-  semantics, and failure isolation. Run their focused NIF, voice, dialogue,
-  strict-XML, and full-CI guards.
+  across `DialogueValidate`, `DialogueSubtype`, and `DialogueCkParity`. Review
+  every declaration and explicitly document validation severity, subtype
+  derivation, Creation Kit parity limits, missing-data semantics, and
+  diagnostic composition. Run the dialogue-validation, subtype-marker,
+  CK-parity, nested-create, strict-XML, and full-CI guards.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -339,7 +340,8 @@ manual release gate.
   `9a5c4d0` replaces the inherited README; `67bbaf5` publishes the integrated
   history to `amethyst-main`; `be0e394` completes the canonical asset-path
   documentation checkpoint; `973083e` completes the asset-provider
-  documentation checkpoint. The asset-carry checkpoint is pending commit.
+  documentation checkpoint; `fabf847` completes the asset-carry documentation
+  checkpoint. The NIF and dialogue-diagnostics checkpoint is pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
