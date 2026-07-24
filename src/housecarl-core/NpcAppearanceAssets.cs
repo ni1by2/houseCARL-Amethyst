@@ -7,43 +7,25 @@ using Mutagen.Bethesda.Plugins.Records;
 
 namespace HousecarlCore;
 
-// ======================================================================
-//  NpcAppearanceAssets — the FILE half of the composed standalone-NPC-copy verb
-//  (capability chain Stage 3 §1 items 3–4). Three jobs:
-//
-//    1. FACEGEN RENAME — the donor's baked facegeom .nif + facetint .dds move to the
-//       NEW NPC's FormKey path (FaceGenPath — folder = the defining master, so the
-//       apply lane files under the TARGET's plugin, the clone lane under the patch).
-//       Empirically pinned (the 2026-07-01 build test, NPC2 cross-validated): the
-//       engine resolves the facetint from the FormKey path and IGNORES the path
-//       embedded inside the .nif — so a rename needs NO .nif editing, ever.
-//
-//    2. REFERENCED-ASSET CARRY — the harvested asset paths (the caller collects them
-//       from the IN-PATCH duplicates pre-serialize via HarvestAssetPaths — a generic
-//       IAssetLinkGetter walk, no per-type hand list), PLUS a conservative string-scan
-//       of the carried facegeom bytes for the skin/hair textures the geom embeds
-//       (NifSkope slots — the engine DOES use those; with the donor disabled they
-//       would silently unresolve). No NIF parser: paths in a .nif are plain ASCII,
-//       and a false-positive costs one skipped candidate, never a wrong write.
-//
-//    3. THE CARRY RULE — a harvested path is carried iff its bytes would VANISH with the
-//       donor: the active VFS winner is the donor's own mod folder / BSA, or the path
-//       resolves nowhere active but exists in the (disabled) donor's folder. A path
-//       another active provider (vanilla BSA, a shared-resource mod) supplies is
-//       SKIPPED + noted — it keeps resolving without the donor. The facegen pair is
-//       the exception (alwaysCarry): its DESTINATION path is new, so it is a rename
-//       from wherever the winning copy lives. Best-effort + reported (Q3): the records
-//       are already written, so a carry miss is a NAMED warning, never a silent gap.
-// ======================================================================
+/// <summary>Describes one asset successfully copied into the output mod.</summary>
+/// <param name="OldRelPath">Canonical Data-relative source path.</param>
+/// <param name="NewRelPath">Canonical Data-relative destination path.</param>
+/// <param name="Bytes">Number of bytes written.</param>
+/// <param name="From">Human-readable winning source from which the bytes were read.</param>
+public sealed record CarriedAsset(
+    string OldRelPath,
+    string NewRelPath,
+    long Bytes,
+    string From);
 
-/// <summary>One carried file: old → new Data-relative path (identical except the facegen pair), bytes, and where
-/// the winning copy came from.</summary>
-public sealed record CarriedAsset(string OldRelPath, string NewRelPath, long Bytes, string From);
-
-/// <summary>The asset-carry half's outcome: what moved, what was deliberately left (another active provider still
-/// supplies it), what was referenced but found nowhere (verify in-game), VFS-precedence warnings (a carried file
-/// whose destination path an ACTIVE provider already supplies does not win until sorted above it — the
-/// facegen-diagnostics keystone: file precedence is its own system), and named failures. Never throws.</summary>
+/// <summary>Reports the complete best-effort asset-carry result for one NPC copy.</summary>
+/// <param name="Carried">Files successfully placed in the output mod.</param>
+/// <param name="SkippedStillProvided">References left alone because another active provider will retain them.</param>
+/// <param name="Missing">Referenced paths that no readable active or donor source supplied.</param>
+/// <param name="Warnings">Precedence or verification caveats that do not represent a failed write.</param>
+/// <param name="Failures">Named read or write failures.</param>
+/// <param name="FaceGenMeshCarried">Whether the donor mesh was written at the new NPC's path.</param>
+/// <param name="FaceGenTintCarried">Whether the donor tint was written at the new NPC's path.</param>
 public sealed record NpcAssetOutcome(
     IReadOnlyList<CarriedAsset> Carried,
     IReadOnlyList<string> SkippedStillProvided,
@@ -53,11 +35,21 @@ public sealed record NpcAssetOutcome(
     bool FaceGenMeshCarried,
     bool FaceGenTintCarried);
 
+/// <summary>Copies the file assets required by a standalone NPC appearance copy.</summary>
+/// <remarks>
+/// FaceGen files move to paths derived from the new FormKey. Other referenced files are copied only when removing
+/// the donor would remove their winning bytes. Writes are atomic and best-effort because the record patch has
+/// already been committed by the time this phase runs.
+/// </remarks>
 public static class NpcAppearanceAssets
 {
-    /// <summary>Harvest every asset path the given records list — the generic <see cref="IAssetLinkGetter"/> walk over
-    /// each record's property graph (lists + substructs included), by construction rather than a per-type field list.
-    /// Paths come back Data-relative (Mutagen's DataRelativePath — e.g. a Model.File 'x.nif' → 'meshes\x.nif').</summary>
+    /// <summary>Harvests every asset link reachable in the supplied record graphs.</summary>
+    /// <param name="records">In-memory copied records to inspect before their backing session is released.</param>
+    /// <returns>Unique Data-relative paths in first-seen order.</returns>
+    /// <remarks>
+    /// The bounded reflection walk recognizes <see cref="IAssetLinkGetter"/> rather than maintaining a per-record
+    /// field list, so lists and nested Mutagen structures are covered automatically.
+    /// </remarks>
     public static IReadOnlyList<string> HarvestAssetPaths(IEnumerable<IMajorRecordGetter> records)
     {
         var paths = new List<string>();
@@ -67,7 +59,18 @@ public static class NpcAppearanceAssets
         return paths;
     }
 
-    static void HarvestFrom(object node, List<string> paths, HashSet<string> seen, HashSet<object> visited, int depth)
+    /// <summary>Walks one bounded Mutagen object graph and appends newly discovered asset paths.</summary>
+    /// <param name="node">Current graph value.</param>
+    /// <param name="paths">Ordered result collector.</param>
+    /// <param name="seen">Case-insensitive path de-duplication set.</param>
+    /// <param name="visited">Reference-identity cycle guard.</param>
+    /// <param name="depth">Current nesting depth; values deeper than six are not expanded.</param>
+    static void HarvestFrom(
+        object node,
+        List<string> paths,
+        HashSet<string> seen,
+        HashSet<object> visited,
+        int depth)
     {
         if (depth > 6 || node is string || !visited.Add(node)) return;
 
@@ -89,7 +92,8 @@ public static class NpcAppearanceAssets
         // Only descend Mutagen model types (their namespace), never arbitrary BCL values — keeps the walk cheap + safe.
         var t = node.GetType();
         if (t.Namespace is null || !t.Namespace.StartsWith("Mutagen.Bethesda", StringComparison.Ordinal)) return;
-        if (node is IFormLinkGetter) return;                              // a link is an identity, not an asset container
+        // A form link is an identity, not an asset container.
+        if (node is IFormLinkGetter) return;
 
         foreach (var prop in t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
@@ -101,20 +105,21 @@ public static class NpcAppearanceAssets
         }
     }
 
-    /// <summary>Conservative texture-path scan of facegeom bytes: every ASCII run that starts 'textures\' (either
-    /// slash) and ends '.dds', case-insensitive — the skin/hair texture paths a facegen .nif embeds and the engine
-    /// resolves at render time. No NIF parsing: a path in a .nif is stored as plain text (the same byte-scrape the
-    /// 2026-07-01 build test used); a false positive costs one 'referenced but found nowhere' note. Within a
-    /// printable run the match ends at the FIRST '.dds' (review finding: last-match glued two adjacent paths into
-    /// garbage), and the scan resumes right after the matched path so a second 'textures\…' in the same run is
-    /// still found; the resume never skips a byte (review finding: an 'i = end' reset over the for-increment ate
-    /// the first byte of a path that started exactly at a run boundary).</summary>
+    /// <summary>Finds printable DDS paths embedded in a FaceGen NIF.</summary>
+    /// <param name="nif">Raw NIF bytes.</param>
+    /// <returns>Unique canonical texture paths in first-seen order.</returns>
+    /// <remarks>
+    /// This deliberately conservative scan accepts ASCII runs beginning with <c>textures\</c> or
+    /// <c>textures/</c> and ending at the first case-insensitive <c>.dds</c>. It does not interpret NIF structure.
+    /// A false positive becomes a named missing-path note and cannot cause a wrong-source write.
+    /// </remarks>
     public static IReadOnlyList<string> ScrapeNifTexturePaths(byte[] nif)
     {
         var found = new List<string>();
         var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var prefix = "textures"u8.ToArray();
-        for (int i = 0; i + prefix.Length + 5 <= nif.Length; i++)         // +5 = '\' + shortest 'a.dds' won't fit past this
+        // Five extra bytes cover the separator plus the shortest possible "a.dds".
+        for (int i = 0; i + prefix.Length + 5 <= nif.Length; i++)
         {
             int j = 0;
             while (j < prefix.Length && (nif[i + j] | 0x20) == prefix[j]) j++;
@@ -136,21 +141,30 @@ public static class NpcAppearanceAssets
                     && (nif[end - 1] | 0x20) == (byte)'s')
                 { ddsEnd = end; break; }
             }
-            if (ddsEnd < 0) { i = end - 1; continue; }                    // no '.dds' in this run — resume AT the stop byte
+            // No extension in this run: resume at the first non-printable byte.
+            if (ddsEnd < 0) { i = end - 1; continue; }
 
             var path = Encoding.ASCII.GetString(nif, i, ddsEnd - i).Replace('/', '\\');
             if (seen.Add(path)) found.Add(path);
-            i = ddsEnd - 1;                                               // resume right after the match (for-increment lands on the next byte)
+            // The loop increment resumes immediately after this match.
+            i = ddsEnd - 1;
         }
         return found;
     }
 
-    /// <summary>Where the donor's own files live on disk: the donor plugin's containing folder plus any BSAs at its
-    /// root — the direct-disk lane for a DISABLED donor the active VFS cannot see. The caller only constructs one
-    /// for a donor under an MO2 mod folder (never for the game Data folder — there every vanilla BSA would
-    /// misclassify as "the donor's", review finding).</summary>
+    /// <summary>Provides direct access to one donor's staging folder and top-level archives.</summary>
+    /// <param name="Folder">Native staging folder containing the donor's Data-root files.</param>
+    /// <param name="Bsas">Native top-level BSA paths belonging to that donor.</param>
+    /// <remarks>
+    /// This fallback supports an installed but disabled donor that is absent from the active Amethyst winner map.
+    /// Callers must not construct it for vanilla Data because that would misclassify all vanilla archives as donor
+    /// content.
+    /// </remarks>
     public sealed record DonorDisk(string Folder, IReadOnlyList<string> Bsas)
     {
+        /// <summary>Builds a donor-disk view from the donor plugin's staging path.</summary>
+        /// <param name="donorPluginPath">Native plugin path inside a donor staging folder.</param>
+        /// <returns>The containing folder and any accessible immediate BSA children.</returns>
         public static DonorDisk For(string donorPluginPath)
         {
             var dir = Path.GetDirectoryName(donorPluginPath)!;
@@ -160,7 +174,10 @@ public static class NpcAppearanceAssets
             return new DonorDisk(dir, bsas);
         }
 
-        /// <summary>Read a Data-relative path from the donor's own disk (loose first, then its root BSAs). Null = absent.</summary>
+        /// <summary>Reads a Data-relative path directly from this donor.</summary>
+        /// <param name="relPath">Canonical Data-relative path.</param>
+        /// <returns>Bytes and provenance, or two null values when no readable copy exists.</returns>
+        /// <remarks>Loose content wins over the donor's BSA entries, matching Skyrim asset precedence.</remarks>
         public (byte[]? Bytes, string? From) Read(string relPath)
         {
             var loose = BethesdaPath.TryResolveExisting(Folder, relPath, out var resolved)
@@ -182,14 +199,22 @@ public static class NpcAppearanceAssets
         }
     }
 
-    /// <summary>Resolve ONE Data-relative path under the carry rule (file header §3). <paramref name="alwaysCarry"/>
-    /// = the facegen-rename case: the destination path is NEW, so the bytes move from wherever the winning copy
-    /// lives (the donor-provides test doesn't apply). Returns the bytes + provenance when the path must be carried,
-    /// (null, note) when deliberately skipped, or a miss — with <c>ReadError</c> carrying the REAL cause when a
-    /// resolved winner could not be read (review finding: discarding it reported an in-use file as "found neither
-    /// in the active VFS nor the donor's folder" — factually false, Q3).</summary>
+    /// <summary>Resolves one path under the donor-removal carry rule.</summary>
+    /// <param name="relPath">Canonical source path.</param>
+    /// <param name="view">Pinned active asset snapshot.</param>
+    /// <param name="donors">Direct-disk fallbacks for installed donor mods.</param>
+    /// <param name="donorModFolderNames">Provider names whose winning copies disappear with the donor.</param>
+    /// <param name="alwaysCarry">True for FaceGen renames whose destination is necessarily new.</param>
+    /// <returns>
+    /// Bytes and provenance when copying is required; a skip note when another provider remains; otherwise a
+    /// missing flag and, when applicable, the active winner's read error.
+    /// </returns>
     static (byte[]? Bytes, string? From, string? SkipNote, bool Missing, string? ReadError) ResolveForCarry(
-        string relPath, AssetResolver.AssetView view, IReadOnlyList<DonorDisk> donors, IReadOnlyList<string> donorModFolderNames, bool alwaysCarry)
+        string relPath,
+        AssetResolver.AssetView view,
+        IReadOnlyList<DonorDisk> donors,
+        IReadOnlyList<string> donorModFolderNames,
+        bool alwaysCarry)
     {
         string? readError = null;
         var res = view.ResolveForPlacement(relPath);
@@ -198,16 +223,29 @@ public static class NpcAppearanceAssets
             var winner = res.Sources[0];
             if (!alwaysCarry)
             {
-                bool donorProvides =
-                    donorModFolderNames.Any(n => string.Equals(winner.ProviderName, n, StringComparison.OrdinalIgnoreCase))
+                bool donorProvides = donorModFolderNames.Any(n =>
+                        string.Equals(winner.ProviderName, n, StringComparison.OrdinalIgnoreCase))
                     || (winner.Kind == AssetKind.Bsa && winner.ArchivePath is not null
-                        && donors.Any(d => string.Equals(Path.GetDirectoryName(winner.ArchivePath), d.Folder, StringComparison.OrdinalIgnoreCase)));
+                        && donors.Any(d => string.Equals(
+                            Path.GetDirectoryName(winner.ArchivePath),
+                            d.Folder,
+                            StringComparison.OrdinalIgnoreCase)));
                 if (!donorProvides)
-                    return (null, null, $"'{relPath}' — still provided by '{winner.ProviderName}' after the donor is removed; not carried.", false, null);
+                    return (
+                        null,
+                        null,
+                        $"'{relPath}' — still provided by '{winner.ProviderName}' after donor removal; not carried.",
+                        false,
+                        null);
             }
             (var bytes, readError) = AssetResolver.ReadPlacementSource(winner);
             if (bytes is not null)
-                return (bytes, winner.Kind == AssetKind.Loose ? $"'{winner.ProviderName}' (loose)" : $"'{Path.GetFileName(winner.ArchivePath!)}'", null, false, null);
+            {
+                var from = winner.Kind == AssetKind.Loose
+                    ? $"'{winner.ProviderName}' (loose)"
+                    : $"'{Path.GetFileName(winner.ArchivePath!)}'";
+                return (bytes, from, null, false, null);
+            }
             // the winner could not be read — fall through to the donor-disk lane, keeping the named cause
         }
 
@@ -219,18 +257,27 @@ public static class NpcAppearanceAssets
         return (null, null, null, true, readError);
     }
 
-    /// <summary>
-    /// The whole asset carry for one copied NPC: rename the facegen pair donor-key → new-key, scrape the carried
-    /// geom for its embedded textures, and carry each harvested path under the carry rule.
-    /// <paramref name="harvestedPaths"/> comes from the caller's pre-serialize harvest of the in-patch duplicates.
-    /// Writes go under <paramref name="outDir"/> (the patch mod folder) via staged temp + <see cref="AtomicFile"/>.
-    /// A carried file whose DESTINATION relpath an active provider already supplies gets a precedence WARNING
-    /// (it does not win until the patch is sorted above that provider). Never throws; every miss/failure named (Q3).
-    /// </summary>
+    /// <summary>Carries all files needed by one copied NPC into its output mod.</summary>
+    /// <param name="donorNpc">Original NPC key used to locate existing FaceGen.</param>
+    /// <param name="newNpc">Destination NPC key used to name copied FaceGen.</param>
+    /// <param name="harvestedPaths">Asset links captured from the in-patch record duplicates.</param>
+    /// <param name="view">Pinned active asset snapshot used for consistent winner reads.</param>
+    /// <param name="donors">Direct-disk donor fallbacks.</param>
+    /// <param name="donorModFolderNames">Active provider names owned by the donor.</param>
+    /// <param name="outDir">Native output-mod root under which Data-relative paths are placed.</param>
+    /// <returns>Complete copy, skip, missing, warning, and failure accounting; this method does not throw.</returns>
+    /// <remarks>
+    /// The FaceGen pair is renamed first. Embedded NIF textures then join the harvested record assets, and each
+    /// path is copied only when it would stop resolving after donor removal. Every write is atomic.
+    /// </remarks>
     public static NpcAssetOutcome CarryAll(
-        FormKey donorNpc, FormKey newNpc,
+        FormKey donorNpc,
+        FormKey newNpc,
         IReadOnlyList<string> harvestedPaths,
-        AssetResolver.AssetView view, IReadOnlyList<DonorDisk> donors, IReadOnlyList<string> donorModFolderNames, string outDir)
+        AssetResolver.AssetView view,
+        IReadOnlyList<DonorDisk> donors,
+        IReadOnlyList<string> donorModFolderNames,
+        string outDir)
     {
         var carried = new List<CarriedAsset>();
         var skipped = new List<string>();
@@ -240,12 +287,14 @@ public static class NpcAppearanceAssets
         bool meshCarried = false, tintCarried = false;
         byte[]? geomBytes = null;
 
+        // Records an active provider that will outrank this new destination until Amethyst priority is adjusted.
         void WarnIfDestinationContested(string newRel)
         {
             var already = view.ResolveForPlacement(newRel);
             if (already.Sources.Count > 0)
-                warnings.Add($"'{newRel}' is ALREADY provided by '{already.Sources[0].ProviderName}' — the carried copy does " +
-                             "not win until the patch mod is sorted ABOVE that provider in MO2 (file precedence is its own system).");
+                warnings.Add(
+                    $"'{newRel}' is ALREADY provided by '{already.Sources[0].ProviderName}' — the carried copy does " +
+                    "not win until the patch mod has higher Amethyst file priority.");
         }
 
         // ---- 1. the facegen pair: donor path → NEW path (a rename — alwaysCarry from the winning copy) ----
@@ -254,14 +303,22 @@ public static class NpcAppearanceAssets
             try
             {
                 var newRel = FaceGenPath.For(newNpc, slot);
-                var (bytes, from, _, isMissing, readErr) = ResolveForCarry(oldRel, view, donors, donorModFolderNames, alwaysCarry: true);
+                var (bytes, from, _, isMissing, readErr) = ResolveForCarry(
+                    oldRel,
+                    view,
+                    donors,
+                    donorModFolderNames,
+                    alwaysCarry: true);
                 if (isMissing || bytes is null)
                 {
                     if (readErr is not null)
-                        failures.Add($"facegen {slot} '{oldRel}': the winning copy exists but could not be read — {readErr}. Re-run once the file is free, or carry it with housecarl_place_asset.");
+                        failures.Add(
+                            $"facegen {slot} '{oldRel}': the winning copy could not be read — {readErr}. " +
+                            "Re-run once the file is free, or carry it with housecarl_place_asset.");
                     else
-                        missing.Add($"facegen {slot} '{oldRel}' — found neither in the active VFS nor the donor's folder. " +
-                                    "Without it the engine regenerates the head at runtime (grey/dark-face risk); verify in-game.");
+                        missing.Add(
+                            $"facegen {slot} '{oldRel}' — found in neither the active file index nor donor staging. " +
+                            "The engine may regenerate the head at runtime; verify in-game.");
                     continue;
                 }
                 WarnIfDestinationContested(newRel);
@@ -290,14 +347,21 @@ public static class NpcAppearanceAssets
         {
             try
             {
-                var (bytes, from, skipNote, isMissing, readErr) = ResolveForCarry(rel, view, donors, donorModFolderNames, alwaysCarry: false);
+                var (bytes, from, skipNote, isMissing, readErr) = ResolveForCarry(
+                    rel,
+                    view,
+                    donors,
+                    donorModFolderNames,
+                    alwaysCarry: false);
                 if (skipNote is not null) { skipped.Add(skipNote); continue; }
                 if (isMissing)
                 {
                     if (readErr is not null)
                         failures.Add($"'{rel}': the winning copy exists but could not be read — {readErr}.");
                     else
-                        missing.Add($"'{rel}' — referenced by the copied records/geom but found nowhere (active VFS or donor folder); verify in-game.");
+                        missing.Add(
+                            $"'{rel}' — referenced by copied records or geometry but absent from the active file " +
+                            "index and donor staging; verify in-game.");
                     continue;
                 }
                 if (bytes is null) continue;
@@ -310,8 +374,12 @@ public static class NpcAppearanceAssets
         return new NpcAssetOutcome(carried, skipped, missing, warnings, failures, meshCarried, tintCarried);
     }
 
-    /// <summary>Stage + atomically commit one carried file under <paramref name="outDir"/>. A failure is a named
-    /// entry in <paramref name="failures"/>, never a throw (the records are already written).</summary>
+    /// <summary>Atomically writes one carried file beneath the output-mod root.</summary>
+    /// <param name="outDir">Native output-mod root.</param>
+    /// <param name="relPath">Validated Data-relative destination.</param>
+    /// <param name="bytes">Exact source bytes.</param>
+    /// <param name="failures">Collector receiving a named failure instead of an exception.</param>
+    /// <returns>True only when the bytes were committed successfully.</returns>
     static bool WriteCarried(string outDir, string relPath, byte[] bytes, List<string> failures)
     {
         try

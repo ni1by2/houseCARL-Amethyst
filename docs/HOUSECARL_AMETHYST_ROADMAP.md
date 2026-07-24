@@ -257,33 +257,35 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: reviewed every declaration in `AssetResolver`,
-  `ArchiveDiscovery`, and `BsaArchive`. Historical header essays have been
-  replaced with concise type and member contracts. The documentation now
-  explains authoritative Amethyst loose winners, the inherited probe-only root
-  walker, loose-versus-BSA precedence, injected archive ranks, derived snapshot
-  ownership, subtree freshness, native BSA list/extract behavior, path and
-  allocation guards, partial-write reporting, and the deferred external
-  BSArch packing boundary. Runtime behavior is unchanged.
+- Last completed checkpoint: reviewed every declaration in
+  `NpcAppearanceAssets`, `NpcAppearanceCopy`, and `AssetRenameService`.
+  Historical header essays have been replaced with local type and member
+  contracts. The documentation now explains closure collection, dependency
+  internalization, clone stripping, apply-field ownership, asset harvesting,
+  donor fallbacks, destination contention, two-phase alias-safe carry,
+  FaceGen/voice renaming, SEQ refresh-only behavior, post-commit warnings, and
+  partial-failure accounting. The algorithms are unchanged; inherited MO2/VFS
+  wording in the touched production messages now names Amethyst's file index
+  and priority.
 - Verification performed: the serialized .NET 9 Linux solution build succeeds
   with zero errors. A forced unsuppressed XML-documentation rebuild succeeds
-  and reports no warning from the three reviewed files; its 168 warnings
-  belong to components still queued for review. The BSA contract, native BSA
-  extraction, asset resolver, archive/status, and placement guards all pass.
-  The resolver guard includes the at-rest proof that a BSA remains renamable
-  and deletable while the resolver is alive. Full `ci-all` is 111/111 on Linux
-  after the final edit. `git diff --check` passes and the reviewed files contain
-  no line longer than 120 characters.
-- Files/components changed: `AssetResolver`, `ArchiveDiscovery`, `BsaArchive`,
-  the tracked roadmap, and the user-facing roadmap copy.
-- Decisions made: Amethyst's filemap/mod-index winner map is authoritative in
-  product mode; the root walker exists only for inherited probes. Loose assets
-  outrank BSA entries, while injected higher archive ranks win among BSAs.
-  Resolver snapshots own copied tables and metadata, never live archive
-  handles. A missing indexed winner or unreadable archive remains a named
-  incomplete-read condition rather than triggering a deployed-Data scan.
-  Native Mutagen support remains the v1 list/extract path. External BSArch
-  packing stays deferred until the post-v1 structured Proton command runner.
+  and reports no warning from the three reviewed files; its 161 warnings
+  belong to components still queued for review. Standalone NPC copy, FaceGen
+  carry, voice carry, SEQ regeneration, and merge-service guards all pass.
+  The focused pass initially caught three altered alarm tokens; `ALREADY`,
+  `CONTENT`, and `REQUIRED` were restored before the full suite. Full `ci-all`
+  is 111/111 on Linux after the final edit. `git diff --check` passes and the
+  reviewed files contain no line longer than 120 characters.
+- Files/components changed: `NpcAppearanceAssets`, `NpcAppearanceCopy`,
+  `AssetRenameService`, the tracked roadmap, and the user-facing roadmap copy.
+- Decisions made: the record patch commits before best-effort asset carry, so
+  later failures are explicit warnings rather than false pre-write refusals.
+  Donor-defined or unresolved appearance dependencies are internalized;
+  resolvable shared dependencies remain ordinary master links. Required
+  foreign links refuse clone mode instead of being nulled. FaceGen and voice
+  use one two-phase disk-staging implementation to prevent in-place ID aliasing.
+  SEQ is rebuilt only when the source shipped one. Existing alarm tokens remain
+  stable because renderers and regression probes treat them as contract text.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -297,22 +299,24 @@ manual release gate.
   `EngineImplicit`, `FormIdRange`, `PluginNameSuggest`, `PluginFile`, `Schema`,
   `SchemaClassifier`, `EmbeddedJson`, `AtomicFile`, `UserConfig`,
   `HousecarlOwnerMeta`, `ModManagerLayout`, `BethesdaPath`, `FaceGenPath`,
-  `VoicePath`, `SeqFile`, `AssetResolver`, `ArchiveDiscovery`, and `BsaArchive`
-  are complete; the remaining inherited core components have not yet received
-  the same declaration-by-declaration review. External BSArch execution is not
-  a native-v1 feature, so the optional live repack arm remains skipped when no
+  `VoicePath`, `SeqFile`, `AssetResolver`, `ArchiveDiscovery`, `BsaArchive`,
+  `NpcAppearanceAssets`, `NpcAppearanceCopy`, and `AssetRenameService` are
+  complete; the remaining inherited core components have not yet received the
+  same declaration-by-declaration review. External BSArch execution is not a
+  native-v1 feature, so the optional live repack arm remains skipped when no
   BSArch path is supplied; self-contained native archive fixtures cover v1
-  behavior. The Linux suite has no accepted red baseline.
+  behavior. Some untouched service and probe messages still say MO2 and remain
+  queued for the product-boundary cleanup. The Linux suite has no accepted red
+  baseline.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  across `NpcAppearanceAssets`, `NpcAppearanceCopy`, and
-  `AssetRenameService`. Review every declaration and explicitly document
-  source and winner reads, two-phase copy/carry behavior, destination
-  collisions, FaceGen/voice/SEQ ownership, dry-run and partial-failure
-  accounting, and atomic placement. Run the NPC copy, FaceGen carry, voice
-  carry, SEQ regeneration, asset rename, strict-XML, and full-CI guards.
+  across `NifService`, `VoiceCheck`, and `DialogueScriptCheck`. Review every
+  declaration and explicitly document native file boundaries, parser limits,
+  snapshot ownership, archive reads, dialogue/voice provenance, missing-data
+  semantics, and failure isolation. Run their focused NIF, voice, dialogue,
+  strict-XML, and full-CI guards.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -334,7 +338,8 @@ manual release gate.
   `9c3c5f3` completes the storage and ownership documentation checkpoint;
   `9a5c4d0` replaces the inherited README; `67bbaf5` publishes the integrated
   history to `amethyst-main`; `be0e394` completes the canonical asset-path
-  documentation checkpoint. The asset-provider checkpoint is pending commit.
+  documentation checkpoint; `973083e` completes the asset-provider
+  documentation checkpoint. The asset-carry checkpoint is pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
