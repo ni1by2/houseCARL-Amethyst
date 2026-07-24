@@ -258,32 +258,34 @@ manual release gate.
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
 - Last completed checkpoint: reviewed and documented every declaration in
-  `RecordNaming`, `EngineImplicit`, `FormIdRange`, and `PluginNameSuggest`.
-  Parameters and return values now explain exact suffix/interface
-  normalization, the deliberately narrow engine-implicit identity table,
-  output values on failed identity lookup, object-ID exhaustion and runtime
-  FormID localization, deterministic suggestion ranking, extension handling,
-  and bounded edit distance. Private shared state and helper declarations are
-  documented as well. Runtime behavior is unchanged.
+  `PluginFile`, `Schema`, `SchemaClassifier`, and `EmbeddedJson`. Every
+  serialized corpus property now explains its wire meaning, null/empty state,
+  count domain, runtime reflection role, or deterministic ordering contract.
+  Classifier methods now document their field/corpus inputs, complete element
+  partition, coercion boundary, and returned verdict. The embedded-resource
+  reader documents suffix matching, returned ownership, and its fail-loud
+  exception. Runtime behavior is unchanged.
 - Verification performed: the .NET 9 Linux solution builds with zero errors.
   The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
   BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
   native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
-  and Codex umbrella guards pass. The focused/transitive
-  `loadorder-status-guard`, `formid-floor-guard`, `esl-formid-guard`,
-  `bulk-primitives-wave2-guard`, and `check-errors-guard` pass, covering
-  suggestion relevance, full/light object-ID boundaries, engine-implicit
-  identity resolution, and the precise dangling-reference exemption. The
-  timing-sensitive cold
+  and Codex umbrella guards pass. The focused `corpus-hygiene-guard`,
+  `coerce-selftest`, `coerce-audit`, `sameshape-agree-guard`, and
+  `vmad-poly-guard` pass, covering the 1,170-type corpus, structural
+  invariants, coercion completeness, same-shape write legality, and
+  polymorphic element-family classification. The timing-sensitive cold
   `freshness-capture-guard` remains green from the resolver checkpoint.
   Full `ci-all` remains 111/111 on Linux. XML-document generation succeeds
-  with zero errors; the four reviewed utility files contribute no compiler or
+  with zero errors; the four reviewed schema files contribute no compiler or
   XML warning. A separate unsuppressed documentation rebuild confirms none of
-  their declarations emits CS1591. Inherited warnings in other components
-  remain queued for their declaration passes.
+  their declarations emits CS1591 and reduces the repository-wide warning
+  count from 438 to 419. Inherited warnings in other components remain queued
+  for their declaration passes.
   `git diff --check` passes and no merge-conflict markers remain.
-- Files/components changed: `RecordNaming`, `EngineImplicit`, `FormIdRange`,
-  `PluginNameSuggest`, the roadmap, and the user-facing checkpoint.
+- Files/components changed: `TypeSchema`, `FieldSchema`, `Corpus`,
+  `SchemaClassifier`, `EmbeddedJson`, the roadmap, and the user-facing
+  checkpoint. `PluginFile` was reviewed and already met the standard without
+  requiring a source edit.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. Upstream native archive reads replace the
   Windows-only BSArch dependency for list/extract; archive packing remains the
@@ -302,20 +304,21 @@ manual release gate.
   inherited MO2-named fixtures and terminology that must be removed at the
   product boundary. `LoadOrderResolver`, `ReadEngine`, `FieldsDiff`,
   `FieldPredicate`, `EffectChain`, `ErrorCheck`, `RecordNaming`,
-  `EngineImplicit`, `FormIdRange`, and `PluginNameSuggest` are complete; the
-  remaining inherited core components have not yet received the same
-  declaration-by-declaration review. The Linux suite has no accepted red
-  baseline.
+  `EngineImplicit`, `FormIdRange`, `PluginNameSuggest`, `PluginFile`, `Schema`,
+  `SchemaClassifier`, and `EmbeddedJson` are complete; the remaining inherited
+  core components have not yet received the same declaration-by-declaration
+  review. The Linux suite has no accepted red baseline.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  with the schema metadata layer: `PluginFile`, `Schema`, `SchemaClassifier`,
-  and `EmbeddedJson`. Explain every serialized field, classification branch,
-  embedded-resource failure, parameter, and return contract without changing
-  behavior; run schema/corpus/write-census guards, a strict XML build, and full
-  `ci-all`. Rewrite setup documentation with the Session 6 Linux installer
-  rather than preserving transitional contracts.
+  with storage and ownership contracts in `AtomicFile`, `UserConfig`,
+  `HousecarlOwnerMeta`, and `ModManagerLayout`. Review every declaration,
+  explicitly document atomicity, locking, recovery, persisted state, ownership
+  markers, and snapshot immutability, and keep behavior unchanged. Run their
+  persistence, atomic-commit, layout, and redeploy guards, a strict XML build,
+  and full `ci-all`. Rewrite setup documentation with the Session 6 Linux
+  installer rather than preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -330,6 +333,7 @@ manual release gate.
   `5a4ad7d` completes the `ReadEngine` documentation checkpoint; `e468879`
   completes the `FieldsDiff` and `FieldPredicate` documentation checkpoint;
   `23c7c9a` completes the `EffectChain` and `ErrorCheck` documentation
+  checkpoint; `0b85b13` completes the shared identity-utility documentation
   checkpoint.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap

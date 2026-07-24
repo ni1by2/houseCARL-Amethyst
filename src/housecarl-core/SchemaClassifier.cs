@@ -46,6 +46,8 @@ public static class SchemaClassifier
     /// WHOLE type. Enums always coerce (Enum.Parse). FormLinkOrIndex, owned-record links, and type-erased
     /// <c>object</c> are correctly excluded (the coerce-audit deferred surface), unifying this proof's denominator
     /// with the census's writable-today set.</summary>
+    /// <param name="f">Serialized field metadata to classify.</param>
+    /// <returns>True when the runtime write engine accepts one scalar token for the complete field value.</returns>
     public static bool CoercibleLeaf(FieldSchema f)
     {
         if (f.Cardinality == "enum") return true; // enums always coerce (Enum.Parse)
@@ -56,6 +58,8 @@ public static class SchemaClassifier
     /// <summary>A list/dict is settable-today iff its ELEMENT coerces from a scalar value (scalar/enum/formlink
     /// element with NO modeled element ref). A modeled-struct/record/arm element (ElementTypeRef set) needs
     /// composition or record resolution — deferred. Corpus-free by construction (the AQ + the ref are enough).</summary>
+    /// <param name="f">Collection field metadata to classify.</param>
+    /// <returns>True when one scalar token can produce a complete collection element.</returns>
     public static bool CoercibleElement(FieldSchema f)
     {
         if (f.ElementTypeRef is not null) return false; // element is a modeled type → needs composition/resolution
@@ -65,6 +69,9 @@ public static class SchemaClassifier
 
     /// <summary>Classify how a list/dict field's ELEMENT is written. The single brain the boolean conveniences and
     /// the later coverage waves all derive from, so the partition can never be defined two ways.</summary>
+    /// <param name="f">Collection field whose element write shape is requested.</param>
+    /// <param name="corpus">Flat catalog used to resolve modeled element references.</param>
+    /// <returns>The single write-path category for the element, including <see cref="ElementKind.Unknown"/>.</returns>
     public static ElementKind ClassifyElement(FieldSchema f, Corpus corpus)
     {
         // No modeled element ref → a scalar/value element: coercible-today, or coercion-deferred.
@@ -91,6 +98,9 @@ public static class SchemaClassifier
     /// <see cref="ElementKind.Record"/> so the composition surface can never admit them (PR review: pre-flight
     /// accepting a record-family compose was an accept-then-throw). A mixed or unresolvable arm set surfaces as
     /// <see cref="ElementKind.Unknown"/> — never silently bucketed either way.</summary>
+    /// <param name="baseName">Catalog name of the polymorphic-base entry.</param>
+    /// <param name="corpus">Flat catalog containing the base and its arms.</param>
+    /// <returns>Arm for struct-like families, Record for record families, otherwise Unknown.</returns>
     static ElementKind PolyBaseElementKind(string baseName, Corpus corpus)
     {
         var b = corpus.Types.GetValueOrDefault(baseName);
@@ -106,6 +116,9 @@ public static class SchemaClassifier
     /// <summary>True iff the field is a collection whose ELEMENT is a BUILD-FROM-PARTS modeled struct (so Add takes a
     /// StructSpec). Excludes record-elements (nested-group wave 3), arm-elements (arm wave 4), and whole-coercible
     /// AssetLink-path elements (set as one value). Defined via <see cref="ClassifyElement"/> so it cannot drift from it.</summary>
+    /// <param name="f">Collection field metadata to test.</param>
+    /// <param name="corpus">Flat catalog used to resolve the element reference.</param>
+    /// <returns>True only for <see cref="ElementKind.Struct"/> elements.</returns>
     public static bool IsStructElement(FieldSchema f, Corpus corpus) =>
         ClassifyElement(f, corpus) == ElementKind.Struct;
 
@@ -119,6 +132,9 @@ public static class SchemaClassifier
     /// <c>ApplyScalarVerb</c> req.Struct → <c>BuildStruct</c> can actually build (gate==apply). Gendered leaves never reach
     /// the compose gate — <c>CorpusRulebook</c> diverts them to their [0]/[1] halves upstream. Corpus-derived, no per-type
     /// wiring (cornerstone): the set of composable substructs IS the set of modeled build-from-parts struct/arm types.</summary>
+    /// <param name="f">Scalar field metadata to test.</param>
+    /// <param name="corpus">Flat catalog used to inspect the referenced modeled type.</param>
+    /// <returns>True only when pre-flight and runtime construction both support a StructSpec.</returns>
     public static bool IsComposableSubstructLeaf(FieldSchema f, Corpus corpus)
     {
         if (f.Cardinality != "substruct" || f.TypeRef is not { } tr) return false;
