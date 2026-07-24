@@ -257,45 +257,32 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: reviewed and documented every declaration in
-  `AtomicFile`, `UserConfig`, `HousecarlOwnerMeta`, and `ModManagerLayout`.
-  Atomic-write methods now state their same-volume staging, consumed-source,
-  original-file preservation, parameter, and exception contracts. Persisted
-  user state now names all four independent concerns and the replacement key
-  for pending redeploy entries. Ownership comments are Amethyst/Linux-native
-  rather than inherited MO2/Windows wording. The manager interface and complete
-  immutable snapshot already met the standard and required no source edit.
-  Runtime behavior is unchanged.
-- Verification performed: the .NET 9 Linux solution builds with zero errors.
-  The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
-  BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
-  native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
-  and Codex umbrella guards pass. The focused `tool-bridge`,
-  `atomic-commit-guard`, `amethyst-layout-guard`,
-  `amethyst-runtime-guard`, `amethyst-redeploy-guard`, and `inplace-guard`
-  pass, covering cross-process state merging and corrupt recovery, Linux
-  old-inode replacement, complete manager snapshots and profile refresh,
-  pending-redeploy clearing, deployment modes, and persistent in-place
-  consent. The timing-sensitive cold
-  `freshness-capture-guard` remains green from the resolver checkpoint.
-  Full `ci-all` remains 111/111 on Linux. XML-document generation succeeds
-  with zero errors; the four reviewed storage/ownership files contribute no
-  compiler or XML warning. A separate unsuppressed documentation rebuild
-  confirms none of their declarations emits CS1591. Inherited warnings in other
-  components remain queued for their declaration passes.
-  `git diff --check` passes and no merge-conflict markers remain.
-- Files/components changed: `AtomicFile`, `UserConfig`, `UserConfigStore`,
-  `HousecarlOwnerMeta`, the roadmap, and the user-facing checkpoint.
-  `IModManagerLayout` and `ManagerSnapshot` were reviewed and already met the
-  standard without requiring a source edit.
-- Decisions made: staging is the only write target; deployed `Data/` is used
-  solely for later verification. Upstream native archive reads replace the
-  Windows-only BSArch dependency for list/extract; archive packing remains the
-  explicitly deferred external-command seam. Upstream dry-run may bypass the
-  Amethyst redeploy confirmation only because it performs no write. Real
-  in-place writes still require both consent and
-  `confirm_amethyst_redeploy=true`. Legacy MO2 provenance code remains only for
-  inherited probes; connected product mode uses authoritative Amethyst winners.
+- Last completed checkpoint: replaced the inherited Windows/MO2 root README
+  with a fork-specific Linux/Amethyst guide. It distinguishes completed
+  foundations from unfinished release work, documents the current development
+  build and temporary manual manifest workflow, explains staging-first patch
+  writes and hardlink-safe in-place editing, and states that no Amethyst plugin
+  or connector repository is required. The acknowledgments now prominently
+  credit the original houseCARL project and its developer, Avick3110, without
+  guessing a personal name not published by the project.
+- Verification performed: all README-relative file and directory links resolve
+  in the repository. The documented MCP lifecycle names match their source
+  declarations. Focused contract checks confirm the original houseCARL and
+  Avick3110 links are present and that obsolete active-install instructions
+  such as `houseCARL-Setup.exe`, `%LOCALAPPDATA%`, `winget`,
+  `ModOrganizer.ini`, and a Windows requirement are absent. No README line
+  exceeds 120 characters, and `git diff --check` passes. This checkpoint changes
+  documentation only; the latest source validation remains the preceding .NET
+  9 Linux build and full 111/111 `ci-all` result.
+- Files/components changed: root `README.md`, the tracked roadmap, and the
+  user-facing roadmap copy.
+- Decisions made: the README must describe the repository as active
+  development with no supported binary release yet. Development instructions
+  name the current integration branch until it is merged. The manual
+  `connection.json` procedure is explicitly transitional; Session 6 will put
+  discovery and manifest creation in the main Linux setup command. Attribution
+  uses Avick3110's public GitHub handle and preserves upstream history, GPL
+  licensing, and copyright notices.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -338,7 +325,8 @@ manual release gate.
   completes the `FieldsDiff` and `FieldPredicate` documentation checkpoint;
   `23c7c9a` completes the `EffectChain` and `ErrorCheck` documentation
   checkpoint; `0b85b13` completes the shared identity-utility documentation
-  checkpoint; `16b809a` completes the schema-metadata documentation checkpoint.
+  checkpoint; `16b809a` completes the schema-metadata documentation checkpoint;
+  `9c3c5f3` completes the storage and ownership documentation checkpoint.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

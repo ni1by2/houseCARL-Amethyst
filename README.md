@@ -1,230 +1,304 @@
-# houseCARL
+# houseCARL-Amethyst
 
-**Comprehensive, data-layer access to your Skyrim Special Edition load order — in plain English, through Claude or Codex.**
+**Native Linux access to a Skyrim Special Edition load order through Amethyst,
+Claude Code, or Codex.**
 
-houseCARL runs a local MCP server with [Mutagen](https://github.com/Mutagen-Modding/Mutagen) — the
-Bethesda-format library — kept warm in memory, giving your AI assistant direct access to every plugin
-record across your Mod Organizer 2 load order, at the **true load-order winner**, with the full conflict
-tree on request. You describe what you want in plain English; houseCARL does the mechanical work and, by
-default, writes results into a **new** plugin you review and enable in MO2 — your originals untouched. When
-you ask for it, an opt-in **in-place lane** edits an existing plugin directly instead (see below).
+houseCARL-Amethyst is a Linux-only fork of
+[houseCARL](https://github.com/Avick3110/houseCARL). It replaces houseCARL's
+Windows and Mod Organizer 2 integration with native
+[Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager)
+state, while preserving the Mutagen record engine, MCP tools, bundled skills,
+reflection-driven record coverage, and guarded write model.
 
-Coverage is **reflection-driven**: a build-time generator walks Mutagen's record interfaces and emits
-houseCARL's schema automatically, so the set of record types houseCARL understands *is* the set Mutagen
-models — by construction, not a hand-maintained subset.
+The server reads Amethyst's active profile, load order, staging directories,
+`filemap.txt`, and `modindex.bin` directly. It does not require MO2, Wine,
+Proton, USVFS, or an Amethyst-side houseCARL plugin.
 
-## What it can do
+> [!IMPORTANT]
+> This fork is under active development and does not yet have a supported
+> binary release. The native Amethyst read, asset-resolution, patch-writing,
+> and hardlink-redeployment foundations are implemented and covered by the
+> Linux test suite. The self-contained Linux installer, final host integration,
+> and real-profile release validation remain in progress. See the
+> [roadmap](docs/HOUSECARL_AMETHYST_ROADMAP.md).
 
-- **Read any record** at the true load-order winner, with the full conflict tree on request — plus batch
-  record detail and cross-plugin queries. Read a plugin that *isn't* in your active order too — even one
-  inside a disabled mod — with a raw, clearly OUT-OF-LOAD-ORDER-flagged look at its own records, so you can
-  inspect a donor mod before you enable it.
-- **Author patches** — set / add / remove fields, edit leveled lists and containers, retune records,
-  re-target conditions — emitted as a new MO2 mod folder (`houseCARL - <name>`). Or **forward a named
-  plugin's version of a record** as a winning override (xEdit's "copy as override into"), or revert a record
-  to vanilla.
-- **Create new records** (new FormIDs) and **remove** records or individual entries; unused masters are
-  cleaned automatically. Author a whole nested dialogue conversation in one call, validate a dialogue
-  graph on demand, catch script (VMAD) properties a record declares but never binds (a silent `None` at
-  runtime), and write the `.seq` file a plugin's start-game-enabled quests need. Author an empty
-  header-only **trigger plugin** when a mod just needs `Foo.esp` to exist.
-- **Edit an existing plugin in place** — when you ask, houseCARL edits, creates, and removes records
-  directly inside an existing plugin (including one it didn't author) instead of writing a separate patch.
-  Opt-in, gated by a one-time per-plugin consent prompt, and it keeps **no backup** — so the default
-  new-patch lane above stays the default.
-- **Compact and merge plugins** — ESL-compact a plugin into the light-master FormID window, carrying its
-  FormID-keyed assets (facegen, voice) along so a compacted mod's faces don't go dark; or merge several
-  plugins into one, renumbering only on collision and dropping now-unused masters — then guides the MO2
-  swap: enable the merged output, deactivate the donor plugins, and keep their asset folders enabled;
-  originals remain intact.
-- **Copy an NPC's appearance into a standalone** — lift a face (head parts, tints, the FaceGen mesh and
-  textures) from a donor NPC into a fresh record that carries no dependency on the donor's plugin — the
-  build behind a portable follower or a face transplanted between mods.
-- **Trace a magic effect** — resolve a MagicEffect to every spell, enchantment, potion, scroll, and
-  ingredient that carries it, with each one's magnitude, in a single call.
-- **Answer bulk / fleet questions** — resolve many FormIDs to their identity in one call, diff two plugins'
-  versions of a record down to just the changed fields, and aggregate a cross-plugin query (define-vs-touch
-  scope, multi-target reverse lookups, group-by counts, winner-value columns, JSON output) — the surface a
-  catalogue, conflict survey, or patch rebuild runs on.
-- **VFS asset layer** — read which copy of any Data-relative file (mesh, texture, script, sound,
-  interface) actually wins your load order (the overwrite folder, a specific mod, Data, or inside a BSA),
-  and place a file as a winning override into a new MO2 mod folder; loose-vs-BSA aware, with FaceGen as the
-  headline use case. "Wrote it" is reported honestly as not yet "it wins" — you still enable and sort the
-  new mod in MO2.
-- **Read and write a mesh's internals** — open the winning copy of a `.nif` and read the values baked
-  inside it — shape names, embedded skin / FaceTint texture paths, flags, alpha, partitions — and write a
-  whitelisted value back (fix a wrong texture path, rename a shape), verified against a two-gate read-back.
-  The mesh half of the dark-face fix, beside the record half.
-- **See the SKSE-plugin layer** — inventory the DLLs and their config files under `Data\SKSE\Plugins`, each
-  resolved to the mod that wins it (with the full conflict chain), and read each winning DLL's declared version
-  metadata — name, author, target runtime, Address-Library flag — statically, without loading it.
-- **Audit that layer for what's actually broken** — cross-check the native Papyrus functions your scripts
-  declare against the DLLs that must implement them (catching a mod whose scripts are installed but whose DLL
-  is missing, 32-bit, built for the wrong game version, or a debug build that won't load — so its calls
-  silently no-op), and cross-check the form references your SKSE configs declare against your real load order
-  (a dangling FormID caught here, instead of by a silent in-game failure). Or peek inside a single DLL's
-  image — its imports and the config paths and plugin names it embeds — to see what an unfamiliar plugin
-  touches. Static and report-only.
-- **See through the SkyPatcher layer** — inventory every SkyPatcher INI in your load order at once (apply
-  order, VFS shadows, INI-vs-INI conflicts, and dead / duplicate / no-op writes), or read one record's
-  *true* state after the whole SkyPatcher layer has replayed over it — so a runtime INI edit is as visible
-  as a plugin override. Report-only.
-- **Drive the external toolchain** — compile Papyrus scripts through the Creation Kit's compiler, and
-  list / extract / repack BSA archives via BSArch; each tool's path is auto-detected or set once.
-- **Decompile compiled scripts** — reconstruct reviewable `.psc` source from any `.pex` (Mutagen-native,
-  no external tool needed), measured at 98.8% byte-exact recompile round-trips across every provable
-  script in a 3,400-plugin load order; anything it can't prove fails loudly in the output, never
-  silently wrong.
-- **Look mods up on Nexus — and check your load order for updates.** Search the Skyrim SE catalogue and
-  pull any mod's version, requirements, file list, per-version changelog, and *true* latest release straight
-  from Nexus Mods, without opening a browser. Check your whole load order for updates **at the exact-file
-  level** — reading MO2's own local cache first to narrow the list, then confirming live — so an old-version
-  compatibility patch installed on purpose isn't misread as out of date; trace a file to its mod by MD5
-  hash; and a raw GraphQL backstop reaches any field the curated tools don't surface yet. All keyless and
-  read-only: it finds and informs; downloading stays your mod manager's "Mod Manager Download" handoff.
-- **Look things up, author distributor files, and review scripts** through 13 bundled, namespaced skills:
-  record schemas (every type Mutagen models), Papyrus / SKSE signatures, SkyPatcher / SPID / KID
-  distributor grammars, Skyrim dialogue authoring, Open Animation Replacer config authoring, SKSE plugin
-  (C++/CommonLibSSE-NG) authoring, Papyrus performance review, dark-face NPC diagnosis, equip-slot lookup,
-  tool-output awareness, and bulk record-job planning.
+## Why this fork exists
+
+Original houseCARL reads MO2 profile files and ships a Windows installer. That
+design is a poor fit for a native Linux modding environment even when Skyrim
+itself runs through Proton.
+
+Amethyst already owns the information houseCARL needs:
+
+- the active Skyrim SE profile;
+- enabled, disabled, and locked mods;
+- authoritative plugin order;
+- shared or profile-specific staging;
+- loose-file winners and their real source paths;
+- deployment state and deployment mode.
+
+houseCARL-Amethyst consumes that state through a manager-specific layout
+adapter. The record and asset engines receive one immutable manager snapshot
+and do not contain Amethyst parsing logic.
+
+## Current capability
+
+The source tree currently provides:
+
+- Amethyst connection, status, refresh, and active-profile switching;
+- shared and profile-specific staging directories;
+- `+`, `-`, and Amethyst `*` mod-list entries;
+- plugin resolution from staging, overwrite, and vanilla `Data_Core`;
+- authoritative loose-file resolution through `filemap.txt` and MessagePack
+  `modindex.bin` v4;
+- case-safe Linux access while preserving canonical Bethesda backslash paths;
+- record reads, conflict trees, cross-plugin queries, diffs, and bulk tools;
+- new patch mods written into Amethyst staging;
+- guarded in-place editing with explicit Amethyst redeployment confirmation;
+- pending-redeploy tracking and post-deployment content/hardlink verification;
+- native BSA listing and extraction, NIF inspection, SKSE inspection,
+  SkyPatcher analysis, FaceGen/voice handling, and SEQ generation;
+- Codex and Claude Code MCP surfaces and bundled skills.
+
+Upstream contains a much larger tool surface than this summary. Retaining a
+feature in the source tree is not the same as declaring it release-ready on
+Linux. The roadmap records which boundaries have native tests and which still
+need packaging or real-game validation.
 
 ## Requirements
 
-- **Windows.**
-- **.NET 9 — both the .NET Runtime 9.0 *and* the ASP.NET Core Runtime 9.0**, from the same
-  [download page](https://dotnet.microsoft.com/download/dotnet/9.0). houseCARL ships framework-dependent
-  (the runtime is not bundled), and the server needs the ASP.NET Core shared framework *on top of* the
-  base .NET runtime. On Windows these are **two separate installers** — the ASP.NET Core Runtime
-  installer does **not** include the base .NET Runtime — so install both. The setup utility checks for
-  both and tells you exactly which is missing.
-- **[Mod Organizer 2](https://www.modorganizer.org/)** with a modlist. houseCARL reads the instance's
-  profile files statically — **MO2 does not need to be running.**
-- **An AI host:** [Claude Code](https://claude.com/claude-code) (v2.1.143 or newer) — either the terminal
-  CLI or the Claude desktop app, which has Claude Code built in (houseCARL runs in Claude Code sessions,
-  not the plain chat) — **or** OpenAI Codex.
+For development and source-based testing:
 
-## Install
+- Linux x86_64;
+- .NET 9 SDK;
+- a native Amethyst installation with a Skyrim Special Edition game entry;
+- an Amethyst profile with a built filemap and mod index;
+- Codex or Claude Code if you want to use the MCP server conversationally.
 
-### Download — recommended (modders)
+Hardlink deployment is the required v1 target. Symlink and copy deployment
+have synthetic smoke coverage but are not release gates. Amethyst has no
+MO2-style VFS deployment backend, so this fork does not implement or claim VFS
+support.
 
-1. Download **`houseCARL-1.9.0.zip`** from the [latest release](https://github.com/Avick3110/houseCARL/releases).
-2. Unzip it and run **`houseCARL-Setup.exe`**.
-3. Pick your host — **`[1] Claude Code`**, **`[2] Codex`**, or **`[3] Both`**. The installer wires
-   everything up:
-   - **Claude** → installs the skills to `~/.claude/skills/housecarl/` and registers the server in
-     `~/.claude.json` (both the Claude Code CLI and the desktop app read these). Persistent — no
-     per-session flag.
-   - **Codex** → installs the server under `%LOCALAPPDATA%\houseCARL\server\`, installs the skills (with a
-     `$housecarl` umbrella entry point) under `~/.agents/skills/`, and registers the server in
-     `~/.codex/config.toml`.
-4. Fully restart your host (quit and reopen the Claude desktop app / restart every Codex session), then
-   tell houseCARL your **MO2 instance folder** — the one containing `ModOrganizer.ini`. It prompts you on
-   first use; you can switch instances anytime by asking it to set a new one.
+## Build from source
 
-> **Updating an existing install?** Fully quit Claude Code (and Codex) before re-running
-> `houseCARL-Setup.exe` — it can't replace the server while a session is running it. If one is, it stops and
-> tells you to quit and re-run.
+The current development work lives on
+`agent/upstream-c305b07-amethyst` until it is merged into the default branch.
 
-### Build from source (developers / verifiers)
-
-Requires the **.NET 9 SDK** (not just the runtime), Windows, and PowerShell.
-
-```powershell
-git clone https://github.com/Avick3110/houseCARL.git
-cd houseCARL
-./scripts/build-plugin.ps1
+```bash
+git clone https://github.com/ni1by2/houseCARL-Amethyst.git
+cd houseCARL-Amethyst
+git switch agent/upstream-c305b07-amethyst
+dotnet restore
+dotnet build housecarl.sln
 ```
 
-The script regenerates the reflection rulebook, publishes the server framework-dependent (trimming **off**
-— houseCARL is reflection-driven, so trimming would strip types and silently lose coverage), bundles the
-skills, builds the setup utility, and packs `release/houseCARL-1.9.0.zip`. Install the output with
-`houseCARL-Setup.exe`, `claude --plugin-dir ./dist/housecarl`, or the bundled local-marketplace
-descriptor — see the script header for details.
+Run the MCP server over its default stdio transport with:
 
-## Usage
+```bash
+dotnet run --project src/housecarl-mcp
+```
 
-Talk to it.
+The source build is for developers and verifiers. Session 6 will replace the
+inherited Windows setup application with a self-contained `linux-x64` bundle,
+XDG installation paths, Codex/Claude registration, upgrade rollback, and
+uninstall support.
 
-houseCARL writes each patch as its own MO2 mod folder (refresh mo2 required)
+## Connect to Amethyst
 
-## How it works
+houseCARL-Amethyst uses a small, stable manifest so the server does not have to
+guess which Amethyst installation or Skyrim entry you mean. No connector
+repository or Amethyst plugin is required.
 
-houseCARL is a single C# process running an MCP server, with Mutagen kept warm for both reading and
-writing. Reads use Mutagen's lazy binary overlay — records parse on access, so the load order isn't held
-fully in memory. Writes go through a small set of generic op verbs over the same reflection layer, always
-into a new plugin. The active load order is read **statically** from your MO2 profile's `loadorder.txt` /
-`modlist.txt` / `plugins.txt` (no USVFS, no live MO2 hooking) and refreshes automatically on the next tool
-call via cheap mtime checks. No plugin file handles are held at rest, so MO2 and xEdit can move or delete
-plugins freely while houseCARL is running.
+The final standalone discovery command is part of the unfinished Linux
+installer. Until that lands, create:
 
-The only outbound network use is the read-only **Nexus Mods lookups** (catalogue search + mod detail).
-They're **keyless** — the public Nexus catalogue API needs no account or API key — and offline-tolerant: if
-there's no connection they say so plainly and every local capability keeps working. houseCARL reads Nexus;
-it never downloads or installs (that stays your mod manager's `nxm` "Mod Manager Download" handoff).
+```text
+<Amethyst profile root>/.housecarl-amethyst/connection.json
+```
 
-## Bundled skills
+with this schema:
 
-Namespaced under `/housecarl:` in Claude (and reachable via `$housecarl` in Codex):
+```json
+{
+  "schemaVersion": 1,
+  "manager": "amethyst",
+  "gameId": "skyrim_se",
+  "gameName": "Skyrim Special Edition",
+  "profileRoot": "/absolute/native/path/to/the/Amethyst/staging/root",
+  "gameConfigDir": "/absolute/native/path/to/AmethystModManager/games/Skyrim Special Edition",
+  "pathsFile": "/absolute/native/path/to/paths.json",
+  "deployStateFile": "/absolute/native/path/to/deploy_state.json",
+  "createdBy": "housecarl-amethyst-setup",
+  "setupVersion": "1.0.0"
+}
+```
 
-- **`mutagen-reference`** — every record type's schema (fields, types, writability, enums, polymorphic
-  arms), generated by reflection over Mutagen.
-- **`papyrus-reference`** — Papyrus + SKSE function signatures (vanilla Skyrim, SKSE, and ~45 popular
-  SKSE-plugin sources), from [BellCube's papyrus-index](https://github.com/BellCubeDev/papyrus-index).
-- **`skypatcher-authoring`**, **`spid-authoring`**, **`kid-authoring`** — author SkyPatcher INI,
-  SPID `_DISTR.ini`, and KID `_KID.ini` distributor files from a grammar reference rather than invented
-  syntax.
-- **`papyrus-optimization`** — review a Papyrus script for performance: classify each part broken /
-  suboptimal / clean, explain what makes it heavy, and give the fix. The cost-and-habits complement to
-  `papyrus-reference`, and houseCARL's first community-contributed skill (DrHeisen).
-- **`facegen-diagnostics`** — walk the dark / grey / black-face NPC bug end to end: compare which plugin
-  wins the NPC record against which mod or BSA wins the facegen file, then place the correct facegen as a
-  winning override or forward the matching appearance into a new plugin, instructing the CK / NifSkope /
-  RaceMenu steps houseCARL can't perform.
-- **`dialogue-authoring`** — author or audit Skyrim dialogue at the data layer: create topics (DIAL) and
-  lines (INFO) in a new plugin, wire them to a branch and quest, attach result scripts, write the
-  start-game-enabled `.seq`, and validate a whole topic's or quest's dialogue graph — encoding the
-  counter-intuitive bookkeeping a byte-valid line skips (and so plays nothing in game).
-- **`oar-authoring`** — author or interpret Open Animation Replacer (OAR) configs: `config.json` /
-  `user.json`, condition sets, submod priorities (OAR ignores load order — higher priority wins), the
-  source-verified `IsEquippedType` enum, addon conditions (Math / RaySense / IED / …), and DAR legacy
-  folders. File-based; uses houseCARL only to resolve the forms a condition references. (DrHeisen.)
-- **`tool-output-awareness`** — recognize the plugins and assets that generated tools produce (Reqtificator,
-  ParallaxGen, DynDOLOD, Synthesis, TexGen, xLODGen, NPC Plugin Chooser 2) and keep their re-derived records
-  and asset paths out of an authored patch — so you never bake a regenerable artifact into a hand patch that
-  goes stale the next time the tool runs. (DrHeisen.)
-- **`biped-slot-reference`** — turn a biped slot (a number like 52, a vanilla name like Body, or a community
-  label like SOS / pelvis) into the `FirstPersonFlags` bit to query on, so finding every armor on an equip
-  slot — multi-slot pieces an exact match misses included — is one `cross_plugin_query ... has` lookup
-  instead of power-of-two mental math.
-- **`skse-plugin-authoring`** — author, build, or audit a native **SKSE plugin DLL** (C++ on CommonLibSSE-NG:
-  the layer beneath every SPID / KID / SkyPatcher distributor, framework, and crash logger) — scaffold the
-  MSVC / CMake / vcpkg toolchain, write a plugin from scratch (lifecycle, event sinks, hooks), expose new
-  native Papyrus functions from C++, target SE + AE + VR from one DLL, or read an open-source plugin's source
-  to explain what it does. Distinct from ESP/record work and from `.psc` Papyrus (owned by `papyrus-reference`);
-  its runtime claims still await an in-game validation pass.
-- **`bulk-record-jobs`** — plan a "many records → one structured deliverable" job (a catalogue, a link or
-  recipe graph, a conflict survey, a patch rebuild, a fan-out extraction) onto the bulk primitives — scoped
-  queries, `group_by`, `housecarl_resolve`, `housecarl_diff_record`, batch writes — instead of per-record
-  loops, with the game-generic Creation-Kit conventions those jobs need and one canonical deliverable schema
-  so a fleet of subagents doesn't invent a different output shape each. Game-generic only — a specific mod's
-  own conventions stay in that mod's skill.
+All paths must be absolute native Linux paths. The manifest contains stable
+roots only. On every refresh, the server reads `deploy_state.json` again and
+recalculates the active profile and effective staging paths.
+
+In Codex or Claude Code, call:
+
+```text
+housecarl_set_amethyst_connection
+```
+
+with the manifest's absolute path. Then use:
+
+```text
+housecarl_amethyst_status
+housecarl_refresh
+```
+
+to inspect or refresh the connected profile.
+
+Invalid schemas, stale paths, missing Amethyst state, and unsafe vanilla-data
+layouts fail with named errors. The server never falls back to MO2 behavior or
+guesses winners from deployed `Data/`.
+
+## Amethyst source-of-truth rules
+
+For the active profile:
+
+- `loadorder.txt` supplies authoritative plugin order;
+- `plugins.txt` supplies Skyrim activation state;
+- `modlist.txt` supplies enabled, disabled, and locked mods;
+- `filemap.txt` supplies authoritative loose-file winners;
+- `modindex.bin` v4 recovers exact source-relative paths and Linux casing;
+- `[Overwrite]` resolves to Amethyst's effective overwrite directory;
+- `Data_Core` is the vanilla source while deployment is active.
+
+If Amethyst reports an active deployment but `Data_Core` is absent, the server
+fails instead of misclassifying the merged game `Data/` directory as vanilla.
+
+## Paths on Linux
+
+The code keeps two path domains separate:
+
+- a **Bethesda path** is Data-relative, uses `\`, and compares
+  case-insensitively;
+- a **host path** is an absolute or relative native Linux filesystem path.
+
+Bethesda paths remain unchanged in plugin fields, BSA entries, Skyrim-format
+output, and MCP responses. Before filesystem access, each segment is validated
+and converted to a host path. Absolute paths, drive-prefixed paths, empty
+segments, NULs, and `..` traversal are rejected.
+
+Logical winner lookup is case-insensitive, but filesystem access uses the raw
+casing recorded by Amethyst's mod index.
+
+## Writing patches
+
+The default write target is a new Amethyst staging mod:
+
+```text
+<effective mods directory>/houseCARL - <patch name>/
+├── <patch name>.esp
+└── meta.ini
+```
+
+houseCARL-Amethyst does not edit `modlist.txt`, `plugins.txt`,
+`loadorder.txt`, or `filemap.txt`.
+
+After creating a patch:
+
+1. Refresh Amethyst.
+2. Enable the generated mod.
+3. Rebuild Amethyst's filemap.
+4. Deploy the profile.
+5. Ask houseCARL-Amethyst to refresh before relying on game-visible results.
+
+The server records the write as pending until a later Amethyst deployment can
+be verified.
+
+## Hardlink-safe in-place editing
+
+In-place editing is deliberately harder to invoke than normal patch creation.
+It requires:
+
+- `in_place=true`;
+- the inherited per-plugin consent handshake;
+- `confirm_amethyst_redeploy=true`.
+
+The server writes only to the staging plugin. It never writes through the
+deployed game `Data/` path.
+
+Atomic replacement gives the staging file a new inode. With hardlink
+deployment, the existing deployed pathname may still point to the old inode
+and therefore the old plugin content. This is expected: refresh and redeploy
+through Amethyst before launching the game.
+
+Pending state clears only after:
+
+- the same Amethyst profile is active;
+- deployment is active;
+- filemap/deployment state is newer than the write; and
+- the deployed file matches the new staging content or hardlink identity.
+
+Until those checks pass, the server refuses to claim that the change is
+game-visible.
+
+## Development and verification
+
+Run the complete CI-safe probe suite with:
+
+```bash
+dotnet run --project src/housecarl-generator -- ci-all
+```
+
+The current Linux baseline is 111/111 probes passing. CI fixtures are
+synthetic and contain no copyrighted Skyrim data. A disposable real
+Skyrim/Amethyst hardlink profile remains a manual v1 release gate.
+
+The implementation is intentionally sparse. Public, internal, and private C#
+declarations are being reviewed declaration by declaration and documented in
+plain English. The review standard is
+[HOUSECARL_CODE_DOCUMENTATION.md](standards/HOUSECARL_CODE_DOCUMENTATION.md).
+
+## Not ready yet
+
+The following remain explicitly unfinished:
+
+- the self-contained Linux installer and release archive;
+- automatic discovery and creation of the Amethyst connection manifest;
+- final Codex and Claude Code host-registration workflows;
+- removal of every inherited MO2/Windows message and test-fixture label;
+- reproducible Ubuntu release CI and package leak scanning;
+- real-game hardlink validation;
+- Proton command specifications for PapyrusCompiler and BSArch execution.
+
+PapyrusCompiler and BSArch process execution are post-v1 work. Native record
+editing, BSA reading/listing/extraction, PEX decompilation, NIF inspection, and
+other local features do not require Proton.
+
+## Project documentation
+
+- [Implementation roadmap](docs/HOUSECARL_AMETHYST_ROADMAP.md)
+- [Code documentation standard](standards/HOUSECARL_CODE_DOCUMENTATION.md)
+- [GPL-3.0 license](LICENSE)
+- [Third-party notices](THIRD-PARTY-NOTICES.txt)
 
 ## License
 
-houseCARL is licensed **GPL-3.0-only** — see [LICENSE](LICENSE). This is required by Mutagen (GPL-3.0-only,
-no linking exception), which houseCARL is built on and bundles. Every third-party component and its license
-is listed in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt), along with the corresponding-source
-pointers.
+houseCARL-Amethyst is licensed under **GPL-3.0-only**, preserving houseCARL's
+license and provenance. See [LICENSE](LICENSE) and
+[THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt).
 
-## Credits
+## Acknowledgments
 
-- **[Mutagen](https://github.com/Mutagen-Modding/Mutagen)** by Noggog — the Bethesda-format library
-  houseCARL is built on.
-- **[papyrus-index](https://github.com/BellCubeDev/papyrus-index)** by **BellCube** — the source corpus
-  for the bundled `papyrus-reference` skill. Thank you.
-- **Zzyxzz** (SkyPatcher) and **powerofthree** (SPID and KID) — whose public documentation the
-  distributor-authoring grammar facts were drawn from.
-- **DrHeisen** — contributed the `papyrus-optimization` skill (houseCARL's first community-contributed
-  skill, a Papyrus performance reviewer), the `oar-authoring` skill (Open Animation Replacer config
-  authoring), and the `tool-output-awareness` skill (keeping generated-tool output out of authored patches).
-  Thank you.
+- **[houseCARL](https://github.com/Avick3110/houseCARL)** and its developer,
+  **[Avick3110](https://github.com/Avick3110)** — this project is a derivative
+  Linux/Amethyst port of their original architecture, Mutagen record engine,
+  MCP tools, safety model, probes, and bundled skills. The fork retains
+  upstream history, GPL notices, and original copyright attribution.
+- **[Mutagen](https://github.com/Mutagen-Modding/Mutagen)** by Noggog — the
+  Bethesda-format library on which houseCARL and this fork are built.
+- **[Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager)**
+  by ChrisDKN — the native Linux mod manager and state model used by this fork.
+- **[papyrus-index](https://github.com/BellCubeDev/papyrus-index)** by BellCube
+  — source material for the bundled Papyrus reference skill.
+- **DrHeisen** — contributor of the upstream Papyrus optimization, OAR
+  authoring, and generated-tool awareness skills retained by this fork.
+- **Zzyxzz** and **powerofthree** — maintainers whose public SkyPatcher, SPID,
+  and KID documentation informs the bundled distributor references.
