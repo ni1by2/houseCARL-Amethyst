@@ -258,34 +258,36 @@ manual release gate.
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
 - Last completed checkpoint: reviewed and documented every declaration in
-  `PluginFile`, `Schema`, `SchemaClassifier`, and `EmbeddedJson`. Every
-  serialized corpus property now explains its wire meaning, null/empty state,
-  count domain, runtime reflection role, or deterministic ordering contract.
-  Classifier methods now document their field/corpus inputs, complete element
-  partition, coercion boundary, and returned verdict. The embedded-resource
-  reader documents suffix matching, returned ownership, and its fail-loud
-  exception. Runtime behavior is unchanged.
+  `AtomicFile`, `UserConfig`, `HousecarlOwnerMeta`, and `ModManagerLayout`.
+  Atomic-write methods now state their same-volume staging, consumed-source,
+  original-file preservation, parameter, and exception contracts. Persisted
+  user state now names all four independent concerns and the replacement key
+  for pending redeploy entries. Ownership comments are Amethyst/Linux-native
+  rather than inherited MO2/Windows wording. The manager interface and complete
+  immutable snapshot already met the standard and required no source edit.
+  Runtime behavior is unchanged.
 - Verification performed: the .NET 9 Linux solution builds with zero errors.
   The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
   BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
   native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
-  and Codex umbrella guards pass. The focused `corpus-hygiene-guard`,
-  `coerce-selftest`, `coerce-audit`, `sameshape-agree-guard`, and
-  `vmad-poly-guard` pass, covering the 1,170-type corpus, structural
-  invariants, coercion completeness, same-shape write legality, and
-  polymorphic element-family classification. The timing-sensitive cold
+  and Codex umbrella guards pass. The focused `tool-bridge`,
+  `atomic-commit-guard`, `amethyst-layout-guard`,
+  `amethyst-runtime-guard`, `amethyst-redeploy-guard`, and `inplace-guard`
+  pass, covering cross-process state merging and corrupt recovery, Linux
+  old-inode replacement, complete manager snapshots and profile refresh,
+  pending-redeploy clearing, deployment modes, and persistent in-place
+  consent. The timing-sensitive cold
   `freshness-capture-guard` remains green from the resolver checkpoint.
   Full `ci-all` remains 111/111 on Linux. XML-document generation succeeds
-  with zero errors; the four reviewed schema files contribute no compiler or
-  XML warning. A separate unsuppressed documentation rebuild confirms none of
-  their declarations emits CS1591 and reduces the repository-wide warning
-  count from 438 to 419. Inherited warnings in other components remain queued
-  for their declaration passes.
+  with zero errors; the four reviewed storage/ownership files contribute no
+  compiler or XML warning. A separate unsuppressed documentation rebuild
+  confirms none of their declarations emits CS1591. Inherited warnings in other
+  components remain queued for their declaration passes.
   `git diff --check` passes and no merge-conflict markers remain.
-- Files/components changed: `TypeSchema`, `FieldSchema`, `Corpus`,
-  `SchemaClassifier`, `EmbeddedJson`, the roadmap, and the user-facing
-  checkpoint. `PluginFile` was reviewed and already met the standard without
-  requiring a source edit.
+- Files/components changed: `AtomicFile`, `UserConfig`, `UserConfigStore`,
+  `HousecarlOwnerMeta`, the roadmap, and the user-facing checkpoint.
+  `IModManagerLayout` and `ManagerSnapshot` were reviewed and already met the
+  standard without requiring a source edit.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. Upstream native archive reads replace the
   Windows-only BSArch dependency for list/extract; archive packing remains the
@@ -305,19 +307,21 @@ manual release gate.
   product boundary. `LoadOrderResolver`, `ReadEngine`, `FieldsDiff`,
   `FieldPredicate`, `EffectChain`, `ErrorCheck`, `RecordNaming`,
   `EngineImplicit`, `FormIdRange`, `PluginNameSuggest`, `PluginFile`, `Schema`,
-  `SchemaClassifier`, and `EmbeddedJson` are complete; the remaining inherited
-  core components have not yet received the same declaration-by-declaration
-  review. The Linux suite has no accepted red baseline.
+  `SchemaClassifier`, `EmbeddedJson`, `AtomicFile`, `UserConfig`,
+  `HousecarlOwnerMeta`, and `ModManagerLayout` are complete; the remaining
+  inherited core components have not yet received the same
+  declaration-by-declaration review. The Linux suite has no accepted red
+  baseline.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  with storage and ownership contracts in `AtomicFile`, `UserConfig`,
-  `HousecarlOwnerMeta`, and `ModManagerLayout`. Review every declaration,
-  explicitly document atomicity, locking, recovery, persisted state, ownership
-  markers, and snapshot immutability, and keep behavior unchanged. Run their
-  persistence, atomic-commit, layout, and redeploy guards, a strict XML build,
-  and full `ci-all`. Rewrite setup documentation with the Session 6 Linux
+  with canonical asset-path utilities in `BethesdaPath`, `FaceGenPath`,
+  `VoicePath`, and `SeqFile`. Review every declaration and explicitly document
+  canonical-versus-host separators, traversal rejection, casing, FormID-derived
+  asset locations, SEQ parsing/writing, and failure ownership without changing
+  behavior. Run their path, asset-carry, voice, SEQ, and full-CI guards plus a
+  strict XML build. Rewrite setup documentation with the Session 6 Linux
   installer rather than preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
@@ -334,7 +338,7 @@ manual release gate.
   completes the `FieldsDiff` and `FieldPredicate` documentation checkpoint;
   `23c7c9a` completes the `EffectChain` and `ErrorCheck` documentation
   checkpoint; `0b85b13` completes the shared identity-utility documentation
-  checkpoint.
+  checkpoint; `16b809a` completes the schema-metadata documentation checkpoint.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

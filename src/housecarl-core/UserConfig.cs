@@ -7,9 +7,9 @@ namespace HousecarlCore;
 /// <summary>
 /// The on-disk user config shape (houseCARL.user.json) — the values houseCARL persists for ITSELF at runtime, separate
 /// from the shipped appsettings.json. Independent concerns share this one file: the Amethyst connection, external-tool
-/// paths (written by housecarl_set_tool_path — the bridge for compile /
-/// BSA / log access). They MUST coexist — a write of one must never clobber the other — which is why the only writer is
-/// <see cref="UserConfigStore.Update"/> (read-modify-write under a lock), never a whole-object overwrite.
+/// paths, in-place consent, and pending-redeployment evidence. They MUST coexist — a write of one must never clobber
+/// the others — which is why the only writer is <see cref="UserConfigStore.Update"/> (read-modify-write under a lock),
+/// never a whole-object overwrite.
 /// </summary>
 public sealed class UserConfig
 {
@@ -29,13 +29,14 @@ public sealed class UserConfig
     /// clobber (or be clobbered by) the connection or tool paths.</summary>
     public List<string>? InPlaceAcknowledged { get; set; }
 
-    /// <summary>Staged writes that are not game-visible until Amethyst rebuilds and deploys.</summary>
+    /// <summary>Staged writes that are not game-visible until Amethyst rebuilds and deploys. Null/absent means no
+    /// pending verification; entries are replaced by profile plus canonical Data-relative path.</summary>
     public List<PendingAmethystWrite>? PendingAmethystWrites { get; set; }
 }
 
 /// <summary>
-/// The single OWNER of houseCARL.user.json — every read and write of that file goes through here, so the two independent
-/// writers can never clobber each other's field. Hardened per the
+/// The single OWNER of houseCARL.user.json — every read and write of that file goes through here, so independent
+/// concerns can never clobber each other's fields. Hardened per the
 /// 2026-06-12 adversarial hunt (F3, hunter-PROVEN silent clobbers):
 ///   • ATOMIC — <see cref="Update"/> serializes to a sibling temp file and renames it over the target (same volume),
 ///     so a reader never sees a half-written file and a crash mid-write never corrupts the saved config.
@@ -120,7 +121,7 @@ public sealed class UserConfigStore
     public UserConfig Load() => Load(out _);
 
     /// <summary>Apply <paramref name="mutate"/> to the CURRENT on-disk config and write it back ATOMICALLY (temp +
-    /// rename) — the ONLY way the file is written, so the two concerns merge instead of overwriting. Returns (ok, error,
+    /// rename) — the ONLY way the file is written, so independent concerns merge instead of overwriting. Returns (ok, error,
     /// note): a write failure is reported in <c>error</c>, not thrown (Q3 — "works this session, won't persist"); a
     /// corrupt prior file is backed up and named in <c>note</c> even when the write itself succeeds, so a recovery is
     /// never silent. The whole read-modify-write runs under the cross-process lock.</summary>
