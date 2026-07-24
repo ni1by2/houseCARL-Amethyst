@@ -59,6 +59,11 @@ public static class ErrorCheck
     /// wanted). Each is opened as its OWN overlay; its links resolve against the active order PLUS the file's own
     /// records (a patch's link to its own new record is not dangling), and a declared master absent from the active
     /// order is a MISSING MASTER finding — same classes, same rendering, plus an OFF-ORDER stamp in the result.</para></summary>
+    /// <param name="resolver">Source of the captured active-order view and record streams.</param>
+    /// <param name="scope">Plugin filenames to check; null or empty checks the complete parseable active order.</param>
+    /// <param name="limit">Global maximum number of dangling-reference rows retained; totals remain uncapped.</param>
+    /// <param name="offOrder">Optional plugin filename/path pairs to verify before they are enabled.</param>
+    /// <returns>A complete integrity report, or a recoverable scope error with no partial findings.</returns>
     public static ErrorCheckResult Run(LoadOrderResolver resolver, IReadOnlyList<string>? scope, int limit,
                                        IReadOnlyList<(string Name, string Path)>? offOrder = null)
     {
@@ -272,9 +277,13 @@ public static class ErrorCheck
     /// link elsewhere in the record. Owner targets live ONLY on <see cref="IExtraDataGetter.Owner"/>, carried by exactly
     /// these four record types (by the generated schema — a fifth would be an upstream Mutagen change, caught by the
     /// schema regen), so this switch is the complete surface.</para></summary>
+    /// <param name="body">Record whose ownership extra-data fields will be examined.</param>
+    /// <returns>Exact exempt FormKeys and their occurrence counts within this record.</returns>
     static Dictionary<FormKey, int> UntypedOwnerVariableData(IMajorRecordGetter body)
     {
         var acc = new Dictionary<FormKey, int>();
+
+        // Add one untyped ownership variable to the per-record multiset when it is a non-null FormKey.
         void Add(IExtraDataGetter? ed)
         {
             if (ed?.Owner is not IUntypedOwnerGetter uo) return;
@@ -295,11 +304,21 @@ public static class ErrorCheck
 
 /// <summary>One broken reference: the SOURCE record (FormKey + catalog type + editorid) and the TARGET FormKey no
 /// active plugin defines.</summary>
+/// <param name="Source">FormKey of the record containing the unresolved link.</param>
+/// <param name="SourceType">Catalog type of the source record, without Mutagen overlay suffixes.</param>
+/// <param name="SourceEditorId">Optional editor identifier of the source record.</param>
+/// <param name="Target">Non-null FormKey that neither the active order nor an allowed self-file defines.</param>
 public sealed record DanglingRef(FormKey Source, string SourceType, string? SourceEditorId, FormKey Target);
 
 /// <summary>Every error found in one plugin: its dangling references (capped across the sweep), the masters it declares
 /// that are not present in the active order, the count + samples of records that could not be scanned, and — if the
 /// plugin's own enumeration faulted — a <paramref name="ScanError"/>.</summary>
+/// <param name="Plugin">Filename of the active or off-order plugin checked.</param>
+/// <param name="Dangling">Retained unresolved references belonging to this plugin.</param>
+/// <param name="MissingMasters">Declared master filenames absent from the active order.</param>
+/// <param name="UnscannableRecords">Number of record bodies skipped after isolated link-walk failures.</param>
+/// <param name="UnscannableSamples">At most three representative record failure diagnostics.</param>
+/// <param name="ScanError">Optional master-table or top-level enumeration failure.</param>
 public sealed record PluginErrors(
     string Plugin,
     IReadOnlyList<DanglingRef> Dangling,
@@ -312,6 +331,15 @@ public sealed record PluginErrors(
 /// plugins are counted in <paramref name="PluginsScanned"/> but omitted), the sweep totals, whether the dangling list
 /// was capped at the caller's limit, the plugins the index build excluded as unparseable, and — on a Q3 scope error —
 /// a recoverable <see cref="Error"/> with no reports.</summary>
+/// <param name="Reports">Only plugins with at least one finding or scan failure.</param>
+/// <param name="PluginsScanned">Number of active and off-order plugin files selected for checking.</param>
+/// <param name="TotalDangling">True unresolved-link count, including rows omitted by the limit.</param>
+/// <param name="TotalMissingMasters">Total absent declared masters across checked plugins.</param>
+/// <param name="TotalUnscannableRecords">Total record bodies skipped after isolated parse failures.</param>
+/// <param name="Capped">Whether at least one dangling-reference row was omitted by the global limit.</param>
+/// <param name="ExcludedPlugins">Active-order plugins excluded during index construction and their reasons.</param>
+/// <param name="Error">Recoverable scope validation failure; null when the sweep ran.</param>
+/// <param name="OffOrderScanned">Off-order plugin filenames checked, or null when that lane was not requested.</param>
 public sealed record ErrorCheckResult(
     IReadOnlyList<PluginErrors> Reports,
     int PluginsScanned,
@@ -323,7 +351,12 @@ public sealed record ErrorCheckResult(
     string? Error,
     IReadOnlyList<string>? OffOrderScanned = null)
 {
+    /// <summary>Whether scope validation succeeded and the sweep produced a meaningful report.</summary>
     public bool Success => Error is null;
+
+    /// <summary>Constructs the uniform empty result returned for invalid explicit scope.</summary>
+    /// <param name="error">Actionable scope diagnostic suitable for the MCP response.</param>
+    /// <returns>An unsuccessful result with zero totals and no reports.</returns>
     public static ErrorCheckResult Fail(string error) =>
         new(Array.Empty<PluginErrors>(), 0, 0, 0, 0, false,
             new Dictionary<string, string>(), error);

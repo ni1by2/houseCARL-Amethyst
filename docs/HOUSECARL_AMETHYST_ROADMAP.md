@@ -258,30 +258,32 @@ manual release gate.
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
 - Last completed checkpoint: reviewed and documented every declaration in
-  `FieldsDiff` and `FieldPredicate`. Their public result records, comparison
-  modes, absence sentinel, exact/root/list diff paths, normalized multiset
-  behavior, parser grammar, presence classification, FormKey and numeric
-  comparisons, bit-mask handling, accounting counters, and diagnostic helpers
-  now have plain-English contracts. Private parser inputs were annotated
-  nullable to match their existing defensive handling; accepted inputs and
-  runtime behavior are unchanged.
+  `EffectChain` and `ErrorCheck`, including their result records and the
+  ownership-variable local helper. Parameters now explain load-order snapshot
+  ownership, carrier scope, row limits versus true totals, typed target gates,
+  active versus off-order plugin scans, dangling-reference accounting,
+  missing-master and parse-failure boundaries, retained sample limits, and
+  uniform recoverable failure shapes. The stale XML reference to the renamed
+  predicate type was corrected; runtime behavior is unchanged.
 - Verification performed: the .NET 9 Linux solution builds with zero errors.
   The focused Amethyst layout, load-order, filemap, runtime, redeploy, dry-run,
   BSA contract/extract, NIF batch/sections, SKSE peek/config-audit,
   native-pairing, argument-binding, readback-count, raw-plugin-read, provenance,
-  and Codex umbrella guards pass. The focused `value-predicate-guard`,
-  `bulk-query-primitives-guard`, `bulk-primitives-wave2-guard`,
-  `flag-bits-display-guard`, `flags-bit-verb-guard`, and
-  `conflict-diff-guard` all pass. The timing-sensitive cold
+  and Codex umbrella guards pass. The focused `effect-chain-guard` and
+  `check-errors-guard` both pass, covering all five modeled carrier types,
+  multi-entry effects, typed failure gates, capping, active and off-order
+  integrity scans, missing masters, self-links, engine-implicit forms, and
+  untyped-owner rank exemptions. The timing-sensitive cold
   `freshness-capture-guard` remains green from the resolver checkpoint.
   Full `ci-all` remains 111/111 on Linux. XML-document generation succeeds
-  while suppressing only missing-member warning CS1591; `FieldsDiff` and
-  `FieldPredicate` now contribute no compiler or XML warnings, including the
-  former nullability warning at the defensive predicate parser boundary.
-  Inherited warnings in other components remain queued for their declaration
-  passes. `git diff --check` passes and no merge-conflict markers remain.
-- Files/components changed: `FieldsDiff`, `FieldPredicate`, the roadmap, and
-  the user-facing checkpoint.
+  with zero errors and 28 inherited non-CS1591 warnings; `EffectChain` and
+  `ErrorCheck` contribute none. A separate unsuppressed documentation rebuild
+  confirms neither file emits CS1591 or any other warning. Inherited warnings
+  in other components remain queued for their declaration passes.
+  `git diff --check` passes and no merge-conflict markers remain.
+- Files/components changed: `EffectChain`, `EffectChainRow`,
+  `EffectChainResult`, `ErrorCheck`, `DanglingRef`, `PluginErrors`,
+  `ErrorCheckResult`, the roadmap, and the user-facing checkpoint.
 - Decisions made: staging is the only write target; deployed `Data/` is used
   solely for later verification. Upstream native archive reads replace the
   Windows-only BSArch dependency for list/extract; archive packing remains the
@@ -298,20 +300,21 @@ manual release gate.
   component has been reviewed. `LoadOrderResolver` and `ReadEngine` are
   complete, but historical service consumers and some probe text still include
   inherited MO2-named fixtures and terminology that must be removed at the
-  product boundary. `LoadOrderResolver`, `ReadEngine`, `FieldsDiff`, and
-  `FieldPredicate` are complete; the remaining inherited core components have
-  not yet received the same declaration-by-declaration review. The Linux suite
-  has no accepted red baseline.
+  product boundary. `LoadOrderResolver`, `ReadEngine`, `FieldsDiff`,
+  `FieldPredicate`, `EffectChain`, and `ErrorCheck` are complete; the remaining
+  inherited core components have not yet received the same
+  declaration-by-declaration review. The Linux suite has no accepted red
+  baseline.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  with `EffectChain` and `ErrorCheck`, the coupled analysis consumers whose
-  focused guards already exercise carrier resolution and load-order integrity
-  scanning. Keep behavior unchanged, fix XML references exposed by the strict
-  build, and run `effect-chain-guard`, `check-errors-guard`, and full `ci-all`.
-  Rewrite setup documentation with the Session 6 Linux installer rather than
-  preserving transitional contracts.
+  with the small shared identity utilities `RecordNaming`, `EngineImplicit`,
+  `FormIdRange`, and `PluginNameSuggest`. Explain normalization, engine-reserved
+  identities, range classification, and suggestion thresholds without changing
+  behavior; run their direct/transitive guards, a strict XML build, and full
+  `ci-all`. Rewrite setup documentation with the Session 6 Linux installer
+  rather than preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -323,7 +326,8 @@ manual release gate.
   safety and path contracts; `abaa5a1` records the Linux failure audit;
   `80c10c4` normalizes those probes and establishes the 111/111 Linux suite;
   `b41069c` completes the `LoadOrderResolver` documentation checkpoint;
-  `5a4ad7d` completes the `ReadEngine` documentation checkpoint.
+  `5a4ad7d` completes the `ReadEngine` documentation checkpoint; `e468879`
+  completes the `FieldsDiff` and `FieldPredicate` documentation checkpoint.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
