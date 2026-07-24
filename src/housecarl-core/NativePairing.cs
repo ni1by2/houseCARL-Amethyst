@@ -2,41 +2,21 @@ using Mutagen.Bethesda.Pex;
 
 namespace HousecarlCore;
 
-// ======================================================================
-//  NativePairing — the PURE half of the native-function pairing audit
-//  (housecarl_native_pairing_audit; plan dev/plans/SKSE_NATIVE_PAIRING_AUDIT_PLAN_2026-07-16.md).
-//
-//  A native Papyrus function is ONE thing declared in TWO places: a .pex script class carrying a
-//  native-flagged function (what quests/MCMs/effects compile against) and a DLL that registers the
-//  implementation at runtime. The halves ship as separate files and fail INDEPENDENTLY — scripts
-//  installed, DLL absent / wrong-runtime / 32-bit — and the engine's response is "unable to bind" +
-//  silent no-op calls. This file extracts the DECLARATION side from a compiled .pex: which script
-//  objects declare native functions, and which functions those are.
-//
-//  Pure over Mutagen's PexFile model (the PapyrusDecompiler/ScriptPropertyCheck lineage) so the CI
-//  probe can pin it against fixture .pex files with no live order. The sweep, provenance
-//  classification, and pairing ladder live in LoadOrderService (they need the VFS + archive
-//  provenance); the honest ceiling stays tier E — this reads what a script DECLARES, never what a
-//  DLL actually registers at runtime.
-// ======================================================================
-
-/// <summary>One script object (class) in a <c>.pex</c> that declares ≥1 native-flagged function, with the declared
-/// native function names (named state functions; a native-flagged property accessor surfaces as <c>Prop.Get</c>/
-/// <c>Prop.Set</c>). <see cref="ClassName"/> is the pex object's own name — the class identity scripts compile
-/// against, which for a namespaced script includes the namespace (<c>Ns:Script</c>).</summary>
+/// <summary>Lists native Papyrus functions declared by one compiled script class.</summary>
+/// <param name="ClassName">PEX object name, including any Papyrus namespace.</param>
+/// <param name="NativeFunctions">Named state functions and property accessors marked native.</param>
 public sealed record NativeClassDecl(string ClassName, IReadOnlyList<string> NativeFunctions);
 
+/// <summary>Extracts the Papyrus declaration half of an SKSE native-function pairing.</summary>
+/// <remarks>This does not prove that a DLL registers the declared functions at runtime.</remarks>
 public static class NativePairing
 {
-    /// <summary>The native flag on <see cref="PexObjectFunction.Flags"/>: raw bit1 (bit0 = Global). Mutagen's enum
-    /// names sit one off from the file format — the documented off-by-one (PapyrusDecompiler header) — so the raw
-    /// bit is the truth, pinned by the native-pairing guard's fixture arm.</summary>
+    /// <summary>Raw PEX function flag bit that marks a native implementation.</summary>
     const uint NativeFlagBit = 0x2;
 
-    /// <summary>Extract every script object in <paramref name="pex"/> that declares native functions. An object with
-    /// no native functions yields nothing (the common case — most scripts are pure Papyrus). Pure; never throws on a
-    /// model Mutagen managed to parse (an UNPARSEABLE .pex fails at <c>PexFile.Create*</c> in the caller, which names
-    /// it — Q3).</summary>
+    /// <summary>Extracts classes that declare at least one native function or accessor.</summary>
+    /// <param name="pex">Already parsed PEX model owned by the caller.</param>
+    /// <returns>Native declarations in PEX object order.</returns>
     public static IReadOnlyList<NativeClassDecl> ExtractNativeClasses(PexFile pex)
     {
         var result = new List<NativeClassDecl>();
@@ -46,7 +26,7 @@ public static class NativePairing
             foreach (var st in obj.States)
                 foreach (var f in st.Functions.Cast<PexObjectNamedFunction>())
                     if (IsNative(f.Function)) natives.Add(f.FunctionName ?? "(unnamed)");
-            // Property accessors are functions too; a native-flagged one is rare but real — count it, never drop it.
+            // Property handlers are functions too and must participate in pairing.
             foreach (var p in obj.Properties)
             {
                 if (p.ReadHandler is { } get && IsNative(get)) natives.Add($"{p.Name}.Get");
@@ -58,5 +38,8 @@ public static class NativePairing
         return result;
     }
 
+    /// <summary>Tests the raw native flag on one PEX function.</summary>
+    /// <param name="f">Function to inspect.</param>
+    /// <returns>True when the native bit is set.</returns>
     static bool IsNative(PexObjectFunction f) => ((uint)f.Flags & NativeFlagBit) != 0;
 }

@@ -257,35 +257,34 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: reviewed every declaration in `DialogueValidate`,
-  `DialogueSubtype`, and `DialogueCkParity`. Historical incident narratives
-  have been replaced with local type and member contracts. The documentation
-  now explains validation scope and severity, winner/session ownership,
-  dialogue graph and condition checks, diagnostic limits, SNAM derivation,
-  non-override default materialization, shared presence predicates, and the
-  distinction between Creation Kit parity and known runtime defects.
+- Last completed checkpoint: reviewed every declaration in `CellShellCheck`,
+  `ScriptPropertyCheck`, `NativePairing`, and `SksePeek`. Historical design
+  narratives have been replaced with local type and member contracts. The
+  documentation now explains post-write cell-shell ownership, recursive PEX
+  property traversal, quest-alias attachments, finding caps and fault
+  isolation, native declaration limits, bounded DLL reads, ASCII/UTF-16
+  extraction, and conservative embedded-string classification.
 - Verification performed: the serialized .NET 9 Linux solution build succeeds
   with zero errors. A forced unsuppressed XML-documentation rebuild succeeds
-  and reports no warning from the three reviewed files; its 140 warnings
-  belong to components still queued for review. Dialogue validation,
-  subtype-marker, Creation Kit parity, and nested-create guards all pass. The
-  focused pass caught a changed `Run On a specific reference` contract phrase,
-  which was restored before the full suite. Full `ci-all` is 111/111 on Linux
-  after the final edit. `git diff --check` passes and the reviewed files
-  contain no line longer than 120 characters.
-- Files/components changed: `DialogueValidate`, `DialogueSubtype`,
-  `DialogueCkParity`, the tracked roadmap, and the user-facing roadmap copy.
-- Decisions made: validation consumes one pinned load-order session and asset
-  snapshot and inspects only the winning INFO set visible to the game. It
-  reports structural defects but does not guess condition truth, audio quality,
-  or lip synchronization. Missing owner data suppresses only checks that would
-  otherwise guess. SNAM normalization remains table-driven from xEdit rather
-  than inferred from unreliable enum names or vanilla DATA values. CK parity
-  fills preserve every explicit author value, surface every automatic change,
-  and share presence predicates with read-only gap reporting. Non-nullable
-  topic Priority uses caller intent to distinguish unset from explicit zero.
-  Quest ANAM max-plus-one derivation remains create-only. Existing diagnostic
-  phrases remain stable where regression probes treat them as contract text.
+  and reports no warning from the four reviewed files; its 133 warnings belong
+  to components still queued for review. Bulk cell creation, script-property
+  checks, native pairing, and SKSE static-peek guards all pass. Full `ci-all`
+  is 111/111 on Linux after the final edit. `git diff --check` passes and the
+  reviewed files contain no line longer than 120 characters.
+- Files/components changed: `CellShellCheck`, `ScriptPropertyCheck`,
+  `NativePairing`, `SksePeek`, the tracked roadmap, and the user-facing roadmap
+  copy.
+- Decisions made: cell-shell reporting remains a post-write diagnostic that
+  cannot invalidate a completed write. Script-property validation checks Auto
+  properties only, follows the full readable extends chain, includes
+  quest-alias attachments, preserves uncapped totals, and retains per-record
+  and per-plugin failures. Alias-bound object properties are not mistaken for
+  null bindings. Native pairing reports what PEX declares, never what a DLL
+  registers at runtime. DLL peeking requires a complete bounded read; an
+  oversized or unreadable image cannot become a clean empty result. Plugin
+  string classification stays stricter than configuration-path classification
+  because plugin names are compared with the active order and can raise
+  alarms.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -302,8 +301,9 @@ manual release gate.
   `VoicePath`, `SeqFile`, `AssetResolver`, `ArchiveDiscovery`, `BsaArchive`,
   `NpcAppearanceAssets`, `NpcAppearanceCopy`, `AssetRenameService`,
   `NifService`, `VoiceCheck`, `DialogueScriptCheck`, `DialogueValidate`,
-  `DialogueSubtype`, and `DialogueCkParity` are complete; the remaining
-  inherited core components have not yet received the same
+  `DialogueSubtype`, `DialogueCkParity`, `CellShellCheck`,
+  `ScriptPropertyCheck`, `NativePairing`, and `SksePeek` are complete; the
+  remaining inherited core components have not yet received the same
   declaration-by-declaration review. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
   BSArch path is supplied; self-contained native archive fixtures cover v1
@@ -314,12 +314,11 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  across `CellShellCheck`, `ScriptPropertyCheck`, `NativePairing`, and
-  `SksePeek`. Review every declaration and explicitly document post-write
-  diagnostic ownership, recursive property traversal, native-plugin metadata
-  limits, binary parsing bounds, and incomplete-read behavior. Run their
-  focused cell-shell, script-property, native-pairing/SKSE, strict-XML, and
-  full-CI guards.
+  across `PapyrusCompile`, `ToolBridge`, and `PapyrusDecompiler`. Review every
+  declaration and explicitly document native versus deferred external-command
+  boundaries, argument ownership, process and log handling, PEX parser limits,
+  bytecode rendering, and failure isolation. Run their focused compile,
+  tool-bridge, decompile, strict-XML, and full-CI guards.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -344,7 +343,8 @@ manual release gate.
   documentation checkpoint; `973083e` completes the asset-provider
   documentation checkpoint; `fabf847` completes the asset-carry documentation
   checkpoint; `e3adb8c` completes the NIF and dialogue-diagnostics
-  documentation checkpoint. The dialogue-semantics checkpoint is pending
+  documentation checkpoint; `5c0039f` completes the dialogue-semantics
+  documentation checkpoint. The supporting-diagnostics checkpoint is pending
   commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap

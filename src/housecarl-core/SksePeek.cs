@@ -2,25 +2,13 @@ using System.Text;
 
 namespace HousecarlCore;
 
-// ======================================================================
-//  SksePeek — the STRING half of the SKSE tier-D static peek
-//  (housecarl_skse_inventory peek=true; plan dev/plans/SKSE_TIER_D_STATIC_PEEK_PLAN_2026-07-16.md).
-//
-//  Tier D answers "what does this unfamiliar DLL's IMAGE statically contain" — its imports (which ride
-//  the manifest read in SksePluginReader, because they're free there) and the high-signal strings it
-//  embeds, which live here because scanning a whole image is NOT free and so stays opt-in per-DLL.
-//
-//  The honest frame, and the reason this file filters instead of dumping: a string in an image is what
-//  the image CONTAINS, never what the code DOES (tier E is the ceiling), and ABSENCE PROVES NOTHING —
-//  RequiemLP.dll and YASTM.dll embed no plugin names at all, because their form references live in
-//  configs or are built at runtime. "Nothing embedded" is therefore a fact about the image; it is never
-//  "no dependencies". Every renderer of this data must carry that framing.
-// ======================================================================
-
-/// <summary>What one DLL's image statically embeds, filtered to the extraction classes worth reading (tier D).
-/// <see cref="RunsScanned"/> vs the list sizes is the Q3 accounting: the classes are a FILTER over the haystack, and the
-/// cut is stated rather than implied. A raw full-strings dump is deliberately not offered — it is the noisy 95% these
-/// classes exist to remove, and anyone who needs it has real <c>strings</c> tooling.</summary>
+/// <summary>Reports high-signal paths and plugin names embedded as strings in one DLL image.</summary>
+/// <param name="ConfigPaths">Distinct configuration-like strings.</param>
+/// <param name="PluginRefs">Distinct plugin filenames.</param>
+/// <param name="RunsScanned">Printable ASCII and UTF-16LE runs considered.</param>
+/// <param name="BytesScanned">Image byte count.</param>
+/// <param name="Note">Failure reason, or null after a complete scan.</param>
+/// <remarks>Embedded strings describe image contents, not runtime behavior or complete dependency coverage.</remarks>
 public sealed record SksePeekResult(
     IReadOnlyList<string> ConfigPaths,
     IReadOnlyList<string> PluginRefs,
@@ -28,33 +16,31 @@ public sealed record SksePeekResult(
     long BytesScanned,
     string? Note)
 {
-    /// <summary>Why the scan produced nothing — set ONLY on failure (unreadable image / past the size cap), null on
-    /// every successful scan. There is deliberately no partial-scan state: an image past <see cref="SksePeek.SizeCap"/>
-    /// is refused and NAMED rather than half-read, because a half-read image's "nothing embedded" would be a silent
-    /// lie. So <see cref="Note"/> is exactly the failure channel, and <see cref="Failed"/> reads off it.</summary>
+    /// <summary>Gets why the complete scan could not run, or null after success.</summary>
     public string? Note { get; init; } = Note;
 
-    /// <summary>True when the scan did not happen — the caller must not render this as a clean "embeds nothing" (Q3).
-    /// <see cref="Note"/> carries the reason.</summary>
+    /// <summary>Gets whether the scan was refused or failed.</summary>
     public bool Failed => Note is not null;
 }
 
+/// <summary>Performs a bounded static string scan over an SKSE DLL image.</summary>
 public static class SksePeek
 {
-    /// <summary>Per-image byte cap for the string scan. SKSE plugin DLLs are single-digit MB; 64 MB is far above any real
-    /// one, so the cap trips only on the pathological case it exists to NAME (a scan cut is reported, never silent).</summary>
+    /// <summary>Maximum image size accepted for a complete string scan.</summary>
     public const long SizeCap = 64L * 1024 * 1024;
 
-    /// <summary>Shortest run counted as a string. 4 is the <c>strings(1)</c> convention: shorter runs are overwhelmingly
-    /// code bytes that happen to be printable, and every extraction class here needs more than 4 chars anyway.</summary>
+    /// <summary>Minimum printable run length, matching the conventional <c>strings(1)</c> default.</summary>
     const int MinRun = 4;
 
+    /// <summary>Plugin extensions recognized by the classifier.</summary>
     static readonly string[] PluginExts = [".esp", ".esm", ".esl"];
+
+    /// <summary>Configuration extensions recognized by the classifier.</summary>
     static readonly string[] ConfigExts = [".ini", ".toml", ".json", ".yaml", ".yml"];
 
-    /// <summary>Peek one DLL off disk. Never throws — an unreadable image returns a <see cref="SksePeekResult.Failed"/>
-    /// result carrying the reason, never an empty-but-clean-looking one (Q3). Read-share + closed before return, the
-    /// no-handle-at-rest discipline <see cref="SksePluginReader"/> holds.</summary>
+    /// <summary>Reads and scans one DLL without retaining a file handle.</summary>
+    /// <param name="filePath">Native DLL path.</param>
+    /// <returns>A complete scan result or an explicit failure result.</returns>
     public static SksePeekResult Scan(string filePath)
     {
         try
@@ -62,7 +48,8 @@ public static class SksePeek
             var fi = new FileInfo(filePath);
             if (fi.Length > SizeCap)
                 return new SksePeekResult([], [], 0, 0,
-                    $"image is {fi.Length / (1024 * 1024)} MB — past the {SizeCap / (1024 * 1024)} MB peek cap; NOT scanned");
+                    $"image is {fi.Length / (1024 * 1024)} MB — past the " +
+                    $"{SizeCap / (1024 * 1024)} MB peek cap; NOT scanned");
             return ScanBytes(File.ReadAllBytes(filePath));
         }
         catch (Exception ex)
@@ -71,10 +58,9 @@ public static class SksePeek
         }
     }
 
-    /// <summary>The pure scan over image bytes — PURE so the skse-peek-guard can pin extraction against planted fixtures
-    /// with no real DLL. Walks the bytes for printable runs in BOTH encodings (ASCII and UTF-16LE: modern C++ plugins use
-    /// wide strings, so scanning only ASCII would silently halve coverage — the exact class of silent gap Q3 forbids),
-    /// then keeps only the runs matching an extraction class.</summary>
+    /// <summary>Scans in-memory image bytes for printable ASCII and UTF-16LE runs.</summary>
+    /// <param name="bytes">Complete image bytes.</param>
+    /// <returns>Filtered configuration paths and plugin references.</returns>
     public static SksePeekResult ScanBytes(ReadOnlySpan<byte> bytes)
     {
         var configs = new List<string>();
@@ -86,7 +72,7 @@ public static class SksePeek
         foreach (var run in Runs(bytes))
         {
             runs++;
-            // Plugin-ref FIRST: "Data\Skyrim.esm" is both path-shaped and a plugin reference, and the plugin reference is
+            // Plugin references take priority because they can also look like paths.
             // the sharper signal (it cross-checks against the load order), so it wins the classification.
             if (PluginRefIn(run) is { } p) { if (seenPlg.Add(p)) plugins.Add(p); }
             else if (IsConfigPath(run) && seenCfg.Add(run)) configs.Add(run);
@@ -94,16 +80,17 @@ public static class SksePeek
         return new SksePeekResult(configs, plugins, runs, bytes.Length, null);
     }
 
-    /// <summary>Every printable run of at least <see cref="MinRun"/> chars, ASCII then UTF-16LE. UTF-16 is scanned at both
-    /// byte alignments (an image's wide strings are usually 2-aligned, but nothing guarantees it); the two encodings can't
-    /// double-count, because a wide string's interleaved NULs break every ASCII run at length 1.</summary>
+    /// <summary>Extracts printable ASCII and UTF-16LE runs at both wide-string alignments.</summary>
+    /// <param name="b">Image bytes.</param>
+    /// <returns>Eagerly collected runs, safe to return beyond the span lifetime.</returns>
     static IEnumerable<string> Runs(ReadOnlySpan<byte> b)
     {
         // A span can't cross an iterator boundary, so collect eagerly — bounded by SizeCap.
         var outp = new List<string>();
         var sb = new StringBuilder(64);
 
-        for (int i = 0; i <= b.Length; i++)                       // <= : the final iteration flushes a run ending AT the buffer end
+        // The final sentinel iteration flushes a run ending at the buffer boundary.
+        for (int i = 0; i <= b.Length; i++)
         {
             if (i < b.Length && IsPrintable(b[i])) { sb.Append((char)b[i]); continue; }
             if (sb.Length >= MinRun) outp.Add(sb.ToString());
@@ -123,22 +110,23 @@ public static class SksePeek
         return outp;
     }
 
+    /// <summary>Tests whether a byte is printable seven-bit ASCII.</summary>
+    /// <param name="c">Byte to inspect.</param>
+    /// <returns>True for bytes from space through tilde.</returns>
     static bool IsPrintable(byte c) => c is >= 0x20 and < 0x7F;
 
-    /// <summary>The plugin FILENAME a run references, or null. Returns the filename alone (not the whole run) because the
-    /// load-order cross-check keys on it — "Data\Dawnguard.esm" and "Dawnguard.esm" are the same reference. A run is a
-    /// plugin ref only when the name ENDS the run: a .esp mid-string is a format template or a substring, not a name.
-    ///
-    /// This classifier is held to a STRICTER bar than <see cref="IsConfigPath"/>, and deliberately: a config path is only
-    /// ever SHOWN ("suggestive of its config surface"), whereas a plugin name is ADJUDICATED against the load order and
-    /// can come back "[!] NOT in your load order". A false positive here is therefore a false ALARM, not just noise — so
-    /// anything that isn't shaped like a real filename is dropped rather than guessed at.</summary>
+    /// <summary>Extracts a strict plugin filename from the end of a printable run.</summary>
+    /// <param name="run">Printable string.</param>
+    /// <returns>The filename without directories, or null when the run is ambiguous or templated.</returns>
+    /// <remarks>
+    /// The strict classifier prevents log-format templates from becoming false missing-plugin alarms.
+    /// </remarks>
     static string? PluginRefIn(string run)
     {
         if (!PluginExts.Any(e => run.EndsWith(e, StringComparison.OrdinalIgnoreCase))) return null;
         int cut = run.LastIndexOfAny(['\\', '/']);
         string name = cut >= 0 ? run[(cut + 1)..] : run;
-        if (name.Length <= 4) return null;                        // ".esp" alone — an extension constant, not a reference
+        if (name.Length <= 4) return null;                        // A bare extension is not a filename.
         // A plugin filename is a filename: a run carrying quotes/separators past the last slash is a sentence about a
         // plugin, not the name of one. Bethesda names allow spaces, dashes, apostrophes, parens — so the shape check is
         // this forbidden-char set, and it must carry BOTH format-string dialects:
@@ -146,12 +134,14 @@ public static class SksePeek
         //   {} → fmt / spdlog / std::format ("{}.esp", "loading {}.esp") — the DOMINANT modern shape, because
         //        CommonLibSSE-NG plugins log through spdlog. Missing these would adjudicate a log template against the
         //        load order and flag it ABSENT on every healthy install.
-        return name.Any(ch => ch is '"' or '\'' or '<' or '>' or '|' or '*' or '?' or ':' or '%' or '{' or '}') ? null : name;
+        bool invalid = name.Any(
+            ch => ch is '"' or '\'' or '<' or '>' or '|' or '*' or '?' or ':' or '%' or '{' or '}');
+        return invalid ? null : name;
     }
 
-    /// <summary>Whether a run is path-shaped enough to be part of the DLL's CONFIG surface — the "which files does this
-    /// image reach for" signal that complements tier B from the other side (tier B audits what a config DECLARES; this
-    /// shows the folder a DLL actually embeds). Suggestive, never a claim the DLL reads it — it is a string in an image.</summary>
+    /// <summary>Tests whether a run is suggestive of an embedded configuration path.</summary>
+    /// <param name="run">Printable string.</param>
+    /// <returns>True for supported extensions or paths under Data/SKSE Plugins after noise filtering.</returns>
     static bool IsConfigPath(string run)
     {
         bool hasCfgExt = ConfigExts.Any(e => run.EndsWith(e, StringComparison.OrdinalIgnoreCase));
@@ -164,7 +154,7 @@ public static class SksePeek
         // ("%s.json", "basic_string<...>.ini"). A real config path has a separator or is a plain filename.
         if (run.Length <= 5) return false;
         // NOTE the asymmetry with PluginRefIn, which also rejects fmt's {} placeholder: a {}-bearing path is a TEMPLATE
-        // the DLL fills in, and it is still real config-surface signal — "Data/SKSE/Plugins/versionlib-{}.bin" tells you
+        // the DLL fills in, and it is still useful configuration-surface evidence.
         // this plugin reads Address Library, which is worth showing. A config path is only ever SHOWN, so a template
         // costs nothing; a plugin name is ADJUDICATED, so a template would become a false "NOT in your load order".
         return !run.Contains('%') && !run.Contains('<') && !run.Contains('"');
