@@ -3,51 +3,56 @@ using System.Text.RegularExpressions;
 
 namespace HousecarlCore;
 
-/// <summary>One compiler diagnostic — a file/line/col + message parsed off PapyrusCompiler's stderr. Its
-/// <see cref="ToString"/> is the compact "name(line,col): message" the AI fix-loop reads (file basename, since the
-/// full path is long and the AI already knows which script it compiled).</summary>
+/// <summary>Represents one location-bearing diagnostic parsed from PapyrusCompiler stderr.</summary>
+/// <param name="File">Source file path reported by the compiler.</param>
+/// <param name="Line">One-based source line.</param>
+/// <param name="Col">One-based source column.</param>
+/// <param name="Message">Compiler message.</param>
 public sealed record PapyrusDiagnostic(string File, int Line, int Col, string Message)
 {
+    /// <summary>Formats a compact diagnostic using only the source filename.</summary>
+    /// <returns><c>name(line,column): message</c>.</returns>
     public override string ToString() => $"{System.IO.Path.GetFileName(File)}({Line},{Col}): {Message}";
 }
 
-/// <summary>The outcome of one compile. <see cref="RunError"/> non-null ⇒ the compiler could NOT be run at all (bad
-/// path / timeout) — distinct from <see cref="Success"/>=false, which is a compile that RAN but produced no .pex.
-/// <see cref="Success"/> is decided by THIS run WRITING the .pex — NOT the exit code (the CK compiler returns 0 even on
-/// a usage error; measured 2026-06-05), and NOT the absence of diagnostics: a .pex that compiled WITH warnings is a
-/// success and the warnings ride along in <see cref="Diagnostics"/> ("if the compiler lets it compile with warnings,
-/// it's good enough" — Aaron 2026-06-06).</summary>
+/// <summary>Reports process execution and output production for one Papyrus compile.</summary>
+/// <param name="Success">Whether this run created or updated the expected PEX.</param>
+/// <param name="ObjectName">Compiled Papyrus object name.</param>
+/// <param name="PexPath">Output PEX path after success.</param>
+/// <param name="Diagnostics">Parsed location-bearing stderr diagnostics.</param>
+/// <param name="Stdout">Captured standard output.</param>
+/// <param name="Stderr">Captured standard error.</param>
+/// <param name="ExitCode">Process exit code, or -1 when the process did not complete.</param>
+/// <param name="RunError">Start or timeout error; null when the compiler process ran.</param>
 public sealed record CompileResult(
     bool Success, string ObjectName, string? PexPath, IReadOnlyList<PapyrusDiagnostic> Diagnostics,
     string Stdout, string Stderr, int ExitCode, string? RunError)
 {
+    /// <summary>Gets whether the compiler process started and completed within the timeout.</summary>
     public bool Ran => RunError is null;
 }
 
-/// <summary>
-/// Drives the Creation Kit's PapyrusCompiler.exe as a subprocess to compile a .psc → .pex (the engine behind
-/// housecarl_compile_script). NOT Mutagen — Mutagen cannot compile Papyrus (verified 2026-06-05), so this is a bounded
-/// ProcessStartInfo + an output parser, nothing more.
-///
-/// Everything here is grounded in the REAL compiler's behaviour, measured 2026-06-05 against the shipped CK compiler:
-///   • Invocation (Bethesda's own ScriptCompile.bat): `PapyrusCompiler &lt;object&gt; -f="flags.flg" -i="dir;dir" -o="out"`.
-///   • Errors print to STDERR, one per line, as `&lt;fullpath&gt;(line,col): message`.
-///   • A success prints `Batch compile … N succeeded, M failed.` to stdout and writes &lt;object&gt;.pex to -o.
-///   • The EXIT CODE is unreliable (0 on a usage error), so success = THIS run WROTE the .pex (warnings are fine).
-/// Pure (no DI): the build-time probe drives this exact code against the real compiler.
-/// </summary>
+/// <summary>Runs Bethesda's external Papyrus compiler with bounded process and stream handling.</summary>
+/// <remarks>
+/// This transitional runner expects a directly executable compiler path. Linux v1 does not claim native compiler
+/// support; structured Proton command execution is deferred. Success is output production, not exit code, because the
+/// Creation Kit compiler can return zero without compiling.
+/// </remarks>
 public static class PapyrusCompile
 {
-    static readonly Regex DiagLine = new(@"^(?<file>.*?)\((?<line>\d+),(?<col>\d+)\):\s*(?<msg>.*)$", RegexOptions.Compiled);
+    /// <summary>Matches the compiler's file, line, column, and message stderr format.</summary>
+    static readonly Regex DiagLine = new(
+        @"^(?<file>.*?)\((?<line>\d+),(?<col>\d+)\):\s*(?<msg>.*)$",
+        RegexOptions.Compiled);
 
     // The "symbol/type could not be resolved" message fragments — the SIGNATURE of a MISSING IMPORT (a dependency's
     // Source\Scripts folder not on the import path), as opposed to a syntax error. Grounded in the REAL CK compiler's
-    // wording, captured 2026-06-26 against deliberately-missing PO3 / SkyUI / JContainers sources:
+    // wording captured against deliberately missing dependency sources:
     //   "unknown type po3_sksefunctions"                     — a declared/return/param type whose source isn't found
     //   "variable JValue is undefined"                       — a static call on a script namespace not on the path
     //   "none is not a known user-defined type"              — the cascade when an unresolved expression types to none
     //   "X is not a function or does not exist"              — an extended function whose source copy isn't found
-    //                                                          (captured during the import-order PEX gate; spike §5.12)
+    //                                                          (captured during the import-order PEX gate)
     // Contrast SYNTAX errors, which are NOT this class: "no viable alternative", "missing EOF", "mismatched input",
     // "unknown user flag" — a code/grammar defect the import path can't fix.
     static readonly string[] UnresolvedSymbolFragments =
@@ -58,11 +63,9 @@ public static class PapyrusCompile
         "is not a function or does not exist",
     };
 
-    /// <summary>True if a compiler diagnostic message is the "symbol/type could not be resolved" class — the signature of
-    /// a MISSING IMPORT (the script is fine; a dependency's Source\Scripts folder just isn't on the import path), as
-    /// distinct from a syntax error. Used to LEAD a dominated failure with the import-path hint instead of letting the AI
-    /// read an avalanche of resolution errors as code bugs. Grounded in the real compiler's wording (see
-    /// <see cref="UnresolvedSymbolFragments"/>); case-insensitive.</summary>
+    /// <summary>Tests whether a diagnostic indicates a missing import rather than a syntax error.</summary>
+    /// <param name="message">Compiler message.</param>
+    /// <returns>True when a known unresolved symbol or type fragment occurs.</returns>
     public static bool IsUnresolvedSymbol(string? message)
     {
         if (string.IsNullOrEmpty(message)) return false;
@@ -71,8 +74,9 @@ public static class PapyrusCompile
         return false;
     }
 
-    /// <summary>Parse PapyrusCompiler stderr into diagnostics. The format is `&lt;fullpath&gt;(line,col): message`, one per
-    /// line (measured against the real compiler). Lines that don't match the shape are ignored (non-diagnostic noise).</summary>
+    /// <summary>Parses location-bearing diagnostics from compiler stderr.</summary>
+    /// <param name="stderr">Complete captured stderr.</param>
+    /// <returns>Matching diagnostics in stream order; unrelated lines are ignored.</returns>
     public static IReadOnlyList<PapyrusDiagnostic> ParseDiagnostics(string? stderr)
     {
         var list = new List<PapyrusDiagnostic>();
@@ -92,20 +96,20 @@ public static class PapyrusCompile
         return list;
     }
 
-    /// <summary>Compile ONE object (a script name, no extension — its .psc must be findable in <paramref name="importDirs"/>)
-    /// to a .pex in <paramref name="outputDir"/>. NON-DESTRUCTIVE (Aaron 2026-06-06): a prior &lt;object&gt;.pex is LEFT in
-    /// place — the user deletes outputs at their convenience, and a failed recompile must never destroy the last good
-    /// build. So instead of deleting it first, success = the .pex was WRITTEN by this run (it newly appeared, or its
-    /// write-time advanced) — an honest signal (Q3) that never touches the file: a successful compile rewrites it, a
-    /// failure leaves it untouched. Reads both output streams asynchronously to avoid the classic pipe deadlock. A start
-    /// failure or a timeout returns a RunError (the compiler couldn't run), never a thrown exception.</summary>
+    /// <summary>Compiles one Papyrus object while preserving any previous output.</summary>
+    /// <param name="compilerExe">Directly executable compiler path.</param>
+    /// <param name="objectName">Script object name without an extension.</param>
+    /// <param name="importDirs">Import directories passed as one semicolon-delimited compiler argument.</param>
+    /// <param name="outputDir">Native output directory.</param>
+    /// <param name="flagsFile">Compiler flags filename or path.</param>
+    /// <param name="timeoutMs">Process timeout in milliseconds.</param>
+    /// <returns>A result that captures start, timeout, diagnostics, streams, and output production.</returns>
     public static CompileResult CompileObject(
         string compilerExe, string objectName, IReadOnlyList<string> importDirs, string outputDir,
         string flagsFile = "TESV_Papyrus_Flags.flg", int timeoutMs = 120_000)
     {
         var pexPath = Path.Combine(outputDir, objectName + ".pex");
-        // Note the prior .pex's write-time (null ⇒ none) so we can tell "this run wrote it" from "a stale one was already
-        // here" — WITHOUT deleting it. A multi-second compile always advances the write-time past this baseline.
+        // Record the prior PEX write time to distinguish this run's output from an existing successful build.
         DateTime? pexBeforeUtc = File.Exists(pexPath) ? File.GetLastWriteTimeUtc(pexPath) : null;
 
         var psi = new ProcessStartInfo
@@ -145,8 +149,10 @@ public static class PapyrusCompile
         // The PROCESS exited, but a grandchild inheriting the stdout/stderr pipe could keep it open and hang the stream
         // reads forever (WaitForExit(int) does NOT flush async readers, unlike the parameterless overload). Bound the
         // post-exit drain: on a stuck pipe kill the tree to force the handles closed and use what was captured rather
-        // than blocking indefinitely (Q3). producedNow is decided on the .pex's mtime, independent of the streams.
-        bool drained; try { drained = Task.WaitAll(new Task[] { outTask, errTask }, StreamDrainMs); } catch { drained = false; }
+        // than blocking indefinitely. Output production is decided from PEX mtime, independently of the streams.
+        bool drained;
+        try { drained = Task.WaitAll(new Task[] { outTask, errTask }, StreamDrainMs); }
+        catch { drained = false; }
         if (!drained) { try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ } }
         var stdout = outTask.IsCompletedSuccessfully ? outTask.Result : "";
         var stderr = errTask.IsCompletedSuccessfully ? errTask.Result : "";
@@ -157,6 +163,14 @@ public static class PapyrusCompile
         // "no diagnostics" (that wrongly failed a compiled-with-warnings build).
         bool producedNow = File.Exists(pexPath)
             && (pexBeforeUtc is null || File.GetLastWriteTimeUtc(pexPath) > pexBeforeUtc.Value);
-        return new CompileResult(producedNow, objectName, producedNow ? pexPath : null, diags, stdout, stderr, proc.ExitCode, null);
+        return new CompileResult(
+            producedNow,
+            objectName,
+            producedNow ? pexPath : null,
+            diags,
+            stdout,
+            stderr,
+            proc.ExitCode,
+            null);
     }
 }

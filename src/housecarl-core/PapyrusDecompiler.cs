@@ -4,57 +4,74 @@ using Mutagen.Bethesda.Pex;
 
 namespace HousecarlCore;
 
-/// <summary>
-/// PEX -> Papyrus source reconstruction over Mutagen's PexFile model.
-/// Codegen patterns verified empirically against HC_SpikeProbe01 (see Dump):
-///   - jump offsets relative to the jump instruction itself
-///   - while  = cond; JMPF -> E; body; JMP (backward); E:
-///   - if     = cond; JMPF -> L; then; JMP -> M; L: else; M:   (JMP -> L means no else)
-///   - and/or = short-circuit JMPF/JMPT landing ON the final consuming conditional jump, same temp
-///   - auto-prop backing var ::Name_var; AutoReadOnly = GET returning a literal
-///   - compiler-generated GotoState/GetState in the '' state (skipped on emit)
-///   - FunctionFlags raw bits: bit0 = Global, bit1 = Native (Mutagen's enum names sit one off)
-/// Q3 rule: any function whose flow doesn't match a verified pattern FAILS LOUD and is counted —
-/// never silently emitted wrong.
-/// </summary>
+/// <summary>Reconstructs readable Papyrus source from Mutagen's parsed PEX model.</summary>
+/// <remarks>
+/// The structurer recognizes verified Creation Kit and common optimizing-compiler control-flow patterns. A function
+/// with unknown flow is emitted as a named failure plus raw bytecode instead of speculative source.
+/// </remarks>
 public sealed class PapyrusDecompiler
 {
+    /// <summary>Collects reconstructed source and per-function completeness accounting.</summary>
     public sealed class Result
     {
+        /// <summary>Reconstructed source for all emitted objects.</summary>
         public string Source = "";
+
+        /// <summary>Total non-native functions and events considered.</summary>
         public int FunctionsTotal;
+
+        /// <summary>Functions emitted as raw-bytecode failures.</summary>
         public int FunctionsFailed;
+
+        /// <summary>Named structural failure descriptions.</summary>
         public List<string> Failures = new();
 
         /// <summary>Count of flow patterns the canonical CK compiler provably never emits (threaded
-        /// shared-join trailing JMPs, jump-to-end early returns, value-reused temps — findings §9):
+        /// shared-join trailing JMPs, jump-to-end early returns, and value-reused temps:
         /// &gt;0 means the pex came from an OPTIMIZING compiler (Caprica class). The decompiled source
         /// is still correct, but recompiling it with the CK compiler will not reproduce the original
         /// bytes — the optimizer's output is not the CK compiler's canonical form.</summary>
         public int OptimizerHints;
     }
 
+    /// <summary>Signals bytecode that cannot be mapped to a verified source structure.</summary>
     sealed class StructureException : Exception
     {
+        /// <summary>Creates a structural failure with user-facing detail.</summary>
+        /// <param name="msg">Specific unsupported pattern.</param>
         public StructureException(string msg) : base(msg) { }
     }
 
-    // ------------------------------------------------------------------ expression tree
+    /// <summary>Base type for reconstructed source expressions.</summary>
     abstract record Expr;
+    /// <summary>Literal source text.</summary>
     sealed record EConst(string Text) : Expr;
+    /// <summary>Identifier reference.</summary>
     sealed record EIdent(string Name) : Expr;
+    /// <summary>Binary operator expression.</summary>
     sealed record EBin(string Op, Expr L, Expr R) : Expr;
+    /// <summary>Unary operator expression.</summary>
     sealed record EUn(string Op, Expr E) : Expr;
+    /// <summary>Papyrus <c>as</c> cast.</summary>
     sealed record ECast(Expr E, string Type) : Expr;
+    /// <summary>Instance or implicit-self function call.</summary>
     sealed record ECall(Expr? Target, string Name, List<Expr> Args) : Expr;          // Target null => self
+    /// <summary>Static class function call.</summary>
     sealed record EStatic(string Cls, string Name, List<Expr> Args) : Expr;
+    /// <summary>Parent-script function call.</summary>
     sealed record EParent(string Name, List<Expr> Args) : Expr;
+    /// <summary>Instance or self property access.</summary>
     sealed record EProp(Expr? Obj, string Name) : Expr;                              // Obj null => self
+    /// <summary>Array indexing expression.</summary>
     sealed record EIndex(Expr Arr, Expr Idx) : Expr;
+    /// <summary>Array length expression.</summary>
     sealed record ELen(Expr Arr) : Expr;
+    /// <summary>Array allocation expression.</summary>
     sealed record ENew(string ElemType, Expr Size) : Expr;
+    /// <summary>Forward or reverse array search.</summary>
     sealed record EFind(Expr Arr, Expr Val, Expr Start, bool Reverse) : Expr;
 
+    /// <summary>Gets the source precedence of an expression.</summary>
     static int Prec(Expr e) => e switch
     {
         EBin b => b.Op switch
@@ -71,6 +88,7 @@ public sealed class PapyrusDecompiler
         _ => 9,
     };
 
+    /// <summary>Renders an expression with precedence-preserving child wrapping.</summary>
     static string Render(Expr e) => e switch
     {
         EConst c => c.Text,
@@ -80,7 +98,8 @@ public sealed class PapyrusDecompiler
         // `as` binds tighter than binary operators — a binop operand must keep its own parens or
         // `(a || b as float)` regroups to `a || (b as float)` (caught by the bulk gate: Nox_Feat).
         ECast c => $"({(c.E is EBin ? "(" + Render(c.E) + ")" : Render(c.E))} as {c.Type})",
-        ECall c => (c.Target is null ? "" : Postfix(c.Target) + ".") + c.Name + "(" + string.Join(", ", c.Args.Select(Render)) + ")",
+        ECall c => (c.Target is null ? "" : Postfix(c.Target) + ".") +
+                   c.Name + "(" + string.Join(", ", c.Args.Select(Render)) + ")",
         EStatic s => $"{s.Cls}.{s.Name}(" + string.Join(", ", s.Args.Select(Render)) + ")",
         EParent p => $"Parent.{p.Name}(" + string.Join(", ", p.Args.Select(Render)) + ")",
         // Self-property access renders with the explicit Self. prefix: inside the defining script a
@@ -96,20 +115,32 @@ public sealed class PapyrusDecompiler
         _ => throw new StructureException($"unrenderable expr {e.GetType().Name}"),
     };
 
+    /// <summary>Tests whether an array search uses Papyrus's implicit start index.</summary>
     static bool IsDefaultStart(EFind f) =>
         f.Start is EConst c && c.Text == (f.Reverse ? "-1" : "0");
 
+    /// <summary>Wraps an expression when its precedence is below the parent requirement.</summary>
     static string Wrap(Expr e, int minPrec) => Prec(e) < minPrec ? "(" + Render(e) + ")" : Render(e);
 
     /// <summary>Postfix positions (member access, indexing) need parens around computed bases.</summary>
     static string Postfix(Expr e) => e is EBin or EUn ? "(" + Render(e) + ")" : Render(e);
 
-    // ------------------------------------------------------------------ state
+    /// <summary>PEX file that supplies user flags and debug metadata.</summary>
     readonly PexFile _pex;
+
+    /// <summary>PEX object currently being emitted.</summary>
     readonly PexObject _obj;
+
+    /// <summary>Mutable result owned by this decompiler instance.</summary>
     readonly Result _res = new();
+
+    /// <summary>Source accumulator owned by this decompiler instance.</summary>
     readonly StringBuilder _sb = new();
+
+    /// <summary>Current function parameter and local types.</summary>
     Dictionary<string, string> _localTypes = new(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Object variable types used for cast analysis.</summary>
     readonly Dictionary<string, string> _objVarTypes = new(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Optional child→parent class map (from `ScriptName X extends Y` headers across the
@@ -122,7 +153,14 @@ public sealed class PapyrusDecompiler
     /// (conservative, correct, gate-tier cosmetic only).</summary>
     readonly IReadOnlyDictionary<string, string>? _classParents;
 
-    public PapyrusDecompiler(PexFile pex, PexObject obj, IReadOnlyDictionary<string, string>? classParents = null)
+    /// <summary>Creates a decompiler for one PEX object.</summary>
+    /// <param name="pex">Owning parsed PEX file.</param>
+    /// <param name="obj">Object to emit.</param>
+    /// <param name="classParents">Optional child-to-parent class map for implicit-upcast detection.</param>
+    public PapyrusDecompiler(
+        PexFile pex,
+        PexObject obj,
+        IReadOnlyDictionary<string, string>? classParents = null)
     {
         _pex = pex; _obj = obj; _classParents = classParents;
         // Object variables (incl. auto-prop backing vars) — TypeOf needs them for implicit-cast
@@ -131,7 +169,13 @@ public sealed class PapyrusDecompiler
             if (v.Name is not null && v.TypeName is not null) _objVarTypes.TryAdd(v.Name, v.TypeName);
     }
 
-    public static Result DecompileFile(PexFile pex, IReadOnlyDictionary<string, string>? classParents = null)
+    /// <summary>Decompiles every object in a parsed PEX file.</summary>
+    /// <param name="pex">Parsed PEX file.</param>
+    /// <param name="classParents">Optional child-to-parent class map.</param>
+    /// <returns>Combined source and completeness accounting.</returns>
+    public static Result DecompileFile(
+        PexFile pex,
+        IReadOnlyDictionary<string, string>? classParents = null)
     {
         var total = new Result();
         var sb = new StringBuilder();
@@ -149,7 +193,8 @@ public sealed class PapyrusDecompiler
         return total;
     }
 
-    // ------------------------------------------------------------------ object emission
+    /// <summary>Emits the configured PEX object.</summary>
+    /// <returns>Source and per-function completeness accounting.</returns>
     public Result Emit()
     {
         var flags = ObjFlags(_obj.RawUserFlags);
@@ -161,16 +206,16 @@ public sealed class PapyrusDecompiler
         _sb.AppendLine();
 
         // Variables (skip compiler-generated :: names — auto-prop backing vars re-emerge as properties).
-        foreach (var v in _obj.Variables.Where(v => !v.Name.StartsWith("::")))
+        foreach (var v in _obj.Variables.Where(v => !v.Name!.StartsWith("::")))
         {
-            _sb.Append($"{TypeName(v.TypeName)} {v.Name}");
+            _sb.Append($"{TypeName(v.TypeName!)} {v.Name}");
             var init = InitText(v.VariableData);
             if (init is not null) _sb.Append($" = {init}");
             var vf = ObjFlags(v.RawUserFlags);
             if (vf.Length > 0) _sb.Append(' ').Append(vf);
             _sb.AppendLine();
         }
-        if (_obj.Variables.Any(v => !v.Name.StartsWith("::"))) _sb.AppendLine();
+        if (_obj.Variables.Any(v => !v.Name!.StartsWith("::"))) _sb.AppendLine();
 
         foreach (var p in _obj.Properties) EmitProperty(p);
 
@@ -187,7 +232,7 @@ public sealed class PapyrusDecompiler
             foreach (var f in OrderBySourceLine(st))
             {
                 if (!named && IsCompilerGenerated(f)) continue;
-                EmitFunction(f.FunctionName, f.Function, ind, st.Name);
+                EmitFunction(f.FunctionName!, f.Function, ind, st.Name!);
             }
             if (named) _sb.AppendLine("EndState").AppendLine();
         }
@@ -196,6 +241,7 @@ public sealed class PapyrusDecompiler
         return _res;
     }
 
+    /// <summary>Orders state functions by available source debug lines, then by original order.</summary>
     IEnumerable<PexObjectNamedFunction> OrderBySourceLine(PexObjectState st)
         => st.Functions.Cast<PexObjectNamedFunction>().OrderBy(f =>
         {
@@ -206,6 +252,7 @@ public sealed class PapyrusDecompiler
             return dbg is not null && dbg.Instructions.Count > 0 ? dbg.Instructions.Min(x => (int)x) : int.MaxValue;
         });
 
+    /// <summary>Recognizes standard compiler-generated top-level state helpers.</summary>
     bool IsCompilerGenerated(PexObjectNamedFunction f)
     {
         if (string.Equals(f.FunctionName, "GetState", StringComparison.OrdinalIgnoreCase))
@@ -217,30 +264,34 @@ public sealed class PapyrusDecompiler
         return false;
     }
 
+    /// <summary>Renders user-flag bits using the PEX user-flag table.</summary>
     string ObjFlags(uint raw)
     {
         var parts = new List<string>();
         for (int bit = 0; bit < 32 && bit < _pex.UserFlags.Length; bit++)
             if ((raw & (1u << bit)) != 0 && !string.IsNullOrEmpty(_pex.UserFlags[bit]))
-                parts.Add(char.ToUpperInvariant(_pex.UserFlags[bit][0]) + _pex.UserFlags[bit][1..]);
+                parts.Add(char.ToUpperInvariant(_pex.UserFlags[bit]![0]) + _pex.UserFlags[bit]![1..]);
         return string.Join(" ", parts);
     }
 
+    /// <summary>Emits an optional Papyrus documentation block.</summary>
     void Doc(string? doc, string ind)
     {
         if (string.IsNullOrEmpty(doc)) return;
         _sb.AppendLine($"{ind}{{{doc}}}");
     }
 
+    /// <summary>Emits an Auto, AutoReadOnly, or full property declaration.</summary>
     void EmitProperty(PexObjectProperty p)
     {
-        var t = TypeName(p.TypeName);
+        var t = TypeName(p.TypeName!);
         var hasAuto = p.Flags.HasFlag(PropertyFlags.AutoVar);
         var flagsTxt = ObjFlags(p.RawUserFlags);
         var suffix = flagsTxt.Length > 0 ? " " + flagsTxt : "";
         if (hasAuto)
         {
-            var backing = _obj.Variables.FirstOrDefault(v => string.Equals(v.Name, p.AutoVarName, StringComparison.OrdinalIgnoreCase));
+            var backing = _obj.Variables.FirstOrDefault(
+                v => string.Equals(v.Name, p.AutoVarName, StringComparison.OrdinalIgnoreCase));
             var init = backing is not null ? InitText(backing.VariableData) : null;
             // Conditional on an auto property lands on the BACKING VARIABLE's user flags, not the
             // property's (measured: DA08EbonyBladeTrackingScript ::FriendsKilled_var flags=0x2) —
@@ -271,24 +322,28 @@ public sealed class PapyrusDecompiler
         _sb.AppendLine();
     }
 
-    // ------------------------------------------------------------------ function emission
+    /// <summary>Emits one function, event, or property handler with a loud fallback on unknown flow.</summary>
     void EmitFunction(string name, PexObjectFunction f, string ind, string state = "", bool propertyHandler = false)
     {
         _res.FunctionsTotal++;
         var raw = (uint)f.Flags;
         bool isGlobal = (raw & 1) != 0, isNative = (raw & 2) != 0;
-        var ret = string.IsNullOrEmpty(f.ReturnTypeName) || f.ReturnTypeName.Equals("None", StringComparison.OrdinalIgnoreCase)
+        var ret = string.IsNullOrEmpty(f.ReturnTypeName) ||
+                  f.ReturnTypeName!.Equals("None", StringComparison.OrdinalIgnoreCase)
             ? null : TypeName(f.ReturnTypeName);
-        bool asEvent = !propertyHandler && ret is null && !isGlobal && name.StartsWith("On", StringComparison.OrdinalIgnoreCase);
+        bool asEvent = !propertyHandler &&
+                       ret is null &&
+                       !isGlobal &&
+                       name.StartsWith("On", StringComparison.OrdinalIgnoreCase);
 
-        var ps = string.Join(", ", f.Parameters.Select(p => $"{TypeName(p.TypeName)} {p.Name}"));
+        var ps = string.Join(", ", f.Parameters.Select(p => $"{TypeName(p.TypeName!)} {p.Name}"));
         var kw = asEvent ? "Event" : "Function";
         var header = $"{ind}{(ret is not null ? ret + " " : "")}{kw} {name}({ps})"
                    + (isGlobal ? " Global" : "") + (isNative ? " Native" : "");
 
         _localTypes = new(StringComparer.OrdinalIgnoreCase);
-        foreach (var p in f.Parameters) _localTypes[p.Name] = p.TypeName;
-        foreach (var l in f.Locals) _localTypes[l.Name] = l.TypeName;
+        foreach (var p in f.Parameters) _localTypes[p.Name!] = p.TypeName!;
+        foreach (var l in f.Locals) _localTypes[l.Name!] = l.TypeName!;
 
         _sb.AppendLine(header);
         Doc(f.DocString, ind + "    ");
@@ -313,7 +368,9 @@ public sealed class PapyrusDecompiler
             .Where(l => !IsTemp(l.Name!) && !l.TypeName!.Equals("None", StringComparison.OrdinalIgnoreCase))
             .Concat(f.Locals.Where(l => body.Materialized.Contains(l.Name!)))
             .ToList();
-        var placed = fail is null ? PlaceDeclsAtFirstAssign(stmts!, declarables) : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var placed = fail is null
+            ? PlaceDeclsAtFirstAssign(stmts!, declarables)
+            : new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var l in declarables.Where(l => !placed.Contains(l.Name!)))
             _sb.AppendLine($"{ind}    {TypeName(l.TypeName!)} {LhsName(l.Name!)}");
 
@@ -388,16 +445,31 @@ public sealed class PapyrusDecompiler
         return placed;
     }
 
-    // ------------------------------------------------------------------ body structuring
+    /// <summary>Structures one function's instruction stream into source statements.</summary>
     sealed class Body
     {
+        /// <summary>Owning decompiler and shared type/result state.</summary>
         readonly PapyrusDecompiler _d;
+
+        /// <summary>Function being structured.</summary>
         readonly PexObjectFunction _f;
+
+        /// <summary>Materialized instruction list.</summary>
         readonly List<PexObjectFunctionInstruction> _ins;
+
+        /// <summary>Expressions waiting for a consuming instruction.</summary>
         readonly Dictionary<string, Expr> _pending = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>First instruction index contributing to each pending expression.</summary>
         readonly Dictionary<string, int> _pendingStart = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Pending names in evaluation order.</summary>
         readonly List<string> _pendingOrder = new();
+
+        /// <summary>Earliest pending-expression instruction consumed by the current instruction.</summary>
         int _consumedStart;   // min start-index of pending values consumed while decoding the current instruction
+
+        /// <summary>Current instruction index used in diagnostics.</summary>
         int _cur;             // index of the instruction currently being decoded (diagnostics)
 
         /// <summary>Temps promoted to named locals: an optimizer (Caprica/jump-threading class) can
@@ -406,6 +478,7 @@ public sealed class PapyrusDecompiler
         /// Declared at function top (function scope is always valid); reads/writes emit by name.</summary>
         public readonly HashSet<string> Materialized = new(StringComparer.OrdinalIgnoreCase);
 
+        /// <summary>Stores a value-producing temporary until it is consumed or emitted.</summary>
         void SetPending(string name, Expr e, List<string> stmts, int startIdx)
         {
             // Overwriting an unconsumed pending = the earlier value was discarded — a statement in
@@ -415,7 +488,9 @@ public sealed class PapyrusDecompiler
             if (_pending.TryGetValue(name, out var old))
             {
                 if (IsCallish(old) || old is EBin) stmts.Add(Render(old));
-                else throw new StructureException($"pending non-statement value on {name} overwritten ({old.GetType().Name})");
+                else
+                    throw new StructureException(
+                        $"pending non-statement value on {name} overwritten ({old.GetType().Name})");
                 DropPending(name);
             }
             _pending[name] = e;
@@ -423,6 +498,7 @@ public sealed class PapyrusDecompiler
             _pendingOrder.Add(name);
         }
 
+        /// <summary>Removes a pending value from all tracking structures.</summary>
         void DropPending(string name)
         {
             _pending.Remove(name);
@@ -439,8 +515,12 @@ public sealed class PapyrusDecompiler
         /// assignment — PCompiler accepts and compiles them; verified empirically on
         /// HC_ExprStmtProbe). Other expression kinds (EProp, EIndex, …) are NOT verified to
         /// round-trip (a bare variable read provably compiles to NOTHING) — loud until probed.</summary>
+        /// <summary>
+        /// Flushes pending values using the instruction after the current one as the read scan start.
+        /// </summary>
         void FlushPending(List<string> stmts) => FlushPending(stmts, _cur + 1);
 
+        /// <summary>Emits discarded statements and materializes values read after a region boundary.</summary>
         void FlushPending(List<string> stmts, int scanFrom)
         {
             foreach (var name in _pendingOrder.ToList())
@@ -450,7 +530,7 @@ public sealed class PapyrusDecompiler
                     && ReadsBeforeWrite(scanFrom, _ins.Count, name))
                 {
                     Materialized.Add(name);
-                    _d._res.OptimizerHints++;   // value-reused temp: PCompiler temps are strictly single-use (§9.4)
+                    _d._res.OptimizerHints++;   // PCompiler temporary values are otherwise single-use.
                     stmts.Add($"{LhsName(name)} = {Render(e)}");
                     DropPending(name);
                     continue;
@@ -476,8 +556,12 @@ public sealed class PapyrusDecompiler
             }
         }
 
+        /// <summary>Tests whether an expression is a call that may stand alone as a statement.</summary>
         static bool IsCallish(Expr e) => e is ECall or EStatic or EParent;
 
+        /// <summary>Creates a function body structurer.</summary>
+        /// <param name="d">Owning decompiler.</param>
+        /// <param name="f">Function to structure.</param>
         public Body(PapyrusDecompiler d, PexObjectFunction f)
         {
             _d = d; _f = f;
@@ -486,7 +570,12 @@ public sealed class PapyrusDecompiler
 
         // Function-level region: jumping to one-past-the-last-instruction ends the function
         // (implicit default return) — exit-equivalent by definition.
-        public List<string> Structure(int lo, int hi) => Structure(lo, hi, flushAtEnd: true, exits: new HashSet<int> { hi }, cont: hi);
+        /// <summary>Structures a top-level instruction region.</summary>
+        /// <param name="lo">Inclusive instruction index.</param>
+        /// <param name="hi">Exclusive instruction index.</param>
+        /// <returns>Reconstructed source statements.</returns>
+        public List<string> Structure(int lo, int hi) =>
+            Structure(lo, hi, flushAtEnd: true, exits: new HashSet<int> { hi }, cont: hi);
 
         /// <summary>flushAtEnd=false for short-circuit expression arms — their pending values must
         /// survive into the enclosing condition; a trailing flush would misemit them as statements.
@@ -501,6 +590,12 @@ public sealed class PapyrusDecompiler
         /// if arms, the condition start for while bodies, hi at function level) — the region-end
         /// flush scans from there for downstream reads; the next linear index would wrongly scan a
         /// sibling arm the flow never reaches.</summary>
+        /// <param name="lo">Inclusive instruction index.</param>
+        /// <param name="hi">Exclusive instruction index.</param>
+        /// <param name="flushAtEnd">Whether pending values become statements at the region boundary.</param>
+        /// <param name="exits">Targets equivalent to falling out of this region.</param>
+        /// <param name="cont">Instruction where control resumes after the region.</param>
+        /// <returns>Reconstructed statements for the region.</returns>
         List<string> Structure(int lo, int hi, bool flushAtEnd, HashSet<int> exits, int cont)
         {
             var stmts = new List<string>();
@@ -559,7 +654,8 @@ public sealed class PapyrusDecompiler
                             // Jump-threaded false-path: targets an enclosing join instead of this
                             // region's end. Exit-equivalent ⇒ clamp to the region end; else fail loud.
                             if (!exits.Contains(target))
-                                throw new StructureException($"conditional jump @{i} -> {target} escapes region end {hi}");
+                                throw new StructureException(
+                                    $"conditional jump @{i} -> {target} escapes region end {hi}");
                             target = hi;
                         }
 
@@ -576,8 +672,15 @@ public sealed class PapyrusDecompiler
                             // They are statements that precede the if: drain them now, in order.
                             FlushPendingCalls(stmts);
                             // Evaluate the right side (cur+1 .. target) — must produce only pending values.
-                            var sub = Structure(i + 1, target, flushAtEnd: false, exits: new HashSet<int>(), cont: target);
-                            if (sub.Count > 0) throw new StructureException($"short-circuit arm @{i + 1}..{target} produced statements");
+                            var sub = Structure(
+                                i + 1,
+                                target,
+                                flushAtEnd: false,
+                                exits: new HashSet<int>(),
+                                cont: target);
+                            if (sub.Count > 0)
+                                throw new StructureException(
+                                    $"short-circuit arm @{i + 1}..{target} produced statements");
                             var (right, _) = Consume(condName, target);
                             var combined = new EBin(op == InstructionOpcode.JMPF ? "&&" : "||", left, right);
                             SetPending(condName, combined, stmts, leftStart);
@@ -608,18 +711,16 @@ public sealed class PapyrusDecompiler
                             && ReadsBeforeWrite(i + 1, target, condName))
                         {
                             Materialized.Add(condName);
-                            _d._res.OptimizerHints++;   // value-reused condition temp (§9.4)
+                            _d._res.OptimizerHints++;   // Optimizer reused a normally single-use temp.
                             stmts.Add($"{LhsName(condName)} = {Render(cond)}");
                             cond = new EIdent(LhsName(condName));
                         }
 
                         // Statement-level JMPT = inverted branch (seen in Caprica-optimized output):
-                        // same if/while shapes with the condition negated. This is the §4 catalog's
+                        // same if/while shapes with the condition negated.
                         // named Caprica marker — the CK compiler emits statement conditionals as JMPF
                         // ALWAYS (its JMPTs live only inside short-circuit arms, consumed above) — so
-                        // reaching here on a JMPT is an optimizer hint. Live-fire 2026-06-12 found the
-                        // original four hint sites underfire on real Caprica ships (Campfire, NL_MCM):
-                        // their clean functions are shape-canonical except for exactly this inversion.
+                        // reaching here on a JMPT is an optimizer hint.
                         if (op == InstructionOpcode.JMPT)
                         {
                             _d._res.OptimizerHints++;
@@ -631,7 +732,8 @@ public sealed class PapyrusDecompiler
                         {
                             int back = (target - 1) + IntArg(_ins[target - 1].Arguments[0]);
                             if (back != condStart)
-                                throw new StructureException($"while back-jump @{target - 1} -> {back}, expected cond start {condStart}");
+                                throw new StructureException(
+                                    $"while back-jump @{target - 1} -> {back}, expected cond start {condStart}");
                             // Falling off the body ≡ the back JMP ≡ a direct jump to the cond start.
                             var bodyStmts = Structure(i + 1, target - 1, flushAtEnd: true,
                                 exits: new HashSet<int> { target - 1, condStart }, cont: condStart);
@@ -665,7 +767,9 @@ public sealed class PapyrusDecompiler
                         if (elseHi == hi) { thenExits.UnionWith(exits); elseExits.UnionWith(exits); }
                         // Both arms resume at the join — region-end value flow scans from there.
                         var thenStmts = Structure(i + 1, thenHi, flushAtEnd: true, exits: thenExits, cont: elseHi);
-                        var elseStmts = elseHi > elseLo ? Structure(elseLo, elseHi, flushAtEnd: true, exits: elseExits, cont: elseHi) : new List<string>();
+                        var elseStmts = elseHi > elseLo
+                            ? Structure(elseLo, elseHi, flushAtEnd: true, exits: elseExits, cont: elseHi)
+                            : new List<string>();
 
                         stmts.Add($"if {Render(cond)}");
                         stmts.AddRange(thenStmts.Select(s => "    " + s));
@@ -709,7 +813,8 @@ public sealed class PapyrusDecompiler
                         }
                         string stmt;
                         if (v.VariableType == VariableType.Null
-                            || (v.VariableType == VariableType.Identifier && IdName(v).Equals("::NoneVar", StringComparison.OrdinalIgnoreCase)))
+                            || (v.VariableType == VariableType.Identifier &&
+                                IdName(v).Equals("::NoneVar", StringComparison.OrdinalIgnoreCase)))
                             stmt = "return";
                         else
                             stmt = $"return {Render(Resolve(v))}";
@@ -723,7 +828,12 @@ public sealed class PapyrusDecompiler
                         var dest = IdName(a[0]);
                         var src = Resolve(a[1]);
                         // Materialized temps are real named locals now — writes are real assignments.
-                        if (IsTemp(dest) && !Materialized.Contains(dest)) { SetPending(dest, src, stmts, Math.Min(_consumedStart, i)); i++; break; }
+                        if (IsTemp(dest) && !Materialized.Contains(dest))
+                        {
+                            SetPending(dest, src, stmts, Math.Min(_consumedStart, i));
+                            i++;
+                            break;
+                        }
                         FlushPending(stmts);
                         stmts.Add($"{LhsName(dest)} = {Render(src)}");
                         i++; break;
@@ -764,7 +874,12 @@ public sealed class PapyrusDecompiler
                             i++; break;
                         }
                         if (dest is null) throw new StructureException($"value op with no dest @{i}");
-                        if (IsTemp(dest) && !Materialized.Contains(dest)) { SetPending(dest, expr, stmts, Math.Min(_consumedStart, i)); i++; break; }
+                        if (IsTemp(dest) && !Materialized.Contains(dest))
+                        {
+                            SetPending(dest, expr, stmts, Math.Min(_consumedStart, i));
+                            i++;
+                            break;
+                        }
                         FlushPending(stmts);
                         stmts.Add($"{LhsName(dest)} = {Render(expr)}");
                         i++; break;
@@ -775,19 +890,22 @@ public sealed class PapyrusDecompiler
             return stmts;
         }
 
+        /// <summary>Tests whether the current function has no declared return value.</summary>
         bool ReturnsNone()
             => string.IsNullOrEmpty(_f.ReturnTypeName)
                || _f.ReturnTypeName.Equals("None", StringComparison.OrdinalIgnoreCase);
 
         /// <summary>Does this instruction read <paramref name="name"/> as a SOURCE operand?
         /// Source-arg positions per opcode shape (dest slots excluded).</summary>
+        /// <returns>True when a source operand references the name.</returns>
         static bool ConsumesAsSource(PexObjectFunctionInstruction ins, string name)
         {
             var a = ins.Arguments;
             IEnumerable<int> srcIdx = ins.OpCode switch
             {
                 InstructionOpcode.IADD or InstructionOpcode.FADD or InstructionOpcode.ISUB or InstructionOpcode.FSUB
-                    or InstructionOpcode.IMUL or InstructionOpcode.FMUL or InstructionOpcode.IDIV or InstructionOpcode.FDIV
+                    or InstructionOpcode.IMUL or InstructionOpcode.FMUL
+                    or InstructionOpcode.IDIV or InstructionOpcode.FDIV
                     or InstructionOpcode.IMOD or InstructionOpcode.STRCAT
                     or InstructionOpcode.CMP_EQ or InstructionOpcode.CMP_LT or InstructionOpcode.CMP_LTE
                     or InstructionOpcode.CMP_GT or InstructionOpcode.CMP_GTE => new[] { 1, 2 },
@@ -810,6 +928,7 @@ public sealed class PapyrusDecompiler
                 && string.Equals(a[ix].StringValue, name, StringComparison.OrdinalIgnoreCase));
         }
 
+        /// <summary>Tests whether a rendered block contains exactly one top-level if statement.</summary>
         static bool BlockIsSingleIf(List<string> block)
         {
             // True when the whole block is one top-level if..endif (its endif is the last line).
@@ -828,7 +947,9 @@ public sealed class PapyrusDecompiler
             return depth == 0;
         }
 
-        /// <summary>Decode a value-producing instruction into (destName, expr). destName "" = ::NoneVar discard.</summary>
+        /// <summary>Decodes a value-producing instruction into its destination and expression.</summary>
+        /// <param name="ins">Instruction to decode.</param>
+        /// <returns>A null destination for no destination, or an empty destination for the discard slot.</returns>
         (string? dest, Expr expr) Produce(PexObjectFunctionInstruction ins)
         {
             var a = ins.Arguments;
@@ -930,7 +1051,8 @@ public sealed class PapyrusDecompiler
                 {
                     var dest = IdName(a[0]);
                     var t = TypeOf(dest) ?? throw new StructureException($"array_create dest {dest} has no type");
-                    if (!t.EndsWith("[]")) throw new StructureException($"array_create dest {dest} type {t} not an array");
+                    if (!t.EndsWith("[]"))
+                        throw new StructureException($"array_create dest {dest} type {t} not an array");
                     return (dest, new ENew(TypeName(t[..^2]), Resolve(a[1])));
                 }
                 case InstructionOpcode.ARRAY_LENGTH:
@@ -955,9 +1077,11 @@ public sealed class PapyrusDecompiler
             }
         }
 
+        /// <summary>Maps the PEX discard destination to an empty source destination.</summary>
         string? DestOrDiscard(string dest)
             => dest.Equals("::NoneVar", StringComparison.OrdinalIgnoreCase) ? "" : dest;
 
+        /// <summary>Decodes a call's counted argument tail and removes omitted default nulls.</summary>
         List<Expr> CallArgs(IReadOnlyList<IPexObjectVariableDataGetter> a, int argcIdx)
         {
             if (a[argcIdx].VariableType != VariableType.Integer)
@@ -977,6 +1101,7 @@ public sealed class PapyrusDecompiler
             return list;
         }
 
+        /// <summary>Converts one PEX variable value into a source expression.</summary>
         Expr Resolve(IPexObjectVariableDataGetter d) => d.VariableType switch
         {
             VariableType.Null => new EConst("None"),
@@ -988,6 +1113,7 @@ public sealed class PapyrusDecompiler
             _ => throw new StructureException($"unknown VariableType {d.VariableType}"),
         };
 
+        /// <summary>Resolves a pending temporary or emits a stable identifier.</summary>
         Expr ResolveIdent(string name)
         {
             if (_pending.TryGetValue(name, out var e))
@@ -997,10 +1123,12 @@ public sealed class PapyrusDecompiler
                 return e;
             }
             if (name.Equals("self", StringComparison.OrdinalIgnoreCase)) return new EIdent("Self");
-            if (IsTemp(name) && !Materialized.Contains(name)) throw new StructureException($"temp {name} read with no pending value @{_cur}");
+            if (IsTemp(name) && !Materialized.Contains(name))
+                throw new StructureException($"temp {name} read with no pending value @{_cur}");
             return new EIdent(LhsName(name));
         }
 
+        /// <summary>Consumes a pending condition value and returns its earliest contributing instruction.</summary>
         (Expr e, int start) Consume(string name, int at)
         {
             if (_pending.TryGetValue(name, out var e))
@@ -1013,6 +1141,7 @@ public sealed class PapyrusDecompiler
             throw new StructureException($"condition temp {name} has no pending value @{at}");
         }
 
+        /// <summary>Tests whether a call instruction writes to the PEX discard slot.</summary>
         static bool IsNoneDestCall(PexObjectFunctionInstruction ins)
         {
             int destIdx = ins.OpCode switch
@@ -1026,7 +1155,7 @@ public sealed class PapyrusDecompiler
                 && string.Equals(ins.Arguments[destIdx].StringValue, "::NoneVar", StringComparison.OrdinalIgnoreCase);
         }
 
-        /// <summary>Does any jump in [scanLo, scanHi) target an index in [rangeLo, rangeHi)?</summary>
+        /// <summary>Tests whether a scanned jump enters a target instruction range.</summary>
         bool AnyJumpInto(int scanLo, int scanHi, int rangeLo, int rangeHi)
         {
             for (int k = scanLo; k < scanHi && k < _ins.Count; k++)
@@ -1059,7 +1188,8 @@ public sealed class PapyrusDecompiler
             int destIdx = ins.OpCode switch
             {
                 InstructionOpcode.IADD or InstructionOpcode.FADD or InstructionOpcode.ISUB or InstructionOpcode.FSUB
-                    or InstructionOpcode.IMUL or InstructionOpcode.FMUL or InstructionOpcode.IDIV or InstructionOpcode.FDIV
+                    or InstructionOpcode.IMUL or InstructionOpcode.FMUL
+                    or InstructionOpcode.IDIV or InstructionOpcode.FDIV
                     or InstructionOpcode.IMOD or InstructionOpcode.STRCAT
                     or InstructionOpcode.CMP_EQ or InstructionOpcode.CMP_LT or InstructionOpcode.CMP_LTE
                     or InstructionOpcode.CMP_GT or InstructionOpcode.CMP_GTE
@@ -1077,6 +1207,7 @@ public sealed class PapyrusDecompiler
                 && string.Equals(a[destIdx].StringValue, name, StringComparison.OrdinalIgnoreCase);
         }
 
+        /// <summary>Gets a local, parameter, or object-variable type by PEX identifier.</summary>
         string? TypeOf(string name)
             => _d._localTypes.TryGetValue(name, out var t) ? t
              : _d._objVarTypes.TryGetValue(name, out var v) ? v : null;
@@ -1098,17 +1229,22 @@ public sealed class PapyrusDecompiler
             return false;
         }
 
+        /// <summary>Tests whether an expression is the current script instance.</summary>
         static bool IsSelf(Expr e) => e is EIdent i && i.Name.Equals("Self", StringComparison.OrdinalIgnoreCase);
+
+        /// <summary>Parenthesizes computed bases used in assignment postfix positions.</summary>
         static string Postfix2(Expr e) => e is EBin or EUn ? "(" + Render(e) + ")" : Render(e);
     }
 
-    // ------------------------------------------------------------------ shared helpers
     /// <summary>Compiler expression temps only: <c>::temp&lt;N&gt;</c> and the <c>::NoneVar</c> discard slot. Other
     /// ::-prefixed names (CK fragment ::mangled_* locals, ::X_var auto-prop backing) are real storage.</summary>
     static bool IsTemp(string name)
         => name.Equals("::NoneVar", StringComparison.OrdinalIgnoreCase)
-           || (name.StartsWith("::temp", StringComparison.OrdinalIgnoreCase) && name.Length > 6 && char.IsDigit(name[6]));
+           || (name.StartsWith("::temp", StringComparison.OrdinalIgnoreCase) &&
+               name.Length > 6 &&
+               char.IsDigit(name[6]));
 
+    /// <summary>Reads a required integer instruction argument.</summary>
     static int IntArg(IPexObjectVariableDataGetter d)
         => d.VariableType == VariableType.Integer
             ? d.IntValue ?? throw new StructureException("int arg with null value")
@@ -1121,6 +1257,7 @@ public sealed class PapyrusDecompiler
             : name.EndsWith("_var", StringComparison.OrdinalIgnoreCase) ? name[2..^4]
             : name.TrimStart(':');
 
+    /// <summary>Reads a required identifier instruction argument.</summary>
     static string IdName(IPexObjectVariableDataGetter d)
         => d.VariableType == VariableType.Identifier
             ? d.StringValue ?? throw new StructureException("identifier with null name")
@@ -1132,6 +1269,9 @@ public sealed class PapyrusDecompiler
             ? d.StringValue ?? throw new StructureException("name with null value")
             : throw new StructureException($"expected name, got {d.VariableType}");
 
+    /// <summary>Renders a scalar PEX initializer, or null when the value has no source initializer.</summary>
+    /// <param name="d">Optional PEX value.</param>
+    /// <returns>Papyrus literal text, or null.</returns>
     internal static string? InitText(IPexObjectVariableDataGetter? d) => d is null ? null : d.VariableType switch
     {
         VariableType.Null => null,
@@ -1142,14 +1282,24 @@ public sealed class PapyrusDecompiler
         _ => null,
     };
 
+    /// <summary>Quotes a Papyrus string literal with supported escape sequences.</summary>
     static string Quote(string s)
     {
         var sb = new StringBuilder("\"");
         foreach (var c in s)
-            sb.Append(c switch { '"' => "\\\"", '\\' => "\\\\", '\n' => "\\n", '\t' => "\\t", '\r' => "", _ => c.ToString() });
+            sb.Append(c switch
+            {
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\n' => "\\n",
+                '\t' => "\\t",
+                '\r' => "",
+                _ => c.ToString(),
+            });
         return sb.Append('"').ToString();
     }
 
+    /// <summary>Renders a round-trip-safe Papyrus floating-point literal.</summary>
     static string FloatText(float f)
     {
         var s = f.ToString("R", CultureInfo.InvariantCulture);
@@ -1160,6 +1310,7 @@ public sealed class PapyrusDecompiler
         return s;
     }
 
+    /// <summary>Normalizes built-in PEX type casing to idiomatic Papyrus source.</summary>
     static string TypeName(string t) => t switch
     {
         _ when t.Equals("Int", StringComparison.OrdinalIgnoreCase) => "int",

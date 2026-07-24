@@ -257,34 +257,32 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: reviewed every declaration in `CellShellCheck`,
-  `ScriptPropertyCheck`, `NativePairing`, and `SksePeek`. Historical design
-  narratives have been replaced with local type and member contracts. The
-  documentation now explains post-write cell-shell ownership, recursive PEX
-  property traversal, quest-alias attachments, finding caps and fault
-  isolation, native declaration limits, bounded DLL reads, ASCII/UTF-16
-  extraction, and conservative embedded-string classification.
+- Last completed checkpoint: reviewed every declaration in `PapyrusCompile`,
+  `ToolBridge`, and `PapyrusDecompiler`. Historical narratives have been
+  replaced with local contracts covering compiler diagnostics, output-based
+  success, bounded process execution, external-tool discovery, PEX statement
+  reconstruction, optimizer hints, and per-function failure isolation.
 - Verification performed: the serialized .NET 9 Linux solution build succeeds
-  with zero errors. A forced unsuppressed XML-documentation rebuild succeeds
-  and reports no warning from the four reviewed files; its 133 warnings belong
-  to components still queued for review. Bulk cell creation, script-property
-  checks, native pairing, and SKSE static-peek guards all pass. Full `ci-all`
-  is 111/111 on Linux after the final edit. `git diff --check` passes and the
-  reviewed files contain no line longer than 120 characters.
-- Files/components changed: `CellShellCheck`, `ScriptPropertyCheck`,
-  `NativePairing`, `SksePeek`, the tracked roadmap, and the user-facing roadmap
-  copy.
-- Decisions made: cell-shell reporting remains a post-write diagnostic that
-  cannot invalidate a completed write. Script-property validation checks Auto
-  properties only, follows the full readable extends chain, includes
-  quest-alias attachments, preserves uncapped totals, and retains per-record
-  and per-plugin failures. Alias-bound object properties are not mistaken for
-  null bindings. Native pairing reports what PEX declares, never what a DLL
-  registers at runtime. DLL peeking requires a complete bounded read; an
-  oversized or unreadable image cannot become a clean empty result. Plugin
-  string classification stays stricter than configuration-path classification
-  because plugin names are compared with the active order and can raise
-  alarms.
+  with zero errors and five unrelated ordinary warnings. A forced unsuppressed
+  XML-documentation rebuild succeeds with no warning from the three reviewed
+  files; its 104 warnings belong to components still queued for review.
+  `tool-bridge`, `compile-probe`, `compile-ergonomics-guard`, and
+  `decompile-guard` all pass. Full `ci-all` is 111/111 on Linux after the final
+  edit. `git diff --check` passes and the reviewed files contain no line longer
+  than 120 characters.
+- Files/components changed: `PapyrusCompile`, `ToolBridge`,
+  `PapyrusDecompiler`, the tracked roadmap, and the user-facing roadmap copy.
+- Decisions made: native PEX parsing and decompilation remain available without
+  Proton. Unknown control flow fails per function and preserves raw bytecode
+  instead of inventing source. Optimizer hints distinguish semantically correct
+  output from byte-for-byte compiler parity, and class-parent knowledge remains
+  scoped to a decompile call. Compile success means that this run produced a
+  newer output file; it does not trust the compiler exit code. Failed compiles
+  preserve prior output, drain both process streams with a bound, and kill the
+  process tree on timeout. External arguments use `ArgumentList`, never a shell
+  command string. The current direct-executable compiler and BSArch metadata is
+  explicitly transitional: Linux native v1 does not claim those Windows tools
+  until a structured Proton command runner exists.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. Session 6 must replace the
   remaining Windows installer/runtime surface and MO2 terminology. The
@@ -302,7 +300,8 @@ manual release gate.
   `NpcAppearanceAssets`, `NpcAppearanceCopy`, `AssetRenameService`,
   `NifService`, `VoiceCheck`, `DialogueScriptCheck`, `DialogueValidate`,
   `DialogueSubtype`, `DialogueCkParity`, `CellShellCheck`,
-  `ScriptPropertyCheck`, `NativePairing`, and `SksePeek` are complete; the
+  `ScriptPropertyCheck`, `NativePairing`, `SksePeek`, `PapyrusCompile`,
+  `ToolBridge`, and `PapyrusDecompiler` are complete; the
   remaining inherited core components have not yet received the same
   declaration-by-declaration review. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
@@ -314,11 +313,10 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  across `PapyrusCompile`, `ToolBridge`, and `PapyrusDecompiler`. Review every
-  declaration and explicitly document native versus deferred external-command
-  boundaries, argument ownership, process and log handling, PEX parser limits,
-  bytecode rendering, and failure isolation. Run their focused compile,
-  tool-bridge, decompile, strict-XML, and full-CI guards.
+  across `WritePatchBuilder`. Review every declaration and document patch
+  ownership, master derivation, atomic serialization, cleanup, in-place
+  consent, Amethyst redeployment state, and failure boundaries. Run its focused
+  write, dry-run, in-place, atomic-commit, strict-XML, and full-CI guards.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -344,7 +342,8 @@ manual release gate.
   documentation checkpoint; `fabf847` completes the asset-carry documentation
   checkpoint; `e3adb8c` completes the NIF and dialogue-diagnostics
   documentation checkpoint; `5c0039f` completes the dialogue-semantics
-  documentation checkpoint. The supporting-diagnostics checkpoint is pending
+  documentation checkpoint; `a6a8cb1` completes the supporting-diagnostics
+  documentation checkpoint. The Papyrus-toolchain checkpoint is pending
   commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
