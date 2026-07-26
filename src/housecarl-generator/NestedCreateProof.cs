@@ -29,11 +29,9 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class NestedCreateProof
 {
-    const string DefaultSource = @"E:\Skyrim Modding\ARR 2.0\Stock Game\Data\Skyrim.esm";
-
     public static int RunProof(string[] args)
     {
-        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : DefaultSource;
+        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : ProbeInputs.DataFile("Skyrim.esm");
 
         Console.WriteLine("================================================================");
         Console.WriteLine(" houseCARL nested-create proof (Layer A — housecarl_create_record nested path)");

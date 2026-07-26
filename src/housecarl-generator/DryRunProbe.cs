@@ -42,7 +42,7 @@ namespace HousecarlGenerator;
 ///                         readable, valid JSON with line+column on failure, array root, non-empty, no unknown op
 ///                         members) refuses NAMED with nothing written. RED on any divergence or silent drop.
 ///
-/// Self-contained: synthesizes a master + a user override in a synthetic MO2 instance in TEMP (the WriteMutexProbe
+/// Self-contained: synthesizes a master + a user override in a manager-neutral fixture in TEMP (the WriteMutexProbe
 /// pattern — the full SERVICE path runs: ResolveOutputPath, the write gate, the in-place consent store) and generates
 /// the validator corpus BY CONSTRUCTION in-process.
 /// Run: dotnet run --project src/housecarl-generator dry-run-guard
@@ -61,7 +61,7 @@ internal static class DryRunProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-dry-run-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // ---- synthetic MO2 instance (the established synth-instance pattern): one master + one user override ----
+            // ---- manager-neutral fixture (the established synth-instance pattern): one master + one user override ----
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");

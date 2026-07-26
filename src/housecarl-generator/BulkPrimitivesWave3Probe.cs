@@ -16,7 +16,7 @@ namespace HousecarlGenerator;
 ///   • P8b <c>CopyFrom</c> — (added in its commit) reflection-generic field transplant from another plugin's version.
 ///   • P8c <c>housecarl_diff_record</c> — (added in its commit) pairwise field diff between two versions of a record.
 ///
-/// Drives the REAL end-to-end tool path — a synthetic MO2 instance in temp (the ExtendResolveProbe/ReadPluginFileProbe
+/// Drives the REAL end-to-end tool path — a manager-neutral fixture in temp (the ExtendResolveProbe/ReadPluginFileProbe
 /// pattern) + <see cref="LoadOrderService"/> — so the wire mapping, corpus pre-flight, and apply engine are all exercised
 /// together, exactly as a caller hits them. Self-contained: a corpus is generated in-process if none is configured.
 ///
@@ -71,7 +71,7 @@ internal static class BulkPrimitivesWave3Probe
     {
         Console.WriteLine("── P8a: composes= — Add appends each, ReplaceAll clears+appends each; all-or-nothing + refusals ──");
 
-        // ---- synthetic MO2 instance with one master (LeveledItem with an empty Entries list + a weapon to reference) ----
+        // ---- manager-neutral fixture with one master (LeveledItem with an empty Entries list + a weapon to reference) ----
         string instance = Path.Combine(dir, "instance");
         string profiles = Path.Combine(instance, "profiles", "Default");
         string mods = Path.Combine(instance, "mods");
@@ -488,7 +488,7 @@ internal static class BulkPrimitivesWave3Probe
         Directory.CreateDirectory(Path.GetDirectoryName(decoyPath)!);
         File.Copy(dataServedPath, decoyPath, overwrite: true);
 
-        // UNTICKED plugin: sole copy, in an ENABLED mod folder, but listed in plugins.txt WITHOUT the `*`. MO2's left
+        // UNTICKED plugin: sole copy, in an ENABLED mod folder, but listed in plugins.txt WITHOUT the `*`. The mod list
         // pane says yes, its right pane says no, and the game does not load it — the exact state a mod-folder-only
         // flag reports backwards.
         var unKey = new ModKey("HcW3Unticked", ModType.Plugin);
@@ -499,7 +499,7 @@ internal static class BulkPrimitivesWave3Probe
         var uwFk = uw.FormKey;
         unMod.BeginWrite.ToPath(untickedPath).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
 
-        // UNREGISTERED plugin: sole copy, in an ENABLED mod folder, and therefore the SERVED copy — but MO2 has not
+        // UNREGISTERED plugin: sole copy, in an ENABLED mod folder, and therefore the SERVED copy — but Amethyst has not
         // written it into loadorder.txt/plugins.txt at all (a mod installed, or a patch written, before the refresh).
         // Serves + Unregistered is a distinct pair from Serves + Unticked: nothing to tick, the remedy is a refresh.
         var unregKey = new ModKey("HcW3Unregistered", ModType.Plugin);
@@ -511,9 +511,9 @@ internal static class BulkPrimitivesWave3Probe
         unregMod.BeginWrite.ToPath(unregPath).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
 
         // UNLISTED folder: on disk under ModsDir but mentioned NOWHERE in modlist.txt. This is the state of a patch
-        // houseCARL has just written, before the MO2 refresh — by far the most common way a real session reaches a
+        // houseCARL has just written, before the Amethyst refresh — by far the most common way a real session reaches a
         // "not in the load order" refusal, and the one the fixtures never modelled (review of PR #274, round 2).
-        // Its remedy is a refresh; "switch the mod on" names an action MO2 cannot offer for it.
+        // Its remedy is a refresh; there is no inactive mod-list entry to enable.
         var unlKey = new ModKey("HcW3Unlisted", ModType.Plugin);
         var unlistedPath = Path.Combine(mods, "DiffUnlistedFresh", unlKey.FileName.String);
         Directory.CreateDirectory(Path.GetDirectoryName(unlistedPath)!);
@@ -522,7 +522,7 @@ internal static class BulkPrimitivesWave3Probe
         var ulwFk = ulw.FormKey;
         unlMod.BeginWrite.ToPath(unlistedPath).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
 
-        // ARCHIVE backup: the SAME filename as the active replacer (55), parked OUTSIDE every MO2/game root — the
+        // ARCHIVE backup: the SAME filename as the active replacer (55), parked OUTSIDE every manager/game root — the
         // old-version-vs-live diff (#269's reporter's actual job). Same name, different file: it must stay off-order.
         var archivePath = Path.Combine(dir, "archive", rKey.FileName.String);
         Directory.CreateDirectory(Path.GetDirectoryName(archivePath)!);
@@ -533,13 +533,13 @@ internal static class BulkPrimitivesWave3Probe
         // The Data-served plugin is CHECKED and in the order: its arm isolates WHICH COPY is served, so its tick state
         // must not be the thing that decides it (leave it unticked and the tick gate answers first, and the
         // served-copy rule goes untested).
-        // HcW3Ghost.esp is TICKED and in the order but exists in NO folder — the stale-profile state (MO2 rewrote the
+        // HcW3Ghost.esp is TICKED and in the order but exists in NO folder — the stale-profile state (Amethyst rewrote the
         // profile, then the mod was removed). It is the one case the explainer must NOT answer with "unticked".
         const string ghostName = "HcW3Ghost.esp";
         File.WriteAllText(Path.Combine(profiles, "loadorder.txt"),
             "# header\r\n" + mKey.FileName + "\r\n" + dsKey.FileName + "\r\n" + rKey.FileName + "\r\n" + ghostName + "\r\n");
         // plugins.txt: master + Data-served + replacer + ghost CHECKED; HcW3Unticked listed WITHOUT the `*` (present but
-        // unchecked). HcW3Unregistered is in NEITHER file — its mod folder is enabled, but MO2 has never seen the plugin.
+        // unchecked). HcW3Unregistered is in NEITHER file — its mod folder is enabled, but Amethyst has never indexed the plugin.
         File.WriteAllText(Path.Combine(profiles, "plugins.txt"),
             "*" + mKey.FileName + "\r\n*" + dsKey.FileName + "\r\n*" + rKey.FileName + "\r\n" + unKey.FileName + "\r\n*" + ghostName + "\r\n");
         File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n+DiffRepl\r\n+DiffReplShadow\r\n+DiffMaster\r\n+DiffUnticked\r\n+DiffUnregistered\r\n-DiffDonor\r\n-DataServedDecoy\r\n");
@@ -723,7 +723,7 @@ internal static class BulkPrimitivesWave3Probe
         Check("#271 render: the same copy BY PATH still names the mod, since its Where cannot",
               rpfDecoy.WhyNotActive is { } wD2 && wD2.Contains("DataServedDecoy"));
         // The two layer-off causes carry DIFFERENT remedies and must never render alike: an UNLISTED folder has nothing
-        // in MO2's list to switch on. Both are flagged not-enabled by the locate, so a fix reading that flag alone
+        // in Amethyst's list to switch on. Both are flagged not-enabled by the locate, so a fix reading that flag alone
         // cannot tell them apart — the standing is decided from modlist.txt membership instead.
         string ulwFid = $"{ulwFk.ID:X6}:{ulwFk.ModKey.FileName}";
         var rpfUnlisted = svc.ReadPluginFile(unlKey.FileName.String, ulwFid, null, null, null, 1, null, 10);
@@ -767,7 +767,7 @@ internal static class BulkPrimitivesWave3Probe
               readUnticked.Error is { } eU3 && !eU3.Contains("does not open disabled")
               && readTypo.Error is { } eT2 && eT2.Contains("does not open disabled"));
 
-        // Serves + Unregistered: the served copy of a plugin MO2 has never written into its profile. Distinct from
+        // Serves + Unregistered: the served copy of a plugin Amethyst has never written into its profile. Distinct from
         // unticked (there is nothing to untick) and from a switched-off mod (the folder is on), so it must say neither.
         string urwFid = $"{urwFk.ID:X6}:{urwFk.ModKey.FileName}";
         var rpfUnreg = svc.ReadPluginFile(unregKey.FileName.String, urwFid, null, null, null, 1, null, 10);

@@ -21,7 +21,7 @@ namespace HousecarlGenerator;
 ///     Priority=50, NextAliasID=max+1/0, objective Flags=0 (S2) — the CK's own defaults, byte-verified vs vanilla,
 ///   • the BNAM lint — housecarl_validate_dialogue WARNS a Custom topic with no Branch (the CK-views-crash catch),
 ///     and does NOT warn a Custom topic that HAS a branch.
-/// Driven over a synthetic MO2 instance in temp (the dialogue-subtype-marker-guard synth pattern; no game files needed).
+/// Driven over a manager-neutral fixture in temp (the dialogue-subtype-marker-guard synth pattern; no game files needed).
 /// Run: dotnet run --project src/housecarl-generator -- dialogue-ckparity-guard
 ///
 /// Arms (ALL required):
@@ -92,7 +92,7 @@ internal static class DialogueCkParityGuardProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-dial-ckparity-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // --- synthetic MO2 instance with a master mod carrying two Custom topics (one branch-less, one branched)
+            // --- manager-neutral fixture with a master mod carrying two Custom topics (one branch-less, one branched)
             //     + a DLBR for the branched one — the fixtures the BNAM-lint arm validates. ---
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
@@ -513,7 +513,7 @@ internal static class DialogueCkParityGuardProbe
     }
 
     /// <summary>Read a created DialogView's DNAM/ENAM bytes back off the written patch as hex (null when the subrecord
-    /// is absent) — the bytes MO2 would load.</summary>
+    /// is absent) — the bytes the game will load after deployment.</summary>
     static (string? dnam, string? enam) ReadView(string patchPath, FormKey viewFk)
     {
         ISkyrimModGetter? ov = null;

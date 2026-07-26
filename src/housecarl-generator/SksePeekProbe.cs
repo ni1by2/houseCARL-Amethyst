@@ -18,9 +18,9 @@ namespace HousecarlGenerator;
 ///   Part 3 — the renderer arms over synthetic data: the load-order cross-check (present / ABSENT / no-answer), the
 ///     Debug-CRT "will not load" wording, the framing line, and the bare-peek loud error.
 ///
-/// ARR 2.0 carries ZERO debug-build plugins (live gate, authoring time), so the sharpest check in tier D has no real
+/// The original validation profile carried ZERO debug-build plugins, so the sharpest check in tier D has no real
 /// specimen to ride — which is exactly why it is pinned synthetically here rather than trusted to a live run.
-/// Self-contained: planted byte fixtures + the runner's own PEs; no MO2 instance, no game data.
+/// Self-contained: planted byte fixtures + the runner's own PEs; no manager state, no game data.
 /// </summary>
 internal static class SksePeekProbe
 {

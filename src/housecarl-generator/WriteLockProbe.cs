@@ -302,8 +302,9 @@ internal static class WriteLockProbe
     public static int RunNestedProof(string[] args)
     {
         Console.WriteLine("=== writelock-nested-proof — Apply re-edit of a NESTED own-override into an active patch (real data) ===");
-        string dataDir = args.Length > 0 ? args[0] : @"E:\Skyrim Modding\ARR 2.0\Stock Game\Data";
-        string skyrim = Path.Combine(dataDir, "Skyrim.esm");
+        string skyrim = args.Length > 0
+            ? Path.Combine(args[0], "Skyrim.esm")
+            : ProbeInputs.DataFile("Skyrim.esm");
         if (!File.Exists(skyrim)) { Console.Error.WriteLine($"need Skyrim.esm; not found at {skyrim} (pass the Data dir as arg 1)"); return 1; }
 
         var tmpDir = Path.Combine(Path.GetTempPath(), "hc-writelock-nested");

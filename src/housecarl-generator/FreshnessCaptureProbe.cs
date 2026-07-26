@@ -34,7 +34,7 @@ namespace HousecarlGenerator;
 ///      mid-write read serves the last good snapshot; the NEXT call refreshes. Deterministic given a write
 ///      long enough to straddle the read (retried; judged only when the read provably finished mid-write).
 ///
-/// Self-contained: synthetic MO2 instances + synthesized plugins in temp; generates its own corpus. No game data.
+/// Self-contained: manager-neutral fixtures + synthesized plugins in temp; generates its own corpus. No game data.
 /// </summary>
 internal static class FreshnessCaptureProbe
 {
@@ -118,7 +118,7 @@ internal static class FreshnessCaptureProbe
             string Fid(FormKey fk) => $"{fk.ID:X6}:{fk.ModKey.FileName}";
 
             // ---- 1: F8/profile — a restored-backup profile (newer content, OLDER mtimes) must be seen ----
-            Console.WriteLine("--- 1: MO2 'Restore Backup' on the profile files (older mtimes) is picked up (hunt F8) ---");
+            Console.WriteLine("--- 1: restored profile files with older mtimes are picked up (hunt F8) ---");
             {
                 var inst = NewInstance("inst-f8");
                 var prof = Path.Combine(inst, "profiles", "Default");
@@ -200,7 +200,7 @@ internal static class FreshnessCaptureProbe
                     {
                         LoadOrderStatusData s;
                         // A read colliding with the flipper's in-progress replace fails LOUD (an IOException out of the
-                        // profile-file read) — the honest MO2-mid-write transient, not a torn answer; skip and re-read.
+                        // profile-file read) — an honest manager-mid-write transient, not a torn answer; skip and re-read.
                         try { s = svc.StatusData(); }
                         catch (IOException) { Interlocked.Increment(ref contended); continue; }
                         catch (UnauthorizedAccessException) { Interlocked.Increment(ref contended); continue; }
@@ -302,7 +302,7 @@ internal static class FreshnessCaptureProbe
                     started.Wait();
                     Thread.Sleep(100);                                // let the write get into its resolve/serialize body
                     if (wt.IsCompleted) { outcome = wt.Result; continue; }   // write finished too fast to straddle — retry
-                    WriteProfile(prof, new[] { masterName, extraName },     // a real MO2 toggle arrives MID-write
+                    WriteProfile(prof, new[] { masterName, extraName },     // a real profile toggle arrives MID-write
                                  new[] { "*" + masterName, "*" + extraName }, new[] { "+MasterMod", "+ExtraMod" });
                     var dc = svc.Stats().plugins;                     // the concurrent read
                     bool midFlight = !wt.IsCompleted;                 // judge only a read that provably finished mid-write

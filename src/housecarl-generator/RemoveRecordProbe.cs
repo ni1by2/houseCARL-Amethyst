@@ -32,11 +32,10 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class RemoveRecordProbe
 {
-    const string SkyrimEsm = @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
-
     public static int RunProbe(string[] args)
     {
-        var src = args.FirstOrDefault(a => a.EndsWith(".esm", StringComparison.OrdinalIgnoreCase)) ?? SkyrimEsm;
+        var src = args.FirstOrDefault(a => a.EndsWith(".esm", StringComparison.OrdinalIgnoreCase))
+                  ?? ProbeInputs.DataFile("Skyrim.esm");
         if (!File.Exists(src)) { Console.Error.WriteLine($"error: source master not found: {src}"); return 1; }
 
         Console.WriteLine("================================================================");

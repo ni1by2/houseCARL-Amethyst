@@ -18,7 +18,7 @@ namespace HousecarlGenerator;
 ///
 /// The whole-inventory PE-walk over real DLLs is validated empirically against the actual load order (297 DLLs at
 /// authoring time); this guard is the CI-runnable regression net for the decode contract + the honest-degrade paths.
-/// Self-contained: synthetic blobs in memory + one temp junk file; no MO2 instance, no game data, no corpus.
+/// Self-contained: synthetic blobs in memory + one temp junk file; no manager state, no game data, no corpus.
 /// </summary>
 internal static class SkseReaderProbe
 {

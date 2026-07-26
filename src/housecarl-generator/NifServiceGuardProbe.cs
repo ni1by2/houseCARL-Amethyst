@@ -24,15 +24,12 @@ namespace HousecarlGenerator;
 ///
 /// Corpus smoke (existence-gated — a REAL facegen mesh, the spike §5 regression truths for the values the synthetic
 /// fixture can't wire: texture-set paths + bone lists). Runs only when the file is present (arg 1, or env
-/// HOUSECARL_NIF_SMOKE, or the workspace default); SKIPs cleanly otherwise, so CI stays green without the corpus.
+/// HOUSECARL_NIF_SMOKE); SKIPs cleanly otherwise, so CI stays green without copyrighted game data.
 ///
 /// Run: dotnet run --project src/housecarl-generator nif-service-guard ["&lt;a-facegen.nif&gt;"]
 /// </summary>
 internal static class NifServiceGuardProbe
 {
-    // The spike §5 ground-truth mesh ('A makeover for Lucien'). Overridable by arg/env so nothing machine-specific is baked in.
-    const string DefaultSmoke = @"E:\Skyrim Modding\ARR 2.0\mods\A makeover for Lucien\meshes\actors\character\FaceGenData\FaceGeom\lucien.esp\00005900.nif";
-
     public static int RunGuard(string[] args)
     {
         Console.WriteLine("================================================================");
@@ -157,7 +154,7 @@ internal static class NifServiceGuardProbe
         // ---- corpus smoke (existence-gated): the spike §5 facegen truths — texture paths + bones on REAL data ----
         Console.WriteLine();
         Console.WriteLine("--- corpus smoke: spike §5 facegen regression truths (existence-gated) ---");
-        var smoke = args.Length > 0 ? args[0] : (Environment.GetEnvironmentVariable("HOUSECARL_NIF_SMOKE") ?? DefaultSmoke);
+        var smoke = args.Length > 0 ? args[0] : ProbeInputs.NifSmoke;
         if (!File.Exists(smoke))
         {
             Console.WriteLine($"  SKIP  no facegen mesh at '{smoke}' (pass one as arg 1 or set HOUSECARL_NIF_SMOKE). The synthetic arms above are self-contained.");

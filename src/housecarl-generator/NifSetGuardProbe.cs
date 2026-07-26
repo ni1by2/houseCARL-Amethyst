@@ -35,8 +35,6 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class NifSetGuardProbe
 {
-    const string DefaultSmoke = @"E:\Skyrim Modding\ARR 2.0\mods\A makeover for Lucien\meshes\actors\character\FaceGenData\FaceGeom\lucien.esp\00005900.nif";
-
     public static int RunGuard(string[] args)
     {
         Console.WriteLine("================================================================");
@@ -185,7 +183,7 @@ internal static class NifSetGuardProbe
                        "non-SE stream → named refusal (no cross-game write)");
         }
 
-        // ---- service lanes end-to-end (REAL LoadOrderService over a synthetic MO2 instance — PlaceAssetProbe pattern) ----
+        // ---- service lanes end-to-end (REAL LoadOrderService over a manager-neutral fixture — PlaceAssetProbe pattern) ----
         Console.WriteLine();
         Console.WriteLine("--- service: new-folder + in-place lanes + persistent consent (real LoadOrderService) ---");
         const string MeshRel = @"meshes\actors\character\facegendata\facegeom\Test.esp\00000001.nif";
@@ -248,7 +246,7 @@ internal static class NifSetGuardProbe
         // ---- corpus smoke (existence-gated): set_path success on a REAL facegen mesh ----
         Console.WriteLine();
         Console.WriteLine("--- corpus smoke: set_path on a real facegen texture set (existence-gated) ---");
-        var smoke = args.Length > 0 ? args[0] : (Environment.GetEnvironmentVariable("HOUSECARL_NIF_SMOKE") ?? DefaultSmoke);
+        var smoke = args.Length > 0 ? args[0] : ProbeInputs.NifSmoke;
         if (!File.Exists(smoke))
             Console.WriteLine($"  SKIP  no facegen mesh at '{smoke}' (pass one as arg 1 or set HOUSECARL_NIF_SMOKE). set_path shares the in-block machinery the CI arms above prove.");
         else
@@ -376,7 +374,7 @@ internal static class NifSetGuardProbe
         return (outMs.ToArray(), shapeIdx, childIdx);
     }
 
-    // ---- synthetic MO2 layout helpers (the PlaceAssetProbe / AssetStatusProbe pattern) ----
+    // ---- manager-neutral fixture layout helpers (the PlaceAssetProbe / AssetStatusProbe pattern) ----
 
     static (string mods, string data, string prof) MakeInstance(string inst)
     {

@@ -25,7 +25,7 @@ namespace HousecarlGenerator;
 //
 //  THE GUARD: drives the REAL housecarl-mcp executable over stdio (the exact wire
 //  path the live failure took) with the exact argument shapes from the bug
-//  report. Needs NO game data and NO MO2 instance: argument binding resolves
+//  report. Needs NO game data and NO manager state: argument binding resolves
 //  before configuration is consulted, and a deliberately-unconfigured server
 //  answers every successfully-bound call with the trained config prompt —
 //  which is precisely the "our code RAN" signal the asserts key on.

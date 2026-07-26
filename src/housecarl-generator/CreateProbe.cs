@@ -37,15 +37,14 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class CreateProbe
 {
-    const string SkyrimEsm = @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
-
     // A spread of CONCRETE flat record types — the SkyPatcher/SPID authoring staples + a shape spread (substructs,
     // effect lists, leveled entries). Genericity is the claim: the same dispatch serves all, none is Keyword-special.
     static readonly string[] FlatTypes = { "Keyword", "Weapon", "Armor", "Spell", "MagicEffect", "Perk", "Faction", "LeveledItem" };
 
     public static int RunProbe(string[] args)
     {
-        var src = args.FirstOrDefault(a => a.EndsWith(".esm", StringComparison.OrdinalIgnoreCase)) ?? SkyrimEsm;
+        var src = args.FirstOrDefault(a => a.EndsWith(".esm", StringComparison.OrdinalIgnoreCase))
+                  ?? ProbeInputs.DataFile("Skyrim.esm");
         if (!File.Exists(src)) { Console.Error.WriteLine($"error: source master not found: {src}"); return 1; }
 
         Console.WriteLine("================================================================");

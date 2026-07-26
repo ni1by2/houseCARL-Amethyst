@@ -46,15 +46,16 @@ namespace HousecarlGenerator;
 ///   - value-type construction — coerce-selftest; coercion completeness — coerce-audit;
 ///   - the deferred surface (collection-nav / nested-group / arm-breadth / header) — the census loud-lists it.
 ///
-/// Run: <c>dotnet run --project src/housecarl-generator write-proof</c>
+/// Run: set <c>HOUSECARL_PROBE_DATA_DIR</c> and <c>HOUSECARL_PROBE_MODS_DIR</c>, then run
+/// <c>dotnet run --project src/housecarl-generator write-proof</c>.
 /// </summary>
 internal static class WriteProof
 {
-    // The modlist's own canonical game root — its isolated "Stock Game" instance, paired with the
-    // mods/ tree — NOT the global Steam install. The full vanilla master set lives here; loading all five
+    // Explicit native inputs keep the exploratory proof independent of any developer machine. The full vanilla
+    // master set lives in the configured Data root; loading all five
     // (vs Skyrim.esm alone) is the residual lever the wave-0 handoff named: more real Bethesda instances
     // populate the optional paths a single master leaves empty.
-    const string DefaultDataDir = @"C:\MO2\Instance\Stock Game\Data";
+    static string DefaultDataDir => ProbeInputs.DataDirectory;
     static readonly string[] VanillaMasters =
         { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" };
     // Beyond vanilla, the live mods/ tree. The heaviest mod plugins (Requiem, the modlist's own outputs, LOTD, the
@@ -62,7 +63,7 @@ internal static class WriteProof
     // zero AND proving the engine against real MODDED records. Loaded the same standalone way (no load-order
     // assembly: we snapshot records, never resolve cross-plugin links). Curated by record density (largest =
     // most records); the full-folder sweep (all ~3,400 plugins) is a separate, larger pass.
-    const string DefaultModsDir = @"C:\MO2\Instance\mods";
+    static string DefaultModsDir => ProbeInputs.ModsDirectory;
     const int TopModPluginsBySize = 50;
     const int GlobalCapPerType = 1024; // backstop on total pooled instances per type across all sources (keeps Phase 2 bounded)
     static readonly ModKey PatchKey = new("HousecarlWriteProof", ModType.Plugin);

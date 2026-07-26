@@ -19,12 +19,13 @@ namespace HousecarlGenerator;
 ///     reproduce a real .pex BYTE-FOR-BYTE? Sweeps a diverse sample (default) or one explicit file. The result
 ///     decides whether wave 5 WIRES a PEX write slice (gate clears across the sample) or records a loud
 ///     Mutagen-delta residual for the divergent subset (the cornerstone's one legitimate residual), never silent.
-///     Usage: <c>pex-probe</c> (sweep) · <c>pex-probe --n 500</c> · <c>pex-probe &lt;file.pex&gt;</c> (one, verbose).
+///     Usage: <c>pex-probe &lt;file.pex&gt;</c> for one file, or set
+///     <c>HOUSECARL_PROBE_DATA_DIR</c>/<c>HOUSECARL_PROBE_MODS_DIR</c> for a sweep.
 /// </summary>
 internal static class Wave5Probe
 {
-    const string StockGameData = @"C:\MO2\Instance\Stock Game\Data";
-    const string ModsDir = @"C:\MO2\Instance\mods";
+    static string StockGameData => ProbeInputs.DataDirectory;
+    static string ModsDir => ProbeInputs.ModsDirectory;
 
     // ------------------------------------------------------------------ header-probe
     public static int RunHeaderProbe(string[] args)

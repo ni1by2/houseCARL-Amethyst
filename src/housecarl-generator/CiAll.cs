@@ -219,7 +219,7 @@ internal static class CiAll
         // external referencer is found + repointed in place. Pins the housecarl_compact_plugin tool's cell-bearing path.
         ("remap-wave2-compact-guard", RemapWave2NestedMechProbe.RunCompactGuard),
         // COMPACT Wave 2 SERVICE-POLICY gate (PR #122 review #3): drives LoadOrderService.CompactPlugin over a synthetic
-        // MO2 instance — the clean new-file lane, esl=false, override-of-master-cell-with-new-child, external refusal, the
+        // manager-neutral fixture — the clean new-file lane, esl=false, override-of-master-cell-with-new-child, external refusal, the
         // repoint→in_place gate, not-active, and the in_place+repoint consent handshake. Covers the policy the engine guard bypasses.
         ("compact-service-guard", CompactServiceGuardProbe.RunGuard),
         // COMPACT/MERGE Wave A1 — the asset-rename SPINE's first category: compacting an NPC mod carries its FormID-keyed
@@ -238,7 +238,7 @@ internal static class CiAll
         // REGENERATES its .seq from the renumbered plugin (a renumber shifts the on-disk FormIDs a stale .seq lists, so its
         // quests would silently never start). NOT a map-rename — rebuilt from P′. New-file + in-place-stale-replace + multi-quest + no-SGE.
         ("seq-regen-guard", SeqRegenProbe.RunGuard),
-        // COMPACT/MERGE Wave A4 — the merge tool (housecarl_merge_plugins) end-to-end over a synthetic MO2 instance:
+        // COMPACT/MERGE Wave A4 — the merge tool (housecarl_merge_plugins) end-to-end over a manager-neutral fixture:
         // multi-donor collision-only renumber (first donor keeps ids), cross-donor LOAD-ORDER-WINNER conflicts each
         // reported, the un-relisted-child GRAFT (a patch's DIAL override + the base mod's second INFO — the arm that
         // fails if merging a mod with its patch drops the base mod's lines), warn-not-refuse externals (referencer +
@@ -256,7 +256,7 @@ internal static class CiAll
         // compose still reads (+1), new [0] = <element> (count wired from Structs.Count, not a constant).
         ("readback-count-guard", ReadbackCountProbe.RunGuard),
         // STANDALONE-COPY CHAIN Stage 1 — housecarl_read_plugin_file: a RAW, out-of-load-order read of ONE plugin file
-        // straight off disk (INCLUDING one DISABLED in MO2), the enabler for forking a donor you're removing from the
+        // straight off disk (INCLUDING one disabled in the profile), the enabler for forking a donor you're removing from the
         // order. Pins: locate+read a disabled plugin by filename, enumerate a type, whole-file summary, direct-path
         // read, the OUT-OF-LOAD-ORDER stamp, the missing-master advisory, and the Q3 refusals (missing/ambiguous
         // filename, bad/absent FormID, formid+type together). Opens its OWN overlay — never touches the resolver index.

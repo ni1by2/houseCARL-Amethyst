@@ -31,14 +31,15 @@ namespace HousecarlGenerator;
 /// name): override COUNTS/DEPTHS are correct, winner IDENTITY is not asserted — pinning the true active
 /// order (plugins.txt) and xEdit-verifying winner identity is the §8.5 correctness gate, not this probe.
 ///
-/// Run: dotnet run --project src/housecarl-generator resolve-probe [maxPlugins]
+/// Run: set <c>HOUSECARL_PROBE_DATA_DIR</c> and <c>HOUSECARL_PROBE_MODS_DIR</c>, then run
+/// <c>dotnet run --project src/housecarl-generator resolve-probe [maxPlugins]</c>.
 ///      (maxPlugins caps the whole set for a fast smoke run; 0/absent = the full set).
 /// </summary>
 internal static class ResolveProbe
 {
-    // Same canonical game roots the write/read proofs use (NOT the global Steam install).
-    const string DefaultDataDir = @"C:\MO2\Instance\Stock Game\Data";
-    const string DefaultModsDir = @"C:\MO2\Instance\mods";
+    // Exploratory probes require explicit native inputs; no developer machine path is embedded in the repository.
+    static string DefaultDataDir => ProbeInputs.DataDirectory;
+    static string DefaultModsDir => ProbeInputs.ModsDirectory;
     static readonly string[] VanillaMasters =
         { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" };
 

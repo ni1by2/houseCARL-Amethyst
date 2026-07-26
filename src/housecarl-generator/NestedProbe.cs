@@ -39,9 +39,6 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class NestedProbe
 {
-    const string DefaultSource =
-        @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
-
     // Bethesda's nested-GRUP records (the census `nestedGroupRecordNames`). The probe RE-DERIVES this set
     // by construction in Phase A (concrete records minus flat-group records) and cross-checks against it.
     static readonly string[] ExpectedNested =
@@ -53,7 +50,7 @@ internal static class NestedProbe
 
     public static int RunNestedProbe(string[] args)
     {
-        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : DefaultSource;
+        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : ProbeInputs.DataFile("Skyrim.esm");
         var asm = typeof(IArmorGetter).Assembly;
 
         Console.WriteLine("################  WAVE 3 SCOUT — nested-group record resolution  ################");

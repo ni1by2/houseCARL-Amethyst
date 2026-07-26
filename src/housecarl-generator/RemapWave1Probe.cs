@@ -13,7 +13,7 @@ namespace HousecarlGenerator;
 ///
 /// Wave-0 proved <c>mod.RemapLinks(dict)</c> repoints OUTGOING FormLinks (a record's references). The compact build
 /// plan §4 step 1 ALSO assumes a way to RENUMBER a record's OWN FormID (move it into the ESL 0x800–0xFFF range) — and
-/// that half was NEVER tested. This probe settles, self-contained (synthetic, TEMP, no MO2/Skyrim.esm), exactly:
+/// that half was NEVER tested. This probe settles, self-contained (synthetic, TEMP, no manager state or Skyrim.esm), exactly:
 ///   1. Does <c>RemapLinks(dict)</c> change a record's OWN identity, or ONLY its outgoing references?
 ///   2. Is <c>MajorRecord.FormKey</c> settable (so we can renumber identity directly)? — reflection, no compile dep.
 ///   3. What mod-/record-level renumber affordances does Mutagen actually expose? — reflect "Remap"/"Duplicate"/"Compact".
@@ -186,7 +186,7 @@ internal static class RemapWave1Probe
 
     /// <summary>
     /// Self-contained regression guard for the compact/merge foundation (RemapEngine). Synthesizes a multi-plugin
-    /// fixture in TEMP (no MO2, no Skyrim.esm) and drives the FULL cycle through the REAL engine, then asserts the
+    /// fixture in TEMP (no manager state or Skyrim.esm) and drives the FULL cycle through the REAL engine, then asserts the
     /// on-disk truth. Arms (ALL required — a GREEN must mean "the foundation compacts end-to-end correctly"):
     ///   HAPPY    — Donor.esp {Weapon WA@0xAAA, FormList FL@0xCCC->[WA]} compacts into a NEW P′ (records renumbered to
     ///              the ESL window 0x800,0x801; FL's INTERNAL ref to WA repointed); the identify-pass over the order

@@ -17,8 +17,8 @@ namespace HousecarlGenerator;
 ///       in-order-but-doesn't-define case ONLY.
 ///
 ///   (b) WRITE-TIME FULL READ-BACK (wishlist #3, re-scoped 2026-06-08) — the write cleave's opt-in fullReadback
-///       returns every touched/created record IN FULL, re-read from the WRITTEN FILE on disk (the same bytes MO2
-///       will load), so a write is verifiable BEFORE the patch is enabled — including the report's headline
+///       returns every touched/created record IN FULL, re-read from the WRITTEN FILE on disk (the same bytes the game
+///       will load after deployment), so a write is verifiable BEFORE the patch is enabled — including the report's headline
 ///       payload, a composed perk-gate condition (the compose grammar from the report's Positive finding).
 ///
 /// Self-contained, in the pattern of <c>snapshot-view-guard</c> / <c>writelock-guard</c>: synthesizes a 2-plugin

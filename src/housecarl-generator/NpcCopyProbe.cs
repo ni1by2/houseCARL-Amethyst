@@ -10,7 +10,7 @@ namespace HousecarlGenerator;
 
 /// <summary>
 /// STANDALONE-NPC-COPY guard (housecarl_copy_npc_appearance — capability chain Stage 3). Drives the REAL
-/// <see cref="LoadOrderService.CopyNpcAppearance"/> over a synthetic MO2 instance with a DISABLED donor (the realistic
+/// <see cref="LoadOrderService.CopyNpcAppearance"/> over a manager-neutral fixture with a DISABLED donor (the realistic
 /// case the chain exists for), pinning the empirical MUSTs the 2026-07-01 build test paid for:
 ///   APPLY      — donor appearance onto an existing active NPC: the closure internalizes the donor's HDPT/TXST/CLFM
 ///                under NEW keys with EditorIDs PRESERVED (facegeom block-name identity), HDPT.Parts (.tri morph refs —
@@ -529,7 +529,7 @@ internal static class NpcCopyProbe
         return fail == 0 ? 0 : 1;
     }
 
-    // ---- synthetic MO2 layout helpers (the SeqRegen / ReadPluginFile probe pattern) ----
+    // ---- manager-neutral fixture layout helpers (the SeqRegen / ReadPluginFile probe pattern) ----
 
     static (string mods, string prof) MakeInstance(string inst)
     {

@@ -12,7 +12,7 @@ namespace HousecarlGenerator;
 //  TOOL_PLAN_2026-07-08.md §5.3 apply-order replay + §2.3 tiered honesty).
 //
 //  Self-contained: an in-memory SkyrimMod weapon, the embedded catalog +
-//  field map, a stub resolver — no game data, no MO2 instance.
+//  field map, a stub resolver — no game data, no manager state.
 //
 //  THE RED-PROOF ARM (plan §7): the final damage asserts the exact value
 //  ONLY the ordered, stateful, running-value replay produces:

@@ -11,14 +11,14 @@ namespace HousecarlGenerator;
 /// into=-extend RESOLVER guard (HCBR-2026-06-23: "in-place into= extend can't find a houseCARL-built plugin once its
 /// mod folder is renamed"). The folder-per-patch model created each patch as "houseCARL - &lt;stem&gt;\&lt;stem&gt;.esp",
 /// and the old into= branch demanded a 3-way name match: into= == mod-folder suffix == .esp basename. A user who renamed
-/// the MO2 mod folder for organization (the .esp basename is FIXED — SPID _DISTR / the CSF JSON / masters bind it) could
+/// the staging mod folder for organization (the .esp basename is FIXED — SPID _DISTR / the CSF JSON / masters bind it) could
 /// no longer extend their OWN patch in place. The fix routes BOTH write lanes — the .esp path (ResolveOutputPath) AND the
 /// rider/asset path (ResolvePatchModFolder: compile / decompile / bsa_repack / place_asset) — through ONE shared 4-step
 /// resolver (ResolveOwnedPatchFolder), decoupling the folder name from the .esp basename WITHOUT relaxing the ownership
 /// marker (this is houseCARL's OWN output; the marker still gates every touch, so it opens NO foreign-plugin door — that's
 /// the separate, unbuilt in-place lane).
 ///
-/// Drives the REAL service write paths against a synthetic MO2 instance in temp (the WriteMutexProbe synth pattern). Arms:
+/// Drives the REAL service write paths against a manager-neutral fixture in temp (the WriteMutexProbe synth pattern). Arms:
 ///   CANONICAL    — into="SeedA" still resolves the unchanged "houseCARL - SeedA\SeedA.esp" (zero regression, no scan).
 ///   BY-ESP       — after the folder is RENAMED, into=&lt;esp basename&gt; finds the patch by the plugin it holds. RED pre-fix.
 ///   BY-ESP-EXT   — into="SeedA.esp" (with extension) strips the ext and resolves the same renamed patch.
@@ -48,7 +48,7 @@ internal static class ExtendResolveProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-extend-resolve-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // ---- synthetic MO2 instance with ONE real master plugin (the established synth-instance pattern) ----
+            // ---- manager-neutral fixture with ONE real master plugin (the established synth-instance pattern) ----
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");
@@ -109,7 +109,7 @@ internal static class ExtendResolveProbe
                       $"into=\"SeedA\" resolves the canonical folder ({Path.GetFileName(Path.GetDirectoryName(r.OutputPath) ?? "")})");
             }
 
-            // ---- RENAME the MO2 mod folder; the .esp basename stays SeedA.esp (SPID/CSF/masters bind it) ----
+            // ---- RENAME the staging mod folder; the .esp basename stays SeedA.esp (SPID/CSF/masters bind it) ----
             string seedFolder = Path.Combine(mods, "houseCARL - SeedA");
             string renamedFolder = Path.Combine(mods, "houseCARL - SeedA Renamed");
             Directory.Move(seedFolder, renamedFolder);

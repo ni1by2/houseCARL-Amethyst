@@ -14,8 +14,8 @@ namespace HousecarlGenerator;
 /// pre-existing .seq goes STALE and its quests then silently never start (the exact failure SeqFile exists to prevent,
 /// Q3). Unlike facegen (A1) / voice (A2), which RENAME files along the old→new map, the .seq is REGENERATED from the
 /// already-renumbered P′ (SeqFile.Build, the housecarl_write_seq path) — the FormIDs come out correct because they're
-/// read from the renumbered plugin. Drives the REAL <see cref="LoadOrderService.CompactPlugin"/> over a synthetic MO2
-/// instance (the FacegenCarry / VoiceCarry pattern), so it pins the END-TO-END wiring, not the service in isolation.
+/// read from the renumbered plugin. Drives the REAL <see cref="LoadOrderService.CompactPlugin"/> over a manager-neutral
+/// fixture (the FacegenCarry / VoiceCarry pattern), so it pins the END-TO-END wiring, not the service in isolation.
 ///   NEW-FILE   — a source that SHIPPED a (stale) .seq is REFRESHED: compact writes a fresh &lt;modRoot&gt;\SEQ\&lt;plugin&gt;.seq
 ///                listing the renumbered quest's NEW on-disk FormID; the outcome reports 1 quest / Written=true.
 ///   IN-PLACE   — a STALE .seq (old FormID) beside the plugin is REPLACED in place: the refreshed .seq lists the NEW
@@ -230,7 +230,7 @@ internal static class SeqRegenProbe
             // A3's load-bearing Q3 contract: a .seq it CANNOT write is a NAMED warning, never a silent stale/missing .seq, and
             // never a failure of the already-written compaction. Under the refresh-only gate the source must SHIP a .seq for the
             // refresh to be attempted, so keep a real source .seq AND hold an EXCLUSIVE lock on it (a realistic "file in use" —
-            // MO2/the game holding it) so the write fails. Assert it degrades, not aborts, AND that the warning reaches the
+            // external tools or the game holding it) so the write fails. Assert it degrades, not aborts, AND that the warning reaches the
             // user-visible tool output (RenderCompact). CI is windows-latest: File.Replace onto a FileShare.None-locked dest
             // throws a sharing violation, while File.Exists still satisfies the gate.
             {
@@ -300,7 +300,7 @@ internal static class SeqRegenProbe
         return seqPath;
     }
 
-    // ---- synthetic MO2 layout helpers (the FacegenCarry / VoiceCarry probe pattern) ----
+    // ---- manager-neutral fixture layout helpers (the FacegenCarry / VoiceCarry probe pattern) ----
 
     static (string mods, string prof) MakeInstance(string inst)
     {

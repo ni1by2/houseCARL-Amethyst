@@ -4,7 +4,7 @@ using HousecarlMcp;
 namespace HousecarlGenerator;
 
 /// <summary>
-/// asset-status guard (facegen-diagnostics Phase 2 — housecarl_asset_status). Proves the layer that turns the MO2
+/// asset-status guard (facegen-diagnostics Phase 2 — housecarl_asset_status). Proves the layer that turns the Amethyst
 /// profile into a live asset answer: ArchiveDiscovery (which BSAs load, bound to their owning plugin + rank) and the
 /// LoadOrderService wiring that wraps AssetResolver into the tool response, kept fresh + decoupled from the heavy
 /// record index.
@@ -15,7 +15,7 @@ namespace HousecarlGenerator;
 ///   B  archive VFS winner — the SAME .bsa filename in two mods resolves to the HIGHER-priority mod's physical copy.
 ///   C  missing Skyrim.ini — no base list found → a LOUD warning (Q3) and no base archive, never a silent gap.
 ///
-/// SERVICE arms (the real LoadOrderService over a synthetic MO2 instance, FreshnessCaptureProbe style):
+/// SERVICE arms (the real LoadOrderService over a manager-neutral fixture, FreshnessCaptureProbe style):
 ///   D  tool response — a BSA-packed facegen path resolves to the right winner; a loose copy BEATS the BSA; the base
 ///      archive is discovered (a 3rd provider) and the higher-rank plugin wins among BSAs; an absent path is ABSENT;
 ///      a drive-rooted path is a per-path error (Q3); a clean read reports no BsaFailures / not ReadIncomplete.
@@ -330,7 +330,7 @@ internal static class AssetStatusProbe
         return fail == 0 ? 0 : 1;
     }
 
-    // ---- synthetic MO2 layout helpers (the FreshnessCaptureProbe pattern) ----
+    // ---- manager-neutral fixture layout helpers (the FreshnessCaptureProbe pattern) ----
 
     static void WriteProfile(string profDir, string[] loadorder, string[] plugins, string[] modlist)
     {

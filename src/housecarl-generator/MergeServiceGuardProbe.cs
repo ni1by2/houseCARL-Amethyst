@@ -8,7 +8,7 @@ namespace HousecarlGenerator;
 
 /// <summary>
 /// COMPACT/MERGE Wave A4 — SERVICE guard for housecarl_merge_plugins (LoadOrderService.MergePlugins) over a synthetic
-/// MO2 instance. The fixture is the real merge shape: a base master, donor A (records + a patch surface: DIAL with two
+/// manager-neutral fixture. The fixture is the real merge shape: a base master, donor A (records + a patch surface: DIAL with two
 /// INFOs, an NPC with facegen, an SGE quest with a shipped .seq, a voiced line), donor B — a PATCH of A later in the
 /// load order (overrides A's DIAL re-listing only ONE modified INFO; overrides the base weapon; collides on an object
 /// id; references A cross-donor) — plus an external referencer and an external overrider OUTSIDE the merge set.
@@ -19,7 +19,7 @@ namespace HousecarlGenerator;
 ///   GRAFT     — A's second INFO (which B's patch DIAL does NOT re-list) is GRAFTED into the winning topic — the arm that
 ///               fails if the graft is dropped (a mod merged with its patch would silently lose the base mod's lines).
 ///   WARN      — the external referencer AND overrider are named WARNs; the merge SUCCEEDS (the A4 posture — donors stay
-///               active until the MO2 swap, so nothing breaks at write time); RenderMerge carries both to user output.
+///               active until the Amethyst profile swap, so nothing breaks at write time); RenderMerge carries both to user output.
 ///   ASSETS    — facegen + voice land under the MERGED plugin-name folders (the folder segment IS the plugin name — the
 ///               carry every merge needs even with zero id collisions); the .seq regenerates (A shipped one).
 ///   REFUSE    — one donor / unknown donor / output already active / output == donor, all loud, nothing written.

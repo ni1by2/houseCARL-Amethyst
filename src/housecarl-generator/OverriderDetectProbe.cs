@@ -14,7 +14,7 @@ namespace HousecarlGenerator;
 /// This proves the fix: the identify-pass now also tests each external record's OWN FormKey against the remap set, and
 /// surfaces overriders as a WARN — warn-and-proceed (xEdit parity), NOT the referencer refuse/repoint (an override can't
 /// be auto-repointed: that's an identity change, not a link rewrite, so routing it through repoint would be a Q3 false
-/// success). Drives the REAL LoadOrderService over synthetic MO2 instances.
+/// success). Drives the REAL LoadOrderService over manager-neutral fixtures.
 ///   OVERRIDER  — plugin Q overrides target P's record (no outgoing ref into P): compacting P SUCCEEDS (warn-and-proceed)
 ///                and the outcome NAMES Q as an external overrider, while listing ZERO referencers (the two are distinct).
 ///   REFERENCER — plugin R FormLinks into P's record (does not override it): compacting P is still REFUSED + R named
@@ -103,7 +103,7 @@ internal static class OverriderDetectProbe
         return fail == 0 ? 0 : 1;
     }
 
-    // ---- synthetic MO2 layout helpers (the CompactServiceGuard / FacegenCarry probe pattern) ----
+    // ---- manager-neutral fixture layout helpers (the CompactServiceGuard / FacegenCarry probe pattern) ----
 
     static (string mods, string prof) MakeInstance(string inst)
     {

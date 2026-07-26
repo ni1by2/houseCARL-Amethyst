@@ -14,16 +14,16 @@ namespace HousecarlGenerator;
 /// a junk filler record. housecarl_create_plugin authors a valid TES4 header with ZERO records — the clean primitive.
 ///
 /// Two layers, both required for a GREEN to mean "the contract holds":
-///   CORE arms (WritePatchBuilder.CreatePlugin straight to a temp path — no MO2, no Skyrim.esm):
+///   CORE arms (WritePatchBuilder.CreatePlugin straight to a temp path — no manager state or Skyrim.esm):
 ///     HEADER-ONLY-ESP — esl=false → 0 records, 0 masters (Aaron 2026-06-23: an empty plugin carries none), NOT
 ///                       ESL-flagged, first 4 bytes "TES4", author/description survive the write+reopen.
 ///     HEADER-ONLY-ESL — esl=true → the light-master (IsSmallMaster) flag survives reopen; still 0 records / 0 masters.
-///   SERVICE arms (the REAL LoadOrderService.CreatePlugin over a synthetic MO2 instance — the bulk-create-guard synth):
+///   SERVICE arms (the REAL LoadOrderService.CreatePlugin over a manager-neutral fixture — the bulk-create-guard synth):
 ///     WIRE-CREATE    — writes the EXACT-named plugin ('HcCpTrigger.esp', NOT auto-suffixed) in a 'houseCARL - …' folder.
 ///     REJ-FOLDER     — re-creating the SAME name refuses loud ('already exists') with no second folder (no auto-suffix:
 ///                      the basename is load-bearing for the trigger, so houseCARL refuses rather than rename).
 ///     REJ-NAME-ACTIVE— naming a plugin already ACTIVE in the order refuses loud ('already active'), no folder (a second
-///                      plugin of that basename would shadow it — MO2 picks one by mod order).
+///                      plugin of that basename would shadow it — staging order selects one by mod order).
 ///     ESL-WIRE       — esl=true through the service lands a light-flagged plugin on disk.
 ///
 /// Run: dotnet run --project src/housecarl-generator -- create-plugin-guard
@@ -46,7 +46,7 @@ internal static class CreatePluginGuardProbe
         Directory.CreateDirectory(root);
         try
         {
-            // ===== CORE arms (self-contained: WritePatchBuilder.CreatePlugin to a temp path, no MO2) =====
+            // ===== CORE arms (self-contained: WritePatchBuilder.CreatePlugin to a temp path, no manager state) =====
 
             // HEADER-ONLY-ESP: a full (non-ESL) header-only plugin round-trips clean.
             {
@@ -70,7 +70,7 @@ internal static class CreatePluginGuardProbe
                     $"success={o.Success} esl={eslBack} recs={recs} masters=[{string.Join(",", masters)}] err=[{Trim(o.Error)}]");
             }
 
-            // ===== SERVICE arms (synthetic MO2 instance → the REAL LoadOrderService.CreatePlugin) =====
+            // ===== SERVICE arms (manager-neutral fixture → the REAL LoadOrderService.CreatePlugin) =====
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");

@@ -14,7 +14,7 @@ namespace HousecarlGenerator;
 ///   • the create-path AUTO-FILL — create a topic through the service and read the written SNAM back off disk,
 ///   • the create-path NON-OVERRIDE — an explicit SubtypeName is never clobbered,
 ///   • the validator ESCALATION — housecarl_validate_dialogue reports a blank marker as a PROBLEM, not a neutral fact.
-/// Driven over a synthetic MO2 instance in temp (the bulk-create-guard synth pattern; no game files needed).
+/// Driven over a manager-neutral fixture in temp (the bulk-create-guard synth pattern; no game files needed).
 /// Run: dotnet run --project src/housecarl-generator -- dialogue-subtype-marker-guard
 ///
 /// Arms (ALL required):
@@ -89,7 +89,7 @@ internal static class DialogueSubtypeMarkerGuardProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-dial-snam-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // --- synthetic MO2 instance with a master mod carrying two pre-fix topics: one BLANK marker, one HELO. ---
+            // --- manager-neutral fixture with a master mod carrying two pre-fix topics: one BLANK marker, one HELO. ---
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");
@@ -262,7 +262,7 @@ internal static class DialogueSubtypeMarkerGuardProbe
         return fail == 0 ? 0 : 1;
     }
 
-    /// <summary>Read a created topic's SNAM marker back off the written patch on disk (the bytes MO2 would load).</summary>
+    /// <summary>Read a created topic's SNAM marker from the written patch bytes that the game will load.</summary>
     static string? TopicSnam(string patchPath, FormKey topicFk)
     {
         ISkyrimModGetter? ov = null;

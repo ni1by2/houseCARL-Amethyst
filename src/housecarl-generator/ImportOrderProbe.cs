@@ -28,9 +28,6 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class ImportOrderProbe
 {
-    // Aaron's known Steam compiler (same default as CompileProbe). Override via arg.
-    const string DefaultCompiler = @"E:\SteamLibrary\steamapps\common\Skyrim Special Edition\Papyrus Compiler\PapyrusCompiler.exe";
-
     public static int RunGuard(string[] args)
     {
         Console.WriteLine("================================================================");
@@ -87,7 +84,7 @@ internal static class ImportOrderProbe
         // ---- 2) END-TO-END: the SKSE-shadow proof against the real compiler ----
         Console.WriteLine();
         Console.WriteLine("--- 2: real compile — extended vanilla copy in import_dirs must win ---");
-        var compiler = args.Length > 0 ? args[0] : DefaultCompiler;
+        var compiler = args.Length > 0 ? args[0] : ProbeInputs.PapyrusCompiler;
         var realVanilla = File.Exists(compiler)
             ? Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(compiler))!, "Data", "Source", "Scripts")
             : null;

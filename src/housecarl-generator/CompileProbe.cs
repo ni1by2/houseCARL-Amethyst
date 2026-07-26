@@ -14,9 +14,6 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class CompileProbe
 {
-    // Aaron's known Steam compiler (the CK ships with the vanilla Steam install, not the MO2 game copy). Override via arg.
-    const string DefaultCompiler = @"E:\SteamLibrary\steamapps\common\Skyrim Special Edition\Papyrus Compiler\PapyrusCompiler.exe";
-
     public static int Run(string[] args)
     {
         Console.WriteLine("================================================================");
@@ -47,7 +44,7 @@ internal static class CompileProbe
         // ---- 2) END-TO-END against the real compiler ----
         Console.WriteLine();
         Console.WriteLine("--- 2: real compile via PapyrusCompile.CompileObject ---");
-        var compiler = args.Length > 0 ? args[0] : DefaultCompiler;
+        var compiler = args.Length > 0 ? args[0] : ProbeInputs.PapyrusCompiler;
         if (!File.Exists(compiler))
         {
             Console.WriteLine($"  SKIP  no compiler at '{compiler}' (pass the PapyrusCompiler.exe path as an arg to run this layer)");

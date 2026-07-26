@@ -45,7 +45,7 @@ internal static class BulkCreateGuardProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-bulk-create-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // --- synthetic MO2 instance with ONE master mod carrying a dialogue topic (the existing-parent fixture). ---
+            // --- manager-neutral fixture with ONE master mod carrying a dialogue topic (the existing-parent fixture). ---
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");

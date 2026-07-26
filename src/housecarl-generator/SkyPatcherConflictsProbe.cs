@@ -156,7 +156,7 @@ internal static class SkyPatcherConflictsProbe
 
         // ---- the no-op (true-ITM) scan's two extracted rules (PR #169 review: the layer scan's
         //      machinery had zero probe coverage; these pin the shareable halves — the full replay
-        //      wiring is validated live, 23 real no-ops on the ARR 2.0 order). ----
+        //      wiring was also validated against a real profile containing 23 no-op writes). ----
         var noOpTargets = new HashSet<Mutagen.Bethesda.Plugins.FormKey>();
         var noOpEids = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         int broad = 0;

@@ -31,7 +31,7 @@ internal static class HierarchyCacheProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-hierarchy-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // ---- minimal synthetic MO2 instance (the established synth-instance pattern) ----
+            // ---- minimal manager-neutral fixture (the established synth-instance pattern) ----
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");

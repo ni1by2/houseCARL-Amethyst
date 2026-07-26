@@ -20,7 +20,7 @@ namespace HousecarlGenerator;
 ///   C  PRE-swap failure is loud + non-destructive (Q3) — a Commit with a MISSING staged source THROWS (never a silent
 ///      no-op) and the prior target survives byte-for-byte.
 ///   C2 MID-swap failure is loud + non-destructive (Q3) — the operationally-relevant case the staging exists to defend:
-///      a valid staged source but the target HELD by an external holder (MO2/xEdit/the running game) → Commit THROWS and
+///      a valid staged source but the target HELD by an external holder (Amethyst/xEdit/the running game) → Commit THROWS and
 ///      the prior target survives byte-for-byte.
 ///
 /// The crash-atomicity itself (no missing-file window on a power cut) is NOT demonstrable in-process and is NOT claimed
@@ -117,7 +117,7 @@ internal static class AtomicCommitProbe
             }
 
             // ---- C2: MID-swap failure is loud + non-destructive (Q3) — the threat staging exists to defend: a VALID
-            //      staged source, but the target is HELD by an external holder (MO2/xEdit/the running game). File.Replace
+            //      staged source, but the target is HELD by an external holder (Amethyst/xEdit/the running game). File.Replace
             //      opens the destination first → can't (FileShare.None) → throws (IOException, NOT FileNotFoundException,
             //      so Commit does NOT fall through to a rename) → Commit propagates loud, prior target byte-intact. ----
             Console.WriteLine("--- C2: mid-swap failure on an externally-locked target (Q3) ---");

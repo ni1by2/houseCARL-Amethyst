@@ -4,7 +4,7 @@ namespace HousecarlGenerator;
 
 /// <summary>
 /// AssetResolver guard (facegen-diagnostics step 1). Proves the VFS-aware asset resolver that the dark-face skill
-/// rides: which mod/BSA provides a Data-relative asset, and which copy WINS, under MO2 precedence.
+/// rides: which mod/BSA provides a Data-relative asset, and which copy WINS, under staging precedence.
 ///
 /// Self-contained LOOSE arms (always run — synthetic mod/overwrite/data folders, no external tool):
 ///   • loose precedence + ORDER — Data + low mod + high mod + overwrite → OVERWRITE wins, all 4 providers in precedence order, ambiguous.
@@ -50,8 +50,8 @@ internal static class AssetResolverProbe
             var overwrite = Path.Combine(root, "overwrite");
             var mods = Path.Combine(root, "mods");
             var data = Path.Combine(root, "Data");
-            var high = Path.Combine(mods, "HighMod");      // higher MO2 priority (listed first)
-            var low = Path.Combine(mods, "LowMod");        // lower MO2 priority
+            var high = Path.Combine(mods, "HighMod");      // higher staging priority (listed first)
+            var low = Path.Combine(mods, "LowMod");        // lower staging priority
             foreach (var d in new[] { overwrite, high, low, data }) Directory.CreateDirectory(d);
 
             void WriteLoose(string baseDir) { var p = BethesdaPath.Under(baseDir, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!); File.WriteAllText(p, "x"); }
@@ -240,7 +240,7 @@ internal static class AssetResolverProbe
                     Check(renamable, "the .bsa is RENAMABLE while the resolver is alive — zero archive handles at rest (the cornerstone)");
                     bool deletable;
                     try { File.Delete(atrest); deletable = !File.Exists(atrest); } catch { deletable = false; }
-                    Check(deletable, "…and DELETABLE — MO2/xEdit can move/delete the archive freely");
+                    Check(deletable, "…and DELETABLE — Amethyst/xEdit can move/delete the archive freely");
                 }
 
                 // negative (Q3): an unreadable BSA is a NAMED failure; a good archive still resolves; ReadIncomplete flags it

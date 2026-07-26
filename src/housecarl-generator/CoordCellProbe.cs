@@ -36,12 +36,11 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class CoordCellProbe
 {
-    const string DefaultSource = @"E:\Skyrim Modding\ARR 2.0\Stock Game\Data\Skyrim.esm";
     static readonly FormKey Tamriel = FormKey.Factory("00003C:Skyrim.esm");
 
     public static int RunProbe(string[] args)
     {
-        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : DefaultSource;
+        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : ProbeInputs.DataFile("Skyrim.esm");
         var asm = typeof(IArmorGetter).Assembly;
 
         Console.WriteLine("################  STEP 0 SCOUT — COORDINATE-KEYED nested CREATE (exterior/interior Cell, Placed-into-new-cell)  ################");

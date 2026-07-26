@@ -7,7 +7,7 @@ namespace HousecarlGenerator;
 /// <summary>
 /// nif-inspect batch-wire guard (#229 — mesh_paths array on housecarl_nif_inspect; hardened by the PR #243 review) —
 /// locks the six batch contracts of NifWire.Render over NifInspectBatchData, fully self-contained (constructed
-/// per-path results through the REAL renderer via InternalsVisibleTo — no game data, no MO2 instance, no file I/O).
+/// per-path results through the REAL renderer via InternalsVisibleTo — no game data, no manager state, no file I/O).
 /// The synthetic mesh model is NifServiceGuardProbe.FakeInspect — ONE builder for both render guards, not a fork.
 ///
 /// Arms:

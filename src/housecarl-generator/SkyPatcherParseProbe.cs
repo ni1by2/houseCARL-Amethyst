@@ -13,7 +13,7 @@ namespace HousecarlGenerator;
 //  unambiguous Plugin.esp|FormID address (incl. leading-zero trim), the
 //  0a boundary (a bare EditorID stays UN-addressed — that's Wave 1), and
 //  the Q3 loud-note paths for malformed segments. Pure in-process, no game
-//  data, no MO2 instance, no Mutagen — just string→model asserts.
+//  data, no manager state, no Mutagen — just string→model asserts.
 // ======================================================================
 internal static class SkyPatcherParseProbe
 {

@@ -16,7 +16,7 @@ namespace HousecarlGenerator;
 /// folder + meta.ini were created BEFORE pre-flight, so a refused write's "NO patch written" left an orphan
 /// folder accreting _001/_002 on retry.
 ///
-/// Drives the REAL service-level write path (LoadOrderService.ApplyEdits) against a synthetic MO2 instance in
+/// Drives the REAL service-level write path (LoadOrderService.ApplyEdits) against a manager-neutral fixture in
 /// temp (the hierarchy-cache-guard synth pattern + the upsert-guard synthesized master). Arms:
 ///   CONCURRENT — N pairs of simultaneous fresh default-name writes: every call succeeds, every output path is
 ///                distinct, and every written file carries ITS OWN edit (no cross-commit). RED pre-fix (same
@@ -46,7 +46,7 @@ internal static class WriteMutexProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-write-mutex-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // ---- synthetic MO2 instance (the established synth-instance pattern) with ONE real master plugin ----
+            // ---- manager-neutral fixture (the established synth-instance pattern) with ONE real master plugin ----
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");

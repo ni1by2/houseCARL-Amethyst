@@ -10,7 +10,7 @@ namespace HousecarlGenerator;
 /// <summary>
 /// COMPACT/MERGE Wave 2 — SERVICE-POLICY guard for housecarl_compact_plugin (PR #122 review #3). Where
 /// remap-wave2-compact-guard drives the ENGINE (RenumberModInto) directly, this drives the SERVICE
-/// (<see cref="LoadOrderService.CompactPlugin"/>) over a synthetic MO2 instance, exercising the policy branches the
+/// (<see cref="LoadOrderService.CompactPlugin"/>) over a manager-neutral fixture, exercising the policy branches the
 /// engine guard bypasses — the paths most likely to regress silently:
 ///   CLEAN     — a self-contained nested mod compacts to a NEW file (default lane): success, !InPlace, P′ in a fresh
 ///               folder with every originating record in the ESL window and the light flag set.
@@ -20,7 +20,7 @@ namespace HousecarlGenerator;
 ///   REFUSE-EXT— a mod another plugin references is REFUSED (the external referencer named), nothing written.
 ///   GATE      — repoint_externals without in_place is REFUSED (the coherence gate; review #1).
 ///   NOT-ACTIVE— a plugin found nowhere on disk is refused (an inactive one FOUND on disk now compacts — see OFF-ORDER).
-///   OFF-ORDER — a plugin in an UNLISTED mod folder (a fresh houseCARL patch pre-MO2-refresh; HCBR-2026-07-14-02 gap 3)
+///   OFF-ORDER — a plugin in an UNLISTED mod folder (a fresh houseCARL patch before-Amethyst-refresh; HCBR-2026-07-14-02 gap 3)
 ///               resolves by filename and compacts normally, with the OFF-ORDER note.
 ///   FLAG-ONLY — an override-only plugin: esl=true copies verbatim + sets the light flag (renum 0); esl=false refuses.
 ///   CONSENT   — in_place + repoint without acknowledge returns the CONFIRM prompt (no write); WITH acknowledge it
@@ -45,7 +45,7 @@ internal static class CompactServiceGuardProbe
             string data = Path.Combine(root, "game", "Data");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods); Directory.CreateDirectory(data);
 
-            // ---- fixture mods (each in its own MO2 mod folder) ----
+            // ---- fixture mods (each in its own staging mod folder) ----
             var selfKey = new ModKey("HcCsSelf", ModType.Plugin);
             var swOld = new FormKey(selfKey, 0xA01); var scOld = new FormKey(selfKey, 0xA02); var spOld = new FormKey(selfKey, 0xA03);
             WriteMod(mods, "SelfMod", selfKey, Array.Empty<string>(), m =>
@@ -170,7 +170,7 @@ internal static class CompactServiceGuardProbe
             }
 
             // ---- OFF-ORDER: a plugin in an UNLISTED mod folder (not in modlist/plugins/loadorder — the fresh houseCARL
-            //      patch before the MO2 refresh, HCBR-2026-07-14-02 gap 3) resolves by filename and compacts normally ----
+            //      patch before the Amethyst refresh, HCBR-2026-07-14-02 gap 3) resolves by filename and compacts normally ----
             {
                 var offKey = new ModKey("HcCsOff", ModType.Plugin);
                 var owOld = new FormKey(offKey, 0xA01);
@@ -256,7 +256,7 @@ internal static class CompactServiceGuardProbe
         return fail == 0 ? 0 : 1;
     }
 
-    /// <summary>Build a plugin via <paramref name="build"/> and write it to its own MO2 mod folder under
+    /// <summary>Build a plugin via <paramref name="build"/> and write it to its own staging mod folder under
     /// <paramref name="mods"/> (no masters unless the build adds referenced records).</summary>
     static void WriteMod(string mods, string folder, ModKey key, IReadOnlyList<string> masters, Action<SkyrimMod> build)
     {

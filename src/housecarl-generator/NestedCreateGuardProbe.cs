@@ -58,7 +58,7 @@ namespace HousecarlGenerator;
 ///
 /// HCBR-2026-07-10-01 — self-reference + compose-struct @refs + extend-edit resolution (the created-record
 /// self-reference gap: a quest's VMAD alias fragment must point Property.Object at ITS OWN quest — every MCM /
-/// player-alias-script mod — and a fresh patch must be extendable by field edits without an MO2 enable round-trip):
+/// player-alias-script mod — and a fresh patch must be extendable by field edits without an Amethyst enable round-trip):
 ///   SIBREF-SELF          — a record's own field @refs ITSELF (declared-before-own-edits + apply's register-then-apply
 ///                          timing). RED pre-fix: 'created EARLIER in this call'.
 ///   SIBREF-STRUCT        — the report's exact shape: @self inside a COMPOSED QuestFragmentAlias' nested Sets
@@ -845,7 +845,7 @@ internal static class NestedCreateGuardProbe
         }
 
         // ---------- EXTEND-EDIT (HCBR-2026-07-10-01 F3): an extend edit targets a record ONLY the patch defines ----------
-        // The report's blocked two-step: create into a patch (not enabled in MO2 — not in the resolver's order), then
+        // The report's blocked two-step: create into a patch (not enabled in Amethyst — not in the resolver's order), then
         // Apply extend on the same patch targeting the created record. RED pre-fix: "not present in the load order".
         // Now the extended patch's own records resolve to a patch-local direct edit; a MIXED call (one load-order
         // target + one patch-local target) lands both; a genuinely-absent target still refuses loud, naming BOTH

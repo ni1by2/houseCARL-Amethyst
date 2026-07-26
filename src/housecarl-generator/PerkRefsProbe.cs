@@ -29,8 +29,6 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class PerkRefsProbe
 {
-    const string DefaultSource = @"E:\SteamLibrary\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
-
     public static int RunGuard(string[] args)
     {
         Console.WriteLine("################  REGRESSION GUARD — references= scan fault isolation (HCBR-2026-06-09-03)  ################");
@@ -181,7 +179,7 @@ internal static class PerkRefsProbe
         var f = HousecarlCore.WriteEngine.ParseFlags(args);
         if (f.GetValueOrDefault("manifest") is { } manifest) return DiagnoseFullOrder(manifest);
 
-        var src = f.GetValueOrDefault("source") ?? DefaultSource;
+        var src = f.GetValueOrDefault("source") ?? ProbeInputs.DataFile("Skyrim.esm");
         if (!File.Exists(src)) { Console.WriteLine($"SKIP: source plugin not found: {src}"); return 0; }
 
         Console.WriteLine($"################  DIAGNOSIS — EnumerateFormLinks over PERK records in {Path.GetFileName(src)}  ################");

@@ -246,7 +246,7 @@ internal static class InPlaceProbe
 
         // ===== I — MARKER + into= BOUNDARY: the editedInPlace marker is stamped but NEVER generated=true, so the user
         // mod keeps failing IsHouseCarlOwned and a later into= can't blind-overwrite it. The marker only fires for a
-        // target under ModsDir (IsUnderModsDir), so this arm drives the REAL service over a synthetic MO2 instance with
+        // target under ModsDir (IsUnderModsDir), so this arm drives the REAL service over a manager-neutral fixture with
         // the user mod as a NON-houseCARL mod folder. The discriminating check: into= STILL refuses the edited user mod
         // — it would SUCCEED (extend it) if the marker had wrongly written generated=true. =====
         {
@@ -653,8 +653,9 @@ internal static class InPlaceProbe
     public static int RunNestedProof(string[] args)
     {
         Console.WriteLine("=== inplace-nested-proof — in-place re-edit of a NESTED own-override (real data) ===");
-        string dataDir = args.Length > 0 ? args[0] : @"E:\Skyrim Modding\ARR 2.0\Stock Game\Data";
-        string skyrim = Path.Combine(dataDir, "Skyrim.esm");
+        string skyrim = args.Length > 0
+            ? Path.Combine(args[0], "Skyrim.esm")
+            : ProbeInputs.DataFile("Skyrim.esm");
         if (!File.Exists(skyrim))
         {
             Console.WriteLine($"SKIP: need Skyrim.esm; not found at {skyrim} (pass the Data dir as arg 1). A real nested record + master");
@@ -719,8 +720,9 @@ internal static class InPlaceProbe
     public static int RunRemoveNestedProof(string[] args)
     {
         Console.WriteLine("=== inplace-remove-nested-proof — in-place REMOVE of a NESTED own-override (real data) ===");
-        string dataDir = args.Length > 0 ? args[0] : @"E:\Skyrim Modding\ARR 2.0\Stock Game\Data";
-        string skyrim = Path.Combine(dataDir, "Skyrim.esm");
+        string skyrim = args.Length > 0
+            ? Path.Combine(args[0], "Skyrim.esm")
+            : ProbeInputs.DataFile("Skyrim.esm");
         if (!File.Exists(skyrim))
         {
             Console.WriteLine($"SKIP: need Skyrim.esm; not found at {skyrim} (pass the Data dir as arg 1). A real nested record + master");

@@ -25,7 +25,7 @@ namespace HousecarlGenerator;
 ///
 /// The arms below are kept as REPRODUCIBLE DOCUMENTATION of how the FINDINGS above were reached — they print the
 /// measured reality (the questions they pose were answered as stated above); the regression guard (RunGuard) pins it.
-/// All self-contained (synthesized plugins in TEMP; NO Skyrim.esm, NO MO2 instance):
+/// All self-contained (synthesized plugins in TEMP; NO Skyrim.esm, NO manager state):
 ///
 ///   A  small-master object-ID range — synthesize a light master (IsSmallMaster=true) carrying ONE record at a
 ///      series of object IDs {0x000, 0x123, 0x7FF, 0x800, 0xFFF, 0x1000} and write it with the DEFAULT params our
@@ -232,7 +232,7 @@ internal static class EslFormIdProbe
     ///
     /// Drives the REAL product write path (WritePatchBuilder.Apply → the single WriteEngine.WritePatch chokepoint),
     /// then the REAL product read path (LoadOrderResolver). Self-contained (synthesizes its masters in TEMP; generates
-    /// the validator corpus in-process; NO Skyrim.esm, NO MO2). Run: dotnet run --project src/housecarl-generator esl-formid-guard
+    /// the validator corpus in-process; NO Skyrim.esm, NO manager state). Run: dotnet run --project src/housecarl-generator esl-formid-guard
     ///
     /// Arms (ALL required — a GREEN must mean "ESL patching round-trips correctly", never "the scenario didn't arise"):
     ///   RANGE     — a light master writes a record at 0x800 and 0xFFF, and REFUSES (named throw) at 0x123 (the GENERAL

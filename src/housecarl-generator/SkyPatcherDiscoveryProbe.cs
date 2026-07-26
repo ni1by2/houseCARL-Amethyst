@@ -36,7 +36,7 @@ internal static class SkyPatcherDiscoveryProbe
             var overwrite = Path.Combine(root, "overwrite");
             var mods = Path.Combine(root, "mods");
             var data = Path.Combine(root, "Data");
-            var modA = Path.Combine(mods, "ModA");         // higher MO2 priority
+            var modA = Path.Combine(mods, "ModA");         // higher staging priority
             var modB = Path.Combine(mods, "ModB");
             foreach (var d in new[] { overwrite, modA, modB, data }) Directory.CreateDirectory(d);
             var enabled = new[] { "ModA", "ModB" };

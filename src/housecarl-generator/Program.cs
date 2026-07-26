@@ -35,7 +35,7 @@ if (args.Length > 0 && args[0] == "pkcu-probe") return PkcuProbe.Run(args[1..]);
 // Index-build resilience (Nexus bug): end-to-end proof the malformed plugin is isolated, not fatal.
 if (args.Length > 0 && args[0] == "pkcu-fix-proof") return PkcuProbe.RunFixProof(args[1..]);
 
-// Index-build resilience (Nexus bug): real-scale proof — full MO2 order + 1 malformed plugin, only it excluded.
+// Index-build resilience (Nexus bug): real-scale proof — full profile order + 1 malformed plugin, only it excluded.
 if (args.Length > 0 && args[0] == "pkcu-scale-proof") return PkcuProbe.RunScaleProof(args[1..]);
 
 // Freshness + write-capture guard (2026-06-12 hunt F5–F8 + PR #51 review note): restored-backup profile/ini

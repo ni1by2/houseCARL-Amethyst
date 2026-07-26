@@ -10,18 +10,18 @@ namespace HousecarlGenerator;
 /// source), in-process BSA single-entry extraction with ZERO handles at rest (the cornerstone), the crash-atomic
 /// non-destructive write, the wins-VFS end-to-end story through the REAL service, and the Q3 refusals.
 ///
-/// PURE / CORE arms (no MO2 instance):
+/// PURE / CORE arms (no manager state):
 ///   A  FaceGen-path transform — folder = the DEFINING master (NOT a winner), file = "00" + the 6-hex local id
 ///      (index masked), mesh under facegeom/.nif, tint under facetint/.dds; matches the committed fixture name. [RED:
 ///      the keystone — a wrong mask/folder places a DIFFERENT NPC's asset.]
 ///   B  native BSA single-entry extraction — TryReadArchiveEntry pulls the right bytes out of the committed FixtureA.bsa,
 ///      returns null for an absent entry, AND holds ZERO handle at rest (the .bsa stays renamable/deletable after). [RED:
-///      the cornerstone — a held handle would block MO2/xEdit.]
+///      the cornerstone — a held handle would block Amethyst/xEdit.]
 ///   C  crash-atomic routing — AtomicFile.WriteAllBytes overwrites byte-exact AND preserves the destination's creation
 ///      time (File.Replace, not File.Move), self-calibrating off a tunneling control; a fresh write lands byte-exact and
 ///      leaves no temp. [RED: a non-atomic File.Move regression flips the creation-time arm.]
 ///
-/// SERVICE arms (the REAL LoadOrderService over a synthetic MO2 instance, AssetStatusProbe style):
+/// SERVICE arms (the REAL LoadOrderService over a manager-neutral fixture, AssetStatusProbe style):
 ///   D  explicit-source place + wins-VFS end-to-end — a loose source placed over a different current winner writes the
 ///      right bytes into a fresh houseCARL mod; after ENABLING that mod on top, the REAL svc.AssetStatus reports IT as the
 ///      VFS winner (the placed copy actually wins once sorted). Originals untouched; the placed file == the source bytes.
@@ -376,7 +376,7 @@ internal static class PlaceAssetProbe
         return fail == 0 ? 0 : 1;
     }
 
-    // ---- synthetic MO2 layout helpers (the AssetStatusProbe / FreshnessCaptureProbe pattern) ----
+    // ---- manager-neutral fixture layout helpers (the AssetStatusProbe / FreshnessCaptureProbe pattern) ----
 
     /// <summary>Create a manager-neutral fixture skeleton (mods/, game/Data/, profiles/Default/) and
     /// return (modsDir, dataDir, profileDir). The caller writes the profile + any mods.</summary>

@@ -197,7 +197,7 @@ internal static class CreateGlobalProbe
         }
 
         // --- G7: the READ-SIDE base→arm mapping (LoadOrderService.BuildTypeLookup, driven through the real CrossQuery).
-        //     A synthetic MO2 instance (the bulk-create-guard synth pattern) holding a master with a GlobalFloat, a
+        //     A manager-neutral fixture (the bulk-create-guard synth pattern) holding a master with a GlobalFloat, a
         //     GlobalInt, and a GameSettingFloat. type='Global' must RESOLVE (not "unknown record type") and return BOTH
         //     globals — proving the abstract base NAME unions its concrete arms (two distinct arms = the observable form
         //     of the "4 arms" claim); type='GameSetting' returns its GameSettingFloat (the generality, second group). ---

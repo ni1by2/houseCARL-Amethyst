@@ -16,7 +16,7 @@ namespace HousecarlGenerator;
 /// duplicate via its flat top-level group. <see cref="RemapEngine.RenumberRecordsInto"/> REFUSES LOUD on a record that
 /// lives ONLY in a nested group (a Cell, a Placed* under a cell, an INFO under a topic) — there is no flat group to
 /// place the duplicate into. Wave 2 must CLOSE that gap so a cell-/dialogue-bearing mod compacts. This probe settles,
-/// self-contained (synthetic, TEMP, no MO2/Skyrim.esm), the three facts the closing mechanism rests on:
+/// self-contained (synthetic, TEMP, no manager state or Skyrim.esm), the three facts the closing mechanism rests on:
 ///
 ///   1. Does <c>Cell.Duplicate(newKey)</c> / <c>Worldspace.Duplicate</c> / <c>DialogTopic.Duplicate</c> DEEP-COPY their
 ///      nested child records (placed refs / exterior cells / INFOs), and do those children keep their OLD FormKeys?

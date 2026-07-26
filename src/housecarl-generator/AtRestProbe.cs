@@ -14,7 +14,7 @@ namespace HousecarlGenerator;
 ///   LoadOrderResolver.Build  →  a read via OverlaySession (GetRecord + ReadFields)  →  a create via
 ///   WritePatchBuilder.CreateRecords  —  and after EACH step, with no session open, asserts every plugin file is
 /// RENAMABLE (and the created patch DELETABLE). A held handle would make the rename throw; renamable = zero
-/// handles at rest, the whole point of Option B (and the live MO2 "delete-while-the-server-is-up" gate in miniature).
+/// handles at rest, the whole point of Option B (and the live "delete-while-the-server-is-up" gate in miniature).
 ///
 /// SAFE: it never touches real plugin data — it COPIES a few small plugins to a temp dir and works only on the
 /// copies. The create is a self-contained (masterless) Keyword, so it needs no master present in the temp set.

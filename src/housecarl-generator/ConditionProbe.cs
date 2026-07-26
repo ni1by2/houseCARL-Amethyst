@@ -48,13 +48,11 @@ namespace HousecarlGenerator;
 /// </summary>
 internal static class ConditionProbe
 {
-    const string DefaultSource =
-        @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
     static readonly ModKey PatchKey = new("hc_cond_probe", ModType.Plugin);
 
     public static int RunConditionProbe(string[] args)
     {
-        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : DefaultSource;
+        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : ProbeInputs.DataFile("Skyrim.esm");
         var asm = typeof(IArmorGetter).Assembly;
 
         Console.WriteLine("################  WAVE 4 SCOUT — condition FormLinkOrIndex (form-vs-index) resolution  ################");

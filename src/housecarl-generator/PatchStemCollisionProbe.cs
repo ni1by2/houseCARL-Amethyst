@@ -9,13 +9,13 @@ namespace HousecarlGenerator;
 
 /// <summary>
 /// Patch-stem load-order-collision guard (PR #192 review). Defaulting the new-patch stem to the generic "Patch"
-/// (so the MO2 folder reads "houseCARL - Patch", not the doubled "houseCARL - houseCARL_Patch") means the default
+/// (so the staged folder reads "houseCARL - Patch", not the doubled "houseCARL - houseCARL_Patch") means the default
 /// plugin BASENAME is "Patch.esp" — a genuinely common name. The engine forbids two ACTIVE plugins sharing a
 /// basename, and mod-FOLDER uniqueness (UniqueStem's original arm) never sees a same-named plugin living in another
 /// mod. So UniqueStem now ALSO uniquifies against the active load order: if "Patch.esp" is already live, the write
 /// becomes "Patch_001.esp", never a duplicate.
 ///
-/// Drives the REAL service write path against a synthetic MO2 instance whose load order already contains an active
+/// Drives the REAL service write path against a manager-neutral fixture whose load order already contains an active
 /// "Patch.esp". Arms:
 ///   COLLISION — a DEFAULT-stem write (patch_name omitted → "Patch") uniquifies to "houseCARL - Patch_001\Patch_001.esp"
 ///               because "Patch.esp" is already active. RED if the load-order arm is reverted (old code emits "Patch.esp").
@@ -39,7 +39,7 @@ internal static class PatchStemCollisionProbe
         var root = Path.Combine(Path.GetTempPath(), "hc-patch-stem-collision-guard-" + Guid.NewGuid().ToString("N"));
         try
         {
-            // ---- synthetic MO2 instance whose active load order ALREADY holds a "Patch.esp" (the collision surface) ----
+            // ---- manager-neutral fixture whose active load order ALREADY holds a "Patch.esp" (the collision surface) ----
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");

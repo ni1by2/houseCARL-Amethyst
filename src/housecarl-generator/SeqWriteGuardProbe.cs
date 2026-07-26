@@ -9,7 +9,7 @@ namespace HousecarlGenerator;
 /// <summary>
 /// SELF-CONTAINED CI REGRESSION GUARD for the SEQ writer (nested/dialogue plan Layer B unit D — housecarl_write_seq).
 /// Pins the start-game-enabled-quest .seq contract end-to-end: the CORE encoding (<see cref="SeqFile"/>) AND the SERVICE
-/// wire (<see cref="LoadOrderService.WriteSeq"/>) over a synthetic MO2 instance. No Skyrim.esm — synthesizes its own
+/// wire (<see cref="LoadOrderService.WriteSeq"/>) over a manager-neutral fixture. No Skyrim.esm — synthesizes its own
 /// masters + patch.
 ///
 /// The load-bearing claim it defends: a .seq lists each SGE quest as its plugin-LOCAL, master-INDEX on-disk FormID
@@ -176,7 +176,7 @@ internal static class SeqWriteGuardProbe
             Check(eslOk,
                 $"ESL-NEVER-FE light patch's SGE quest encodes master-index (own high 0x{eOwnHi:X2}==1, never 0xFE), ON-DISK-MATCH holds — built [{string.Join(",", builtE.Quests.Select(q => $"0x{q.OnDiskFormId:X8}"))}]");
 
-            // ====================== SERVICE WIRE over a synthetic MO2 instance ======================
+            // ====================== SERVICE WIRE over a manager-neutral fixture ======================
             string instance = Path.Combine(root, "instance");
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");
