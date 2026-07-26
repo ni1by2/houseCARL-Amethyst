@@ -2,6 +2,7 @@
 name: CI
 
 on:
+  workflow_dispatch:
   push:
     branches: [main, amethyst-main, agent/upstream-c305b07-amethyst]
   pull_request:
