@@ -16,10 +16,10 @@ Proton, USVFS, or an Amethyst-side houseCARL plugin.
 
 > [!IMPORTANT]
 > This fork is under active development and does not yet have a supported
-> binary release. The native Amethyst read, asset-resolution, patch-writing,
-> and hardlink-redeployment foundations are implemented and covered by the
-> Linux test suite. The self-contained Linux installer, final host integration,
-> and real-profile release validation remain in progress. See the
+> binary release. Native Amethyst integration and the self-contained Linux
+> installer/package are implemented and covered by the Linux test suite.
+> Removal of inherited MO2 runtime seams and disposable real-profile hardlink
+> validation remain in progress. See the
 > [roadmap](docs/HOUSECARL_AMETHYST_ROADMAP.md).
 
 ## Why this fork exists
@@ -59,6 +59,9 @@ The source tree currently provides:
 - native BSA listing and extraction, NIF inspection, SKSE inspection,
   SkyPatcher analysis, FaceGen/voice handling, and SEQ generation;
 - Codex and Claude Code MCP surfaces and bundled skills.
+- a self-contained Linux x86_64 release builder and XDG installer;
+- checksum-before-install, atomic server updates, rollback, and conservative
+  uninstall that preserves user configuration.
 
 Upstream contains a much larger tool surface than this summary. Retaining a
 feature in the source tree is not the same as declaring it release-ready on
@@ -82,13 +85,13 @@ support.
 
 ## Build from source
 
-The current development work lives on
-`agent/upstream-c305b07-amethyst` until it is merged into the default branch.
+The integrated development history is published to `amethyst-main`; focused
+checkpoint work is also mirrored to `agent/upstream-c305b07-amethyst`.
 
 ```bash
 git clone https://github.com/ni1by2/houseCARL-Amethyst.git
 cd houseCARL-Amethyst
-git switch agent/upstream-c305b07-amethyst
+git switch amethyst-main
 dotnet restore
 dotnet build housecarl.sln
 ```
@@ -99,10 +102,15 @@ Run the MCP server over its default stdio transport with:
 dotnet run --project src/housecarl-mcp
 ```
 
-The source build is for developers and verifiers. Session 6 will replace the
-inherited Windows setup application with a self-contained `linux-x64` bundle,
-XDG installation paths, Codex/Claude registration, upgrade rollback, and
-uninstall support.
+Build the self-contained release with:
+
+```bash
+./scripts/build-release.sh
+```
+
+The archive and its SHA-256 checksum are written under `release/`. The
+installer supports `--codex`, `--claude`, `--both`, `--rollback`, and
+`--uninstall`.
 
 ## Connect to Amethyst
 
@@ -110,8 +118,7 @@ houseCARL-Amethyst uses a small, stable manifest so the server does not have to
 guess which Amethyst installation or Skyrim entry you mean. No connector
 repository or Amethyst plugin is required.
 
-The final standalone discovery command is part of the unfinished Linux
-installer. Until that lands, create:
+Amethyst's built-in integration writes:
 
 ```text
 <Amethyst profile root>/.housecarl-amethyst/connection.json
@@ -260,11 +267,7 @@ plain English. The review standard is
 
 The following remain explicitly unfinished:
 
-- the self-contained Linux installer and release archive;
-- automatic discovery and creation of the Amethyst connection manifest;
-- final Codex and Claude Code host-registration workflows;
 - removal of every inherited MO2/Windows message and test-fixture label;
-- reproducible Ubuntu release CI and package leak scanning;
 - real-game hardlink validation;
 - Proton command specifications for PapyrusCompiler and BSArch execution.
 

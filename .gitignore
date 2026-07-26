@@ -51,13 +51,13 @@ generated/
 ## Reproducible on demand; the engine + oracle source is committed, the emitted plugins are not.
 write-output/
 
-## Assembled plugin — the shippable tree built by scripts/build-plugin.ps1 (publish output +
+## Assembled plugin — the shippable tree built by scripts/build-release.sh (publish output +
 ## corpus.json + bundled skills + the plugin/ files). A build ARTIFACT, reproducible on demand;
 ## the plugin SOURCE lives in plugin/ (tracked). Never source-of-truth.
 dist/
 
 ## Shippable release zip(s) - release/houseCARL-<ver>.zip, packed from dist/ by
-## scripts/build-plugin.ps1. (Already matched by the [Rr]elease/ rule above; listed for intent.)
+## scripts/build-release.sh. (Already matched by the [Rr]elease/ rule above; listed for intent.)
 ## Build artifact, reproducible on demand; never source-of-truth.
 release/
 
@@ -80,9 +80,8 @@ release/
 ## dev/references/Skypatcher/ and dev/plans/GITHUB_GOLIVE_RESEARCH_2026-06-04.md entries.
 dev/
 
-## Per-user runtime config written beside the server (houseCARL.user.json) — it carries the MO2
-## instance path the product saves via housecarl_set_mo2_instance. The *.user rule above does NOT
-## match *.user.json, so this safety net keeps a dev run's local config out of the repo.
+## Per-user runtime config. Installed builds keep it under XDG_CONFIG_HOME; development runs may
+## still place it beside the server, so this safety net keeps native paths out of the repository.
 *.user.json
 houseCARL.user.json
 

@@ -72,7 +72,7 @@ Read grammar-core once plus the one record file you need — don't bulk-load eve
    filename order `0`→`z`; different-field edits don't conflict).
 
 6. **Verify through the reader** — this is what makes the skill-authored write path safe.
-   After placing the INI (and enabling its mod in MO2 if it's new):
+   After placing the INI, refresh Amethyst, enable its mod if new, rebuild the filemap, and deploy:
    - `housecarl_skypatcher_read` on a record the patch targets: the computed post-state must show
      your ops APPLIED with the intended before → after values. A typo'd filter or operation
      classifies **Unknown with a loud warning** here — the same line SkyPatcher itself would skip

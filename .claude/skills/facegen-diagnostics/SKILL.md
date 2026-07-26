@@ -21,7 +21,7 @@ appearance edits into a new override plugin (`housecarl_read_record`, `housecarl
 data values *inside* the winning facegen `.nif`** (`housecarl_nif_inspect`) — its baked shape names, the
 embedded texture-set paths (the FaceTint `.dds` path at slot 6 and the skin diffuse/normal at slots 0/1),
 NiAVObject flags + scale, alpha property, BSDismember partitions, bones, node tree, and header strings. It
-resolves the mesh through the same VFS (winner by default; `mod=` for a specific provider), so you can read
+resolves the mesh through Amethyst's winner index (winner by default; `mod=` for a specific provider), so you can read
 the copy the game actually uses. And it can now **write a whitelisted set of those `.nif` data values back**
 (`housecarl_nif_set`): rewrite a `BSShaderTextureSet` slot (`set_path` — the embedded FaceTint slot 6 or skin
 slots 0/1), rename a baked shape or node (`rename_shape` / `rename_node`), and set `NiAVObject` flags
@@ -29,8 +29,9 @@ slots 0/1), rename a baked shape or node (`rename_shape` / `rename_node`), and s
 class), a `BSDismember` partition (`set_partition`), or scale (`set_scale`). Every write passes **two
 offset-immune verification gates before anything lands** (only the value the op claims to touch changed; a
 reload re-reads it; census + SE-stream intact) — a failed verify writes **nothing** and says why. By default
-the edited mesh goes into a **new houseCARL MO2 mod folder** at the same path (originals untouched; enable +
-sort it above the current winner — a BSA-packed source becomes a loose winning override this way);
+the edited mesh goes into a **new houseCARL Amethyst staging mod** at the same path (originals untouched;
+refresh, enable, rebuild the filemap, and deploy it above the current winner — a BSA-packed source becomes
+a loose winning override this way);
 `in_place=true` overwrites the winning loose file itself (opt-in, one-time per-file acknowledge, **no
 backup**).
 
@@ -56,8 +57,8 @@ pin a specific cause or pick a fix; the flow below is enough to drive most diagn
 Dark face exists because **two independent precedence systems** decide different things:
 
 - **Plugin load order** decides which mod's **NPC record** wins → `housecarl_read_record`.
-- **The MO2 VFS / asset order** decides which mod's **facegen FILE** wins → `housecarl_asset_status`.
-  **Loose always beats BSA**; among loose, MO2 priority (then overwrite) wins; among BSAs, the later-loaded
+- **Amethyst's filemap / asset order** decides which mod's **facegen FILE** wins → `housecarl_asset_status`.
+  **Loose always beats BSA**; among loose, Amethyst priority (then overwrite) wins; among BSAs, the later-loaded
   plugin's wins.
 
 The face goes dark whenever, for one NPC, the **file winner's source ≠ the record winner's appearance
@@ -134,8 +135,8 @@ FormID/kind, so **you compute and pass both** the `.nif` and the `.dds`). Branch
   color-only band-aid). Recently **ESL-compacted or merged**? A stale old-name file may exist while the new
   path is empty (Cause F/G) — place it at the new name **plus** rewrite the embedded FaceTint slot to match
   with `nif_set set_path texture_slot=6` (the step that used to be a manual NifSkope edit).
-- **A file wins, but from the wrong source** → Cause A/C/D/E. Is it a **loose file from a different/disabled
-  mod or MO2 overwrite** masking the correct copy (E; loose beats BSA even from a disabled mod)? The correct
+- **A file wins, but from the wrong source** → Cause A/C/D/E. Is it a **loose file from a different
+  enabled mod or Amethyst overwrite** masking the correct copy (E; loose beats BSA)? The correct
   copy **trapped in a losing/double BSA** (D)? A **non-appearance edit** that won the record while an
   overhaul's file still wins (C)?
 - **A file wins from the right source, record looks right, still dark** → "file present" is necessary but

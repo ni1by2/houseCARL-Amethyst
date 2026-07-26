@@ -1,76 +1,79 @@
-========================================================================
- houseCARL  v{{VERSION}}  --  START HERE
-========================================================================
+houseCARL-Amethyst {{VERSION}} — Linux x86_64
+================================================
 
-houseCARL gives Claude direct, plain-English access to your Skyrim SE
-load order: read any record, author patches, build SkyPatcher / SPID
-files, and look up record schemas and Papyrus signatures. Your original
-plugins are NEVER touched -- every change goes into a new Mod Organizer 2
-mod that you review and enable yourself.
+houseCARL-Amethyst gives Codex and Claude Code native, data-layer access
+to a Skyrim Special Edition profile managed by Amethyst. It reads Amethyst
+staging and filemap state; it does not require Mod Organizer 2 or a
+Windows compatibility layer.
 
+Install
+-------
 
-INSTALL  (about 30 seconds, no command line)
-------------------------------------------------------------------------
+1. Extract the complete release archive.
 
-  1.  Double-click   houseCARL-Setup.exe   in this folder.
-      Let it finish. It adds houseCARL to Claude (the skills + the
-      local server) -- it does not touch your game or your mods.
+2. In a terminal, enter the extracted housecarl-amethyst directory and run
+   one of:
 
-  2.  FULLY restart Claude.
-      Close and reopen the Claude desktop app, or restart the `claude`
-      terminal. This is the step people forget -- Claude only picks up
-      houseCARL after a restart.
+     ./housecarl-amethyst-install --codex
+     ./housecarl-amethyst-install --claude
+     ./housecarl-amethyst-install --both
 
-  3.  Point houseCARL at your modlist. In Claude, say (with YOUR path):
+   The installer verifies SHA256SUMS before changing anything. It installs
+   the self-contained server under:
 
-          set my houseCARL MO2 instance to  D:\Modding\MO2
+     ${XDG_DATA_HOME:-$HOME/.local/share}/housecarl-amethyst/server
 
-      Use the folder that contains your  ModOrganizer.ini.
-      (Or just ask houseCARL to do something, and it will walk you
-      through choosing the folder.)
+   Persistent connection and safety state lives separately under:
 
-  4.  Try it:
+     ${XDG_CONFIG_HOME:-$HOME/.config}/housecarl-amethyst
 
-          "what does my Skyrim load order look like?"
-          "make a patch that gives every iron weapon +5 damage"
-          "which plugins override the IronSword record, and who wins?"
+3. Fully restart the selected host.
 
+4. Connect houseCARL to the manifest exported by Amethyst's built-in
+   houseCARL integration:
 
-UPDATING  (installing a newer houseCARL over an older one)
-------------------------------------------------------------------------
-  Same as installing -- but FULLY QUIT Claude (and Codex) FIRST. The
-  setup can't replace the houseCARL server while a session is running
-  it; if one is, it stops and tells you to quit and re-run.
+     housecarl_set_amethyst_connection(
+       "/absolute/path/to/.housecarl-amethyst/connection.json")
 
+5. Verify the live profile with housecarl_amethyst_status.
 
-REQUIREMENTS
-------------------------------------------------------------------------
-  - Windows (x64).
-  - .NET 9 -- BOTH of these runtimes, from the same download page:
-        1)  .NET Runtime 9.0
-        2)  ASP.NET Core Runtime 9.0
-    They are two separate installers, and the ASP.NET Core one does
-    NOT include the base .NET Runtime -- install both. (The runtimes,
-    not the SDK.)
-        https://dotnet.microsoft.com/download/dotnet/9.0
-        or:  winget install Microsoft.DotNet.Runtime.9
-             winget install Microsoft.DotNet.AspNetCore.9
-    houseCARL-Setup.exe checks for both and tells you which one is
-    missing, so when in doubt just run it.
-  - A recent Claude Code  (v2.1.143 or newer) -- the terminal CLI, or
-    the Claude desktop app (Claude Code is built in; houseCARL runs in
-    Claude Code sessions, not the plain chat).
-  - Mod Organizer 2 with a modlist.  MO2 does NOT need to be running.
+Updating and rollback
+---------------------
 
+Quit Codex and Claude Code, extract the newer release, and run the same
+install command. The prior server remains available as a one-step rollback:
 
-WHAT'S IN HERE
-------------------------------------------------------------------------
-  houseCARL-Setup.exe   the installer you double-click
-  housecarl\            the plugin itself (server + skills + rulebook)
-  housecarl\README.md   full README, more usage examples, and credits
-  housecarl\LICENSE     GPL-3.0-only  (+ THIRD-PARTY-NOTICES.txt)
+  ./housecarl-amethyst-install --rollback --both
 
-Prefer the terminal? The "housecarl" folder is also a normal Claude Code
-plugin -- see housecarl\README.md. Otherwise just use the installer above.
+The target flag selects the host prompt consistently; rollback only swaps
+the shared server and does not change either host configuration.
 
-========================================================================
+Uninstall
+---------
+
+  ./housecarl-amethyst-install --uninstall --both
+
+Uninstall removes the shared server, rollback copy, installed skills, and
+houseCARL MCP registrations. It deliberately preserves XDG configuration,
+including the saved Amethyst connection and pending-redeployment state.
+
+Requirements
+------------
+
+- Linux x86_64.
+- Amethyst Mod Manager with a Skyrim Special Edition profile.
+- Hardlink deployment is the verified v1 target.
+- Codex, Claude Code, or both.
+
+The server and installer are self-contained. System .NET is not required.
+External Windows tools such as PapyrusCompiler and BSArch remain deferred;
+native record, archive-reading, PEX-decompilation, NIF, and asset features
+do not require Proton.
+
+Source and licence
+------------------
+
+https://github.com/ni1by2/houseCARL-Amethyst
+
+GPL-3.0-only. This fork is based on houseCARL by Avick3110; see README.md,
+LICENSE, and THIRD-PARTY-NOTICES.txt.

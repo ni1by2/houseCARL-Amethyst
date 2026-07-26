@@ -163,7 +163,7 @@ strip-prefix mods, facegen, voice, NIF, SKSE and SkyPatcher fixtures pass.
 Exit gate: new and guarded in-place writes never target deployed `Data/`, report
 old hardlinks honestly, and clear pending state only after verification.
 
-### Documentation pass — complete inherited and fork-authored codebase — active
+### Documentation pass — active core complete; product edges remain
 
 Baseline scope on 2026-07-22: 217 C# files, about 76,874 lines and roughly 722
 function declarations. Existing upstream documentation is extensive but uneven;
@@ -175,9 +175,9 @@ non-obvious invariant has been reviewed.
 - [x] Review all fork-authored Amethyst layout, filemap, load-order and path code.
 - [x] Review the fork-authored Amethyst MCP connection, status and refresh seams.
 - [x] Review the inherited asset resolution and archive-discovery boundary.
-- [ ] Review all inherited `housecarl-core` declarations and reasoning seams.
+- [x] Review all inherited `housecarl-core` declarations and reasoning seams.
 - [ ] Review all inherited and fork-authored `housecarl-mcp` declarations.
-- [ ] Review all `housecarl-setup` declarations during the Linux rewrite.
+- [x] Review all `housecarl-setup` declarations during the Linux rewrite.
 - [ ] Review all generator, proof-harness and probe declarations.
 - [ ] Run a final stale MO2/Windows terminology and XML-reference audit.
 - [ ] Record per-component build/probe evidence and unresolved ambiguities.
@@ -189,22 +189,23 @@ contains evidence for every component. This gate covers unchanged upstream code.
 
 ### Session 6 — Linux packaging and host integration
 
-- [ ] Replace Windows setup/build scripts with Linux equivalents.
+- [x] Replace Windows setup/build scripts with Linux equivalents.
 - [ ] Add standalone Amethyst discovery and atomic manifest setup.
-- [ ] Publish self-contained `linux-x64` with trimming disabled.
-- [ ] Install under XDG data paths and register Codex/Claude MCP stdio.
-- [ ] Add backups, update locks, uninstall, rollback and checksums.
+- [x] Publish self-contained `linux-x64` with server trimming disabled.
+- [x] Install under XDG data paths and register Codex/Claude MCP stdio.
+- [x] Add config backups, atomic activation, uninstall, rollback and checksums.
 - [ ] Remove Windows runtime, `.exe`, registry, MO2 and PowerShell-only surface.
-- [ ] Update all bundled skills and user-facing documentation.
+- [x] Update bundled skills and release-facing documentation for Amethyst.
 
 Exit gate: clean Linux installs start from both hosts without system .NET, and
 upgrade/uninstall preserve user configuration.
 
 ### Session 7 — CI, documentation, and v1 release candidate
 
-- [ ] Move required CI to Ubuntu and run all CI-safe probes.
-- [ ] Add standalone-setup and end-to-end synthetic Amethyst tests.
-- [ ] Add reproducible package validation and leak scanning.
+- [x] Move the required workflow definition to Ubuntu.
+- [ ] Confirm the new Ubuntu workflow on GitHub and run all CI-safe probes.
+- [x] Add installer-lifecycle and end-to-end synthetic Amethyst tests.
+- [x] Add reproducible package validation and leak scanning.
 - [ ] Complete installation, workflow, safety and troubleshooting docs.
 - [ ] Perform disposable real-profile hardlink validation.
 - [ ] Produce the v1 checklist and rollback procedure.
@@ -255,68 +256,51 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 6, Linux installer, packaging, host integration,
-  and removal of the obsolete MO2 product surface.
-- Last completed checkpoint: completed `SkyPatcherCatalog` and the active-core
-  declaration-by-declaration documentation pass. Catalog ownership, closed-set
-  unknown handling, loading, lookup, parsing, helper behavior, and every public
-  filter-kind, operation-shape, tractability, and key-role enum member now have
-  concise contracts. The only remaining CS1591 warnings are in obsolete MO2
-  compatibility classes queued for removal rather than publication.
-- Verification performed: the .NET 9 Linux solution and forced strict
-  XML-documentation core build succeeds with no warning from any retained
-  reviewed component. All six SkyPatcher parser, catalog, discovery, overlay,
-  field-map, and conflict guards pass. Full `ci-all` is 111/111 on Linux after
-  the final edit, and `git diff --check` passes.
-- Files/components changed: `SkyPatcherCatalog`, the tracked roadmap, and the
-  user-facing roadmap copy.
-- Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
-  boundary. Patch operations validate every request before one serialization
-  and reopen the result. In-place operations read records from the target
-  plugin rather than the load-order winner, preserve that plugin's master and
-  FormID metadata, and rely on the service for consent and Amethyst redeployment
-  confirmation. Atomic replacement preserves the prior file on validation or
-  serialization failure. Header-only plugin creation verifies record count,
-  masters, and ESL state before reporting success. The large file is being
-  reviewed in bounded public and internal slices so documentation changes do
-  not obscure behavioral review.
-- Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
-  profile remains the Session 7 manual release gate. Session 6 must replace the
-  remaining Windows installer/runtime surface and MO2 terminology. The
-  declaration-by-declaration review is still incomplete even though the strict
-  XML build succeeds; CS1591 remains intentionally suppressed until each
-  component has been reviewed. `LoadOrderResolver` and `ReadEngine` are
-  complete, but historical service consumers and some probe text still include
-  inherited MO2-named fixtures and terminology that must be removed at the
-  product boundary. `LoadOrderResolver`, `ReadEngine`, `FieldsDiff`,
-  `FieldPredicate`, `EffectChain`, `ErrorCheck`, `RecordNaming`,
-  `EngineImplicit`, `FormIdRange`, `PluginNameSuggest`, `PluginFile`, `Schema`,
-  `SchemaClassifier`, `EmbeddedJson`, `AtomicFile`, `UserConfig`,
-  `HousecarlOwnerMeta`, `ModManagerLayout`, `BethesdaPath`, `FaceGenPath`,
-  `VoicePath`, `SeqFile`, `AssetResolver`, `ArchiveDiscovery`, `BsaArchive`,
-  `NpcAppearanceAssets`, `NpcAppearanceCopy`, `AssetRenameService`,
-  `NifService`, `VoiceCheck`, `DialogueScriptCheck`, `DialogueValidate`,
-  `DialogueSubtype`, `DialogueCkParity`, `CellShellCheck`,
-  `ScriptPropertyCheck`, `NativePairing`, `SksePeek`, `PapyrusCompile`,
-  `ToolBridge`, `PapyrusDecompiler`, `WritePatchBuilder`, `CorpusRulebook`,
-  `RemapEngine`, `WriteEngine`, and `SkyPatcherCatalog` are complete. The only
-  undocumented inherited core classes are obsolete MO2 compatibility code
-  queued for Session 6 removal. External BSArch execution is not a
-  native-v1 feature, so the optional live repack arm remains skipped when no
-  BSArch path is supplied; self-contained native archive fixtures cover v1
-  behavior. Some untouched service and probe messages still say MO2 and remain
-  queued for the product-boundary cleanup. The Linux suite has no accepted red
-  baseline.
-  The current setup implementation is still transitional; Session 6 must
-  replace it with versioned Linux installation, atomic activation, rollback,
-  and self-contained bundle tests.
-- Exact next action: inventory the setup, build, workflow, skills, and runtime
-  references to MO2, Windows, `.exe`, registry, PowerShell, and `win-x64`.
-  Remove obsolete MO2 core classes only after identifying and replacing every
-  live consumer. Then implement and guard the versioned self-contained
-  `linux-x64` installer/update/rollback path.
-  Rewrite setup documentation with the Session 6 Linux installer rather than
-  preserving transitional contracts.
+- Active milestone: Session 6, completing standalone Amethyst discovery and
+  removing obsolete MO2 runtime seams.
+- Last completed checkpoint: replaced the inherited Windows installer and
+  PowerShell packager with a documented Linux-only XDG installer and
+  reproducible self-contained `linux-x64` release. One shared server serves
+  Codex and Claude; mutable state is outside the versioned server tree.
+  Upgrades retain one rollback tree, config edits are backup-first and atomic,
+  uninstall preserves user state, and checksums are verified before mutation.
+- Verification performed: the hermetic setup lifecycle passes clean install,
+  Codex/Claude registration, spaces/apostrophes/Unicode paths, upgrade,
+  rollback, checksum-tamper rejection, similarly named MCP preservation, and
+  conservative uninstall. The strict setup XML build has no CS1591 warning.
+  The release builder produced stripped Linux x86_64 ELF server and installer
+  executables, no `.exe`, a valid internal `SHA256SUMS`, and a valid archive
+  SHA-256. Two consecutive release builds produced the identical archive hash
+  `3443b4eba23866f203869f28d800a8a55eacec86a87e720856ad0626bc700d4a`.
+  Full Linux `ci-all` passes 111/111 after the final installer and skill edits,
+  and `git diff --check` is clean.
+- Files/components changed: Linux setup application and lifecycle probe,
+  `build-release.sh`, Ubuntu workflow, plugin/marketplace metadata, release
+  entry point, root and shipped READMEs, bundled operational skills, project
+  metadata, and this roadmap.
+- Decisions made: Linux does not need the inherited mandatory-file-lock update
+  model; same-filesystem directory rename provides atomic activation while a
+  running process may continue from its old inode. Exactly one former server
+  directory is retained for reversible rollback. Host registrations point at
+  the shared server and explicitly set `HOUSECARL_DATA_DIR` to the XDG config
+  root. The reflection-driven server remains untrimmed; trimming is confined
+  to the small non-reflection installer. TOML strings use escaped basic-string
+  syntax so native paths containing spaces, Unicode, or apostrophes remain
+  valid.
+- Known failures or residual risks: standalone discovery/atomic creation of
+  `connection.json` is still required. The runtime service and several
+  historical probes retain MO2 compatibility seams; these are not shipped
+  setup paths but must be migrated before the Amethyst-only product boundary
+  is complete. The Ubuntu workflow definition has not yet been observed green
+  on GitHub. A disposable real Skyrim/Amethyst hardlink profile remains the
+  Session 7 manual release gate. External PapyrusCompiler and BSArch execution
+  remains post-v1.
+- Exact next action: add a documented, hermetic standalone discovery command
+  that finds native/AppImage, AUR-style, and Flatpak Amethyst roots, requires
+  an unambiguous Skyrim SE selection, validates at least one usable profile,
+  and atomically writes schema-v1 `connection.json`. Then migrate live
+  `LoadOrderService` and probe consumers away from `Mo2Instance`,
+  `Mo2LoadOrder`, and `Mo2ModMeta`.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -349,8 +333,9 @@ manual release gate.
   slice; `465436b` completes `WritePatchBuilder`; `d16d990` completes
   `CorpusRulebook`; `e61882b` completes `RemapEngine`; `52b66cf` completes the
   public `WriteEngine` slice; `2cf70a4` completes the lifecycle slice;
-  `06207b1` completes `WriteEngine`. The `SkyPatcherCatalog` checkpoint is
-  pending commit.
+  `06207b1` completes `WriteEngine`; `8f70b4e` completes
+  `SkyPatcherCatalog`. The Linux installer/release checkpoint is pending
+  commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

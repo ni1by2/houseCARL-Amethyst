@@ -18,7 +18,7 @@ namespace HousecarlGenerator;
 ///   * CorpusRulebook.CorpusPath (the one mutable static) is reset to the runner's canonical corpus BEFORE each
 ///     probe, so the 7 "check-first" probes (vmad-poly, poly-field-descend, sameshape, nullarm, formlink-null,
 ///     gendered-nav, floi-fields) reuse it and never validate against a prior probe's deleted temp corpus.
-///   * setup-update-lock-guard nulls the CODEX_HOME env var and never restores it — snapshot + restore around
+///   * setup-lifecycle-guard is hermetic and receives explicit XDG roots.
 ///     every probe.
 ///   * Each probe runs inside its own try/catch: a probe that THROWS (rather than returning non-zero) fails only
 ///     itself. (Many probes wrap their body only in try/finally cleanup, not try/catch-return.)
@@ -139,7 +139,7 @@ public static class CiAll
         // renderer arms (dead-vs-verify adjudication, unpaired framing, baseline accounting, filter + did-you-mean).
         ("native-pairing-guard", NativePairingProbe.RunGuard),
         ("compile-ergonomics-guard", CompileErgonomicsProbe.RunGuard),
-        ("setup-update-lock-guard", SetupUpdateLockProbe.RunGuard),
+        ("setup-lifecycle-guard", SetupLifecycleProbe.RunGuard),
         ("import-order-guard", ImportOrderProbe.RunGuard),
         ("render-clamp-guard", RenderClampProbe.RunGuard),
         ("decompile-guard", DecompileGuardProbe.RunGuard),
@@ -346,7 +346,7 @@ public static class CiAll
             Console.WriteLine($"  (shared-corpus pre-gen failed: {ex.Message} — probes will self-generate)");
         }
 
-        var codexHome = Environment.GetEnvironmentVariable("CODEX_HOME");   // snapshot once (setup-update-lock nulls it)
+        var codexHome = Environment.GetEnvironmentVariable("CODEX_HOME");
         var results = new List<(string Name, bool Ok, string? Error, double Secs)>();
 
         foreach (var (name, run) in Probes)

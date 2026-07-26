@@ -61,10 +61,10 @@ skill), and the matching `.psc` declaration a script author compiles against (**
 skill authors only the **C++ producer side** and the pairing contract. The `.psc` signature surface — the
 `native`/`global` keywords, parameter names, defaults, how a latent function reads script-side — is owned
 by houseCARL's **`papyrus-reference`** skill. Never derive a `.psc` signature from a C++ header and present
-it as authoritative; when you need the script-side line, consult `papyrus-reference`. The consumer `.psc`
-then compiles via `housecarl_compile_script` (never a hand-rolled `PapyrusCompiler.exe` call — it quotes
-spaced paths and won't hit originals). Say this boundary out loud any time a task straddles the C++/Papyrus
-line, so nobody treats a header-derived signature as the real one.
+it as authoritative; when you need the script-side line, consult `papyrus-reference`. Native v1 authors
+the consumer `.psc` but does not execute PapyrusCompiler; the structured Proton command runner is post-v1
+work. Say this boundary out loud any time a task straddles the C++/Papyrus line, so nobody treats a
+header-derived signature as the real one or claims an unperformed compilation.
 
 ## The references — nine files, read the ones your job touches
 

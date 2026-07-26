@@ -50,7 +50,7 @@ public static class PluginValidateProbe
         {
             // ---------- INV1 — every shipped skill's frontmatter parses + has name/description ----------
             // BOTH shipped frontmatter trees are in scope: the Claude Code skills (.claude/skills, bundled by
-            // build-plugin.ps1) AND the Codex umbrella skill (plugin/codex/housecarl, shipped separately by the
+            // build-release.sh) AND the Codex umbrella skill (plugin/codex/housecarl, shipped separately by the
             // same build). Both carry a YAML frontmatter the respective loader parses, so both are exposed to the
             // parse-failure class — walking only .claude/skills would leave the Codex skill's same-shape
             // description unguarded (PR #95 review).

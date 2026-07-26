@@ -18,7 +18,7 @@ native functions, the `.psc` signatures on the other side of that boundary belon
 - **The minimal scaffold** — the proven xmake file-set, and the honestly-unbuilt CMake one.
 - **`add_commonlibsse_plugin`** — what the CMake helper generates and its availability trap.
 - **Per-runtime presets** — configuring for SE / AE / VR.
-- **Deploy into an MO2 mod** — the `SKSE/Plugins/<name>.dll` artifact shape.
+- **Deploy into an Amethyst staging mod** — the `SKSE/Plugins/<name>.dll` artifact shape.
 - **The loop** — build → deploy → verify (`skse64.log`) → iterate.
 - **Rebuilding an existing plugin from source** — ABI-faithful rebuilds for one-defect patches.
 - **ClibDT** — the beginner automation that does the whole setup for you.
@@ -312,14 +312,14 @@ is only that one preset produces the one cross-runtime DLL.
 
 ---
 
-## Deploy into an MO2 mod
+## Deploy into an Amethyst staging mod
 
 A deployed plugin is **a mod folder whose root is Data-shaped**, with the DLL at `SKSE/Plugins/<name>.dll` —
-because SKSE's loader scans exactly `<game>/Data/SKSE/Plugins/*.dll`. Under MO2 the mod folder is projected
-into `Data` by the virtual file system, so one mod folder serves every runtime.
+because SKSE's loader scans exactly `<game>/Data/SKSE/Plugins/*.dll`. Place that folder in the effective
+Amethyst staging `mods` directory; Amethyst deploys the filemap winner into `Data`.
 
 ```
-MyPlugin/                      <- one MO2 mod (root == Data)
+MyPlugin/                      <- one Amethyst staging mod (root == Data)
 └── SKSE/Plugins/
     ├── MyPlugin.dll
     ├── MyPlugin.pdb           <- symbols; makes crash logs name your functions
@@ -327,13 +327,13 @@ MyPlugin/                      <- one MO2 mod (root == Data)
 ```
 
 **Deploy hooks are not standardized** — every template ships a POST_BUILD copy, but the env-var name that
-points it at your MO2 `mods` dir differs by ecosystem: `SKYRIM_MODS_FOLDER` (hello-world),
+points it at your staging `mods` dir differs by ecosystem: `SKYRIM_MODS_FOLDER` (hello-world),
 `XSE_TES5_MODS_PATH` (the xmake plugin rule — and it copies **automatically** after every changed build),
 `CompiledPluginsPath` (OAR), a semicolon-separated `SkyrimPluginTargets` list (colorglass), a
 runtime-specific `SkyrimAEPath`/`SkyrimVRPath` (SPID). When you clone an unfamiliar repo, **grep its
 CMake/xmake for `SKSE/Plugins`** to find its hook, and check whether the copy defaults ON (OAR hard-fails a
-bare configure if its path is unset) or OFF (SPID silently skips). Set your chosen var once to the MO2
-`mods` directory and the build lands the DLL where MO2 can enable it.
+bare configure if its path is unset) or OFF (SPID silently skips). Set your chosen var once to the effective
+Amethyst `mods` directory and the build lands the DLL where Amethyst can enable it.
 
 Two deployment rules that bite in the field:
 
@@ -341,8 +341,8 @@ Two deployment rules that bite in the field:
   Debug build links the debug CRT (`MSVCP140D.dll` and friends), which exists only on developer machines,
   so on any other machine the DLL dies at `LoadLibrary` with the missing-dependency signature
   (`load-failures.md` §5). Keep the PDB beside the DLL either way; it makes crash logs name your functions.
-- **Refresh MO2 after external writes.** Files a POST_BUILD copy drops into `mods\` are invisible to an
-  already-open MO2 until it refreshes — verify against the refreshed VFS, not the bare folder.
+- **Refresh Amethyst after external writes.** Re-enable the staging mod if needed, rebuild the filemap,
+  and deploy before verifying the game-visible copy.
 
 ### The one runtime data dependency: Address Library
 
@@ -365,10 +365,10 @@ loader has no equivalent line, so don't tell a VR user to look for it.
 ## The loop
 
 1. **Set the deploy env var once** (`SKYRIM_MODS_FOLDER` / `XSE_TES5_MODS_PATH` / whichever your scaffold
-   uses) to the MO2 `mods` dir.
+   uses) to the effective Amethyst `mods` directory.
 2. **Build** — `cmake --build --preset <x>` or `xmake build` (xmake auto-installs on every changed build).
    The DLL and PDB land in `mods/<Name>/SKSE/Plugins/`.
-3. **Enable the mod once in MO2** and launch SKSE **through MO2**.
+3. **Refresh Amethyst, enable the mod, rebuild the filemap, deploy,** and launch SKSE through Amethyst.
 4. **Verify load** — read the SKSE runtime log for a success line, then the plugin's own log for its init
    output.
 5. **Distribute** — `xmake package`, a CPack ZIP, or a FOMOD; all mod-manager-installable, Data-shaped.
@@ -449,7 +449,7 @@ proven fact:
 - **The cross-runtime export auto-emit** — that the build generates `{Query, Version}` and you supply
   `{Load}`, producing one DLL that loads on SE, AE, and VR — is proven from the codegen source but wants a
   `dumpbin /EXPORTS` + a live SKSEVR load to confirm end to end.
-- **The prebuilt auto-fetch** (download / SHA256 / fallback) and **MO2 VFS mechanics** (refresh while MO2 is
+- **The prebuilt auto-fetch** (download / SHA256 / fallback) and **Amethyst deployment mechanics** (refresh while Amethyst is
   open, DLL file-lock while the game runs) are proven as code-and-docs intent only.
 - **The exact VR log line-set** (the emitted `sksevr.log` shape, its absences, its steam-loader filename) is
   a runtime claim awaiting a real VR log.

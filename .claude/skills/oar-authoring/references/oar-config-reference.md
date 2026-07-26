@@ -353,9 +353,10 @@ Source: `ReplacerMods.h` (`enum ConfigSource { kUser, kAuthor, kLegacy, kLegacyA
   config you want (priority + the whole `conditions` array + any flags).
 - The **in-game editor** writes `user.json` when you edit in **User** mode (it copies the current
   state to `user.json`); **Author** mode rewrites `config.json` (for mod authors shipping a mod).
-- Because MO2 overlays files through USVFS, the `user.json` can live in a **separate MO2 mod** that
-  loads after the original animation mod. The override then appears beside the original `config.json`
-  and wins — letting you keep **all** your OAR tweaks in one mod without editing any original files.
+- Because Amethyst deploys the authoritative filemap winner, the `user.json` can live in a
+  **separate Amethyst staging mod** with higher priority than the original animation mod. The
+  override wins at the same Data-relative path, letting you keep **all** your OAR tweaks in one mod
+  without editing any original files.
   (A common modlist pattern: one dedicated overrides mod that contains *only* `user.json` files and
   loads after the originals.)
 

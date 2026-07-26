@@ -1,5 +1,21 @@
 # Changelog
 
+## houseCARL-Amethyst — unreleased
+
+- Replaced Mod Organizer 2 and Windows product integration with native
+  Amethyst profile, staging, filemap, and deployment-state adapters.
+- Added Linux-safe Bethesda/host path separation and authoritative
+  `filemap.txt` plus `modindex.bin` v4 asset resolution.
+- Added hardlink-aware pending-redeployment verification and Amethyst staging
+  writes.
+- Added a self-contained Linux x86_64 release, XDG installer, Codex/Claude
+  registration, checksum verification, atomic upgrades, rollback, and
+  conservative uninstall.
+
+The entries below are the preserved upstream houseCARL history. References to
+Windows or MO2 describe that upstream product and are not current fork setup
+instructions.
+
 All notable changes to houseCARL are documented here. Versioning is [semantic](https://semver.org);
 the `version` in `.claude-plugin/plugin.json` is bumped on each release, so installed users update only
 when it changes.

@@ -1,675 +1,488 @@
-using System.Diagnostics;
+using System.Security.Cryptography;
+using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace HousecarlSetup;
 
-/// <summary>
-/// houseCARL desktop setup - a no-CLI, no-GUI double-click installer.
-///
-/// houseCARL can be hosted by TWO agents; this utility installs for either or both, behind a
-/// pick-a-number prompt (or a --claude / --codex / --both flag for an unattended run):
-///
-///   [1] Claude Code - copies the bundled plugin into ~/.claude/skills/housecarl/ (the desktop app
-///                     auto-loads its skills) and registers the MCP server in ~/.claude.json (the
-///                     desktop spawns it per session). UNCHANGED from the proven desktop install.
-///   [2] Codex       - installs the server under %LOCALAPPDATA%\houseCARL\server\, copies the helper
-///                     skills + the houseCARL umbrella skill FLAT into ~/.agents/skills/ (the location
-///                     a fresh Codex install was confirmed to scan), and registers the server as
-///                     [mcp_servers.housecarl] in ~/.codex/config.toml.
-///   [3] Both        - both of the above.
-///
-/// The MO2 folder is intentionally NOT set here; houseCARL asks for it in chat on first use and stores
-/// it in user.json beside whichever server copy is running.
-///
-/// Codex layout note: Codex scans ~/.agents/skills/ for skill FOLDERS, so the skills go there flat (not
-/// nested inside a plugin folder), and the server - which is not a skill - lives in its own neutral dir.
-/// For a Both install each host runs its own server copy (so MO2 is set once per host); unifying to a
-/// single shared server is a deferred clean-up that would re-touch the proven Claude path.
-/// </summary>
+/// <summary>Installs the self-contained Linux server and its host integrations without root access.</summary>
 public static class Program
 {
-    private const string PluginFolderName = "housecarl"; // plugin dir shipped beside this exe
-    private const string McpServerName    = "housecarl"; // server key under mcpServers / [mcp_servers.*]
+    private const string ProductKey = "housecarl";
+    private const string ProductDirectory = "housecarl-amethyst";
 
-    // Major version of the runtimes the bundled SERVER needs (keep in sync with housecarl-mcp's
-    // TargetFramework). The default roll-forward policy stays within a major, so "10.x installed"
-    // does not satisfy a net9.0 framework-dependent server.
-    private const string ServerRuntimeMajor = "9";
-
-    public enum Target { Claude, Codex, Both }
-
-    /// <summary>What a non-interactive <see cref="TryInstall"/> did.</summary>
-    public enum InstallOutcome
+    /// <summary>AI host whose skills and MCP registration should be managed.</summary>
+    public enum Target
     {
-        /// <summary>Skills + server copied and the MCP server registered for the chosen host(s).</summary>
-        Installed,
-        /// <summary>A houseCARL server file at a destination is in use (a live Claude/Codex session is
-        /// running it), so it could not be overwritten. Nothing usable was changed when the refusal was at
-        /// pre-flight (<see cref="InstallResult.RefusedBeforeAnyCopy"/>).</summary>
-        ServerInUse,
+        /// <summary>Manage Claude Code only.</summary>
+        Claude,
+        /// <summary>Manage Codex only.</summary>
+        Codex,
+        /// <summary>Manage both supported hosts.</summary>
+        Both,
     }
 
-    /// <summary>Result of a non-interactive install attempt — the probeable seam under the interactive prompt.</summary>
-    /// <param name="Outcome">What happened.</param>
-    /// <param name="Message">Caller-facing detail for a non-<see cref="InstallOutcome.Installed"/> outcome (else null).</param>
-    public sealed record InstallResult(InstallOutcome Outcome, string? Message)
+    /// <summary>Immutable native paths used by an install, rollback, or uninstall operation.</summary>
+    /// <param name="Home">User home directory.</param>
+    /// <param name="DataRoot">XDG product data directory.</param>
+    /// <param name="ServerDir">Active self-contained server directory.</param>
+    /// <param name="RollbackDir">Previous server directory retained for one-step rollback.</param>
+    /// <param name="ConfigDir">Persistent XDG configuration directory.</param>
+    /// <param name="ClaudeConfig">Claude Code JSON configuration file.</param>
+    /// <param name="CodexConfig">Codex TOML configuration file.</param>
+    public sealed record InstallPaths(
+        string Home,
+        string DataRoot,
+        string ServerDir,
+        string RollbackDir,
+        string ConfigDir,
+        string ClaudeConfig,
+        string CodexConfig)
     {
-        /// <summary>True only when a <see cref="InstallOutcome.ServerInUse"/> refusal happened at PRE-FLIGHT,
-        /// before any file was copied (so nothing was changed). False for the mid-copy defense-in-depth catch.</summary>
-        public bool RefusedBeforeAnyCopy { get; init; }
+        /// <summary>Builds absolute install paths from explicit XDG roots.</summary>
+        public static InstallPaths Create(
+            string home,
+            string dataHome,
+            string configHome,
+            string? codexHome = null)
+        {
+            string fullHome = Path.GetFullPath(home);
+            string dataRoot = Path.Combine(Path.GetFullPath(dataHome), ProductDirectory);
+            string configRoot = Path.Combine(Path.GetFullPath(configHome), ProductDirectory);
+            string resolvedCodexHome = string.IsNullOrWhiteSpace(codexHome)
+                ? Path.Combine(fullHome, ".codex")
+                : Path.GetFullPath(codexHome);
+            return new(
+                fullHome,
+                dataRoot,
+                Path.Combine(dataRoot, "server"),
+                Path.Combine(dataRoot, "server.rollback"),
+                configRoot,
+                Path.Combine(fullHome, ".claude.json"),
+                Path.Combine(resolvedCodexHome, "config.toml"));
+        }
     }
 
+    /// <summary>Runs the command-line installer and translates failures into actionable terminal output.</summary>
     private static int Main(string[] args)
     {
         if (args.Contains("--help") || args.Contains("-h"))
         {
-            Console.WriteLine("houseCARL setup - installs houseCARL into Claude Code and/or Codex.");
-            Console.WriteLine();
-            Console.WriteLine("  Just run it (double-click) and pick which host(s) to install for.");
-            Console.WriteLine("  Or pass a flag to skip the prompt:");
-            Console.WriteLine("    --claude   install for Claude Code only");
-            Console.WriteLine("    --codex    install for Codex only");
-            Console.WriteLine("    --both     install for both");
-            Console.WriteLine("    --skip-runtime-check   skip the .NET runtime preflight (custom DOTNET_ROOT etc.)");
+            PrintHelp();
             return 0;
+        }
+        if (!OperatingSystem.IsLinux())
+        {
+            Console.Error.WriteLine("error: houseCARL-Amethyst supports Linux x86_64 only.");
+            return 1;
         }
 
         try
         {
-            Console.WriteLine("houseCARL setup");
-            Console.WriteLine("===============");
-            Console.WriteLine();
-
-            // Locate the plugin shipped beside this program.
-            string pkgDir      = AppContext.BaseDirectory;
-            string pluginSrc   = Path.Combine(pkgDir, PluginFolderName);
-            string srcManifest = Path.Combine(pluginSrc, ".claude-plugin", "plugin.json");
-            string srcExe      = Path.Combine(pluginSrc, "server", "housecarl-mcp.exe");
-            if (!File.Exists(srcManifest) || !File.Exists(srcExe))
-            {
-                Console.Error.WriteLine("ERROR: couldn't find the houseCARL plugin next to this program.");
-                Console.Error.WriteLine("  Looked in: " + pluginSrc);
-                Console.Error.WriteLine("  Keep this program in the same folder as the unzipped 'housecarl' folder, then run it again.");
-                return Finish(1);
-            }
-
-            // ---- server runtime preflight ------------------------------------
-            // The bundled server is framework-dependent net9.0 + ASP.NET Core: it needs BOTH the
-            // base .NET Runtime (Microsoft.NETCore.App) and the ASP.NET Core Runtime
-            // (Microsoft.AspNetCore.App). On Windows those are TWO separate installers, and the
-            // ASP.NET Core one does NOT include the base runtime -- a real-world install trap.
-            // This exe ships self-contained precisely so it still runs on a machine with neither
-            // and can say exactly what's missing, instead of the install "succeeding" into a
-            // server that never starts.
-            if (!args.Contains("--skip-runtime-check"))
-            {
-                List<string> missing = MissingServerRuntimes();
-                if (missing.Count > 0)
-                {
-                    Console.Error.WriteLine("ERROR: the houseCARL server needs .NET runtime(s) that are not installed:");
-                    if (missing.Contains("Microsoft.NETCore.App"))
-                        Console.Error.WriteLine("    - .NET Runtime " + ServerRuntimeMajor + ".x           (Microsoft.NETCore.App)");
-                    if (missing.Contains("Microsoft.AspNetCore.App"))
-                        Console.Error.WriteLine("    - ASP.NET Core Runtime " + ServerRuntimeMajor + ".x   (Microsoft.AspNetCore.App)");
-                    Console.Error.WriteLine();
-                    Console.Error.WriteLine("  Both come from the same page:");
-                    Console.Error.WriteLine("    https://dotnet.microsoft.com/download/dotnet/" + ServerRuntimeMajor + ".0");
-                    Console.Error.WriteLine("  NOTE: they are two separate installers, and the ASP.NET Core Runtime");
-                    Console.Error.WriteLine("  installer does NOT include the base .NET Runtime -- you need both.");
-                    Console.Error.WriteLine("  Or via winget:");
-                    if (missing.Contains("Microsoft.NETCore.App"))
-                        Console.Error.WriteLine("    winget install Microsoft.DotNet.Runtime." + ServerRuntimeMajor);
-                    if (missing.Contains("Microsoft.AspNetCore.App"))
-                        Console.Error.WriteLine("    winget install Microsoft.DotNet.AspNetCore." + ServerRuntimeMajor);
-                    Console.Error.WriteLine();
-                    Console.Error.WriteLine("  Install the missing runtime(s), then run this setup again. (If you're sure");
-                    Console.Error.WriteLine("  your setup is fine -- e.g. a custom dotnet location -- re-run this setup");
-                    Console.Error.WriteLine("  with --skip-runtime-check.)");
-                    return Finish(1);
-                }
-                Console.WriteLine("[check] .NET Runtime " + ServerRuntimeMajor + " + ASP.NET Core Runtime " + ServerRuntimeMajor + ": found.");
-                Console.WriteLine();
-            }
-
-            // HOUSECARL_SETUP_HOME overrides the home dir (testing / unusual setups).
-            string? homeOverride = Environment.GetEnvironmentVariable("HOUSECARL_SETUP_HOME");
-            string home = string.IsNullOrWhiteSpace(homeOverride)
-                ? Environment.GetFolderPath(Environment.SpecialFolder.UserProfile)
-                : homeOverride;
-
+            InstallPaths paths = EnvironmentPaths();
             Target? target = ResolveTarget(args);
             if (target is null)
             {
-                Console.WriteLine("Cancelled - nothing was installed.");
-                return Finish(0);
+                Console.WriteLine("Cancelled; no files were changed.");
+                return 0;
             }
 
-            Console.WriteLine();
-            InstallResult result = TryInstall(target.Value, pluginSrc, home, homeOverride);
-            if (result.Outcome == InstallOutcome.ServerInUse)
-            {
-                Console.Error.WriteLine("ERROR: houseCARL is already installed and a server file is in use, so it");
-                Console.Error.WriteLine("       can't be updated right now.");
-                if (result.Message is not null)
-                    Console.Error.WriteLine("  " + result.Message);
-                Console.Error.WriteLine();
-                Console.Error.WriteLine("  Fully quit Claude Code AND Codex -- every desktop window, every terminal");
-                Console.Error.WriteLine("  session, and any background session -- then run this setup again.");
-                Console.Error.WriteLine(result.RefusedBeforeAnyCopy
-                    ? "  Nothing was changed."
-                    : "  The update was stopped partway; re-running after you quit will finish it.");
-                return Finish(1);
-            }
-
-            PrintNext(target.Value);
-            return Finish(0);
+            if (args.Contains("--uninstall"))
+                Uninstall(target.Value, paths);
+            else if (args.Contains("--rollback"))
+                Rollback(paths);
+            else
+                Install(target.Value, AppContext.BaseDirectory, paths, verifyChecksums: true);
+            return 0;
         }
         catch (Exception ex)
         {
-            Console.Error.WriteLine();
-            Console.Error.WriteLine("ERROR: houseCARL setup did not complete.");
-            Console.Error.WriteLine("  " + ex.Message);
-            return Finish(1);
+            Console.Error.WriteLine("error: " + ex.Message);
+            return 1;
         }
     }
 
-    // ---- non-interactive install (the probeable seam under the prompt) -----
-
-    /// <summary>
-    /// Copy the plugin + register the MCP server for the chosen host(s), non-interactively. This is the seam
-    /// <see cref="Main"/> drives after the prompt, and the one the CI guard drives directly.
-    ///
-    /// Re-running setup over a LIVE install would have <see cref="CopyDirectory"/> overwrite the running
-    /// <c>housecarl-mcp.exe</c> (File.Copy overwrite:true), throw mid-copy, and leave a half-updated tree
-    /// behind a generic "did not complete". So we PRE-FLIGHT the lock at EVERY destination this target
-    /// touches, before copying anything, and refuse with actionable guidance (mirrors the runtime preflight
-    /// below). A clean first install (no destination exe yet) is never blocked. As defense in depth, a
-    /// sharing violation that slips past the pre-flight (a held sibling DLL, or a session started between the
-    /// check and the copy) is caught and surfaced with the same guidance instead of the generic failure.
-    /// </summary>
-    public static InstallResult TryInstall(Target target, string pluginSrc, string home, string? homeOverride)
+    /// <summary>Prints the supported non-interactive operations and their persistence behavior.</summary>
+    private static void PrintHelp()
     {
-        List<string> destExes = new();
-        if (target is Target.Claude or Target.Both) destExes.Add(ClaudeDestExe(home));
-        if (target is Target.Codex  or Target.Both) destExes.Add(CodexDestExe(home, homeOverride));
-
-        foreach (string destExe in destExes)
-            if (ServerExeInUse(destExe))
-                return new InstallResult(InstallOutcome.ServerInUse,
-                        "Can't update the server here — it looks like it's running (or the file is locked/read-only): " + destExe)
-                    { RefusedBeforeAnyCopy = true };
-
-        try
-        {
-            if (target is Target.Claude or Target.Both) InstallForClaude(pluginSrc, home);
-            if (target is Target.Codex  or Target.Both) InstallForCodex(pluginSrc, home, homeOverride);
-        }
-        catch (IOException ex) when (IsSharingViolation(ex))
-        {
-            // The try wraps the copy AND the host-config registration, so the locked file may be the server
-            // exe/DLL or a config file (e.g. ~/.codex/config.toml open in an editor) — name both honestly.
-            return new InstallResult(InstallOutcome.ServerInUse,
-                "A houseCARL file was in use during the update (the server, or a config file it writes).");
-        }
-
-        return new InstallResult(InstallOutcome.Installed, null);
+        Console.WriteLine("houseCARL-Amethyst Linux installer");
+        Console.WriteLine("  --codex | --claude | --both   choose host integration");
+        Console.WriteLine("  --rollback                     restore the previous server version");
+        Console.WriteLine("  --uninstall                    remove server, skills, and host registration");
+        Console.WriteLine();
+        Console.WriteLine("User configuration is kept under XDG_CONFIG_HOME during updates and uninstall.");
     }
 
-    /// <summary>The Claude install's server exe path. Single source of truth so pre-flight == installer.</summary>
-    private static string ClaudeDestExe(string home)
-        => Path.Combine(home, ".claude", "skills", PluginFolderName, "server", "housecarl-mcp.exe");
-
-    /// <summary>The Codex install's server dir. Under a test home (HOUSECARL_SETUP_HOME) it hangs off that
-    /// home so tests never touch the real LOCALAPPDATA; otherwise it lives under %LOCALAPPDATA%.</summary>
-    private static string CodexServerDir(string home, string? homeOverride)
+    /// <summary>Resolves the current user's XDG and host-configuration locations.</summary>
+    private static InstallPaths EnvironmentPaths()
     {
-        string dataBase = string.IsNullOrWhiteSpace(homeOverride)
-            ? Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData)
-            : home;
-        return Path.Combine(dataBase, "houseCARL", "server");
+        string home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+        if (string.IsNullOrWhiteSpace(home))
+            throw new InvalidOperationException("HOME could not be resolved.");
+        string dataHome = Environment.GetEnvironmentVariable("XDG_DATA_HOME")
+            ?? Path.Combine(home, ".local", "share");
+        string configHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME")
+            ?? Path.Combine(home, ".config");
+        return InstallPaths.Create(home, dataHome, configHome, Environment.GetEnvironmentVariable("CODEX_HOME"));
     }
 
-    /// <summary>The Codex install's server exe path. Single source of truth so pre-flight == installer.</summary>
-    private static string CodexDestExe(string home, string? homeOverride)
-        => Path.Combine(CodexServerDir(home, homeOverride), "housecarl-mcp.exe");
-
-    /// <summary>
-    /// True if <paramref name="destExe"/> already exists AND can't be opened for writing — i.e. a live
-    /// Claude/Codex session is running it (a running image denies write sharing). A missing file (a clean
-    /// first install) returns false, so it's never falsely blocked. The handle is opened then immediately
-    /// closed and never written, so a held server's exe stays byte-intact.
-    ///
-    /// CONSERVATIVE BY DESIGN: FileShare.None reports "in use" if ANYTHING else holds the file (an AV
-    /// on-demand scan, the Search indexer, a backup tool with full sharing) — a possible false positive
-    /// that self-resolves on retry. That is the SAFE direction: a false positive is an annoying "quit and
-    /// re-run"; a false negative is the exact mid-copy corruption this exists to prevent. Do NOT "tighten"
-    /// this (e.g. to FileShare.Read) into a false-negative.
-    /// </summary>
-    private static bool ServerExeInUse(string destExe)
-    {
-        if (!File.Exists(destExe)) return false;
-        try
-        {
-            using FileStream _ = new(destExe, FileMode.Open, FileAccess.ReadWrite, FileShare.None);
-            return false; // got exclusive write access -> nothing holds it -> safe to overwrite
-        }
-        catch (IOException)                 { return true; } // in use by a running session
-        catch (UnauthorizedAccessException) { return true; } // locked / read-only -> can't overwrite either
-    }
-
-    // Windows reports sharing/lock violations as HRESULTs; .NET on Linux reports its in-process FileShare
-    // conflict as EAGAIN (11). Re-stamp only those known lock values so disk-full and path failures retain
-    // their real diagnosis.
-    private const int HrSharingViolation = unchecked((int)0x80070020);
-    private const int HrLockViolation    = unchecked((int)0x80070021);
-    private const int UnixWouldBlock     = 11;
-
-    private static bool IsSharingViolation(IOException ex)
-        => ex.HResult == HrSharingViolation
-           || ex.HResult == HrLockViolation
-           || (!OperatingSystem.IsWindows() && ex.HResult == UnixWouldBlock);
-
-    // ---- server runtime preflight ------------------------------------------
-
-    /// <summary>
-    /// Which of the server's required shared frameworks are missing at the required major version.
-    /// Asks `dotnet --list-runtimes` first (covers custom install locations on PATH); falls back to
-    /// scanning the default machine-wide install dir, which also covers a console whose PATH predates
-    /// a just-finished runtime install.
-    /// </summary>
-    private static List<string> MissingServerRuntimes()
-    {
-        string[] required = { "Microsoft.NETCore.App", "Microsoft.AspNetCore.App" };
-        HashSet<string> found = new(StringComparer.Ordinal);
-
-        try
-        {
-            ProcessStartInfo psi = new("dotnet", "--list-runtimes")
-            {
-                RedirectStandardOutput = true,
-                RedirectStandardError  = true,
-                UseShellExecute        = false,
-                CreateNoWindow         = true,
-            };
-            using Process? p = Process.Start(psi);
-            if (p is not null)
-            {
-                // Drain stderr asynchronously so a broken dotnet host writing errors can't fill the
-                // pipe and deadlock the stdout read, and bound the whole interaction so a wedged host
-                // can't hang the preflight - on timeout we kill it and fall through to the folder scan.
-                p.ErrorDataReceived += (_, _) => { };
-                p.BeginErrorReadLine();
-                Task<string> stdoutTask = p.StandardOutput.ReadToEndAsync();
-                if (!p.WaitForExit(15000))
-                {
-                    try { p.Kill(entireProcessTree: true); } catch { /* already exited */ }
-                }
-                if (stdoutTask.Wait(2000))
-                {
-                    foreach (string line in stdoutTask.Result.Split('\n'))
-                    {
-                        string t = line.Trim();
-                        foreach (string fx in required)
-                            if (t.StartsWith(fx + " " + ServerRuntimeMajor + ".", StringComparison.Ordinal))
-                                found.Add(fx);
-                    }
-                }
-            }
-        }
-        catch { /* dotnet not on PATH -- the folder scan below still gets a say */ }
-
-        string sharedDir = Path.Combine(
-            Environment.GetFolderPath(Environment.SpecialFolder.ProgramFiles), "dotnet", "shared");
-        foreach (string fx in required)
-        {
-            if (found.Contains(fx)) continue;
-            string fxDir = Path.Combine(sharedDir, fx);
-            // A version folder must actually contain assemblies - an empty 9.x dir left behind by an
-            // aborted install/uninstall must not count as "installed".
-            if (Directory.Exists(fxDir) &&
-                Directory.GetDirectories(fxDir, ServerRuntimeMajor + ".*")
-                    .Any(d => Directory.EnumerateFiles(d, "*.dll").Any()))
-                found.Add(fx);
-        }
-
-        return required.Where(fx => !found.Contains(fx)).ToList();
-    }
-
-    // ---- target selection (flag or interactive prompt) --------------------
-
+    /// <summary>Returns an explicit target flag, or asks interactively when no flag was supplied.</summary>
     private static Target? ResolveTarget(string[] args)
     {
-        if (args.Contains("--both"))   return Target.Both;
-        if (args.Contains("--codex"))  return Target.Codex;
-        if (args.Contains("--claude")) return Target.Claude;
+        List<Target> selected = [];
+        if (args.Contains("--claude")) selected.Add(Target.Claude);
+        if (args.Contains("--codex")) selected.Add(Target.Codex);
+        if (args.Contains("--both")) selected.Add(Target.Both);
+        if (selected.Count > 1)
+            throw new ArgumentException("choose only one of --claude, --codex, or --both.");
+        if (selected.Count == 1)
+            return selected[0];
 
-        Console.WriteLine("Install houseCARL for which agent?");
-        Console.WriteLine("  [1] Claude Code");
-        Console.WriteLine("  [2] Codex");
-        Console.WriteLine("  [3] Both");
-        Console.WriteLine();
-        while (true)
+        Console.Write("Install for [1] Claude Code, [2] Codex, [3] both, or [q] quit: ");
+        return Console.ReadLine()?.Trim().ToLowerInvariant() switch
         {
-            Console.Write("Enter 1, 2, or 3 (or q to quit): ");
-            string? s = Console.ReadLine();
-            if (s is null) return null;        // no interactive input (redirected) - treat as cancel
-            switch (s.Trim().ToLowerInvariant())
-            {
-                case "1": return Target.Claude;
-                case "2": return Target.Codex;
-                case "3": return Target.Both;
-                case "q": case "quit": return null;
-                default: Console.WriteLine("  Please type 1, 2, 3, or q."); break;
-            }
-        }
+            "1" => Target.Claude,
+            "2" => Target.Codex,
+            "3" => Target.Both,
+            "q" or "quit" or null => null,
+            _ => throw new ArgumentException("expected 1, 2, 3, or q."),
+        };
     }
-
-    // ---- Claude Code install (unchanged from the proven desktop install) ---
-
-    private static void InstallForClaude(string pluginSrc, string home)
-    {
-        string skillsDest = Path.Combine(home, ".claude", "skills", PluginFolderName);
-        string destExe    = ClaudeDestExe(home);
-        string claudeJson = Path.Combine(home, ".claude.json");
-
-        Console.WriteLine("[Claude Code] installing skills + server");
-        Console.WriteLine("      -> " + skillsDest);
-        CopyDirectory(pluginSrc, skillsDest);
-
-        Console.WriteLine("[Claude Code] registering the MCP server");
-        Console.WriteLine("      -> " + claudeJson);
-        RegisterClaudeMcpServer(claudeJson, McpServerName, destExe);
-        Console.WriteLine();
-    }
-
-    // ---- Codex install -----------------------------------------------------
-
-    private static void InstallForCodex(string pluginSrc, string home, string? homeOverride)
-    {
-        // Server + corpus go to a neutral per-user dir, NOT the skills dir: Codex scans ~/.agents/skills
-        // for skill FOLDERS, and the server is not a skill. Under a test home (HOUSECARL_SETUP_HOME) the
-        // data dir hangs off that home so tests never touch the real LOCALAPPDATA.
-        string serverDest = CodexServerDir(home, homeOverride);
-        string destExe    = CodexDestExe(home, homeOverride);
-
-        // Skills go FLAT under ~/.agents/skills/ (the cross-agent, user-scope skills dir).
-        string skillsRoot = Path.Combine(home, ".agents", "skills");
-
-        // ~/.codex/config.toml, honoring CODEX_HOME if the user set it.
-        string? codexHomeEnv = Environment.GetEnvironmentVariable("CODEX_HOME");
-        string codexHome = string.IsNullOrWhiteSpace(codexHomeEnv)
-            ? Path.Combine(home, ".codex")
-            : codexHomeEnv;
-        string configToml = Path.Combine(codexHome, "config.toml");
-
-        Console.WriteLine("[Codex] installing the server");
-        Console.WriteLine("      -> " + serverDest);
-        CopyDirectory(Path.Combine(pluginSrc, "server"), serverDest);
-
-        Console.WriteLine("[Codex] installing skills");
-        Console.WriteLine("      -> " + skillsRoot);
-        string skillsSrc = Path.Combine(pluginSrc, "skills");
-        if (Directory.Exists(skillsSrc))
-            foreach (string skillDir in Directory.GetDirectories(skillsSrc))
-                CopyDirectory(skillDir, Path.Combine(skillsRoot, Path.GetFileName(skillDir)));
-
-        // Codex-only umbrella skill: the $housecarl entry point (a top-level SKILL.md routing to the
-        // helpers + an agents/openai.yaml declaring the MCP-server dependency). It ships beside the plugin
-        // in the package (codex/housecarl), NOT inside it, so the Claude install never sees it. Placed in
-        // ~/.agents/skills/ alongside the helpers - the location a fresh Codex install was confirmed to
-        // scan (the helpers there are discovered and working).
-        string umbrellaSrc = Path.Combine(Path.GetDirectoryName(pluginSrc)!, "codex", "housecarl");
-        if (Directory.Exists(umbrellaSrc))
-        {
-            string umbrellaDest = Path.Combine(skillsRoot, PluginFolderName);
-            Console.WriteLine("[Codex] installing the houseCARL umbrella skill");
-            Console.WriteLine("      -> " + umbrellaDest);
-            CopyDirectory(umbrellaSrc, umbrellaDest);
-        }
-
-        Console.WriteLine("[Codex] registering the MCP server");
-        Console.WriteLine("      -> " + configToml);
-        RegisterCodexMcpServer(configToml, McpServerName, destExe);
-        Console.WriteLine();
-    }
-
-    // ---- NEXT steps --------------------------------------------------------
-
-    private static void PrintNext(Target target)
-    {
-        Console.WriteLine("houseCARL is installed.");
-        Console.WriteLine();
-        Console.WriteLine("  NEXT:");
-        if (target is Target.Claude or Target.Both)
-            Console.WriteLine("   - Claude Code: fully quit and reopen the Claude desktop app.");
-        if (target is Target.Codex or Target.Both)
-            Console.WriteLine("   - Codex: fully restart Codex (close every session), then check /mcp and /skills.");
-        Console.WriteLine("   - On first use of a houseCARL tool it will ask you to point it at your");
-        Console.WriteLine("     Mod Organizer 2 folder (the one containing ModOrganizer.ini).");
-        if (target is Target.Both)
-            Console.WriteLine("   - (Each host runs its own server copy, so you'll set the MO2 folder once per host.)");
-    }
-
-    private static int Finish(int exitCode)
-    {
-        Console.WriteLine();
-        Console.Write("Press any key to close...");
-        try { Console.ReadKey(intercept: true); } catch { /* no interactive console (redirected) */ }
-        Console.WriteLine();
-        return exitCode;
-    }
-
-    // ---- file copy --------------------------------------------------------
-
-    private static void CopyDirectory(string sourceDir, string destDir)
-    {
-        Directory.CreateDirectory(destDir);
-        foreach (string dir in Directory.GetDirectories(sourceDir, "*", SearchOption.AllDirectories))
-            Directory.CreateDirectory(Path.Combine(destDir, Path.GetRelativePath(sourceDir, dir)));
-        foreach (string file in Directory.GetFiles(sourceDir, "*", SearchOption.AllDirectories))
-            File.Copy(file, Path.Combine(destDir, Path.GetRelativePath(sourceDir, file)), overwrite: true);
-    }
-
-    // ---- ~/.claude.json registration (JSON splice) ------------------------
-
-    private static readonly JsonSerializerOptions Indented = new() { WriteIndented = true };
 
     /// <summary>
-    /// Insert/replace mcpServers.<paramref name="name"/> WITHOUT reparsing the whole file. ~/.claude.json
-    /// can hold keys that differ only by case (Windows path history), which case-insensitive parsers
-    /// reject; we parse ONLY the small, duplicate-free mcpServers object and splice it back, leaving the
-    /// rest of the file byte-for-byte intact. Backs the file up first.
+    /// Verifies the release payload, atomically replaces the shared server, then registers the selected hosts.
     /// </summary>
-    private static void RegisterClaudeMcpServer(string claudeJsonPath, string name, string command)
+    /// <param name="target">Host integration to install.</param>
+    /// <param name="packageRoot">Extracted release directory containing housecarl/server.</param>
+    /// <param name="paths">Explicit native destination paths.</param>
+    /// <param name="verifyChecksums">Whether SHA256SUMS must validate before any mutation.</param>
+    public static void Install(Target target, string packageRoot, InstallPaths paths, bool verifyChecksums)
+    {
+        string root = Path.GetFullPath(packageRoot);
+        string plugin = Path.Combine(root, ProductKey);
+        string server = Path.Combine(plugin, "server");
+        string executable = Path.Combine(server, "housecarl-mcp");
+        if (!File.Exists(executable))
+            throw new FileNotFoundException("release payload is missing housecarl/server/housecarl-mcp.", executable);
+        if (verifyChecksums)
+            VerifyChecksums(root);
+
+        ReplaceServer(server, paths.ServerDir, paths.RollbackDir);
+        Directory.CreateDirectory(paths.ConfigDir);
+        string installedExecutable = Path.Combine(paths.ServerDir, "housecarl-mcp");
+        string skills = Path.Combine(plugin, "skills");
+        string umbrella = Path.Combine(root, "codex", ProductKey);
+
+        if (target is Target.Claude or Target.Both)
+        {
+            InstallSkills(skills, umbrella, Path.Combine(paths.Home, ".claude", "skills"));
+            RegisterClaude(paths.ClaudeConfig, installedExecutable, paths.ConfigDir);
+        }
+        if (target is Target.Codex or Target.Both)
+        {
+            InstallSkills(skills, umbrella, Path.Combine(paths.Home, ".agents", "skills"));
+            RegisterCodex(paths.CodexConfig, installedExecutable, paths.ConfigDir);
+        }
+
+        Console.WriteLine($"Installed houseCARL-Amethyst server: {paths.ServerDir}");
+        Console.WriteLine($"Persistent configuration: {paths.ConfigDir}");
+        Console.WriteLine("Restart the selected host, connect an Amethyst manifest, then run housecarl_amethyst_status.");
+    }
+
+    /// <summary>Restores the immediately previous server directory and retains the replaced build as rollback.</summary>
+    public static void Rollback(InstallPaths paths)
+    {
+        if (!Directory.Exists(paths.RollbackDir))
+            throw new InvalidOperationException("no previous server version is available to roll back.");
+        string swap = paths.ServerDir + ".swap-" + Guid.NewGuid().ToString("N");
+        if (Directory.Exists(paths.ServerDir))
+            Directory.Move(paths.ServerDir, swap);
+        try
+        {
+            Directory.Move(paths.RollbackDir, paths.ServerDir);
+            if (Directory.Exists(swap))
+                Directory.Move(swap, paths.RollbackDir);
+        }
+        catch
+        {
+            if (!Directory.Exists(paths.ServerDir) && Directory.Exists(swap))
+                Directory.Move(swap, paths.ServerDir);
+            throw;
+        }
+        Console.WriteLine($"Restored previous server: {paths.ServerDir}");
+    }
+
+    /// <summary>Removes installed binaries, owned skills, and selected host registrations while preserving user config.</summary>
+    public static void Uninstall(Target target, InstallPaths paths)
+    {
+        if (target is Target.Claude or Target.Both)
+        {
+            RemoveOwnedSkills(Path.Combine(paths.Home, ".claude", "skills"));
+            RemoveClaudeRegistration(paths.ClaudeConfig);
+        }
+        if (target is Target.Codex or Target.Both)
+        {
+            RemoveOwnedSkills(Path.Combine(paths.Home, ".agents", "skills"));
+            RemoveCodexRegistration(paths.CodexConfig);
+        }
+        DeleteDirectory(paths.ServerDir);
+        DeleteDirectory(paths.RollbackDir);
+        Console.WriteLine($"Uninstalled houseCARL-Amethyst; preserved configuration: {paths.ConfigDir}");
+    }
+
+    /// <summary>Validates every relative payload hash listed in SHA256SUMS.</summary>
+    public static void VerifyChecksums(string packageRoot)
+    {
+        string root = Path.GetFullPath(packageRoot);
+        string list = Path.Combine(root, "SHA256SUMS");
+        if (!File.Exists(list))
+            throw new FileNotFoundException("release is missing SHA256SUMS.", list);
+
+        int count = 0;
+        foreach (string raw in File.ReadLines(list))
+        {
+            string line = raw.Trim();
+            if (line.Length == 0) continue;
+            int split = line.IndexOf("  ", StringComparison.Ordinal);
+            if (split != 64)
+                throw new InvalidDataException($"malformed SHA256SUMS line: {raw}");
+            string relative = line[(split + 2)..];
+            string path = SafePackagePath(root, relative);
+            if (!File.Exists(path))
+                throw new InvalidDataException($"checksummed payload is missing: {relative}");
+            string actual = Convert.ToHexStringLower(SHA256.HashData(File.ReadAllBytes(path)));
+            if (!actual.Equals(line[..64], StringComparison.OrdinalIgnoreCase))
+                throw new InvalidDataException($"checksum mismatch: {relative}");
+            count++;
+        }
+        if (count == 0)
+            throw new InvalidDataException("SHA256SUMS contains no payload entries.");
+    }
+
+    /// <summary>Resolves a checksum entry beneath the package root and rejects traversal or absolute paths.</summary>
+    private static string SafePackagePath(string root, string relative)
+    {
+        if (Path.IsPathRooted(relative) || relative.Contains('\0'))
+            throw new InvalidDataException($"unsafe checksum path: {relative}");
+        string path = Path.GetFullPath(Path.Combine(root, relative));
+        string prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        if (!path.StartsWith(prefix, StringComparison.Ordinal))
+            throw new InvalidDataException($"checksum path escapes the release: {relative}");
+        return path;
+    }
+
+    /// <summary>Copies the server to a sibling staging directory and swaps it into place by directory rename.</summary>
+    private static void ReplaceServer(string source, string destination, string rollback)
+    {
+        string? parent = Path.GetDirectoryName(destination);
+        if (parent is null) throw new InvalidOperationException("server destination has no parent.");
+        Directory.CreateDirectory(parent);
+        string staging = destination + ".installing-" + Guid.NewGuid().ToString("N");
+        CopyDirectory(source, staging);
+        try
+        {
+            DeleteDirectory(rollback);
+            if (Directory.Exists(destination))
+                Directory.Move(destination, rollback);
+            try { Directory.Move(staging, destination); }
+            catch
+            {
+                if (!Directory.Exists(destination) && Directory.Exists(rollback))
+                    Directory.Move(rollback, destination);
+                throw;
+            }
+        }
+        finally { DeleteDirectory(staging); }
+    }
+
+    /// <summary>Installs all bundled helper skills plus the host-neutral umbrella skill.</summary>
+    private static void InstallSkills(string skillsSource, string umbrellaSource, string destinationRoot)
+    {
+        Directory.CreateDirectory(destinationRoot);
+        List<string> owned = [];
+        if (Directory.Exists(skillsSource))
+            foreach (string source in Directory.GetDirectories(skillsSource))
+            {
+                string name = Path.GetFileName(source);
+                ReplaceOwnedDirectory(source, Path.Combine(destinationRoot, name));
+                owned.Add(name);
+            }
+        if (Directory.Exists(umbrellaSource))
+        {
+            ReplaceOwnedDirectory(umbrellaSource, Path.Combine(destinationRoot, ProductKey));
+            owned.Add(ProductKey);
+        }
+        File.WriteAllLines(
+            Path.Combine(destinationRoot, ProductKey, ".housecarl-owned-skills"),
+            owned.Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal));
+    }
+
+    /// <summary>Replaces one installer-owned skill directory through a sibling staging directory.</summary>
+    private static void ReplaceOwnedDirectory(string source, string destination)
+    {
+        string staging = destination + ".installing-" + Guid.NewGuid().ToString("N");
+        CopyDirectory(source, staging);
+        try
+        {
+            DeleteDirectory(destination);
+            Directory.Move(staging, destination);
+        }
+        finally { DeleteDirectory(staging); }
+    }
+
+    /// <summary>Removes only skill directories named in the installed ownership manifest.</summary>
+    private static void RemoveOwnedSkills(string root)
+    {
+        string manifest = Path.Combine(root, ProductKey, ".housecarl-owned-skills");
+        if (File.Exists(manifest))
+            foreach (string name in File.ReadLines(manifest).Where(IsSimpleName).ToArray())
+                DeleteDirectory(Path.Combine(root, name));
+        DeleteDirectory(Path.Combine(root, ProductKey));
+    }
+
+    /// <summary>Returns true for a single safe directory name used by the ownership manifest.</summary>
+    private static bool IsSimpleName(string name) =>
+        name.Length > 0 && name is not "." and not ".." &&
+        name.IndexOfAny([Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar, '\0']) < 0;
+
+    /// <summary>Recursively copies a directory without following directory symlinks.</summary>
+    private static void CopyDirectory(string source, string destination)
+    {
+        Directory.CreateDirectory(destination);
+        foreach (string directory in Directory.GetDirectories(source, "*", SearchOption.AllDirectories))
+        {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException($"release contains a directory symlink: {directory}");
+            Directory.CreateDirectory(Path.Combine(destination, Path.GetRelativePath(source, directory)));
+        }
+        foreach (string file in Directory.GetFiles(source, "*", SearchOption.AllDirectories))
+        {
+            if ((File.GetAttributes(file) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidDataException($"release contains a file symlink: {file}");
+            File.Copy(file, Path.Combine(destination, Path.GetRelativePath(source, file)));
+        }
+    }
+
+    /// <summary>Deletes a directory when it exists.</summary>
+    private static void DeleteDirectory(string path)
+    {
+        if (Directory.Exists(path))
+            Directory.Delete(path, recursive: true);
+    }
+
+    /// <summary>Registers the shared server and persistent data directory in Claude Code's JSON config.</summary>
+    private static void RegisterClaude(string path, string command, string dataDir)
     {
         JsonObject entry = new()
         {
-            ["type"]    = "stdio",
+            ["type"] = "stdio",
             ["command"] = command,
-            ["args"]    = new JsonArray(),
+            ["args"] = new JsonArray(),
+            ["env"] = new JsonObject { ["HOUSECARL_DATA_DIR"] = dataDir },
         };
-
-        if (!File.Exists(claudeJsonPath))
-        {
-            JsonObject newRoot = new() { ["mcpServers"] = new JsonObject { [name] = entry } };
-            File.WriteAllText(claudeJsonPath, newRoot.ToJsonString(Indented));
-            return;
-        }
-
-        string text = File.ReadAllText(claudeJsonPath);
-        File.Copy(claudeJsonPath, claudeJsonPath + ".houseCARL.bak", overwrite: true);
-
-        (int start, int end)? bounds = FindRootMemberObject(text, "mcpServers");
-        string updated;
-        if (bounds is { } b)
-        {
-            string objText = text.Substring(b.start, b.end - b.start + 1);
-            JsonObject servers = JsonNode.Parse(objText) as JsonObject
-                ?? throw new InvalidDataException("mcpServers is not a JSON object.");
-            servers[name] = entry; // insert or replace (idempotent on re-run)
-            string newObj = Reindent(servers.ToJsonString(Indented), LeadingIndentOfLineAt(text, b.start));
-            updated = string.Concat(text.AsSpan(0, b.start), newObj, text.AsSpan(b.end + 1));
-        }
-        else
-        {
-            int rootBrace = text.IndexOf('{');
-            if (rootBrace < 0) throw new InvalidDataException("~/.claude.json is not a JSON object.");
-            JsonObject servers = new() { [name] = entry };
-            string block = "\n  \"mcpServers\": " + Reindent(servers.ToJsonString(Indented), "  ") + ",";
-            updated = string.Concat(text.AsSpan(0, rootBrace + 1), block, text.AsSpan(rootBrace + 1));
-        }
-
-        File.WriteAllText(claudeJsonPath, updated);
+        JsonObject root = ReadJsonObject(path);
+        JsonObject servers = root["mcpServers"] as JsonObject ?? new JsonObject();
+        root["mcpServers"] = servers;
+        servers[ProductKey] = entry;
+        WriteConfig(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
-    /// <summary>Finds the `{ ... }` value of a DEPTH-1 (root-level) member named <paramref name="key"/>. String-aware.</summary>
-    private static (int start, int end)? FindRootMemberObject(string text, string key)
+    /// <summary>Removes only houseCARL's entry from Claude Code's JSON config.</summary>
+    private static void RemoveClaudeRegistration(string path)
     {
-        string token = "\"" + key + "\"";
-        int depth = 0;
-        bool inString = false, escape = false;
-        for (int i = 0; i < text.Length; i++)
+        if (!File.Exists(path)) return;
+        JsonObject root = ReadJsonObject(path);
+        if (root["mcpServers"] is JsonObject servers)
+            servers.Remove(ProductKey);
+        WriteConfig(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    /// <summary>Reads a JSON object or creates an empty root when the config does not exist.</summary>
+    private static JsonObject ReadJsonObject(string path) =>
+        !File.Exists(path) ? new JsonObject() :
+        JsonNode.Parse(File.ReadAllText(path)) as JsonObject
+            ?? throw new InvalidDataException($"{path} is not a JSON object.");
+
+    /// <summary>Registers the shared server and environment in Codex without reformatting unrelated TOML.</summary>
+    private static void RegisterCodex(string path, string command, string dataDir)
+    {
+        string text = File.Exists(path) ? File.ReadAllText(path) : "";
+        string body = $"[mcp_servers.{ProductKey}]\n" +
+                      $"command = {TomlString(command)}\n\n" +
+                      $"[mcp_servers.{ProductKey}.env]\n" +
+                      $"HOUSECARL_DATA_DIR = {TomlString(dataDir)}\n";
+        WriteConfig(path, ReplaceTomlTable(text, body));
+    }
+
+    /// <summary>Removes houseCARL's Codex table and nested environment table.</summary>
+    private static void RemoveCodexRegistration(string path)
+    {
+        if (!File.Exists(path)) return;
+        WriteConfig(path, ReplaceTomlTable(File.ReadAllText(path), null));
+    }
+
+    /// <summary>Replaces or removes the product's TOML table while preserving every unrelated line.</summary>
+    private static string ReplaceTomlTable(string text, string? replacement)
+    {
+        string newline = text.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        string[] lines = text.Replace("\r\n", "\n", StringComparison.Ordinal).Split('\n');
+        List<string> kept = [];
+        for (int i = 0; i < lines.Length;)
         {
-            char c = text[i];
-            if (inString)
+            if (!IsOwnedTomlHeader(lines[i]))
             {
-                if (escape) escape = false;
-                else if (c == '\\') escape = true;
-                else if (c == '"') inString = false;
+                kept.Add(lines[i++]);
                 continue;
             }
-            if (c == '"')
+            i++;
+            while (i < lines.Length && !lines[i].TrimStart().StartsWith("[", StringComparison.Ordinal))
+                i++;
+        }
+        string result = string.Join(newline, kept).TrimEnd();
+        if (replacement is not null)
+            result = (result.Length == 0 ? "" : result + newline + newline) +
+                     replacement.Replace("\n", newline, StringComparison.Ordinal).TrimEnd();
+        return result.Length == 0 ? "" : result + newline;
+    }
+
+    /// <summary>Recognizes the exact product table or one of its nested tables without matching similarly named servers.</summary>
+    private static bool IsOwnedTomlHeader(string line)
+    {
+        string header = line.Trim();
+        return header == $"[mcp_servers.{ProductKey}]" ||
+               header.StartsWith($"[mcp_servers.{ProductKey}.", StringComparison.Ordinal);
+    }
+
+    /// <summary>Quotes a native path as a TOML basic string, including apostrophes and Unicode safely.</summary>
+    private static string TomlString(string value)
+    {
+        StringBuilder quoted = new StringBuilder(value.Length + 2).Append('"');
+        foreach (char character in value)
+            quoted.Append(character switch
             {
-                if (depth == 1 && i + token.Length <= text.Length
-                    && string.CompareOrdinal(text, i, token, 0, token.Length) == 0)
-                {
-                    int j = i + token.Length;
-                    while (j < text.Length && char.IsWhiteSpace(text[j])) j++;
-                    if (j < text.Length && text[j] == ':')
-                    {
-                        j++;
-                        while (j < text.Length && char.IsWhiteSpace(text[j])) j++;
-                        if (j < text.Length && text[j] == '{')
-                            return MatchBraces(text, j);
-                        throw new InvalidDataException("mcpServers exists but its value is not an object.");
-                    }
-                }
-                inString = true;
-            }
-            else if (c == '{') depth++;
-            else if (c == '}') depth--;
-        }
-        return null;
+                '"' => "\\\"",
+                '\\' => "\\\\",
+                '\b' => "\\b",
+                '\t' => "\\t",
+                '\n' => "\\n",
+                '\f' => "\\f",
+                '\r' => "\\r",
+                < ' ' or '\u007f' => "\\u" + ((int)character).ToString("X4"),
+                _ => character.ToString(),
+            });
+        return quoted.Append('"').ToString();
     }
 
-    private static (int start, int end)? MatchBraces(string text, int openIndex)
+    /// <summary>Backs up an existing host config, then atomically replaces it with UTF-8 text.</summary>
+    private static void WriteConfig(string path, string text)
     {
-        int depth = 0;
-        bool inString = false, escape = false;
-        for (int i = openIndex; i < text.Length; i++)
-        {
-            char c = text[i];
-            if (inString)
-            {
-                if (escape) escape = false;
-                else if (c == '\\') escape = true;
-                else if (c == '"') inString = false;
-            }
-            else if (c == '"') inString = true;
-            else if (c == '{') depth++;
-            else if (c == '}') { if (--depth == 0) return (openIndex, i); }
-        }
-        return null;
-    }
-
-    private static string LeadingIndentOfLineAt(string text, int index)
-    {
-        int lineStart = text.LastIndexOf('\n', index) + 1;
-        int j = lineStart;
-        while (j < text.Length && (text[j] == ' ' || text[j] == '\t')) j++;
-        return text.Substring(lineStart, j - lineStart);
-    }
-
-    private static string Reindent(string json, string indent)
-    {
-        if (indent.Length == 0) return json;
-        string[] lines = json.Split('\n');
-        for (int i = 1; i < lines.Length; i++) lines[i] = indent + lines[i];
-        return string.Join('\n', lines);
-    }
-
-    // ---- ~/.codex/config.toml registration (TOML splice) ------------------
-
-    /// <summary>
-    /// Insert/replace [mcp_servers.<paramref name="name"/>] in a TOML config.toml, leaving everything
-    /// else intact. The command path is written as a LITERAL TOML string (single quotes) so Windows
-    /// backslashes pass through verbatim - a basic "double-quoted" string would treat them as escapes.
-    /// Backs the file up first; idempotent on re-run.
-    /// </summary>
-    private static void RegisterCodexMcpServer(string configTomlPath, string name, string command)
-    {
-        string? dir = Path.GetDirectoryName(configTomlPath);
-        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
-
-        if (!File.Exists(configTomlPath))
-        {
-            string fresh = "# houseCARL MCP server (added by houseCARL-Setup)\n"
-                         + "[mcp_servers." + name + "]\n"
-                         + "command = '" + command + "'\n";
-            File.WriteAllText(configTomlPath, fresh);
-            return;
-        }
-
-        string text = File.ReadAllText(configTomlPath);
-        File.Copy(configTomlPath, configTomlPath + ".houseCARL.bak", overwrite: true);
-        File.WriteAllText(configTomlPath, SpliceTomlTable(text, name, command));
-    }
-
-    /// <summary>
-    /// Replace the [mcp_servers.&lt;name&gt;] table (and any of its subtables) with a fresh one, or append
-    /// it if absent. Line-based so it never reformats the rest of the file; preserves the file's newline
-    /// style. A TOML table body runs from its header to the next table header (or EOF).
-    /// </summary>
-    private static string SpliceTomlTable(string text, string name, string command)
-    {
-        string nl   = text.Contains("\r\n") ? "\r\n" : "\n";
-        string head = "[mcp_servers." + name + "]";
-        string sub  = "[mcp_servers." + name + ".";
-        string[] body = { head, "command = '" + command + "'" };
-
-        string[] lines = text.Replace("\r\n", "\n").Split('\n');
-        List<string> outLines = new();
-        bool replaced = false;
-        for (int i = 0; i < lines.Length; i++)
-        {
-            if (!replaced && lines[i].Trim() == head)
-            {
-                // skip our existing table body + any [mcp_servers.<name>.*] subtables
-                int j = i + 1;
-                while (j < lines.Length)
-                {
-                    string t = lines[j].Trim();
-                    if (t.StartsWith("[") && t != head && !t.StartsWith(sub)) break;
-                    j++;
-                }
-                outLines.AddRange(body);
-                i = j - 1;          // resume after the skipped block
-                replaced = true;
-                continue;
-            }
-            outLines.Add(lines[i]);
-        }
-
-        if (!replaced)
-        {
-            string trimmed = string.Join(nl, outLines).TrimEnd('\r', '\n');
-            return trimmed.Length == 0
-                ? "# houseCARL MCP server (added by houseCARL-Setup)" + nl + string.Join(nl, body) + nl
-                : trimmed + nl + nl + string.Join(nl, body) + nl;
-        }
-
-        string result = string.Join(nl, outLines);
-        return result.EndsWith(nl) ? result : result + nl;
+        string? directory = Path.GetDirectoryName(path);
+        if (directory is null) throw new InvalidOperationException($"config path has no parent: {path}");
+        Directory.CreateDirectory(directory);
+        if (File.Exists(path))
+            File.Copy(path, path + ".housecarl-amethyst.bak", overwrite: true);
+        string temporary = path + ".tmp-" + Guid.NewGuid().ToString("N");
+        File.WriteAllText(temporary, text);
+        File.Move(temporary, path, overwrite: true);
     }
 }

@@ -124,7 +124,7 @@ static void AddMcp(IServiceCollection services, bool stdio)
     var mcp = services.AddMcpServer(options =>
     {
         // The houseCARL brand string lives HERE — the one place in code (CLAUDE.md §6). The version is the exe's
-        // stamped InformationalVersion: build-plugin.ps1 passes -p:Version from plugin.json (the single version
+        // stamped InformationalVersion: build-release.sh passes -p:Version from plugin.json (the single version
         // home), so ServerInfo reports the REAL release; an unstamped dev build honestly says 0.0.0-dev.
         options.ServerInfo = new Implementation { Name = "houseCARL", Version = ServerVersion() };
         options.ServerInstructions =
@@ -163,7 +163,7 @@ static void AddMcp(IServiceCollection services, bool stdio)
     mcp.WithRequestFilters(f => f.AddCallToolFilter(ToolCallShim.LenientArguments));
 }
 
-// The exe's stamped version for ServerInfo: InformationalVersion (set by build-plugin.ps1's -p:Version from
+// The executable's stamped version for ServerInfo: InformationalVersion (set by build-release.sh's -p:Version from
 // plugin.json — ONE version home) with any "+metadata" suffix trimmed; an unstamped build reports 0.0.0-dev.
 static string ServerVersion()
 {

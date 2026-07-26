@@ -77,9 +77,9 @@ that pass in the situation you care about. Load order is never the lever.
    `config.json`. If you're **overriding someone else's mod without editing it**, write a
    `user.json` beside their `config.json` — OAR uses `user.json` instead of `config.json` for that
    submod (a full-document shadow, not a field merge, so include the *complete* config you want). In
-   a modlist, keep all `user.json` overrides in one dedicated MO2 mod that loads after the originals;
-   USVFS overlays them and they win, leaving originals untouched. (A modlist typically keeps these
-   in one dedicated overrides mod that loads after the originals.)
+   an Amethyst modlist, keep all `user.json` overrides in one dedicated staging mod with higher
+   priority than the originals. Amethyst deploys the winning files while the source mods remain
+   untouched.
 5. **Add variants / blend / loop behavior only if needed.** `replacementAnimDatas` drives random
    variants (`weight`, `playOnce`, `variantMode`); `interruptible`, `replaceOnLoop` (default true),
    and the `blendTime*` fields tune transitions. Prefer `replaceOnLoop` over the deprecated

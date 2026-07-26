@@ -201,9 +201,9 @@ this skill's job.
    silent-dead-dialogue cause — there is no tool that will catch them, so reason them through.
 
 4. **Result scripts, if the line does something.** Compose the line's `VirtualMachineAdapter` script binding
-   (the `TIF_`-style fragment), author the `.psc`, and compile it with `housecarl_compile_script` (never
-   hand-roll `PapyrusCompiler.exe` — the tool sets the import paths and quotes spaced paths). The create-
-   time check flags a line whose result script isn't bound + compiled (**WILL NOT FIRE**). Use
+   (the `TIF_`-style fragment) and author the `.psc`. Native v1 does not execute PapyrusCompiler;
+   compile through the documented external-tool workflow when Proton support lands. The create-time
+   check flags a line whose result script isn't bound + compiled (**WILL NOT FIRE**). Use
    `papyrus-reference` for function signatures.
 
 5. **Voice.** For each voiced line, houseCARL computes the expected `.fuz` path and reports **WILL BE
@@ -222,8 +222,8 @@ this skill's job.
    `TextDisplayGlobals` (an unbacked tag renders as `[...]` in game — a silent failure it now warns on) — and
    **prints a standing-limits footer for what it cannot** (the CTDA conditions,
    lip-sync, and the dropped-line caveat). Treat the footer as real: a clean pass is not "this will play."
-   Read the new records back (`full_readback` on the create call) before telling the user to enable + sort
-   the patch in MO2.
+   Read the new records back (`full_readback` on the create call) before telling the user to refresh
+   Amethyst, enable the patch, rebuild the filemap, and deploy.
 
 ## Do you need to open the Creation Kit? No.
 
@@ -304,7 +304,7 @@ has no `Subtype` field. Copy the exact value from a known-good ForceGreet topic 
 
    (`ForceGreet` is the Mutagen spelling of xEdit's `PFGT` subtype — confirm the enum value in
    `mutagen-reference`.) The write is non-destructive: it lands in a reviewable patch; read it back before
-   enabling + sorting in MO2.
+   refreshing, enabling, rebuilding the Amethyst filemap, and deploying.
 
 **Recipe C — un-bind a result-script fragment from an INFO.** Clearing a fragment binding is a supported
 `Remove` now — no `remove_record` + recreate. `Remove` the whole result-script adapter:

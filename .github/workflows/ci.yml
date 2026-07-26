@@ -1,14 +1,9 @@
-# houseCARL CI — a green/red gate on every push to main and every pull request.
-# What it does, in plain terms: a fresh Windows machine on GitHub's servers compiles
-# houseCARL and runs its re-runnable proof probes. Green = it builds and the core logic
-# passes; red = something broke. The probes self-SKIP the parts that need external tools
-# (the Creation Kit's Papyrus compiler, BSArch) which aren't installed on the runner, so
-# they stay a reliable gate without those tools present.
+# Linux product gate. External Windows tools remain optional, so their probes self-skip when absent.
 name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, amethyst-main, agent/upstream-c305b07-amethyst]
   pull_request:
 
 # Cancel a superseded in-progress run on the SAME pull request when a newer commit is pushed
@@ -21,7 +16,7 @@ concurrency:
 jobs:
   build-and-probe:
     name: build + probes
-    runs-on: windows-latest   # houseCARL is a Windows-only (Skyrim SE) product — match that
+    runs-on: ubuntu-latest
     steps:
       - name: Check out the code
         uses: actions/checkout@v6
@@ -61,3 +56,15 @@ jobs:
         # freshness passes — the same "report every failure" posture as the ci-all runner itself.
         if: ${{ !cancelled() }}
         run: dotnet src/housecarl-generator/bin/Release/net9.0/housecarl-generator.dll freshness-capture-guard
+
+      - name: Build and checksum the self-contained Linux release
+        if: ${{ !cancelled() }}
+        run: ./scripts/build-release.sh
+
+      - name: Inspect the release architecture and contents
+        if: ${{ !cancelled() }}
+        run: |
+          file dist/housecarl-amethyst/housecarl/server/housecarl-mcp
+          file dist/housecarl-amethyst/housecarl-amethyst-install
+          test "$(find release -maxdepth 1 -name 'housecarl-amethyst-*-linux-x64.tar.gz.sha256' -size +0c | wc -l)" -eq 1
+          ! find dist/housecarl-amethyst -type f -name '*.exe' -print -quit | grep -q .

@@ -28,8 +28,9 @@ Face tint ("FaceTint"):  textures\actors\character\facegendata\facetint\<Definin
 ```
 
 The two trees diverge only at `meshes`↔`textures` and `facegeom`↔`facetint`; the `<DefiningMaster>\<file>`
-tail is identical. Paths are case-insensitive (the MO2 VFS already is). **The `.dds` stays opaque binary to
-houseCARL** (it reads no tint/skin pixels) — but the `.nif` no longer is: `housecarl_nif_inspect` reads its
+tail is identical. Bethesda paths compare case-insensitively; Amethyst's raw index casing is used for
+native filesystem access. **The `.dds` stays opaque binary to houseCARL** (it reads no tint/skin pixels) —
+but the `.nif` no longer is: `housecarl_nif_inspect` reads its
 **data values** (shape names, the embedded texture-set paths, NiAVObject flags, alpha, partitions, bones,
 node tree, header strings) and `housecarl_nif_set` **writes a whitelisted subset of them back** (texture-slot
 paths, shape/node names, flags, alpha, partitions, scale), verified before landing. What houseCARL still
@@ -84,8 +85,8 @@ mod's loose facegen sits at the OLD names until renamed/regenerated; `place_asse
 Dark/grey/black face is a **desync between two independent precedence systems**:
 
 - **Plugin load order** decides which mod's **NPC record** wins — what `housecarl_read_record` returns.
-- **The MO2 VFS / asset order** decides which mod's **facegen FILE** wins — what `housecarl_asset_status`
-  returns. **Loose always beats BSA**; among loose, MO2 mod priority (then the overwrite folder) decides;
+- **Amethyst's filemap / asset order** decides which mod's **facegen FILE** wins — what `housecarl_asset_status`
+  returns. **Loose always beats BSA**; among loose, Amethyst priority (then the overwrite folder) decides;
   among BSAs, the BSA whose plugin loads later wins.
 
 Dark/wrong face occurs whenever, for the same NPC, the **file winner's source ≠ the record winner's
@@ -176,7 +177,8 @@ over the procedure, never claim to do it.**
 When a correct copy exists somewhere (mod or BSA) but loses VFS precedence (Cause D/E, and the file side of
 A/C/F/G). `asset_status` the two paths to see the current winner, then `place_asset`/`bulk_place_asset` to
 extract the correct entry (single-entry in-process BSA extract) and write it as a winning loose override
-into a fresh enable+sort MO2 mod. **Place BOTH `.nif` and `.dds` as a pair, from the SAME source mod.**
+into a fresh Amethyst staging mod, then refresh, enable, rebuild the filemap, and deploy.
+**Place BOTH `.nif` and `.dds` as a pair, from the SAME source mod.**
 
 > **Same-FormKey forward is SAFE by construction — do not over-refuse.** The `.nif` embeds the FaceTint
 > `.dds` path as a pure function of `(defining-master, local FormID)`. A same-FormKey, same-defining-master
@@ -357,8 +359,9 @@ batch tool. You no longer guess the broken slot, and for a single mesh you no lo
 - **RaceMenu/SKEE is a whole out-of-lane class** (U–X). Player-only grey is the strongest exclusion. A
   `.jslot` is not facegen (W); NiOverride overlays are runtime state (X). Don't conflate the CharGen working
   folder (`Data\SKSE\Plugins\CharGen\`) with the facegen VFS paths.
-- **BSA-vs-loose stale facegen:** loose always beats BSA — including from a **disabled** mod or MO2
-  overwrite (Cause E). The classic "fine in xEdit/CK but dark in game." Trust `asset_status`'s reported
+- **BSA-vs-loose stale facegen:** loose always beats BSA, including Amethyst overwrite (Cause E).
+  Disabled mods are absent from the authoritative filemap. The classic "fine in xEdit/CK but dark in
+  game." Trust `asset_status`'s reported
   winner (a "Manage Archives"-on user can invert the rule). Drop "archive-invalidation /
   bInvalidateOlderFiles" language for SE — that's LE-era; SE honors BSAs natively.
 - **Vanilla/CC baseline:** vanilla NPCs ship matching facegen in the base-game BSAs under
