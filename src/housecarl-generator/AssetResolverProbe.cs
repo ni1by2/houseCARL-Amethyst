@@ -148,9 +148,14 @@ internal static class AssetResolverProbe
                 var unicodePath = BethesdaPath.Under(data, unicode);
                 Directory.CreateDirectory(Path.GetDirectoryName(unicodePath)!);
                 File.WriteAllText(unicodePath, "unicode");
+                const string unicodeQuery = @"meshes/deep folder/深い/ässet.nif";
                 using var unicodeResolver = AssetResolver.Build(overwrite, mods, data, enabled, Array.Empty<ActiveArchive>());
-                Check(unicodeResolver.Resolve(@"meshes/deep folder/深い/ässet.nif").Winner is { Source: "Data" },
-                      "spaces, Unicode, mixed separators, and mixed casing resolve on a case-sensitive filesystem");
+                var unicodeHit = unicodeResolver.Resolve(unicodeQuery);
+                var directFound = BethesdaPath.TryResolveExisting(data, unicodeQuery, out var directPath);
+                Check(unicodeHit.Winner is { Source: "Data" },
+                      "spaces, Unicode, mixed separators, and mixed casing resolve on a case-sensitive filesystem" +
+                      $" — winner={unicodeHit.Winner?.Source ?? "none"}, direct={directFound}, path='{directPath}', " +
+                      $"exists={File.Exists(directPath)}");
             }
 
             // ---- dedup: the SAME .bsa bound by two plugins is read ONCE (no double-count → no false Ambiguous) ----

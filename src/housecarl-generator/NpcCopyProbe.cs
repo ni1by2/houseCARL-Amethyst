@@ -302,8 +302,10 @@ internal static class NpcCopyProbe
                         "assets: facetint renamed alongside");
                     Check(File.Exists(BethesdaPath.Under(outDir, skinRel)),
                         "assets: the geom's EMBEDDED texture (byte-scraped) carried from the disabled donor's folder");
-                    Check(BethesdaPath.TryResolveExisting(outDir, hairRel, out var carriedHair) && File.Exists(carriedHair),
-                        "assets: the record-referenced model carried from the disabled donor's folder");
+                    var hairFound = BethesdaPath.TryResolveExisting(outDir, hairRel, out var carriedHair);
+                    Check(hairFound && File.Exists(carriedHair),
+                        "assets: the record-referenced model carried from the disabled donor's folder" +
+                        AssetFailureDetail(o, hairRel, hairFound, carriedHair));
                     Check(o.Assets is { } aa && aa.Missing.Any(m => m.Contains("FemaleHead.tri", StringComparison.OrdinalIgnoreCase)),
                         "assets: an unresolvable referenced path is a NAMED miss (Q3), never silent");
                 }
@@ -430,8 +432,10 @@ internal static class NpcCopyProbe
                     Check(o.Assets is { FaceGenMeshCarried: true } &&
                           File.Exists(BethesdaPath.Under(outDir, $@"meshes\actors\character\facegendata\facegeom\MyFollower.esp\00000800.nif")),
                         "widen assets: the facegen pair is carried from the DEFINING plugin's folder (not the named patch's)");
-                    Check(BethesdaPath.TryResolveExisting(outDir, hairRel, out var widenedHair) && File.Exists(widenedHair),
-                        "widen assets: the record-referenced model carries from the defining plugin's folder");
+                    var widenedHairFound = BethesdaPath.TryResolveExisting(outDir, hairRel, out var widenedHair);
+                    Check(widenedHairFound && File.Exists(widenedHair),
+                        "widen assets: the record-referenced model carries from the defining plugin's folder" +
+                        AssetFailureDetail(o, hairRel, widenedHairFound, widenedHair));
                 }
             }
 
@@ -527,6 +531,18 @@ internal static class NpcCopyProbe
         Console.WriteLine();
         Console.WriteLine(fail == 0 ? "ALL CHECKS PASSED" : $"{fail} CHECK(S) FAILED");
         return fail == 0 ? 0 : 1;
+    }
+
+    /// <summary>Appends compact carry diagnostics only when an asset assertion needs its source and destination facts.</summary>
+    static string AssetFailureDetail(NpcCopyOutcome outcome, string relPath, bool found, string resolvedPath)
+    {
+        if (found && File.Exists(resolvedPath)) return "";
+        var assets = outcome.Assets;
+        return $"; query='{relPath}', resolved='{resolvedPath}', found={found}, exists={File.Exists(resolvedPath)}, " +
+               $"harvested=[{string.Join(" | ", outcome.HarvestedAssetPaths)}], " +
+               $"carried=[{string.Join(" | ", assets?.Carried.Select(x => x.NewRelPath) ?? Array.Empty<string>())}], " +
+               $"missing=[{string.Join(" | ", assets?.Missing ?? Array.Empty<string>())}], " +
+               $"failures=[{string.Join(" | ", assets?.Failures ?? Array.Empty<string>())}]";
     }
 
     // ---- manager-neutral fixture layout helpers (the SeqRegen / ReadPluginFile probe pattern) ----
