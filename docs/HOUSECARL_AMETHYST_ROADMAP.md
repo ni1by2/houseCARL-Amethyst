@@ -266,9 +266,10 @@ manual release gate.
   gate. Local `ci-all` passes 111/111; the count is the prior 108-probe native
   baseline plus three upstream deleted-record and verified asset-path guards.
   The separate cold freshness guard passes all five arms. Hosted run
-  [30219985950](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/30219985950)
-  passes the preceding 110-probe checkpoint, cold freshness, self-contained
-  packaging, checksum creation, architecture inspection, and `.exe` exclusion.
+  [30221301116](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/30221301116)
+  passes the merged build, 111/111 probes, cold freshness, self-contained
+  packaging, checksum creation, both Linux x86-64 ELF inspections, and `.exe`
+  exclusion.
   Two merged-source release builds produced the identical SHA-256
   `fda599f07913dec3ff8401560badb4b4351355ddf59d4d30c7cb42d2ef801056`.
 - Files/components changed: upstream sweep scopes and JSON output, deleted-body
@@ -279,10 +280,10 @@ manual release gate.
   Bethesda paths are converted before Linux filesystem access.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. External
-  PapyrusCompiler and BSArch execution remains post-v1. The merged source still
-  requires a fresh hosted Ubuntu run after it is pushed.
-- Exact next action: push the current checkpoint, dispatch and verify hosted
-  Ubuntu CI, then request the disposable real-profile hardlink validation.
+  PapyrusCompiler and BSArch execution remains post-v1.
+- Exact next action: obtain the user's disposable real Amethyst profile and
+  manifest path, then perform the hardlink validation checklist with explicit
+  approval before any game-visible deployment.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -338,7 +339,9 @@ manual release gate.
   `6db9a58` removes the live Windows external-tool runtime and its obsolete
   probes; `d9404d5` adds the Linux user and release documentation; `908f999`
   records that checkpoint; `dd9369d` merges upstream through `7904854` while
-  retaining the fork's native Amethyst and documentation contracts.
+  retaining the fork's native Amethyst and documentation contracts; `9ec2538`
+  records the integration and local release evidence. Hosted run `30221301116`
+  verifies that commit on Ubuntu.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
