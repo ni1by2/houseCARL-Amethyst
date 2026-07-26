@@ -39,9 +39,10 @@ bundled skills, and registers the stdio MCP server. Mutable connection and
 write-safety state remains under
 `${XDG_CONFIG_HOME:-$HOME/.config}/housecarl-amethyst` across upgrades.
 
-After restarting the selected host, pass the absolute Amethyst integration
-manifest to `housecarl_set_amethyst_connection`, then run
-`housecarl_amethyst_status`.
+Create the manifest with
+`./housecarl-amethyst-install --connect-amethyst`. After restarting the
+selected host, pass the printed absolute path to
+`housecarl_set_amethyst_connection`, then run `housecarl_amethyst_status`.
 
 ## Safe writes
 

@@ -76,8 +76,9 @@ public sealed class AmethystLayout : IModManagerLayout
             throw Error($"deployStateFile is outside gameConfigDir: '{deployStateFile}'");
 
         using var paths = JsonFile(pathsFile, "paths.json");
-        var configuredRoot = ExistingDirectory(RequiredString(paths.RootElement, "staging_path", "paths.json"), "paths.json.staging_path");
-        if (!SamePath(profileRoot, configuredRoot))
+        var configuredRoot = OptionalBlankString(paths.RootElement, "staging_path");
+        if (configuredRoot is not null &&
+            !SamePath(profileRoot, ExistingDirectory(configuredRoot, "paths.json.staging_path")))
             throw Error($"connection manifest is stale: profileRoot '{profileRoot}' does not match paths.json staging_path '{configuredRoot}'");
 
         using var deploy = JsonFile(deployStateFile, "deploy_state.json");
@@ -209,6 +210,22 @@ public sealed class AmethystLayout : IModManagerLayout
         if (item.ValueKind != JsonValueKind.String || string.IsNullOrWhiteSpace(item.GetString()))
             throw Error($"{property} must be a non-empty string");
         return item.GetString()!.Trim();
+    }
+
+    /// <summary>Reads a string property while treating Amethyst's blank default-staging value as absent.</summary>
+    /// <param name="value">JSON object that may contain the property.</param>
+    /// <param name="property">Exact property name.</param>
+    /// <returns>A trimmed nonblank value, or null for absence, null, or blank text.</returns>
+    static string? OptionalBlankString(JsonElement value, string property)
+    {
+        if (value.ValueKind != JsonValueKind.Object ||
+            !value.TryGetProperty(property, out var item) ||
+            item.ValueKind == JsonValueKind.Null)
+            return null;
+        if (item.ValueKind != JsonValueKind.String)
+            throw Error($"{property} must be a string");
+        string text = item.GetString()!.Trim();
+        return text.Length == 0 ? null : text;
     }
 
     /// <summary>Reads a required signed 32-bit integer property.</summary>

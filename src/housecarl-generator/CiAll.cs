@@ -140,6 +140,7 @@ public static class CiAll
         ("native-pairing-guard", NativePairingProbe.RunGuard),
         ("compile-ergonomics-guard", CompileErgonomicsProbe.RunGuard),
         ("setup-lifecycle-guard", SetupLifecycleProbe.RunGuard),
+        ("amethyst-discovery-guard", AmethystDiscoveryProbe.RunGuard),
         ("import-order-guard", ImportOrderProbe.RunGuard),
         ("render-clamp-guard", RenderClampProbe.RunGuard),
         ("decompile-guard", DecompileGuardProbe.RunGuard),

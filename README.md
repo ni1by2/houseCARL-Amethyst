@@ -118,13 +118,27 @@ houseCARL-Amethyst uses a small, stable manifest so the server does not have to
 guess which Amethyst installation or Skyrim entry you mean. No connector
 repository or Amethyst plugin is required.
 
-Amethyst's built-in integration writes:
+Create the manifest with the release installer:
+
+```bash
+./housecarl-amethyst-install --connect-amethyst
+```
+
+The command checks native/AppImage/AUR-style and Flatpak configuration roots,
+requires one usable Skyrim SE profile, and writes:
 
 ```text
 <Amethyst profile root>/.housecarl-amethyst/connection.json
 ```
 
-with this schema:
+If both installation styles contain usable profiles, select one explicitly:
+
+```bash
+./housecarl-amethyst-install --connect-amethyst \
+  --amethyst-config /absolute/path/to/AmethystModManager
+```
+
+The resulting manifest uses this schema:
 
 ```json
 {

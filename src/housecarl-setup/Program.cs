@@ -80,6 +80,13 @@ public static class Program
         try
         {
             InstallPaths paths = EnvironmentPaths();
+            bool connect = args.Contains("--connect-amethyst");
+            bool hostSelected = args.Any(arg => arg is "--claude" or "--codex" or "--both");
+            if (connect && !hostSelected && !args.Contains("--uninstall") && !args.Contains("--rollback"))
+            {
+                ConnectAmethyst(args, paths);
+                return 0;
+            }
             Target? target = ResolveTarget(args);
             if (target is null)
             {
@@ -93,6 +100,8 @@ public static class Program
                 Rollback(paths);
             else
                 Install(target.Value, AppContext.BaseDirectory, paths, verifyChecksums: true);
+            if (connect)
+                ConnectAmethyst(args, paths);
             return 0;
         }
         catch (Exception ex)
@@ -109,8 +118,35 @@ public static class Program
         Console.WriteLine("  --codex | --claude | --both   choose host integration");
         Console.WriteLine("  --rollback                     restore the previous server version");
         Console.WriteLine("  --uninstall                    remove server, skills, and host registration");
+        Console.WriteLine("  --connect-amethyst             discover and write connection.json");
+        Console.WriteLine("  --amethyst-config PATH         disambiguate an Amethyst config root");
         Console.WriteLine();
         Console.WriteLine("User configuration is kept under XDG_CONFIG_HOME during updates and uninstall.");
+    }
+
+    /// <summary>Runs standalone Amethyst discovery and prints the validated manifest path.</summary>
+    private static void ConnectAmethyst(string[] args, InstallPaths paths)
+    {
+        var result = AmethystDiscovery.CreateConnection(new(
+            paths.Home,
+            Path.GetDirectoryName(paths.ConfigDir)!,
+            OptionValue(args, "--amethyst-config"),
+            Environment.GetEnvironmentVariable("MOD_MANAGER_PROFILES_DIR")));
+        Console.WriteLine($"Created Amethyst connection: {result.ManifestPath}");
+        Console.WriteLine($"Active profile: {result.ActiveProfile}");
+    }
+
+    /// <summary>Returns one option's following argument and rejects missing or repeated values.</summary>
+    private static string? OptionValue(string[] args, string option)
+    {
+        int[] positions = args.Select((value, index) => (value, index))
+            .Where(item => item.value == option)
+            .Select(item => item.index)
+            .ToArray();
+        if (positions.Length == 0) return null;
+        if (positions.Length > 1 || positions[0] + 1 >= args.Length || args[positions[0] + 1].StartsWith('-'))
+            throw new ArgumentException($"{option} requires exactly one path argument.");
+        return args[positions[0] + 1];
     }
 
     /// <summary>Resolves the current user's XDG and host-configuration locations.</summary>

@@ -29,13 +29,16 @@ Install
 
 3. Fully restart the selected host.
 
-4. Connect houseCARL to the manifest exported by Amethyst's built-in
-   houseCARL integration:
+4. In the extracted release directory, discover the active Amethyst Skyrim
+   configuration and create its connection manifest:
 
-     housecarl_set_amethyst_connection(
-       "/absolute/path/to/.housecarl-amethyst/connection.json")
+     ./housecarl-amethyst-install --connect-amethyst
 
-5. Verify the live profile with housecarl_amethyst_status.
+   If both native and Flatpak installations contain usable profiles, repeat
+   with --amethyst-config and the absolute AmethystModManager config path.
+
+5. Pass the printed manifest path to housecarl_set_amethyst_connection, then
+   verify the live profile with housecarl_amethyst_status.
 
 Updating and rollback
 ---------------------

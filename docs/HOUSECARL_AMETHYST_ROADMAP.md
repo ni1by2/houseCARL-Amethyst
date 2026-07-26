@@ -124,7 +124,7 @@ no Windows registry or drive assumptions.
 - [x] Keep changing profile and deployment state out of the manifest.
 - [x] Cover shared and profile-specific layouts with synthetic tests.
 - [x] Retire the experimental Amethyst-side connector design.
-- [ ] Ship the standalone discovery/setup command with Session 6 packaging.
+- [x] Ship the standalone discovery/setup command with Session 6 packaging.
 
 Exit gate: a setup-generated manifest remains usable across restarts and
 invalid state produces actionable diagnostics without modifying Amethyst.
@@ -190,7 +190,7 @@ contains evidence for every component. This gate covers unchanged upstream code.
 ### Session 6 — Linux packaging and host integration
 
 - [x] Replace Windows setup/build scripts with Linux equivalents.
-- [ ] Add standalone Amethyst discovery and atomic manifest setup.
+- [x] Add standalone Amethyst discovery and atomic manifest setup.
 - [x] Publish self-contained `linux-x64` with server trimming disabled.
 - [x] Install under XDG data paths and register Codex/Claude MCP stdio.
 - [x] Add config backups, atomic activation, uninstall, rollback and checksums.
@@ -258,49 +258,46 @@ manual release gate.
 
 - Active milestone: Session 6, completing standalone Amethyst discovery and
   removing obsolete MO2 runtime seams.
-- Last completed checkpoint: replaced the inherited Windows installer and
-  PowerShell packager with a documented Linux-only XDG installer and
-  reproducible self-contained `linux-x64` release. One shared server serves
-  Codex and Claude; mutable state is outside the versioned server tree.
-  Upgrades retain one rollback tree, config edits are backup-first and atomic,
-  uninstall preserves user state, and checksums are verified before mutation.
-- Verification performed: the hermetic setup lifecycle passes clean install,
-  Codex/Claude registration, spaces/apostrophes/Unicode paths, upgrade,
-  rollback, checksum-tamper rejection, similarly named MCP preservation, and
-  conservative uninstall. The strict setup XML build has no CS1591 warning.
-  The release builder produced stripped Linux x86_64 ELF server and installer
-  executables, no `.exe`, a valid internal `SHA256SUMS`, and a valid archive
-  SHA-256. Two consecutive release builds produced the identical archive hash
-  `3443b4eba23866f203869f28d800a8a55eacec86a87e720856ad0626bc700d4a`.
-  Full Linux `ci-all` passes 111/111 after the final installer and skill edits,
-  and `git diff --check` is clean.
-- Files/components changed: Linux setup application and lifecycle probe,
-  `build-release.sh`, Ubuntu workflow, plugin/marketplace metadata, release
-  entry point, root and shipped READMEs, bundled operational skills, project
-  metadata, and this roadmap.
-- Decisions made: Linux does not need the inherited mandatory-file-lock update
-  model; same-filesystem directory rename provides atomic activation while a
-  running process may continue from its old inode. Exactly one former server
-  directory is retained for reversible rollback. Host registrations point at
-  the shared server and explicitly set `HOUSECARL_DATA_DIR` to the XDG config
-  root. The reflection-driven server remains untrimmed; trimming is confined
-  to the small non-reflection installer. TOML strings use escaped basic-string
-  syntax so native paths containing spaces, Unicode, or apostrophes remain
-  valid.
-- Known failures or residual risks: standalone discovery/atomic creation of
-  `connection.json` is still required. The runtime service and several
-  historical probes retain MO2 compatibility seams; these are not shipped
-  setup paths but must be migrated before the Amethyst-only product boundary
-  is complete. The Ubuntu workflow definition has not yet been observed green
-  on GitHub. A disposable real Skyrim/Amethyst hardlink profile remains the
-  Session 7 manual release gate. External PapyrusCompiler and BSArch execution
-  remains post-v1.
-- Exact next action: add a documented, hermetic standalone discovery command
-  that finds native/AppImage, AUR-style, and Flatpak Amethyst roots, requires
-  an unambiguous Skyrim SE selection, validates at least one usable profile,
-  and atomically writes schema-v1 `connection.json`. Then migrate live
-  `LoadOrderService` and probe consumers away from `Mo2Instance`,
-  `Mo2LoadOrder`, and `Mo2ModMeta`.
+- Last completed checkpoint: the Linux installer now owns connector-free
+  Amethyst discovery. It finds native/AppImage/AUR-style and Flatpak Skyrim SE
+  configuration, resolves custom or current blank/default staging, validates
+  the active profile and vanilla-data safety, rejects ambiguous or unusable
+  state before writing, and atomically creates schema-v1 `connection.json`.
+  Amethyst manager files remain read-only.
+- Verification performed: `amethyst-discovery-guard` passes nine native,
+  Flatpak, default-staging, ambiguity, fail-before-write, atomic replacement,
+  and production-layout checks. The setup lifecycle and Amethyst layout guards
+  pass. The strict setup XML build has zero warnings; the self-contained
+  trimmed installer publishes without trim-analysis warnings. Full Linux
+  `ci-all` passes 112/112. Two consecutive release builds produced identical
+  archive hash
+  `a579a038dddd0c0a0b5c1b1216a1e21d242d1c52d2b0b42930047b0b7a08784d`;
+  the archive checksum, complete internal `SHA256SUMS`, stripped Linux x86_64
+  server and installer ELF files, and absence of `.exe` files were verified.
+  Current Amethyst `origin/main` at `7e8a5c3` (`v2.0.4-10`) contains no
+  built-in houseCARL integration and retains the state consumed here.
+- Files/components changed: standalone discovery service and synthetic guard,
+  installer command surface, default-staging handling in `AmethystLayout`, CI
+  probe registry, root/shipped/plugin connection instructions, and this
+  roadmap.
+- Decisions made: the deleted connector remains retired. The setup command is
+  the sole manifest writer and never edits Amethyst profile or deployment
+  files. Automatic discovery must select exactly one usable configuration;
+  native-plus-Flatpak ambiguity requires `--amethyst-config`. Blank
+  `staging_path` follows Amethyst's current profiles-base precedence instead
+  of being treated as malformed.
+- Known failures or residual risks: the runtime service and historical probes
+  still retain MO2 compatibility types; they must be migrated before the
+  Amethyst-only product boundary is complete. The Ubuntu workflow definition
+  has not yet been observed green on GitHub. A disposable real
+  Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
+  External PapyrusCompiler and BSArch execution remains post-v1. NuGet
+  vulnerability metadata was unreachable in the restricted local environment;
+  compilation and restored dependencies were otherwise successful.
+- Exact next action: migrate the live `LoadOrderService` and its probe
+  consumers away from `Mo2Instance`, `Mo2LoadOrder`, and `Mo2ModMeta`, first
+  moving manager-neutral shared models out of MO2-named files. Preserve
+  Amethyst snapshot/filemap authority and run focused probes after each slice.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -335,7 +332,8 @@ manual release gate.
   public `WriteEngine` slice; `2cf70a4` completes the lifecycle slice;
   `06207b1` completes `WriteEngine`; `8f70b4e` completes
   `SkyPatcherCatalog`; `0917bea` completes the Linux installer and release
-  checkpoint.
+  checkpoint; `22c431d` records its evidence. The standalone-discovery
+  implementation commit is pending this checkpoint.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
