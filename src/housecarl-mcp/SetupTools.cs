@@ -38,6 +38,7 @@ public static class SetupTools
         catch (AmethystConfigurationException ex) { return "error: " + ex.Message; }
     });
 
+    /// <summary>Validates and stores one optional external-tool or log-directory path.</summary>
     [McpServerTool(Name = "housecarl_set_tool_path", Title = "Tell houseCARL where an external tool is"),
      Description(
          "Give houseCARL the path to an external tool it drives: 'papyrus_compiler' (the Creation Kit's " +

@@ -11,6 +11,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class CompileTools
 {
+    /// <summary>Refuses Linux execution until the structured Proton compiler runner is implemented.</summary>
     [McpServerTool(Name = "housecarl_compile_script", Title = "Compile a Papyrus script (.psc → .pex)"),
      Description(
          "Post-v1 reserved tool for compiling a Papyrus script (.psc) with Bethesda's Windows-only PapyrusCompiler. " +

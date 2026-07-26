@@ -15,6 +15,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class ReadTools
 {
+    /// <summary>Reads one winning record with optional field filtering and conflict context.</summary>
     [McpServerTool(Name = "housecarl_read_record", ReadOnly = true, Title = "Read a record"),
      Description(
          "Read one record's fields as the load order resolves it. Returns the TRUE load-order winner's values by " +
@@ -55,6 +56,7 @@ public static class ReadTools
         return json ? JsonWire.RenderRecord(outcome, max_chars) : Wire.RenderRecord(svc, outcome, fields, conflict_tree, max_chars);
     });
 
+    /// <summary>Reads several winning records through one consistent resolver snapshot.</summary>
     [McpServerTool(Name = "housecarl_batch_record_detail", ReadOnly = true, Title = "Read many records"),
      Description(
          "Read many records in ONE call (saves per-record tool-call overhead). Each FormID resolves to its " +
@@ -91,6 +93,7 @@ public static class ReadTools
         return json ? JsonWire.RenderBatch(outcomes, max_chars) : Wire.RenderBatch(svc, outcomes, fields, conflict_tree, max_chars);
     });
 
+    /// <summary>Compares two plugins' versions of one record field by field.</summary>
     [McpServerTool(Name = "housecarl_diff_record", ReadOnly = true, Title = "Diff two plugins' versions of a record"),
      Description(
          "Field-level diff between TWO plugins' versions of ONE record — plugin_a vs plugin_b. Each plugin may be an " +
@@ -128,6 +131,7 @@ public static class ReadTools
         return json ? JsonWire.RenderDiffRecord(outcome, max_chars) : Wire.RenderDiffRecord(outcome, max_chars);
     });
 
+    /// <summary>Queries matching records across the resolved load order with paging and grouping.</summary>
     [McpServerTool(Name = "housecarl_cross_plugin_query", ReadOnly = true, Title = "Query records across the load order"),
      Description(
          "Find records across the whole load order matching a filter — returns matches only, each as a compact " +
@@ -223,6 +227,7 @@ public static class ReadTools
         };
     });
 
+    /// <summary>Resolves FormIDs to winning record identity and source information.</summary>
     [McpServerTool(Name = "housecarl_resolve", ReadOnly = true, Title = "Resolve FormIDs to their identity"),
      Description(
          "Turn a batch of FormIDs into their load-order identity — for EACH: type, editorid, display name, and " +
@@ -251,6 +256,7 @@ public static class ReadTools
         return json ? JsonWire.RenderResolve(rows, max_chars) : Wire.RenderResolve(rows, max_chars);
     });
 
+    /// <summary>Traces a magic effect through its resolved carriers and magnitudes.</summary>
     [McpServerTool(Name = "housecarl_effect_chain", ReadOnly = true, Title = "Resolve an effect's carriers + magnitudes"),
      Description(
          "Given a MagicEffect (MGEF), return every Spell/Enchantment/Potion/Scroll/Ingredient (SPEL/ENCH/ALCH/SCRL/INGR) " +
@@ -282,6 +288,7 @@ public static class ReadTools
         return Wire.RenderEffectChain(result, max_chars);
     });
 
+    /// <summary>Scans active or named plugins for dangling record references and related errors.</summary>
     [McpServerTool(Name = "housecarl_check_errors", ReadOnly = true, Title = "Check the load order for record errors"),
      Description(
          "Load-order integrity sweep — the data-layer twin of the Creation Kit's 'Check For Errors' / xEdit's error " +
@@ -312,6 +319,7 @@ public static class ReadTools
         return Wire.RenderCheckErrors(result, max_chars);
     });
 
+    /// <summary>Checks scripted records for missing scripts and unbound properties.</summary>
     [McpServerTool(Name = "housecarl_validate_scripts", ReadOnly = true, Title = "Check scripted records for unbound script properties"),
      Description(
          "Script-property binding sweep — catches the silent-None footgun a byte-valid plugin hides: a record whose " +
@@ -341,6 +349,7 @@ public static class ReadTools
         return Wire.RenderScriptCheck(result, max_chars);
     });
 
+    /// <summary>Reads or enumerates one plugin file directly, independent of active load order.</summary>
     [McpServerTool(Name = "housecarl_read_plugin_file", ReadOnly = true, Title = "Read a plugin file directly (active or not)"),
      Description(
          "Read ONE plugin file straight off disk — INCLUDING a plugin DISABLED in Amethyst — returning THAT FILE's own " +

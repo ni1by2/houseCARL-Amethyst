@@ -15,6 +15,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class AssetTools
 {
+    /// <summary>Reports the authoritative winning provider for each Data-relative asset path.</summary>
     [McpServerTool(Name = "housecarl_asset_status", ReadOnly = true, Title = "Asset status — which mod/BSA wins for a Data-relative path"),
      Description(
          "Resolve one or more Data-relative asset paths through Amethyst's filemap and report, for " +

@@ -34,6 +34,7 @@ public sealed class NexusClient
     // direction). We author them exactly and must NOT let a camelCase policy rewrite them.
     static readonly JsonSerializerOptions Json = new() { PropertyNamingPolicy = null };
 
+    /// <summary>Creates a Nexus GraphQL client over the host-managed HTTP client.</summary>
     public NexusClient(HttpClient http) => _http = http;
 
     // ──────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -487,7 +488,15 @@ public sealed record NexusModDetail(
 /// to OLD_VERSION/ARCHIVED), or is MISSING entirely (hidden/deleted — can't determine). The file-level currency signal a
 /// mod-level version compare can't give: Nexus itself retires a file, so its category IS the honest "is my exact file
 /// current" answer — immune to the multi-file-page confusion.</summary>
-public enum FileVerdict { Live, Superseded, Missing }
+public enum FileVerdict
+{
+    /// <summary>The exact installed file remains a live Nexus file.</summary>
+    Live,
+    /// <summary>Nexus moved the exact file into an old or archived category.</summary>
+    Superseded,
+    /// <summary>The file identifier no longer resolves on the mod page.</summary>
+    Missing
+}
 
 /// <summary>One installed file's currency: the file (resolved from its id) and its verdict, plus — when
 /// <see cref="Verdict"/> is <see cref="FileVerdict.Superseded"/> — the newest LIVE file with the SAME name (the same
@@ -506,7 +515,23 @@ public sealed record InstalledFileCurrency(
 /// never the old confidently-wrong mod-level compare. <see cref="LatestOnly"/> = only a mod id was given (no version, no
 /// file id) → newest listed, no verdict. <see cref="NotFound"/> / <see cref="Error"/> are the Q3 honest "couldn't
 /// decide" states, never silently folded into "current".</summary>
-public enum UpdateVerdict { Current, Outdated, FileGone, NoFileId, LatestOnly, NotFound, Error }
+public enum UpdateVerdict
+{
+    /// <summary>Every supplied installed file remains live.</summary>
+    Current,
+    /// <summary>At least one installed file has been superseded.</summary>
+    Outdated,
+    /// <summary>An installed file identifier no longer exists.</summary>
+    FileGone,
+    /// <summary>No file identifier was available for an exact check.</summary>
+    NoFileId,
+    /// <summary>Only latest-file context was requested, so no installed-file verdict exists.</summary>
+    LatestOnly,
+    /// <summary>The requested Nexus mod was not found.</summary>
+    NotFound,
+    /// <summary>The check could not complete and carries an explicit error.</summary>
+    Error
+}
 
 /// <summary>One mod's batch update-check result. <paramref name="Files"/> is the per-installed-file currency detail
 /// (present for the file-level verdicts Current/Outdated/FileGone; empty otherwise). <paramref name="LatestMainVersion"/>

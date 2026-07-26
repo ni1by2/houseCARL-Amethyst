@@ -29,6 +29,7 @@ public static class NifTools
         "known: " + string.Join(", ", KnownSections) + ", all — no 'textures' section; " +
         "embedded texture-set slot paths are under 'shapes' (detail) and 'paths'";
 
+    /// <summary>Reads selected sections from one or more NIF files without modifying them.</summary>
     [McpServerTool(Name = "housecarl_nif_inspect", ReadOnly = true, Title = "Inspect the data values inside one or many Skyrim meshes (.nif)"),
      Description(
          "Read the DATA VALUES inside one or many Skyrim meshes (.nif) at the data layer, beneath NifSkope. Resolve each " +
@@ -116,6 +117,7 @@ public static class NifTools
               $"({KnownSectionsHint}). Pass one or more known sections, or omit sections= for the summary only."
             : null;
 
+    /// <summary>Writes one whitelisted NIF value into staging or a guarded in-place source.</summary>
     [McpServerTool(Name = "housecarl_nif_set", Title = "Write a whitelisted data value into a Skyrim mesh (.nif)"),
      Description(
          "Write ONE whitelisted DATA VALUE into a Skyrim SE mesh (.nif) at the data layer, beneath NifSkope — then VERIFY " +

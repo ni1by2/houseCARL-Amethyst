@@ -17,6 +17,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class SeqTools
 {
+    /// <summary>Regenerates a plugin's start-game-enabled quest SEQ file in staging.</summary>
     [McpServerTool(Name = "housecarl_write_seq", Title = "Write a start-game-enabled-quest .seq file"),
      Description(
          "Write the SEQ file (Data\\SEQ\\<plugin>.seq) a plugin needs for its START-GAME-ENABLED quests to actually run. " +

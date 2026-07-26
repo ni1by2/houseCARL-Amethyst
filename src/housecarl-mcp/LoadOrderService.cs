@@ -1074,7 +1074,7 @@ public sealed class LoadOrderService : IDisposable
 
         var r = ReplaySkyPatcher(view, session, scan, catalog, fieldMap, scratch, formResolver, fk, linesCache: null);
         if (r.Error is not null) return SkyPatcherPostStateData.Fail(fk, r.Error);
-        return new SkyPatcherPostStateData(null, fk, r.EditorId, r.TypeName, r.WinnerPlugin,
+        return new SkyPatcherPostStateData(null, fk, r.EditorId, r.TypeName!, r.WinnerPlugin!,
             r.Folders, scan.Notes, scan.ReadIncomplete || assets.ReadIncomplete, assetWarnings, profileName);
     }
 
@@ -2184,6 +2184,10 @@ public sealed class LoadOrderService : IDisposable
         }
     }
 
+    /// <summary>
+    /// Returns the distinct game-install directories in which an external compiler may be installed.
+    /// The active Amethyst game path comes first, followed by Mutagen's platform-specific discovery result.
+    /// </summary>
     public IReadOnlyList<string> CompilerGameDirHints()
     {
         var hints = new List<string>();
@@ -2634,13 +2638,14 @@ public sealed class LoadOrderService : IDisposable
     /// field-level delta of <see cref="A"/> vs <see cref="B"/> (B the reference side), truncation-honest via Complete.</summary>
     public sealed record DiffRecordOutcome(string Formid, DiffPole? A, DiffPole? B, FieldsDiff.Result? Diff, string? Error)
     {
+        /// <summary>Creates a failed comparison with no partially populated poles or field differences.</summary>
         public static DiffRecordOutcome Fail(string formid, string error) => new(formid, null, null, null, error);
     }
 
     // ---- batch (Q4.9) -----------------------------------------------------------------------------------
 
     /// <summary>Resolve+read many records in one call (housecarl_batch_record_detail). Each formid runs the same
-    /// <see cref="ResolveRead"/> path, so a bad/absent formid yields a per-item recoverable error (Q3) without
+    /// <c>ResolveRead</c> path, so a bad/absent formid yields a per-item recoverable error (Q3) without
     /// failing the batch. Returns one <see cref="ReadOutcome"/> per input, in order. <paramref name="plugin"/> —
     /// when set — reads every formid AS THAT NAMED PLUGIN'S version (its override, not the load-order winner), the
     /// batch twin of housecarl_read_record's plugin= (HCBR-2026-07-15): a formid that plugin doesn't touch yields
@@ -5558,11 +5563,11 @@ public sealed class LoadOrderService : IDisposable
     /// or a record-type summary (neither). The standalone-copy chain's Stage-1 enabler: it reaches a donor you're
     /// REMOVING from the active order, which the resolver (active profile only) cannot see.
     ///
-    /// <para>STRUCTURAL PURITY (why a separate method, not a flag on <see cref="ResolveRead"/>): it opens its OWN
+    /// <para>STRUCTURAL PURITY (why a separate method, not a flag on <c>ResolveRead</c>): it opens its OWN
     /// overlay via <see cref="LoadOrderResolver.OpenOverlay"/>, materialises, and DISPOSES it — it never consults the
     /// resolver index and never reports a winner/conflict, so a raw-file read cannot masquerade as load-order truth
     /// (the renderer stamps every result OUT-OF-LOAD-ORDER) and no handle is held at rest (the donor is never locked).
-    /// It emits FormLink fields as FormKey tokens exactly like <see cref="ResolveRead"/> — it does NOT follow links, so
+    /// It emits FormLink fields as FormKey tokens exactly like <c>ResolveRead</c> — it does NOT follow links, so
     /// it needs no master files present; declared masters that are not installed are reported as an advisory (Q3).</para>
     ///
     /// <para>Read-only. Q3: a missing/ambiguous filename, a bad or absent FormID, or a record Mutagen cannot parse is
@@ -6130,6 +6135,7 @@ public sealed class LoadOrderService : IDisposable
         return matches.Count > 0 ? matches : null;
     }
 
+    /// <summary>Disposes cached record and asset resolvers owned by this service.</summary>
     public void Dispose()
     {
         lock (_gate) { _resolver?.Dispose(); _resolver = null; _assetResolver?.Dispose(); _assetResolver = null; }
@@ -6147,6 +6153,7 @@ public sealed record ReadOutcome(
     IReadOnlyList<string>? TouchingPlugins,
     string? Error)
 {
+    /// <summary>Creates a failed record read while preserving the requested FormKey.</summary>
     public static ReadOutcome Fail(FormKey fk, string error) => new(fk, null, null, null, 0, null, error);
 }
 
@@ -6165,6 +6172,7 @@ public sealed record CrossQueryOutcome(
     string? GroupBy = null, string? ScopeLabel = null, int Offset = 0,
     bool WhereWinner = false, string? WhereSourceNote = null)   // #233: WhereWinner ⇒ the match decided on the live winner; WhereSourceNote carries the type=-scope redundancy note
 {
+    /// <summary>Creates a rejected query with no rows or aggregate results.</summary>
     public static CrossQueryOutcome Fail(string error) => new(Array.Empty<FormKey>(), null, 0, false, error);
 }
 
@@ -6193,29 +6201,62 @@ public sealed record PluginTypeCount(string Type, int Count);
 /// read-time error).</summary>
 public sealed record PluginFileOutcome
 {
+    /// <summary>Explains why the requested file could not be read; null for successful or ambiguous results.</summary>
     public string? Error { get; init; }
+
+    /// <summary>Preserves the plugin name or path supplied by the caller.</summary>
     public required string Requested { get; init; }
+
+    /// <summary>Identifies the result shape: error, ambiguous, read, enumerate, or summary.</summary>
     public string Mode { get; init; } = "error";
+
+    /// <summary>Contains the absolute host path of the file that was opened.</summary>
     public string? FilePath { get; init; }
+
+    /// <summary>Describes where the matching plugin file was found.</summary>
     public string? Where { get; init; }
+
+    /// <summary>Indicates whether this exact plugin file belongs to the active load order.</summary>
     public bool Enabled { get; init; }
     /// <summary>WHY the game does not load this file — null when <see cref="Enabled"/> (and on the error/ambiguous
     /// outcomes, which carry no file). Composed once by the shared locate contract
     /// (<see cref="LoadOrderService.PluginLocateResult.WhyNotActive"/>) so every renderer of this state says the same
     /// thing; naming the CAUSE is what lets a reader act without re-deriving it (#271).</summary>
     public string? WhyNotActive { get; init; }
+    /// <summary>Lists every master declared by the opened plugin.</summary>
     public IReadOnlyList<string> Masters { get; init; } = Array.Empty<string>();
-    public IReadOnlyList<string> MissingMasters { get; init; } = Array.Empty<string>();     // declared but installed NOWHERE
-    public IReadOnlyList<string> InactiveMasters { get; init; } = Array.Empty<string>();    // installed but NOT active (disabled/unchecked)
+
+    /// <summary>Lists declared masters that are not installed in any known staging location.</summary>
+    public IReadOnlyList<string> MissingMasters { get; init; } = Array.Empty<string>();
+
+    /// <summary>Lists installed masters that are disabled or otherwise absent from the active order.</summary>
+    public IReadOnlyList<string> InactiveMasters { get; init; } = Array.Empty<string>();
+
+    /// <summary>Contains the requested record when <see cref="Mode"/> is <c>read</c>.</summary>
     public RecordFields? Record { get; init; }
+
+    /// <summary>Contains the returned record headers when <see cref="Mode"/> is <c>enumerate</c>.</summary>
     public IReadOnlyList<PluginRecordRow> Rows { get; init; } = Array.Empty<PluginRecordRow>();
+
+    /// <summary>Reports the total number of matching records before the enumeration limit was applied.</summary>
     public int RowTotal { get; init; }
+
+    /// <summary>Indicates that <see cref="Rows"/> omits matches beyond the requested limit.</summary>
     public bool Capped { get; init; }
+
+    /// <summary>Contains per-record-type counts when <see cref="Mode"/> is <c>summary</c>.</summary>
     public IReadOnlyList<PluginTypeCount> TypeCounts { get; init; } = Array.Empty<PluginTypeCount>();
+
+    /// <summary>Reports the total number of records represented by <see cref="TypeCounts"/>.</summary>
     public int RecordTotal { get; init; }
+
+    /// <summary>Lists every matching file when a filename is ambiguous across staging folders.</summary>
     public IReadOnlyList<PluginFileHit> Ambiguous { get; init; } = Array.Empty<PluginFileHit>();
 
+    /// <summary>Creates a failed raw-plugin read for the original request.</summary>
     public static PluginFileOutcome Fail(string requested, string error) => new() { Requested = requested, Error = error, Mode = "error" };
+
+    /// <summary>Creates an ambiguous result and exposes every candidate so the caller can choose a path.</summary>
     public static PluginFileOutcome AmbiguousHits(string requested, IReadOnlyList<PluginFileHit> hits) =>
         new() { Requested = requested, Mode = "ambiguous", Ambiguous = hits };
 }
@@ -6225,6 +6266,7 @@ public sealed record PluginFileOutcome
 /// per-call session already disposed, so it carries NO live overlay (Option B — the renderer never holds a handle).</summary>
 public sealed record ConflictTreeView(IReadOnlyList<ConflictNodeView> Nodes)
 {
+    /// <summary>Returns the last node, which is the winning plugin version in priority order.</summary>
     public ConflictNodeView Winner => Nodes[^1];
 }
 
@@ -6520,6 +6562,7 @@ public sealed record SkyPatcherPostStateData(
     IReadOnlyList<string> AssetWarnings,
     string ProfileName)
 {
+    /// <summary>Creates a rejected post-state read with no inferred folder outcomes.</summary>
     public static SkyPatcherPostStateData Fail(Mutagen.Bethesda.Plugins.FormKey fk, string error)
         => new(error, fk, null, "", "", Array.Empty<SkyPatcherFolderOutcome>(), Array.Empty<string>(), false, Array.Empty<string>(), "");
 }
@@ -6557,6 +6600,7 @@ public sealed record NifInspectData(
     HousecarlCore.NifInspect? Inspect,
     string? Error)
 {
+    /// <summary>Creates a failed mesh inspection without claiming that the asset is absent.</summary>
     public static NifInspectData Fail(string relPath, string error)
         => new(relPath, null, Array.Empty<NifProvider>(), false, false, null, error);
 }
@@ -6594,16 +6638,20 @@ public sealed record NifSetResult(
     IReadOnlyList<string> Warnings,
     string ProfileName)
 {
+    /// <summary>Creates a refused mesh edit and preserves any provider evidence already collected.</summary>
     public static NifSetResult Fail(string error, IReadOnlyList<NifProvider>? providers = null, string profileName = "")
         => new("", null, providers ?? Array.Empty<NifProvider>(), false, null, error, false, null, false, false, null, null, null, Array.Empty<string>(), profileName);
 
+    /// <summary>Creates the first-touch consent response required before an in-place mesh edit.</summary>
     public static NifSetResult NeedsAck(string prompt, NifProvider edited, IReadOnlyList<NifProvider> providers, string profileName)
         => new("", edited, providers, false, null, null, true, prompt, true, false, null, null, null, Array.Empty<string>(), profileName);
 
+    /// <summary>Creates a successful result for a mesh written into a new houseCARL-owned staging mod.</summary>
     public static NifSetResult OkNewFolder(string rel, NifProvider edited, IReadOnlyList<NifProvider> providers, bool ambiguous,
         HousecarlCore.NifSetReport report, string modFolder, string? winner, IReadOnlyList<string> warnings, string profileName)
         => new(rel, edited, providers, ambiguous, report, null, false, null, false, true, modFolder, null, winner, warnings, profileName);
 
+    /// <summary>Creates a successful result for a guarded edit written directly to the staging source.</summary>
     public static NifSetResult OkInPlace(string rel, NifProvider edited, IReadOnlyList<NifProvider> providers, bool ambiguous, bool editedIsWinner,
         HousecarlCore.NifSetReport report, string inPlacePath, IReadOnlyList<string> warnings, string profileName)
         => new(rel, edited, providers, ambiguous, report, null, false, null, true, editedIsWinner, null, inPlacePath, null, warnings, profileName);
@@ -6620,6 +6668,7 @@ public sealed record PlaceRequest(string AssetPath, string? Source);
 /// copy does NOT win until the fresh mod is enabled + sorted above it), or null if nothing provided it before.</summary>
 public sealed record PlaceResult(string AssetPath, bool Placed, long Bytes, string? SourceDesc, string? CurrentWinner, string? Error)
 {
+    /// <summary>Creates a per-asset placement failure without discarding the current winner.</summary>
     public static PlaceResult Fail(string assetPath, string error, string? currentWinner = null)
         => new(assetPath, false, 0, null, currentWinner, error);
 }
@@ -6632,6 +6681,7 @@ public sealed record PlaceResult(string AssetPath, bool Placed, long Bytes, stri
 public sealed record PlaceOutcome(
     IReadOnlyList<PlaceResult> Results, string? ModFolder, IReadOnlyList<string> Warnings, string? LeftoverFolder, string? Error)
 {
+    /// <summary>Creates a whole-request placement failure before any asset is written.</summary>
     public static PlaceOutcome Fail(string error)
         => new(Array.Empty<PlaceResult>(), null, Array.Empty<string>(), null, error);
 }
@@ -6646,7 +6696,10 @@ public sealed record SeqOutcome(
     bool Success, string? Error, string? SeqPath, string? ModFolder,
     IReadOnlyList<HousecarlCore.SeqFile.SeqQuest> Quests, string PluginFileName, bool WroteIntoPluginFolder)
 {
+    /// <summary>Provides a human-readable success or no-op note that is separate from errors.</summary>
     public string? Note { get; init; }
+
+    /// <summary>Creates a failed SEQ write with no output path or partial quest result.</summary>
     public static SeqOutcome Fail(string error)
         => new(false, error, null, null, Array.Empty<HousecarlCore.SeqFile.SeqQuest>(), "", false);
 }

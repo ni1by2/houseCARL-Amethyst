@@ -19,6 +19,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class DecompileTools
 {
+    /// <summary>Decompiles one PEX file into reviewable Papyrus source in Amethyst staging.</summary>
     [McpServerTool(Name = "housecarl_decompile_script", Title = "Decompile a compiled Papyrus script (.pex → .psc)"),
      Description(
          "Decompile a compiled Papyrus script (.pex) back to source (.psc), landing the .psc in a NEW houseCARL " +

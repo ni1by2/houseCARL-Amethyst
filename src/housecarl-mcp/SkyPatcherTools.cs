@@ -19,6 +19,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class SkyPatcherTools
 {
+    /// <summary>Reports SkyPatcher discovery, apply order, duplicate writes, and conflicts.</summary>
     [McpServerTool(Name = "housecarl_skypatcher_layer", ReadOnly = true, Title = "SkyPatcher layer (INIs, apply order, conflicts)"),
      Description(
          "Inventory the SkyPatcher distributor layer of the ACTIVE load order — the runtime record edits the record " +
@@ -49,6 +50,7 @@ public static class SkyPatcherTools
         return SkyPatcherWire.RenderLayer(data, filter?.Trim(), max_chars > 0 ? max_chars : 80_000);
     });
 
+    /// <summary>Computes one record's static post-SkyPatcher state where operations are tractable.</summary>
     [McpServerTool(Name = "housecarl_skypatcher_read", ReadOnly = true, Title = "A record's true post-SkyPatcher state"),
      Description(
          "Compute one record's TRUE state after the SkyPatcher layer applies — the answer neither the plugins nor " +

@@ -17,6 +17,7 @@ public sealed class ToolPathResolver
 {
     readonly UserConfigStore _store;
 
+    /// <summary>Creates a resolver backed by the shared atomic user-configuration store.</summary>
     public ToolPathResolver(UserConfigStore store) => _store = store;
 
     /// <summary>The path the user SAVED for a dependency, or null if unset. Pure read (no probe, no persist) — for a status

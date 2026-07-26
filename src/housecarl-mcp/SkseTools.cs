@@ -18,6 +18,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class SkseTools
 {
+    /// <summary>Inventories SKSE native plugins, configurations, providers, and compatibility metadata.</summary>
     [McpServerTool(Name = "housecarl_skse_inventory", ReadOnly = true, Title = "SKSE plugin layer (DLLs, configs, provider & static metadata)"),
      Description(
          "Inventory the SKSE-plugin layer of the ACTIVE load order — the layer houseCARL's record/asset tools are otherwise " +
@@ -59,6 +60,7 @@ public static class SkseTools
         return SkseInventoryWire.Render(data, filter, max_chars > 0 ? max_chars : 80_000);
     });
 
+    /// <summary>Checks Papyrus native declarations against the DLLs expected to implement them.</summary>
     [McpServerTool(Name = "housecarl_native_pairing_audit", ReadOnly = true, Title = "Native Papyrus declarations vs the DLLs that implement them (pairing audit)"),
      Description(
          "Cross-check the native Papyrus functions the ACTIVE order's compiled scripts declare against the SKSE DLLs that must " +
@@ -90,6 +92,7 @@ public static class SkseTools
         return NativePairingWire.Render(data, filter, max_chars > 0 ? max_chars : 80_000);
     });
 
+    /// <summary>Validates record and asset references found in supported SKSE configuration files.</summary>
     [McpServerTool(Name = "housecarl_skse_config_audit", ReadOnly = true, Title = "SKSE config references vs the load order (reference-validity audit)"),
      Description(
          "Cross-check the form references SKSE-plugin CONFIGS declare against the real records of the ACTIVE load order — so a " +

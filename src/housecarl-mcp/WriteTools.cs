@@ -17,6 +17,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class WriteTools
 {
+    /// <summary>Applies one field edit to a new patch or explicitly confirmed in-place target.</summary>
     [McpServerTool(Name = "housecarl_set_field", Title = "Edit one record field"),
      Description(
          "Edit ONE field of one record and write the change to a NEW patch plugin (originals untouched). Resolves the " +
@@ -73,6 +74,7 @@ public static class WriteTools
             acknowledge, confirm_amethyst_redeploy, dry_run), max_chars, full_readback);
     });
 
+    /// <summary>Applies an all-or-nothing batch of field edits through one resolver snapshot.</summary>
     [McpServerTool(Name = "housecarl_bulk_apply", Title = "Apply many edits in one patch"),
      Description(
          "Apply MANY edits in ONE patch plugin (originals untouched) — the batch form of housecarl_set_field, and the way " +
@@ -217,6 +219,7 @@ public static class WriteTools
         UnmappedMemberHandling = JsonUnmappedMemberHandling.Disallow,
     };
 
+    /// <summary>Removes a whole record from a staged patch or guarded in-place target.</summary>
     [McpServerTool(Name = "housecarl_remove_record", Title = "Remove a whole record from a patch (or a plugin in place)"),
      Description(
          "Remove a WHOLE record from a houseCARL patch — a literal drop-from-plugin (NOT a flag-as-deleted stub). The " +
@@ -254,6 +257,7 @@ public static class WriteTools
         return RenderRemoval(svc.RemoveRecords(new[] { formid }, patch, target, in_place, acknowledge, confirm_amethyst_redeploy));
     });
 
+    /// <summary>Creates one new top-level or owned-child record and applies its initial operations.</summary>
     [McpServerTool(Name = "housecarl_create_record", Title = "Create a brand-new record"),
      Description(
          "Create a BRAND-NEW record (a new FormID) of record_type in a NEW patch plugin (originals untouched) — the " +
@@ -313,6 +317,7 @@ public static class WriteTools
         return RenderCreate(svc.CreateRecords(record_type, editorid, operations ?? Array.Empty<BulkOp>(), patch_name, into, full_readback, parent, collection, grid, target, in_place, acknowledge, confirm_amethyst_redeploy), max_chars, full_readback);
     });
 
+    /// <summary>Creates several records atomically, including same-call references and nested children.</summary>
     [McpServerTool(Name = "housecarl_bulk_create", Title = "Create many records (incl. a nested one-shot) in one patch"),
      Description(
          "Create MANY brand-new records in ONE patch plugin (originals untouched) — the batch form of housecarl_create_record, " +
@@ -366,6 +371,7 @@ public static class WriteTools
         return RenderCreate(svc.CreateRecordsBatch(records, patch_name, into, full_readback, target, in_place, acknowledge, confirm_amethyst_redeploy), max_chars, full_readback);
     });
 
+    /// <summary>Forwards selected plugin versions of records into one reviewable patch.</summary>
     [McpServerTool(Name = "housecarl_forward_record", Title = "Forward a plugin's version of a record as an override"),
      Description(
          "Forward a SPECIFIC plugin's version of one-or-more records into a NEW patch as an override (originals untouched) " +
@@ -425,6 +431,7 @@ public static class WriteTools
             in_place, acknowledge, confirm_amethyst_redeploy, dry_run), max_chars);
     });
 
+    /// <summary>Creates an empty header-only plugin in a new Amethyst staging mod.</summary>
     [McpServerTool(Name = "housecarl_create_plugin", Title = "Create an empty header-only (trigger) plugin"),
      Description(
          "Create an EMPTY, HEADER-ONLY plugin — a valid TES4 header with ZERO records and no masters, in a NEW mod " +
@@ -456,6 +463,7 @@ public static class WriteTools
         return RenderCreatePlugin(svc.CreatePlugin(plugin_name, esl, author, description));
     });
 
+    /// <summary>Compacts a plugin's local FormIDs with explicit safety confirmation.</summary>
     [McpServerTool(Name = "housecarl_compact_plugin", Title = "Compact / ESL-renumber a plugin's FormIDs"),
      Description(
          "COMPACT a plugin's FormIDs — the data-layer twin of xEdit's \"Compact FormIDs for ESL\". Renumbers EVERY record " +
@@ -503,6 +511,7 @@ public static class WriteTools
         return RenderCompact(svc.CompactPlugin(plugin, esl, in_place, repoint_externals, acknowledge, patch_name, confirm_amethyst_redeploy));
     });
 
+    /// <summary>Merges donor plugins into one new staged plugin after conflict and reference checks.</summary>
     [McpServerTool(Name = "housecarl_merge_plugins", Title = "Merge plugins into one new plugin"),
      Description(
          "MERGE two or more ACTIVE plugins into ONE NEW plugin — a RECORDS operation (the zMerge/'Merge Plugins' job): the " +
@@ -1219,33 +1228,43 @@ public static class WriteTools
 /// optional composition.</summary>
 public sealed record BulkOp
 {
+    /// <summary>Record FormID edited by this operation; omitted for create operations.</summary>
     [JsonPropertyName("formid"), Description("The record's FormID 'XXXXXX:Plugin.esp'.")]
     public string? Formid { get; init; }
 
+    /// <summary>Dotted path from the record to the field being edited.</summary>
     [JsonPropertyName("field_path"), Description("Dotted field path, e.g. 'BasicStats.Damage' or 'Entries'. Step into a list/dict element mid-path with brackets, e.g. 'Effects[0].Data.Magnitude'; at the LEAF use verb + key, not brackets.")]
     public string? FieldPath { get; init; }
 
+    /// <summary>Mutation verb applied to the selected field.</summary>
     [JsonPropertyName("verb"), Description("Set (default) | Add | Remove | SetAtIndex | ReplaceAll | Merge | CopyFrom (deep-copy the field at field_path from from_plugin's version — see from_plugin).")]
     public string Verb { get; init; } = "Set";
 
+    /// <summary>Single textual value coerced to the target field type.</summary>
     [JsonPropertyName("value"), Description("The value (coerced to the field's type). Omit for Remove / ReplaceAll / Merge / compose.")]
     public string? Value { get; init; }
 
+    /// <summary>Dictionary key or list index used by collection verbs.</summary>
     [JsonPropertyName("key"), Description("Dict key or list index at the leaf.")]
     public string? Key { get; init; }
 
+    /// <summary>Complete scalar or FormLink list used by ReplaceAll.</summary>
     [JsonPropertyName("values"), Description("The whole new list for a list ReplaceAll.")]
     public string[]? Values { get; init; }
 
+    /// <summary>Dictionary entries used by Merge or ReplaceAll.</summary>
     [JsonPropertyName("entries"), Description("Key→value pairs for a dict Merge or dict ReplaceAll.")]
     public Dictionary<string, string>? Entries { get; init; }
 
+    /// <summary>One modeled value constructed for a struct or polymorphic target.</summary>
     [JsonPropertyName("compose"), Description("Build a modeled struct: an arm for a polymorphic Set, or the element for a struct-element Add (e.g. a leveled-list entry; for a polymorphic list like VMAD Scripts[i].Properties, the element's CONCRETE arm type, e.g. 'ScriptObjectProperty').")]
     public StructInput? Compose { get; init; }
 
+    /// <summary>Several modeled list elements constructed and applied in order.</summary>
     [JsonPropertyName("composes"), Description("Build MANY modeled list elements in ONE op — the batch sibling of compose (each entry the same {type, fields?, ctor_args?, sets?} shape). With verb=Add, APPENDS each element in order (e.g. 10 leveled-list entries, a whole block of condition rows in one op instead of ten Adds). With verb=ReplaceAll, CLEARS the list then appends each — the way to replace a whole modeled list (conditions, effects, entries); pass composes=[] with ReplaceAll to CLEAR the list to empty (the modeled twin of values=[]). LIST elements only; mutually exclusive with compose/value/values. All-or-nothing: a bad element refuses the whole call with per-element (composes[i]) reasons.")]
     public StructInput[]? Composes { get; init; }
 
+    /// <summary>Plugin whose record version supplies a CopyFrom field value.</summary>
     [JsonPropertyName("from_plugin"), Description("For verb=\"CopyFrom\" ONLY: the plugin whose version of THIS record to deep-copy the field at field_path from — an ACTIVE plugin, OR a plugin FILE on disk that isn't in the load order (e.g. a disabled OLD patch you want to re-assert a field from). CopyFrom takes no value/values/entries/compose/composes — the source IS from_plugin's version of the field. Honors forward-then-edit precedence: into= a patch that already carries the record copies onto the patch's own version. Copies a WHOLE field's value (scalar, formlink, modeled list, sub-struct); it can't copy owned child records (forward the whole record with housecarl_forward_record instead).")]
     public string? FromPlugin { get; init; }
 }
@@ -1255,21 +1274,27 @@ public sealed record BulkOp
 /// nested parent/collection (a child's parent may be an existing FormID or a same-call sibling's editorid).</summary>
 public sealed record CreateOp
 {
+    /// <summary>Catalog record type or four-character signature to create.</summary>
     [JsonPropertyName("record_type"), Description("The kind of record to create: a catalog name ('Keyword', 'Spell', 'DialogTopic', 'DialogResponses', 'PlacedObject') or a 4-char signature.")]
     public string? RecordType { get; init; }
 
+    /// <summary>Required EditorID assigned to the new record.</summary>
     [JsonPropertyName("editorid"), Description("REQUIRED. The EditorID the new record is referenced by. A nested child's parent= can name this editorid (a same-call sibling parent).")]
     public string? Editorid { get; init; }
 
+    /// <summary>Initial field operations applied after record allocation.</summary>
     [JsonPropertyName("operations"), Description("Optional. The new record's fields, same shape as bulk_apply ops but with NO formid: {field_path, verb?, value?, key?, values?, entries?, compose?}.")]
     public BulkOp[]? Operations { get; init; }
 
+    /// <summary>Existing FormID or earlier same-call EditorID that owns this nested record.</summary>
     [JsonPropertyName("parent"), Description("Optional. For a NESTED record: the parent it nests under — an EXISTING parent's FormID 'XXXXXX:Plugin.esp', OR the editorid of a record declared EARLIER in this same records array (a same-call sibling). Omit for a flat top-level record.")]
     public string? Parent { get; init; }
 
+    /// <summary>Named parent collection that receives this nested record.</summary>
     [JsonPropertyName("collection"), Description("Optional. Which of the parent's child-collections to add into, BY NAME (e.g. a cell's 'Persistent') — needed only when more than one fits. Omit when unique or when parent is omitted.")]
     public string? Collection { get; init; }
 
+    /// <summary>Exterior-cell grid coordinate written as X,Y.</summary>
     [JsonPropertyName("grid"), Description("Optional. For an EXTERIOR cell only (record_type 'Cell' with parent= a Worldspace): the cell's grid as \"X,Y\" (e.g. \"5,-12\"). houseCARL files it into the worldspace's block tree by block=floor(grid/32), subblock=floor(grid/8). A 'Cell' with NO parent and NO grid is an INTERIOR cell (self-files by FormID). Ignored for non-Cell types.")]
     public string? Grid { get; init; }
 }
@@ -1278,15 +1303,19 @@ public sealed record CreateOp
 /// flat coercible sub-fields, optional positional ctor args, and nested edits applied to the built struct.</summary>
 public sealed record StructInput
 {
+    /// <summary>Concrete catalog type constructed for this modeled value.</summary>
     [JsonPropertyName("type"), Description("The concrete catalog type to build (arm type for a polymorphic Set; the collection's element type for an Add, e.g. 'LeveledItemEntry'; or a polymorphic element's concrete ARM, e.g. 'ScriptObjectProperty' into VMAD Properties).")]
     public string? Type { get; init; }
 
+    /// <summary>Flat field names and textual values assigned after construction.</summary>
     [JsonPropertyName("fields"), Description("Flat coercible sub-fields set directly on the struct: name → value.")]
     public Dictionary<string, string>? Fields { get; init; }
 
+    /// <summary>Positional textual arguments for constructors that require them.</summary>
     [JsonPropertyName("ctor_args"), Description("Positional constructor args, for struct types that require them.")]
     public string[]? CtorArgs { get; init; }
 
+    /// <summary>Nested edits applied after the modeled value is constructed.</summary>
     [JsonPropertyName("sets"), Description("Nested edits applied to the built struct (paths rooted at it), e.g. {path:'Data.Reference', value:'<FormID>'}.")]
     public NestedSet[]? Sets { get; init; }
 }
@@ -1294,18 +1323,23 @@ public sealed record StructInput
 /// <summary>One nested edit inside a <see cref="StructInput"/> (a path+verb+value rooted at the struct being built).</summary>
 public sealed record NestedSet
 {
+    /// <summary>Dotted path rooted at the enclosing modeled value.</summary>
     [JsonPropertyName("path"), Description("Dotted path within the struct, e.g. 'Data.Level'.")]
     public string? Path { get; init; }
 
+    /// <summary>Mutation verb applied at <see cref="Path"/>.</summary>
     [JsonPropertyName("verb"), Description("Set (default) | Add | Remove | SetAtIndex.")]
     public string Verb { get; init; } = "Set";
 
+    /// <summary>Single textual value coerced to the nested target type.</summary>
     [JsonPropertyName("value"), Description("The value (coerced).")]
     public string? Value { get; init; }
 
+    /// <summary>Dictionary key or list index for a nested collection edit.</summary>
     [JsonPropertyName("key"), Description("Dict key or list index, if the nested target is a collection.")]
     public string? Key { get; init; }
 
+    /// <summary>Recursively constructed modeled value for the nested target.</summary>
     [JsonPropertyName("compose"), Description("Build a modeled sub-struct for THIS nested target (recursive): the concrete ARM of a polymorphic sub-field (e.g. a Condition's Data → 'GetActorValueConditionData'), or the element for a struct-element Add nested inside the struct. Omit for a coercible scalar (use value=).")]
     public StructInput? Compose { get; init; }
 }

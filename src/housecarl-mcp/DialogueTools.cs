@@ -14,6 +14,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class DialogueTools
 {
+    /// <summary>Validates the resolved dialogue graph rooted at a topic, quest, view, or branch.</summary>
     [McpServerTool(Name = "housecarl_validate_dialogue", ReadOnly = true, Title = "Validate a dialogue topic or quest"),
      Description(
          "Validate a dialogue topic's whole graph against the load order — what the game actually sees. Pass a " +

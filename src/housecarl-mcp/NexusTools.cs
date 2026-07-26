@@ -17,6 +17,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class NexusTools
 {
+    /// <summary>Searches Skyrim Special Edition mods on Nexus.</summary>
     [McpServerTool(Name = "housecarl_nexus_search", ReadOnly = true, Title = "Search Nexus Mods"),
      Description(
          "Search Nexus Mods for Skyrim Special Edition mods by name/keywords, WITHOUT opening a browser — houseCARL " +
@@ -54,6 +55,7 @@ public static class NexusTools
         return Render.Search(query.Trim(), category, sort, result!);
     }, ct);
 
+    /// <summary>Returns current metadata, files, and optional changelog information for one Nexus mod.</summary>
     [McpServerTool(Name = "housecarl_nexus_mod", ReadOnly = true, Title = "Look up a Nexus mod"),
      Description(
          "Look up ONE Skyrim Special Edition mod on Nexus by its numeric mod id (e.g. 12604) OR a pasted mod URL — " +
@@ -107,6 +109,7 @@ public static class NexusTools
         return Render.Mod(detail!, description, files, changelog, since);
     }, ct);
 
+    /// <summary>Runs an explicitly supplied read-only Nexus GraphQL query.</summary>
     [McpServerTool(Name = "housecarl_nexus_graphql", ReadOnly = true, Title = "Run a raw Nexus GraphQL query"),
      Description(
          "The COMPLETENESS BACKSTOP behind houseCARL's curated Nexus tools: run a RAW read-only query against the Nexus " +
@@ -142,6 +145,7 @@ public static class NexusTools
         return Render.Graphql(data);
     }, ct);
 
+    /// <summary>Checks supplied Nexus mod and file identifiers against current file metadata.</summary>
     [McpServerTool(Name = "housecarl_nexus_check_updates", ReadOnly = true, Title = "Batch-check Nexus mods for updates (file-level)"),
      Description(
          "Check MANY Skyrim Special Edition mods for updates in ONE call — at the FILE level, without a browser or an API " +
@@ -220,6 +224,7 @@ public static class NexusTools
         return (pairs, bad);
     }
 
+    /// <summary>Hashes local files and asks Nexus which published file each hash identifies.</summary>
     [McpServerTool(Name = "housecarl_nexus_identify", ReadOnly = true, Title = "Identify a file on Nexus by MD5"),
      Description(
          "Identify which Nexus mod (and which uploaded file) a file came from, by its MD5 hash — without a browser or an " +

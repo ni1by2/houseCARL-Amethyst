@@ -12,6 +12,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class BsaTools
 {
+    /// <summary>Lists the canonical entry paths stored in one Bethesda archive.</summary>
     [McpServerTool(Name = "housecarl_bsa_list", ReadOnly = true, Title = "List a .bsa archive's contents"),
      Description(
          "List the files inside a Bethesda .bsa archive. Returns the archive format + the contained file paths. " +
@@ -45,6 +46,7 @@ public static class BsaTools
         return sb.ToString().TrimEnd('\n');
     });
 
+    /// <summary>Extracts an entire archive into a requested folder or new Amethyst staging mod.</summary>
     [McpServerTool(Name = "housecarl_bsa_extract", Title = "Extract a .bsa archive to a folder"),
      Description(
          "Extract a Bethesda .bsa archive's contents to a folder so you can read the files. Reads the archive directly " +
@@ -93,6 +95,7 @@ public static class BsaTools
         return sb.ToString();
     });
 
+    /// <summary>Uses the configured external BSArch command to pack a folder into a staged archive.</summary>
     [McpServerTool(Name = "housecarl_bsa_repack", Title = "Pack a folder into a .bsa archive"),
      Description(
          "Pack a folder of loose files into a Bethesda .bsa archive (via BSArch), placed in a NEW reviewable houseCARL mod " +

@@ -15,6 +15,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class NpcCopyTools
 {
+    /// <summary>Copies one NPC's appearance and required assets without retaining the donor master.</summary>
     [McpServerTool(Name = "housecarl_copy_npc_appearance", Title = "Copy an NPC's appearance as a standalone (no donor master)"),
      Description(
          "Copy a donor NPC's whole APPEARANCE — headparts (with their texture sets, extra parts and the morph .tri " +

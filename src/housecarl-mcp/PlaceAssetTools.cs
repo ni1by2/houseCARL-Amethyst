@@ -21,6 +21,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class PlaceAssetTools
 {
+    /// <summary>Places one loose asset override into a houseCARL-owned Amethyst staging mod.</summary>
     [McpServerTool(Name = "housecarl_place_asset", Title = "Place ONE asset file in Amethyst staging"),
      Description(
          "Place ONE asset file — ANY Data-relative file (a mesh, texture, script, sound, interface, etc.) — into a NEW " +
@@ -56,6 +57,7 @@ public static class PlaceAssetTools
         return PlaceWire.Render(svc.PlaceAssets(reqs!, patch_name, into));
     });
 
+    /// <summary>Places several loose asset overrides atomically into one staging mod.</summary>
     [McpServerTool(Name = "housecarl_bulk_place_asset", Title = "Place MANY asset files in one houseCARL mod"),
      Description(
          "Place MANY asset files in ONE houseCARL-owned Amethyst staging mod — the batch form of housecarl_place_asset (place " +
@@ -225,15 +227,19 @@ static class PlaceWire
 /// housecarl_place_asset: a FormID (+ optional slot) or a raw destination path, and the optional source.</summary>
 public sealed record PlaceAssetSpec
 {
+    /// <summary>NPC FormID used to derive one or both FaceGen destinations.</summary>
     [JsonPropertyName("formid"), Description("The NPC's FormID 'XXXXXX:Plugin.esp' — houseCARL computes the FaceGen path. Omit kind to place BOTH the mesh and the tint. Provide this OR asset_path.")]
     public string? Formid { get; init; }
 
+    /// <summary>Optional FaceGen slot: mesh or tint.</summary>
     [JsonPropertyName("kind"), Description("With formid: 'mesh' (head .nif) or 'tint' (face .dds). Omit to place BOTH. Ignored with asset_path.")]
     public string? Kind { get; init; }
 
+    /// <summary>Explicit Data-relative destination used instead of a FormID.</summary>
     [JsonPropertyName("asset_path"), Description("A Data-relative destination path (e.g. 'meshes/actors/...'), instead of formid. Provide this OR formid.")]
     public string? AssetPath { get; init; }
 
+    /// <summary>Loose path or archive source copied into the destination.</summary>
     [JsonPropertyName("source"), Description("The correct copy to place: a loose file path, '<archive.bsa>|<entry>', or a '.bsa' path. Omit to auto-resolve the sole VFS provider. With formid and no kind, an explicit source must be a bare '.bsa' path.")]
     public string? Source { get; init; }
 }
