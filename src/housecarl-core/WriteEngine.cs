@@ -11,19 +11,19 @@ using Noggog;
 namespace HousecarlCore;
 
 /// <summary>
-/// Step 4 — the reflection-driven write engine.
+/// Applies validated record edits through Mutagen's reflection model.
 ///
-/// The spike (<c>dev/references/spike/ReflectionWrite.cs</c>) proved the core mechanism
-/// (overlay → GetOrAddAsOverride → reflect property → coerce → SetValue → write-with-masters,
-/// 4/4 byte-identical) but only via <i>typed</i> accessors on <c>Armor</c>. This engine
-/// generalises it to <b>any</b> record group and to <b>nested</b> paths (substruct → dict-by-key),
-/// which is the net-new, highest-risk delta (step-4 plan §2 #1).
-///
-/// Build order (plan §9): generic lifecycle (confirmed via <c>write-api</c>) → path navigation +
-/// Set, driven first to the NPC-skills acceptance target (<c>npc-skills</c>) — the riskiest piece,
-/// proven earliest. Corpus pre-flight validation, the remaining verbs, and the oracle layer follow.
-///
-/// Modes: <c>write-api</c> (discovery), <c>npc-skills</c> (the acceptance proof).
+/// <para>
+/// The engine resolves a source record, adds an override to a patch, navigates
+/// fields and collection elements by their corpus path, coerces textual values
+/// to the required CLR type, applies the requested verb, and serializes with
+/// the correct masters. Nested paths are handled without record-specific code.
+/// </para>
+/// <para>
+/// Public <c>Run*</c> methods are diagnostic and regression harnesses. Product
+/// writes enter through <see cref="WritePatchBuilder"/>, which performs corpus
+/// validation and controls atomic output or guarded in-place replacement.
+/// </para>
 /// </summary>
 public static class WriteEngine
 {
@@ -36,6 +36,11 @@ public static class WriteEngine
     //  This is the dict-set-inside-a-substruct kind — the single thing most likely to surface
     //  a real navigation problem, so we build it first.
     // ======================================================================
+    /// <summary>
+    /// Runs the original nested-dictionary write proof against a supplied
+    /// Skyrim master and verifies that the source file remains unchanged.
+    /// </summary>
+    /// <returns>Zero when the written value and source hash verify; otherwise one.</returns>
     public static int RunNpcSkillsProof(string[] args)
     {
         var sourcePath = args.Length > 0 ? args[0] : DefaultSourcePath;
@@ -166,6 +171,11 @@ public static class WriteEngine
     //  Locate with EITHER --editorid OR --formkey (012E46:Skyrim.esm). [--name <patch>] [--out <path>]
     //  Sibling `show` resolves a record + prints its fields/keywords (read-to-plan).
     // ======================================================================
+    /// <summary>
+    /// Runs the command-line patch harness for one record and one or more
+    /// validated field operations.
+    /// </summary>
+    /// <returns>Zero when the patch writes and verifies; otherwise one.</returns>
     public static int RunPatch(string[] args)
     {
         var f = ParseFlags(args);
@@ -403,6 +413,11 @@ public static class WriteEngine
     //      --source "<plugin>" [--type Weapon] --formkey 0F1AC1:Skyrim.esm \
     //      [--path BasicStats.Damage] [--path BasicStats.Value]
     // ----------------------------------------------------------------------
+    /// <summary>
+    /// Prints a selected record's identity, requested field values, and resolved
+    /// keyword list to help a developer author a write request.
+    /// </summary>
+    /// <returns>Zero when the record is found and displayed; otherwise one.</returns>
     public static int RunShow(string[] args)
     {
         var f = ParseFlags(args);
@@ -459,6 +474,11 @@ public static class WriteEngine
     //    dotnet run --project src/housecarl-generator condition-patch \
     //        [--source "<plugin>"] [--target XXXXXX:Plugin.esp] [--out <path>] [--name <patch>]
     // ======================================================================
+    /// <summary>
+    /// Runs the condition-target write harness and emits a non-destructive patch
+    /// that can be inspected independently.
+    /// </summary>
+    /// <returns>Zero when the condition write and source-integrity check pass; otherwise one.</returns>
     public static int RunConditionPatch(string[] args)
     {
         var f = ParseFlags(args);
@@ -627,7 +647,7 @@ public static class WriteEngine
     /// <summary>True iff <paramref name="source"/> lives in a NESTED group (no flat <c>SkyrimGroup&lt;T&gt;</c>) and so
     /// needs the source link cache to reconstruct its parent chain when overridden (Cell / the Placed* family / INFO /
     /// Navmesh / Landscape). Lets the write cleave build the COSTLY per-overlay link cache ONLY for nested records and
-    /// never for the flat common case (<see cref="LoadOrderResolver.LinkCacheFor"/> is seconds + GBs). Mirrors
+    /// never for the flat common case (building a full source link cache can be expensive). Mirrors
     /// <see cref="TryResolveGroup"/>'s flat test off the SAME <see cref="EnumerateFlatGroups"/> enumeration (no drift),
     /// without needing a patch mod in hand.</summary>
     public static bool RecordNeedsSourceCache(IMajorRecordGetter source)
@@ -780,8 +800,8 @@ public static class WriteEngine
 
     /// <summary>
     /// The single source of truth for "which records live in a flat <c>SkyrimGroup&lt;T&gt;</c> on the mod" —
-    /// the records the generic lifecycle can <c>GetOrAddAsOverride</c>. <see cref="ResolveGroup"/> (the engine's
-    /// per-write record resolution) and the write census (reachability classification) both derive from this one
+    /// the records the generic lifecycle can <c>GetOrAddAsOverride</c>. Per-write
+    /// record resolution and the reachability census both derive from this one
     /// enumeration, so they can never disagree about what is group-reachable. The Loqui convention gives each
     /// concrete <c>Npc</c> the getter interface <c>INpcGetter</c>; records stored in NESTED groups (Cell under a
     /// cell-block, placed refs under a cell, INFO under a topic) have no top-level <c>SkyrimGroup&lt;T&gt;</c> and
@@ -1594,10 +1614,10 @@ public static class WriteEngine
         catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    /// <summary>Serialize a plugin edited IN PLACE back over ITSELF — the model-C, xEdit-parity re-emit the Wave 0
-    /// round-trip probe validated (in-place write lane, <c>WritePatchBuilder.ApplyInPlace</c>). DELIBERATELY NOT
-    /// <see cref="WritePatch"/>: in-place re-emits an EXISTING authored plugin, so it must NOT apply WritePatch's
-    /// NEW-patch conventions — no Skyrim.esm/Update.esm baseline force-include (<see cref="WritePatch"/>'s
+    /// <summary>Serialize a plugin edited IN PLACE back over ITSELF — the xEdit-parity re-emit validated by the
+    /// round-trip guard (in-place write lane, <c>WritePatchBuilder.ApplyInPlace</c>). This deliberately does not call
+    /// <c>WritePatch</c>: in-place re-emits an EXISTING authored plugin, so it must not apply new-patch conventions —
+    /// no Skyrim.esm/Update.esm baseline force-include (<c>WritePatch</c>'s
     /// <c>WithExtraIncludedMasters</c> would ADD masters the author never declared, reindexing the file) and no
     /// <see cref="EnsureFormIdFloor"/> (<c>NoNextFormIDProcessing</c> persists the author's <c>HEDR.NextObjectID</c>
     /// verbatim). This is EXACTLY the probe's incantation (<c>RoundTripProbe</c>: <c>.WithLoadOrder(&lt;own declared
@@ -3085,6 +3105,11 @@ public static class WriteEngine
     //  exact, deduplicated gap to add to TryValueType — derived from Mutagen's own model,
     //  never guessed. Also flags AQ names that fail to resolve. Q3: report, never silent-skip.
     // ======================================================================
+    /// <summary>
+    /// Audits every writable corpus leaf and reports CLR value types that the
+    /// generic text coercer cannot construct.
+    /// </summary>
+    /// <returns>Zero when all required types resolve and are coercible; otherwise one.</returns>
     public static int RunCoerceAudit(string[] args)
     {
         var corpusPath = args.Length > 0 ? args[0] : CorpusRulebook.CorpusPath;
@@ -3234,6 +3259,11 @@ public static class WriteEngine
     //  build a valid, assignable instance from a sample string (coerce-audit proves only
     //  RECOGNITION). Diagnoses on failure by dumping the type's ctor surface.
     // ======================================================================
+    /// <summary>
+    /// Constructs representative values for every special coercion family and
+    /// verifies that each result is assignable to its requested type.
+    /// </summary>
+    /// <returns>Zero when every sample constructs and is assignable; otherwise one.</returns>
     public static int RunCoerceSelftest(string[] args)
     {
         var texAsset = typeof(SkyrimMod).Assembly.GetType("Mutagen.Bethesda.Skyrim.Assets.SkyrimTextureAssetType");
@@ -3299,6 +3329,11 @@ public static class WriteEngine
     // ======================================================================
     //  BUILD-START API DISCOVERY  (write-api) — kept as a Mutagen-bump guard
     // ======================================================================
+    /// <summary>
+    /// Prints the Mutagen override and group APIs on which the reflection writer
+    /// depends, providing a compatibility check after dependency upgrades.
+    /// </summary>
+    /// <returns>Always zero after completing the discovery report.</returns>
     public static int RunDiscovery(string[] args)
     {
         Console.WriteLine("=== Mutagen assemblies loaded ===");
@@ -3491,16 +3526,19 @@ public static class WriteEngine
     }
 }
 
-/// <summary>Thrown when a write needs to MATERIALIZE an absent substruct whose concrete type has no parameterless
-/// constructor — Mutagen's composition types (GenderedItem&lt;T&gt; male/female pairs, Array2d&lt;T&gt; grids) that
-/// can only be built from their parts. This is the absent-substruct COMPOSITION deferral: a real, named gap that
-/// rides the composition wave (wave 1) with the struct-element collections, never a silent skip (Q3). It is an
-/// <see cref="InvalidOperationException"/> so existing fail-loud handlers still catch it, while a proof/instrument
-/// can catch it SPECIFICALLY to tally the deferral by construction (no hand-listing of the composition types).</summary>
+/// <summary>
+/// Reports that an absent substructure cannot be materialized from a
+/// parameterless constructor and must instead be composed from its parts.
+/// </summary>
 public sealed class CompositionRequiredException : InvalidOperationException
 {
+    /// <summary>Gets the path segment that required materialization.</summary>
     public string Segment { get; }
+
+    /// <summary>Gets the concrete substructure type that requires composition.</summary>
     public Type SubstructType { get; }
+
+    /// <summary>Creates an exception for an unsupported composition boundary.</summary>
     public CompositionRequiredException(string segment, Type substructType)
         : base($"Absent substruct '{segment}' of type {substructType.Name} has no parameterless constructor — it is a " +
                "COMPOSITION type (e.g. GenderedItem<T> / Array2d<T>) buildable only from its parts. Deferred to the " +
@@ -3525,6 +3563,10 @@ public sealed class CompositionRequiredException : InvalidOperationException
 /// NRE is preserved as <see cref="Exception.InnerException"/>. Q3 — no silent failure, no opaque message.</summary>
 public sealed class NullArmSerializeException : InvalidOperationException
 {
+    /// <summary>
+    /// Wraps Mutagen's null-reference failure with an actionable description
+    /// while preserving the original exception.
+    /// </summary>
     public NullArmSerializeException(Exception inner)
         : base("a required modeled sub-field was null when Mutagen serialized the patch (a NullReferenceException in the " +
                "writer). The cause is a COMPOSED record that left a required polymorphic sub-field unset — e.g. a Condition " +
@@ -3563,6 +3605,7 @@ public sealed class NullArmSerializeException : InvalidOperationException
 /// fail-loud handler still catches it.</summary>
 public sealed class ExpectedApplyRejectionException : InvalidOperationException
 {
+    /// <summary>Creates a refusal for a user-fixable condition visible only in live record data.</summary>
     public ExpectedApplyRejectionException(string message) : base(message) { }
 }
 
@@ -3581,5 +3624,6 @@ public sealed class ExpectedApplyRejectionException : InvalidOperationException
 /// is an <see cref="InvalidOperationException"/> so any plain fail-loud handler still catches it.</summary>
 public sealed class MalformedTargetDataException : InvalidOperationException
 {
+    /// <summary>Creates a refusal describing malformed data already present in the target record.</summary>
     public MalformedTargetDataException(string message) : base(message) { }
 }
