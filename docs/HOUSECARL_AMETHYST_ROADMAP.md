@@ -334,8 +334,8 @@ manual release gate.
   `CorpusRulebook`; `e61882b` completes `RemapEngine`; `52b66cf` completes the
   public `WriteEngine` slice; `2cf70a4` completes the lifecycle slice;
   `06207b1` completes `WriteEngine`; `8f70b4e` completes
-  `SkyPatcherCatalog`. The Linux installer/release checkpoint is pending
-  commit.
+  `SkyPatcherCatalog`; `0917bea` completes the Linux installer and release
+  checkpoint.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
