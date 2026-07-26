@@ -256,48 +256,41 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 6, completing standalone Amethyst discovery and
-  removing obsolete MO2 runtime seams.
-- Last completed checkpoint: the Linux installer now owns connector-free
-  Amethyst discovery. It finds native/AppImage/AUR-style and Flatpak Skyrim SE
-  configuration, resolves custom or current blank/default staging, validates
-  the active profile and vanilla-data safety, rejects ambiguous or unusable
-  state before writing, and atomically creates schema-v1 `connection.json`.
-  Amethyst manager files remain read-only.
-- Verification performed: `amethyst-discovery-guard` passes nine native,
-  Flatpak, default-staging, ambiguity, fail-before-write, atomic replacement,
-  and production-layout checks. The setup lifecycle and Amethyst layout guards
-  pass. The strict setup XML build has zero warnings; the self-contained
-  trimmed installer publishes without trim-analysis warnings. Full Linux
-  `ci-all` passes 112/112. Two consecutive release builds produced identical
-  archive hash
-  `a579a038dddd0c0a0b5c1b1216a1e21d242d1c52d2b0b42930047b0b7a08784d`;
-  the archive checksum, complete internal `SHA256SUMS`, stripped Linux x86_64
-  server and installer ELF files, and absence of `.exe` files were verified.
-  Current Amethyst `origin/main` at `7e8a5c3` (`v2.0.4-10`) contains no
-  built-in houseCARL integration and retains the state consumed here.
-- Files/components changed: standalone discovery service and synthetic guard,
-  installer command surface, default-staging handling in `AmethystLayout`, CI
-  probe registry, root/shipped/plugin connection instructions, and this
-  roadmap.
-- Decisions made: the deleted connector remains retired. The setup command is
-  the sole manifest writer and never edits Amethyst profile or deployment
-  files. Automatic discovery must select exactly one usable configuration;
-  native-plus-Flatpak ambiguity requires `--amethyst-config`. Blank
-  `staging_path` follows Amethyst's current profiles-base precedence instead
-  of being treated as malformed.
-- Known failures or residual risks: the runtime service and historical probes
-  still retain MO2 compatibility types; they must be migrated before the
-  Amethyst-only product boundary is complete. The Ubuntu workflow definition
-  has not yet been observed green on GitHub. A disposable real
+- Active milestone: Session 6, removing inherited MO2 runtime seams.
+- Last completed checkpoint: manager-neutral load-order result, composition,
+  and plugin-source models now live outside `Mo2LoadOrder`. The shipped MCP
+  server starts only through the Amethyst connection path; its direct-root
+  product mode and the unregistered MO2 update-cache feature are gone.
+  User-visible MCP, Nexus, skill, and staging instructions use Amethyst
+  terminology, and SKSE inventory now reads manager-neutral composition.
+- Verification performed: both previously wording-sensitive
+  `bulk-primitives-wave3-guard` and `read-plugin-file-guard` pass with
+  Amethyst-specific diagnostics. The full Linux `ci-all` suite passes 111/111;
+  its intentional reduction from 112 removes the deleted MO2 metadata-cache
+  probe. The solution builds serially and `git diff --check` passes.
+- Files/components changed: shared load-order models, MCP startup and
+  load-order service, record/asset/write tool descriptions, Nexus guidance,
+  the operational skill, the CI registry, and removal of `Mo2ModMeta`,
+  `Mo2ModMetaProbe`, and `UpdateStatusTools`.
+- Decisions made: test-only explicit paths remain available to synthetic
+  probes, but are no longer a shipped server configuration. The obsolete
+  update cache is removed instead of adapting MO2-specific `meta.ini` fields
+  that Amethyst does not own. Historical changelog entries remain historical.
+- Known failures or residual risks: `LoadOrderService` still contains legacy
+  constructors and helper paths backed by `Mo2Instance` and `Mo2LoadOrder`;
+  inherited probes still use them as fixtures. A parallel MSBuild invocation
+  can fail silently while evaluating shared project references, whereas
+  `-m:1` succeeds; this needs a focused build-graph diagnosis before CI is
+  changed. The Ubuntu workflow definition has not yet been observed green on
+  GitHub. A disposable real
   Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
   External PapyrusCompiler and BSArch execution remains post-v1. NuGet
-  vulnerability metadata was unreachable in the restricted local environment;
-  compilation and restored dependencies were otherwise successful.
-- Exact next action: migrate the live `LoadOrderService` and its probe
-  consumers away from `Mo2Instance`, `Mo2LoadOrder`, and `Mo2ModMeta`, first
-  moving manager-neutral shared models out of MO2-named files. Preserve
-  Amethyst snapshot/filemap authority and run focused probes after each slice.
+  vulnerability metadata remains unreachable in the restricted environment.
+- Exact next action: move the remaining generic parsing and plugin-location
+  helpers out of `Mo2LoadOrder`, then remove the live `Mo2Instance` path from
+  `LoadOrderService` while preserving explicit-path test fixtures. Diagnose
+  the parallel build failure separately so runtime migration and build-graph
+  changes remain reviewable.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -333,7 +326,8 @@ manual release gate.
   `06207b1` completes `WriteEngine`; `8f70b4e` completes
   `SkyPatcherCatalog`; `0917bea` completes the Linux installer and release
   checkpoint; `22c431d` records its evidence; `e493098` completes standalone
-  Amethyst discovery and atomic manifest creation.
+  Amethyst discovery and atomic manifest creation; `3bee8fc` records that
+  checkpoint; `40c867f` removes the first obsolete MO2 product surfaces.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
