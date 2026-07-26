@@ -24,7 +24,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator strings-resolve-probe &lt;cleaned-plugin.esm&gt; &lt;stockgame-data-dir&gt; [nameSubstr]
 /// </summary>
-public static class StringsResolveProbe
+internal static class StringsResolveProbe
 {
     public static int Run(string[] args)
     {

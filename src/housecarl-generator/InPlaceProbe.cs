@@ -53,7 +53,7 @@ namespace HousecarlGenerator;
 /// The NESTED lock arm (the LinkCacheFor-on-a-foreign-target path) needs a real nested record + master, so it lives in
 /// <see cref="RunNestedProof"/> (real Skyrim.esm; self-skips on the CI runner), the same posture as writelock-nested-proof.
 /// </summary>
-public static class InPlaceProbe
+internal static class InPlaceProbe
 {
     const string MasterName = "HcInPlaceMaster.esm";
     const string UserName = "HcInPlaceUser.esp";

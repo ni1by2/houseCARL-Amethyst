@@ -79,7 +79,7 @@ namespace HousecarlGenerator;
 ///                  topic') that names ALL FOUR accepted kinds (DIAL/QUST/DLVW/DLBR) — pinning the guidance strings
 ///                  against the input-kind drift this PR itself demonstrated (REJ-NOTFOUND pins its string too).
 /// </summary>
-public static class DialogueValidateGuardProbe
+internal static class DialogueValidateGuardProbe
 {
     public static int RunGuard(string[] args)
     {

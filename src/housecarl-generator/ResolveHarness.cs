@@ -14,7 +14,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator resolve [maxPlugins]
 /// </summary>
-public static class ResolveHarness
+internal static class ResolveHarness
 {
     public static int RunResolve(string[] args)
     {

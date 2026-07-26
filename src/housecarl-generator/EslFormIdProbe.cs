@@ -44,7 +44,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator esl-formid-probe
 /// </summary>
-public static class EslFormIdProbe
+internal static class EslFormIdProbe
 {
     public static int RunProbe(string[] args)
     {

@@ -31,7 +31,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator -- source-display-guard</c>
 /// </summary>
-public static class SourceDisplayProbe
+internal static class SourceDisplayProbe
 {
     static int _pass, _fail;
 

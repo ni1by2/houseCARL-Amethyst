@@ -42,7 +42,7 @@ namespace HousecarlGenerator;
 ///                      "4 arms" by-construction claim. type='GameSetting' returns its GameSettingFloat (generality).
 ///                      RED before the fix (BuildTypeLookup skipped polymorphic-base names → "unknown record type").
 /// </summary>
-public static class CreateGlobalProbe
+internal static class CreateGlobalProbe
 {
     public static int RunGuard(string[] args)
     {

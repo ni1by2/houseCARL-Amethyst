@@ -64,7 +64,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- forward-from-plugin-guard
 /// </summary>
-public static class ForwardFromPluginProbe
+internal static class ForwardFromPluginProbe
 {
     const string MasterName = "HcFwdMaster.esm";
     const string ModAName = "HcFwdModA.esp";

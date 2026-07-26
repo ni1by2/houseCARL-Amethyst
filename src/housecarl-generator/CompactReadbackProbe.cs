@@ -31,7 +31,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator -- compact-readback-guard</c>
 /// </summary>
-public static class CompactReadbackProbe
+internal static class CompactReadbackProbe
 {
     static int _pass, _fail;
 

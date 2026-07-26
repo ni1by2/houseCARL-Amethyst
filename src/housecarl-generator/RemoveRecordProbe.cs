@@ -30,7 +30,7 @@ namespace HousecarlGenerator;
 ///       re-write (the record-level pairing of the Q3b entry-level finding).
 ///   Q6 (literal, not flag) — the removed record leaves NO deleted-stub (Aaron locked literal drop-from-plugin).
 /// </summary>
-public static class RemoveRecordProbe
+internal static class RemoveRecordProbe
 {
     const string SkyrimEsm = @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
 

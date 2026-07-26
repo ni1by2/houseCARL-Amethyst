@@ -29,7 +29,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator handle-probe [worstCaseN]   (default worstCaseN=300)
 /// </summary>
-public static class HandleProbe
+internal static class HandleProbe
 {
     public static int RunProbe(string[] args)
     {

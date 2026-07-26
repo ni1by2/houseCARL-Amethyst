@@ -4,7 +4,7 @@ using HousecarlCore;
 namespace HousecarlGenerator;
 
 /// <summary>Synthetic Linux fixtures for the setup-manifest layout contract; no game data required.</summary>
-public static class AmethystLayoutProbe
+internal static class AmethystLayoutProbe
 {
     /// <summary>Runs manifest/layout scenarios and returns a process-style result.</summary>
     /// <param name="args">Reserved common probe arguments; currently unused.</param>

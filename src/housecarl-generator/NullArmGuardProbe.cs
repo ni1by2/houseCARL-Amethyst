@@ -53,7 +53,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator nullarm-guard</c>
 /// </summary>
-public static class NullArmGuardProbe
+internal static class NullArmGuardProbe
 {
     public static int RunGuard(string[] args)
     {

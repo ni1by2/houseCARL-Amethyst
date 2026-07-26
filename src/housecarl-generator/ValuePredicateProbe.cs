@@ -24,7 +24,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator value-predicate-guard</c>
 /// </summary>
-public static class ValuePredicateProbe
+internal static class ValuePredicateProbe
 {
     /// <summary>One synthesized MagicEffect plus the literals it was BUILT with — the independent ground truth the
     /// evaluator must reproduce (the brute-force oracle reads these fields, never the record).</summary>

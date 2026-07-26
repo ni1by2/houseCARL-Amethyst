@@ -31,7 +31,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- skse-config-audit-guard
 /// </summary>
-public static class SkseConfigAuditProbe
+internal static class SkseConfigAuditProbe
 {
     public static int RunGuard(string[] args)
     {

@@ -21,7 +21,7 @@ namespace HousecarlGenerator;
 ///                (existing behavior, unchanged) — the contrast that proves overrider≠referencer handling.
 /// Run: dotnet run --project src/housecarl-generator overrider-detect-guard
 /// </summary>
-public static class OverriderDetectProbe
+internal static class OverriderDetectProbe
 {
     public static int RunGuard(string[] args)
     {

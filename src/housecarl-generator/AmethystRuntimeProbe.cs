@@ -8,7 +8,7 @@ using HousecarlMcp;
 namespace HousecarlGenerator;
 
 /// <summary>Locks the public connection, persistence, status, and refresh contract.</summary>
-public static class AmethystRuntimeProbe
+internal static class AmethystRuntimeProbe
 {
     /// <summary>Runs the public MCP connection, persistence, status, resolver, and refresh scenario.</summary>
     /// <param name="args">Reserved common probe arguments; currently unused.</param>

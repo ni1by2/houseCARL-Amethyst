@@ -42,7 +42,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator floi-fields-guard</c>
 /// </summary>
-public static class FloiFieldsProbe
+internal static class FloiFieldsProbe
 {
     const string RecType = "ConstructibleObject";   // COBJ has a Conditions list (as nullarm-guard / floi-read-guard use)
     const string Arm = "GetEquippedConditionData";

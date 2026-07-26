@@ -25,7 +25,7 @@ namespace HousecarlGenerator;
 /// Every original master/mod the seed touched is SHA-checked unchanged. Patches are left in write-output/remove-proof/
 /// for Aaron to open in xEdit.  Run: dotnet run --project src/housecarl-generator remove-proof [maxPlugins]
 /// </summary>
-public static class RemoveProof
+internal static class RemoveProof
 {
     static readonly HashSet<string> Vanilla = new(StringComparer.OrdinalIgnoreCase)
         { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" };

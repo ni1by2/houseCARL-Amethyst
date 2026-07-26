@@ -23,7 +23,7 @@ namespace HousecarlGenerator;
 //  • SELF-TEST (RED-proof) — a deliberately-broken fixture map must
 //    produce all four expected complaint classes.
 // ======================================================================
-public static class SkyPatcherFieldMapProbe
+internal static class SkyPatcherFieldMapProbe
 {
     public static int RunGuard(string[] args)
     {

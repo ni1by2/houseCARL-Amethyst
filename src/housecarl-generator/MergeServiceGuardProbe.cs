@@ -26,7 +26,7 @@ namespace HousecarlGenerator;
 ///   UNTOUCHED — the donor files are byte-identical after the merge (new-file lane only).
 /// Run: dotnet run --project src/housecarl-generator merge-service-guard
 /// </summary>
-public static class MergeServiceGuardProbe
+internal static class MergeServiceGuardProbe
 {
     public static int RunGuard(string[] args)
     {

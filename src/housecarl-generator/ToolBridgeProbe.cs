@@ -32,7 +32,7 @@ namespace HousecarlGenerator;
 /// The cross-restart persistence + live-server forcing-function proof is the Aaron-empirical follow-up (needs his install).
 /// Run: dotnet run --project src/housecarl-generator tool-bridge
 /// </summary>
-public static class ToolBridgeProbe
+internal static class ToolBridgeProbe
 {
     public static int Run(string[] args)
     {

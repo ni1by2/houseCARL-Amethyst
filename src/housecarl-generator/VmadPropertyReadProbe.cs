@@ -23,7 +23,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- vmad-property-read-guard
 /// </summary>
-public static class VmadPropertyReadProbe
+internal static class VmadPropertyReadProbe
 {
     public static int RunGuard(string[] args)
     {

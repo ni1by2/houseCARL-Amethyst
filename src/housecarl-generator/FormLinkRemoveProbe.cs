@@ -36,7 +36,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator formlink-remove-guard</c>
 /// </summary>
-public static class FormLinkRemoveProbe
+internal static class FormLinkRemoveProbe
 {
     public static int RunGuard(string[] args)
     {

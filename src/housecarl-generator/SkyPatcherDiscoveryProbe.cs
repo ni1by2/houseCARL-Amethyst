@@ -22,7 +22,7 @@ namespace HousecarlGenerator;
 //  Plugin.esp.ini filename gate both ways, the SkyPatcher.ini [Patcher]
 //  per-type toggle, stray root-level INIs, undocumented subfolders.
 // ======================================================================
-public static class SkyPatcherDiscoveryProbe
+internal static class SkyPatcherDiscoveryProbe
 {
     public static int RunGuard(string[] args)
     {

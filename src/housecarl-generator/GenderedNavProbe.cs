@@ -45,7 +45,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator gendered-nav-guard</c>
 /// </summary>
-public static class GenderedNavProbe
+internal static class GenderedNavProbe
 {
     public static int RunGuard(string[] args)
     {
@@ -335,7 +335,7 @@ public static class GenderedNavProbe
     static string OutPath(string stem) =>
         Path.Combine(Path.GetTempPath(), stem + "-" + Guid.NewGuid().ToString("N"), stem + ".esp");
 
-    /// <summary>Build a patch through the REAL <see cref="WriteEngine.WritePatch"/>, reopen it via a binary overlay,
+    /// <summary>Build a patch through the REAL <c>WriteEngine.WritePatch</c>, reopen it via a binary overlay,
     /// and run <paramref name="verify"/> against the reopened (getter) record — so the assertion is a genuine
     /// on-disk round-trip, not an in-memory read.</summary>
     static (bool ok, string? detail) TrySerialize(string stem, Action<SkyrimMod> build, Func<ISkyrimModGetter, (bool, string?)> verify)

@@ -30,7 +30,7 @@ namespace HousecarlGenerator;
 ///                (in the outcome AND the rendered output) while the compact STILL succeeds — A3's core Q3 contract.
 /// Run: dotnet run --project src/housecarl-generator -- seq-regen-guard
 /// </summary>
-public static class SeqRegenProbe
+internal static class SeqRegenProbe
 {
     public static int RunGuard(string[] args)
     {

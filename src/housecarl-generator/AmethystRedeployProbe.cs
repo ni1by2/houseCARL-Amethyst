@@ -4,7 +4,7 @@ using HousecarlCore;
 namespace HousecarlGenerator;
 
 /// <summary>Locks the staging-first redeploy gate for hardlink, symlink, and copy deployments.</summary>
-public static class AmethystRedeployProbe
+internal static class AmethystRedeployProbe
 {
     /// <summary>Runs all redeployment safety scenarios and returns a process-style success code.</summary>
     /// <param name="args">Reserved for the common probe entry-point contract; currently unused.</param>

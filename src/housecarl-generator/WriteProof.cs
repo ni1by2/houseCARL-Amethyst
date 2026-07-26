@@ -48,7 +48,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator write-proof</c>
 /// </summary>
-public static class WriteProof
+internal static class WriteProof
 {
     // The modlist's own canonical game root — its isolated "Stock Game" instance, paired with the
     // mods/ tree — NOT the global Steam install. The full vanilla master set lives here; loading all five

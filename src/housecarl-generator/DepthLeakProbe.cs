@@ -21,7 +21,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator depth-leak-guard</c>
 /// </summary>
-public static class DepthLeakProbe
+internal static class DepthLeakProbe
 {
     // Field-path fragments that only appear when the walker descended INTO a .NET reflection object — i.e.
     // the leak signature. A clean read shows `…Data.Parameter1Type = [RuntimeType] Name=ActorValue` and stops;

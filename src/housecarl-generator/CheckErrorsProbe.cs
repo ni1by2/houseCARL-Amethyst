@@ -70,7 +70,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- check-errors-guard
 /// </summary>
-public static class CheckErrorsProbe
+internal static class CheckErrorsProbe
 {
     public static int RunGuard(string[] args)
     {

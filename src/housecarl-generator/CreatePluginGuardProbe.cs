@@ -28,7 +28,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- create-plugin-guard
 /// </summary>
-public static class CreatePluginGuardProbe
+internal static class CreatePluginGuardProbe
 {
     public static int RunGuard(string[] args)
     {

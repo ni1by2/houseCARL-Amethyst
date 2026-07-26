@@ -24,7 +24,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator remap-wave1-mech
 /// </summary>
-public static class RemapWave1Probe
+internal static class RemapWave1Probe
 {
     public static int RunMechanism(string[] args)
     {
@@ -467,7 +467,7 @@ public static class RemapWave1Probe
                 {
                     pPrime.ModHeader.Stats.NextFormID = Math.Max(0x800u, (uint)plan.Dict.Count + 0x800u);
                     // resolve the plugin's own declared masters (in load order) for a faithful write.
-                    var byName = orderedPaths.ToDictionary(Path.GetFileName, x => x, StringComparer.OrdinalIgnoreCase);
+                    var byName = orderedPaths.ToDictionary(x => Path.GetFileName(x)!, x => x, StringComparer.OrdinalIgnoreCase);
                     var resolved = new List<ISkyrimModGetter>();
                     bool missing = false;
                     foreach (var mr in ov.ModHeader.MasterReferences)

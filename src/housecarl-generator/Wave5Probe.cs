@@ -21,7 +21,7 @@ namespace HousecarlGenerator;
 ///     Mutagen-delta residual for the divergent subset (the cornerstone's one legitimate residual), never silent.
 ///     Usage: <c>pex-probe</c> (sweep) · <c>pex-probe --n 500</c> · <c>pex-probe &lt;file.pex&gt;</c> (one, verbose).
 /// </summary>
-public static class Wave5Probe
+internal static class Wave5Probe
 {
     const string StockGameData = @"C:\MO2\Instance\Stock Game\Data";
     const string ModsDir = @"C:\MO2\Instance\mods";

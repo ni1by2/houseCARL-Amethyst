@@ -6,7 +6,7 @@ using MessagePack;
 namespace HousecarlGenerator;
 
 /// <summary>Locks Amethyst v4 winners, exclusions, raw casing, and stripped-wrapper lookup.</summary>
-public static class AmethystFileMapProbe
+internal static class AmethystFileMapProbe
 {
     /// <summary>Runs authoritative-winner and fail-loud filemap scenarios.</summary>
     /// <param name="args">Reserved common probe arguments; currently unused.</param>

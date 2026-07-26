@@ -36,7 +36,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator formlink-null-guard</c>
 /// </summary>
-public static class FormLinkNullProbe
+internal static class FormLinkNullProbe
 {
     public static int RunGuard(string[] args)
     {

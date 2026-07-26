@@ -19,7 +19,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator master-probe
 /// </summary>
-public static class MasterProbe
+internal static class MasterProbe
 {
     const string SkyrimEsm = @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
 

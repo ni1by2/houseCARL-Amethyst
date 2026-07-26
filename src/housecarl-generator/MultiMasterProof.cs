@@ -27,7 +27,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator multimaster-patch [maxPlugins]
 /// </summary>
-public static class MultiMasterProof
+internal static class MultiMasterProof
 {
     static readonly HashSet<string> Vanilla = new(StringComparer.OrdinalIgnoreCase)
         { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" };

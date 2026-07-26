@@ -16,7 +16,7 @@ namespace HousecarlGenerator;
 /// every polymorphic arm — at full depth, by construction. Coverage == Mutagen's
 /// coverage; no category filter, no depth limit, no subset.
 /// </summary>
-public static class CorpusGenerator
+internal static class CorpusGenerator
 {
     record RefItem(Type Getter, string Kind, string? AbstractBase);
 

@@ -37,7 +37,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator nested-create-probe [sourcePlugin]</c>
 /// </summary>
-public static class NestedCreateProbe
+internal static class NestedCreateProbe
 {
     const string DefaultSource =
         @"E:\Skyrim Modding\ARR 2.0\Stock Game\Data\Skyrim.esm";

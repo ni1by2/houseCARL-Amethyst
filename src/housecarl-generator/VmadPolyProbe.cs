@@ -19,7 +19,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator vmad-poly-guard [--source "&lt;path&gt;\Skyrim.esm"]
 /// </summary>
-public static class VmadPolyProbe
+internal static class VmadPolyProbe
 {
     public static int RunGuard(string[] args)
     {

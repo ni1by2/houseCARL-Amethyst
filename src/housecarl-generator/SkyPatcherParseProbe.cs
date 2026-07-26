@@ -15,7 +15,7 @@ namespace HousecarlGenerator;
 //  the Q3 loud-note paths for malformed segments. Pure in-process, no game
 //  data, no MO2 instance, no Mutagen — just string→model asserts.
 // ======================================================================
-public static class SkyPatcherParseProbe
+internal static class SkyPatcherParseProbe
 {
     public static int RunGuard(string[] args)
     {

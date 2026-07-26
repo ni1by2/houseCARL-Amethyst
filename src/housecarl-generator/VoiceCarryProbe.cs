@@ -27,7 +27,7 @@ namespace HousecarlGenerator;
 ///   NO-VOICE   — a voiced-free plugin carries nothing and is NOT a failure (FilesScanned 0, carried 0, zero WARN).
 /// Run: dotnet run --project src/housecarl-generator voice-carry-guard
 /// </summary>
-public static class VoiceCarryProbe
+internal static class VoiceCarryProbe
 {
     // The voice-path coordinates the fixture's audio is filed under — only the id segment moves on a compact, so old
     // and new paths share these (CarryVoice rewrites the id, nothing else). VoiceType is the on-disk folder name.

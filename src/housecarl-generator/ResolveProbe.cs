@@ -34,7 +34,7 @@ namespace HousecarlGenerator;
 /// Run: dotnet run --project src/housecarl-generator resolve-probe [maxPlugins]
 ///      (maxPlugins caps the whole set for a fast smoke run; 0/absent = the full set).
 /// </summary>
-public static class ResolveProbe
+internal static class ResolveProbe
 {
     // Same canonical game roots the write/read proofs use (NOT the global Steam install).
     const string DefaultDataDir = @"C:\MO2\Instance\Stock Game\Data";

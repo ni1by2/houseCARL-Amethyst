@@ -35,7 +35,7 @@ namespace HousecarlGenerator;
 ///
 /// Recon only: writes to a temp dir, touches no tracked file, reports loud (Q3).
 /// </summary>
-public static class CreateProbe
+internal static class CreateProbe
 {
     const string SkyrimEsm = @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
 

@@ -18,7 +18,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator pkcu-probe &lt;malformed.esp&gt;
 /// </summary>
-public static class PkcuProbe
+internal static class PkcuProbe
 {
     public static int Run(string[] args)
     {

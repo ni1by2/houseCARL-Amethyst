@@ -29,7 +29,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator formid-floor-probe
 /// </summary>
-public static class FormIdFloorProbe
+internal static class FormIdFloorProbe
 {
     public static int RunProbe(string[] args)
     {

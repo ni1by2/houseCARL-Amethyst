@@ -22,7 +22,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- element-identity-guard
 /// </summary>
-public static class ElementIdentityProbe
+internal static class ElementIdentityProbe
 {
     public static int RunGuard(string[] args)
     {

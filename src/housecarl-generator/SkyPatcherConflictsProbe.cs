@@ -22,7 +22,7 @@ namespace HousecarlGenerator;
 //  IS dead. Explicit-then-broad kills; broad-then-explicit kills
 //  nothing; accumulating / gated / cross-file writes never ITM.
 // ======================================================================
-public static class SkyPatcherConflictsProbe
+internal static class SkyPatcherConflictsProbe
 {
     public static int RunGuard(string[] args)
     {

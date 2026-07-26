@@ -32,7 +32,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator -- verify-loop-guard</c>
 /// </summary>
-public static class VerifyLoopProbe
+internal static class VerifyLoopProbe
 {
     static int _pass, _fail;
 

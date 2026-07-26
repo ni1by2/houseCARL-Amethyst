@@ -29,7 +29,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- native-pairing-guard
 /// </summary>
-public static class NativePairingProbe
+internal static class NativePairingProbe
 {
     public static int RunGuard(string[] args)
     {

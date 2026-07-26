@@ -30,11 +30,11 @@ namespace HousecarlGenerator;
 /// independent of asset-link coercion). It is deliberately NOT tested here; the coercion fix is proven by the sound case.
 ///
 /// Self-contained: synthesises the record + plugin in a fresh <c>SkyrimMod</c> in TEMP (no game data). The validator
-/// corpus is the SHARED one loaded via <see cref="CorpusRulebook.Load"/> (<c>CorpusRulebook.CorpusPath</c> — the
+/// corpus is the SHARED one loaded via <c>CorpusRulebook.Load</c> (<c>CorpusRulebook.CorpusPath</c> — the
 /// canonicalCorpus the ci-all runner pre-generates, or <c>generated/corpus.json</c> for a standalone run); this probe
 /// does NOT generate it. Run: dotnet run --project src/housecarl-generator assetlink-write-guard
 /// </summary>
-public static class AssetLinkWriteProbe
+internal static class AssetLinkWriteProbe
 {
     public static int RunGuard(string[] args)
     {
@@ -57,7 +57,7 @@ public static class AssetLinkWriteProbe
             recordType: "SoundDescriptor",
             field: "SoundFiles",
             addRecord: m => { var r = m.SoundDescriptors.AddNew("HC_SNDR_AssetLink"); return r.FormKey; },
-            readBack: (back, fk) => back.SoundDescriptors.First(x => x.FormKey == fk).SoundFiles?.Select(a => a.GivenPath).ToList(),
+            readBack: (back, fk) => back.SoundDescriptors.First(x => x.FormKey == fk).SoundFiles?.Select(a => (string?)a.GivenPath).ToList(),
             replaceAll: new[] { @"Sound\fx\hc\bardsong\one.wav", @"Sound\fx\hc\bardsong\two.wav", @"Sound\fx\hc\bardsong\three.wav" },
             add: @"Sound\fx\hc\bardsong\four.wav");
 

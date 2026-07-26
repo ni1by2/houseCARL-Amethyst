@@ -28,7 +28,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- seq-staleness-guard
 /// </summary>
-public static class SeqStalenessProbe
+internal static class SeqStalenessProbe
 {
     public static int RunGuard(string[] args)
     {

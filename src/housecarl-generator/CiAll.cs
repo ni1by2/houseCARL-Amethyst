@@ -26,7 +26,7 @@ namespace HousecarlGenerator;
 /// explicit-path UserConfigStores. The class-parents/decompile caches are per-LoadOrderService-INSTANCE (each
 /// probe builds its own), not process statics, so co-hosting is safe (research §5 #6).
 /// </summary>
-public static class CiAll
+internal static class CiAll
 {
     // The ordered CI probe set — the single source of truth for what CI runs (was the per-probe ci.yml steps).
     // Adding a CI probe = add it here. Kept in ci.yml step order so the one-step log reads the same as before.

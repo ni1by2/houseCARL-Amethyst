@@ -38,7 +38,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator subclass-remove-guard
 /// </summary>
-public static class SubclassRemoveGuardProbe
+internal static class SubclassRemoveGuardProbe
 {
     const string MasterName = "HcSubRmMaster.esm";
     const string UserName = "HcSubRmUser.esp";

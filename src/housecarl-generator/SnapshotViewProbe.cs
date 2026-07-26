@@ -41,7 +41,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator -- snapshot-view-guard</c>
 /// </summary>
-public static class SnapshotViewProbe
+internal static class SnapshotViewProbe
 {
     static int _pass, _fail;
 

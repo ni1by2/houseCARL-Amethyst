@@ -22,7 +22,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator floi-read-guard</c>
 /// </summary>
-public static class FloiReadProbe
+internal static class FloiReadProbe
 {
     public static int RunGuard(string[] args)
     {

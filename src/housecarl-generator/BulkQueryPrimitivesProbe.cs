@@ -37,7 +37,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator bulk-query-primitives-guard</c>
 /// </summary>
-public static class BulkQueryPrimitivesProbe
+internal static class BulkQueryPrimitivesProbe
 {
     static int _pass, _fail;
 

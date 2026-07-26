@@ -48,7 +48,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- effect-chain-guard
 /// </summary>
-public static class EffectChainProbe
+internal static class EffectChainProbe
 {
     public static int RunGuard(string[] args)
     {

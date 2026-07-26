@@ -25,7 +25,7 @@ namespace HousecarlGenerator;
 /// Vanilla masters the proof references are SHA-checked unchanged (create only writes the patch). Patches are left in
 /// write-output/create-proof/ for Aaron to open in xEdit.  Run: dotnet run --project src/housecarl-generator create-proof [maxPlugins]
 /// </summary>
-public static class CreateProof
+internal static class CreateProof
 {
     static readonly HashSet<string> Vanilla = new(StringComparer.OrdinalIgnoreCase)
         { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" };

@@ -3,7 +3,7 @@ using HousecarlCore;
 namespace HousecarlGenerator;
 
 /// <summary>Locks Amethyst's priority, activation, locking, casing, and source rules.</summary>
-public static class AmethystLoadOrderProbe
+internal static class AmethystLoadOrderProbe
 {
     /// <summary>Runs the synthetic priority/activation/source scenario.</summary>
     /// <param name="args">Reserved common probe arguments; currently unused.</param>

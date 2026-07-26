@@ -19,7 +19,7 @@ namespace HousecarlGenerator;
 /// <c>IFormLinkOrIndex&lt;T&gt;</c> condition target in BOTH modes (a real FormID vs a numeric
 /// alias/package index), and what decides which mode serializes?</b> so the wave-4 build doesn't fly blind.
 ///
-/// THE GAP (verbatim from <see cref="WriteEngine.TryFormLink"/>'s own note, WriteEngine.cs:1113):
+/// THE GAP (verbatim from <c>WriteEngine.TryFormLink</c>'s own note, WriteEngine.cs:1113):
 /// "IFormLinkOrIndex&lt;T&gt; (condition-data targets) is deliberately NOT recognised here — its concrete
 /// ctor needs a discriminator flag whose byte-semantics we won't ship unverified (no condition oracle yet)."
 /// READING conditions already works (the wave-0 differ snapshots them); coerce-audit loud-defers the 156
@@ -46,7 +46,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator condition-probe [sourcePlugin]</c>
 /// </summary>
-public static class ConditionProbe
+internal static class ConditionProbe
 {
     const string DefaultSource =
         @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";

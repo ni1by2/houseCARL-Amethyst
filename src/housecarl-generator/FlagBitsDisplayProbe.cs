@@ -33,7 +33,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- flag-bits-display-guard
 /// </summary>
-public static class FlagBitsDisplayProbe
+internal static class FlagBitsDisplayProbe
 {
     public static int RunGuard(string[] args)
     {

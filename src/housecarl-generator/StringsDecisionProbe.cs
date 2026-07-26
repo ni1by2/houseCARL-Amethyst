@@ -17,7 +17,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator strings-decision-guard
 /// </summary>
-public static class StringsDecisionProbe
+internal static class StringsDecisionProbe
 {
     public static int RunGuard(string[] args)
     {

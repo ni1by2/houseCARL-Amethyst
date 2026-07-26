@@ -31,7 +31,7 @@ namespace HousecarlGenerator;
 ///   DUP-REJECT  — an into= re-run of the SAME cell editorid refuses loud (no silent duplicate — cells carry a stable
 ///                 EditorID, so the flat nested-children append carve-out does NOT transfer; PR #94 review).
 /// </summary>
-public static class CoordCellGuardProbe
+internal static class CoordCellGuardProbe
 {
     public static int RunGuard(string[] args)
     {

@@ -30,7 +30,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator write-census</c>
 /// </summary>
-public static class WriteCensus
+internal static class WriteCensus
 {
     public static int Run(string[] args)
     {

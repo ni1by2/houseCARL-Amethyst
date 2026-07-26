@@ -364,7 +364,7 @@ namespace HousecarlGenerator;
 ///   SUBSTRUCT-SET-ARM-COMPOSE-E2E   — the ARM-typed case round-trips build+assign+SERIALIZE: a composed SceneScriptFragments lands on Scene.VMAD.ScriptFragments on disk (PR #147 review finding 2).
 ///   SUBSTRUCT-SET-COERCIBLE-COMPOSE-MSG — a compose on a COERCIBLE substruct (ButtonLabel) names the plain-value path, not the misleading 'requires a value' (PR #147 review finding 3).
 /// </summary>
-public static class NestedCreateGuardProbe
+internal static class NestedCreateGuardProbe
 {
     public static int RunGuard(string[] args)
     {

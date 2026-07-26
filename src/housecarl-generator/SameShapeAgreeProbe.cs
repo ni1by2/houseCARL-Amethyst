@@ -44,7 +44,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator sameshape-agree-guard</c>
 /// </summary>
-public static class SameShapeAgreeProbe
+internal static class SameShapeAgreeProbe
 {
     public static int RunGuard(string[] args)
     {

@@ -29,7 +29,7 @@ namespace HousecarlGenerator;
 ///               target's old bytes fully intact and no .housecarl-tmp residue — the staged write's failure
 ///               contract (the old in-place serialize had no such guarantee shape to test).
 /// </summary>
-public static class UpsertGuardProbe
+internal static class UpsertGuardProbe
 {
     public static int RunGuard(string[] args)
     {

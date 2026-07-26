@@ -4311,7 +4311,7 @@ public sealed class LoadOrderService : IDisposable
                     // donor whose mod is perfectly enabled. State the cause the locate contract computed (#271).
                     static string Located(PluginLocateResult l) => $"{l.Where}{(l.WhyNotActive is { } why ? $"; NOT active — {why}" : "")}";
                     static NpcAppearanceCopy.DonorFetch CacheFetch(Mutagen.Bethesda.Plugins.Cache.ILinkCache c) =>
-                        fk2 => { try { return c.TryResolve(fk2, out var b) ? b : null; } catch { return null; } };
+                        fk2 => { try { return c.TryResolve<IMajorRecordGetter>(fk2, out var b) ? b : null; } catch { return null; } };
 
                     donorFilePath = loc.Path!;
                     donorReadFrom = loc.Where == "direct path"

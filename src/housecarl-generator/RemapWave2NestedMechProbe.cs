@@ -31,7 +31,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator remap-wave2-nested-mech
 /// </summary>
-public static class RemapWave2NestedMechProbe
+internal static class RemapWave2NestedMechProbe
 {
     public static int RunMechanism(string[] args)
     {

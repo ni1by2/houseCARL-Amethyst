@@ -27,7 +27,7 @@ namespace HousecarlGenerator;
 ///               compacts the target IN PLACE and repoints the external referencer to the new key (the full opt-in path).
 /// Run: dotnet run --project src/housecarl-generator compact-service-guard
 /// </summary>
-public static class CompactServiceGuardProbe
+internal static class CompactServiceGuardProbe
 {
     public static int RunGuard(string[] args)
     {

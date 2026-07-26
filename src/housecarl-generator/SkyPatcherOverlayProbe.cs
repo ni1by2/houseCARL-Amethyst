@@ -21,7 +21,7 @@ namespace HousecarlGenerator;
 //  the ORIGINAL value ⇒ 10×2.5=25 / 51; unordered set-after-mult ⇒ 100 or
 //  125. Same for weight: a.ini sets 9, m.ini sets 2 ⇒ later file wins ⇒ 2.
 // ======================================================================
-public static class SkyPatcherOverlayProbe
+internal static class SkyPatcherOverlayProbe
 {
     sealed class StubResolver : SkyPatcherOverlay.IFormResolver
     {

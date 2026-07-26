@@ -53,7 +53,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator roundtrip-probe -- --mo2 &lt;instanceDir&gt; [--max N] [--plugins A.esp,B.esp]
 /// </summary>
-public static class RoundTripProbe
+internal static class RoundTripProbe
 {
     public static int RunProbe(string[] args)
     {

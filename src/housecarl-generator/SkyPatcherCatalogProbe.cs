@@ -17,7 +17,7 @@ namespace HousecarlGenerator;
 //  guard for when the skill reference updates. In-process; the catalog is
 //  an embedded resource, the index is read from the repo (CWD-relative).
 // ======================================================================
-public static class SkyPatcherCatalogProbe
+internal static class SkyPatcherCatalogProbe
 {
     public static int RunGuard(string[] args)
     {

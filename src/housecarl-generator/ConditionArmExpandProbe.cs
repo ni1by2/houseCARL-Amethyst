@@ -28,7 +28,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- condition-arm-expand-guard
 /// </summary>
-public static class ConditionArmExpandProbe
+internal static class ConditionArmExpandProbe
 {
     public static int RunGuard(string[] args)
     {

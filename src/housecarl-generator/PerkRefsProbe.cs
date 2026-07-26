@@ -27,7 +27,7 @@ namespace HousecarlGenerator;
 /// Run: <c>dotnet run --project src/housecarl-generator perk-refs-guard</c>
 ///      <c>dotnet run --project src/housecarl-generator perk-refs-diagnose [-- --source &lt;path&gt; | --mo2 &lt;instanceDir&gt;]</c>
 /// </summary>
-public static class PerkRefsProbe
+internal static class PerkRefsProbe
 {
     const string DefaultSource = @"E:\SteamLibrary\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
 

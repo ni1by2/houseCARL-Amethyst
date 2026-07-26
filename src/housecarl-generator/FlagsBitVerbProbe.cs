@@ -41,7 +41,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator flags-bit-verb-guard</c>
 /// </summary>
-public static class FlagsBitVerbProbe
+internal static class FlagsBitVerbProbe
 {
     public static int RunGuard(string[] args)
     {

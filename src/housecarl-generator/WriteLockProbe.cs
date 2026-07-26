@@ -30,7 +30,7 @@ namespace HousecarlGenerator;
 ///
 /// Self-contained — synthesizes its own .esp in TEMP; no game data. Run: dotnet run --project src/housecarl-generator writelock-probe
 /// </summary>
-public static class WriteLockProbe
+internal static class WriteLockProbe
 {
     public static int RunProbe(string[] args)
     {

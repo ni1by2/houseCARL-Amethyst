@@ -48,7 +48,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- corpus-hygiene-guard
 /// </summary>
-public static class CorpusHygieneProbe
+internal static class CorpusHygieneProbe
 {
     static int _pass, _fail;
 

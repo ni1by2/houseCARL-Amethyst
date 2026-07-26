@@ -23,7 +23,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- nif-sections-guard
 /// </summary>
-public static class NifSectionsProbe
+internal static class NifSectionsProbe
 {
     static int _pass, _fail;
 

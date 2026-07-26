@@ -24,7 +24,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- owned-record-identity-guard
 /// </summary>
-public static class OwnedRecordIdentityProbe
+internal static class OwnedRecordIdentityProbe
 {
     public static int RunGuard(string[] args)
     {

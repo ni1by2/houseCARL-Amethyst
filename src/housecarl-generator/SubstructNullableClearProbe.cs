@@ -32,7 +32,7 @@ namespace HousecarlGenerator;
 ///                       boundary, not here.)
 ///   E2E-POLY          — a Book carrying a Teaches arm, ApplyVerb Remove -> Teaches == null — the poly apply half.
 /// </summary>
-public static class SubstructNullableClearProbe
+internal static class SubstructNullableClearProbe
 {
     public static int RunGuard(string[] args)
     {

@@ -24,7 +24,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- codex-umbrella-coverage-guard
 /// </summary>
-public static class CodexUmbrellaCoverageProbe
+internal static class CodexUmbrellaCoverageProbe
 {
     static int _pass, _fail;
 

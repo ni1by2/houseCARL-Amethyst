@@ -21,7 +21,7 @@ namespace HousecarlGenerator;
 ///   NO-FACEGEN — an NPC with no facegen carries nothing and is NOT a failure (NpcCount &gt; 0, files 0, zero WARN).
 /// Run: dotnet run --project src/housecarl-generator facegen-carry-guard
 /// </summary>
-public static class FacegenCarryProbe
+internal static class FacegenCarryProbe
 {
     public static int RunGuard(string[] args)
     {

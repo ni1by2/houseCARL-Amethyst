@@ -18,7 +18,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator oracle</c>
 /// </summary>
-public static class WriteOracle
+internal static class WriteOracle
 {
     const string DefaultSourcePath =
         @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";

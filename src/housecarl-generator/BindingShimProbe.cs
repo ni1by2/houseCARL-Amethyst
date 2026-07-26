@@ -30,7 +30,7 @@ namespace HousecarlGenerator;
 //  answers every successfully-bound call with the trained config prompt —
 //  which is precisely the "our code RAN" signal the asserts key on.
 // ======================================================================
-public static class BindingShimProbe
+internal static class BindingShimProbe
 {
     const string GenericError = "An error occurred invoking";          // the SDK's opaque text (measured live, HCBR-2026-06-11-01)
     const string ConfigPrompt = "houseCARL-Amethyst is not connected yet"; // the unconfigured prompt proves the tool body ran

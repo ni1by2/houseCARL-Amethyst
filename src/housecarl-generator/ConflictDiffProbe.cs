@@ -31,7 +31,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator conflict-diff-guard</c>
 /// </summary>
-public static class ConflictDiffProbe
+internal static class ConflictDiffProbe
 {
     static int _pass, _fail;
 

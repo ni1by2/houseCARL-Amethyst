@@ -29,7 +29,7 @@ namespace HousecarlGenerator;
 ///                source_plugin=); a non-NPC donor; a donor-internal custom RACE (out of scope, named).
 /// Run: dotnet run --project src/housecarl-generator -- copy-npc-appearance-guard
 /// </summary>
-public static class NpcCopyProbe
+internal static class NpcCopyProbe
 {
     public static int RunGuard(string[] args)
     {

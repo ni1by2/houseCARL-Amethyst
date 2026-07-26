@@ -12,7 +12,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator skypatcher-post-state &lt;FormID:Plugin.esp&gt; --instance &lt;MO2 instance dir&gt;
 /// </summary>
-public static class SkyPatcherHarness
+internal static class SkyPatcherHarness
 {
     public static int Run(string[] args)
     {

@@ -47,7 +47,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- script-property-check-guard
 /// </summary>
-public static class ScriptPropertyCheckProbe
+internal static class ScriptPropertyCheckProbe
 {
     public static int RunGuard(string[] args)
     {

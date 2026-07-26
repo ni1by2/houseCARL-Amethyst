@@ -38,7 +38,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- plugin-validate-guard
 /// </summary>
-public static class PluginValidateProbe
+internal static class PluginValidateProbe
 {
     static int _pass, _fail;
 

@@ -39,7 +39,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator poly-field-descend-guard</c>
 /// </summary>
-public static class PolyFieldDescendProbe
+internal static class PolyFieldDescendProbe
 {
     public static int RunGuard(string[] args)
     {

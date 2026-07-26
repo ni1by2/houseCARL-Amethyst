@@ -25,7 +25,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator -- readback-count-guard
 /// </summary>
-public static class ReadbackCountProbe
+internal static class ReadbackCountProbe
 {
     static int _pass, _fail;
 

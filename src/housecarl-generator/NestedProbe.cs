@@ -32,12 +32,12 @@ namespace HousecarlGenerator;
 /// (formKey)</c> → <c>GetOrAddAsOverride</c>. Phase A discovers the ACTUAL surface in pinned Mutagen 0.53.1
 /// (reflection only — robust to a version bump). Phase B inventories how many of each nested type live in
 /// the source, then drives a REAL by-FormKey override of every nested type that HAS an instance, writes a
-/// patch through the proven <see cref="WriteEngine.WritePatch"/>, reopens it, and confirms the target + its
+/// patch through the proven <c>WriteEngine.WritePatch</c>, reopens it, and confirms the target + its
 /// parents landed and the source is byte-for-byte untouched. Fails LOUD per type (Q3).
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator nested-probe [sourcePlugin]</c>
 /// </summary>
-public static class NestedProbe
+internal static class NestedProbe
 {
     const string DefaultSource =
         @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";

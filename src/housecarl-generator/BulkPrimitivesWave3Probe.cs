@@ -22,7 +22,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator bulk-primitives-wave3-guard</c>
 /// </summary>
-public static class BulkPrimitivesWave3Probe
+internal static class BulkPrimitivesWave3Probe
 {
     static int _pass, _fail;
     static void Check(string label, bool ok)

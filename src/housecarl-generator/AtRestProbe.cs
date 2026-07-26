@@ -21,7 +21,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator atrest-probe [nPlugins]   (default 5)
 /// </summary>
-public static class AtRestProbe
+internal static class AtRestProbe
 {
     public static int RunProbe(string[] args)
     {
