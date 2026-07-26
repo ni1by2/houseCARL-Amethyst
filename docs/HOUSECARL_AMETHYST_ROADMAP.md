@@ -256,37 +256,40 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 6, simplifying the remaining generator-only
-  compatibility seams after the human-readable public-surface audit.
-- Last completed checkpoint: the strict documentation build for the complete
-  four-project graph passes with zero warnings and zero errors. Generator
-  command handlers are now correctly internal to their executable instead of
-  presenting 109 test and generation entry points as a reusable public API.
-  Their existing detailed class rationale and inline assertions remain intact;
-  genuinely public shipped declarations retain local XML contracts.
-- Verification performed: the strict CS1591 build of
-  `housecarl-generator` and its core, MCP, and setup project references passes
-  with zero warnings and zero errors. Full Linux `ci-all` passes 110/110 with
-  the repository-local .NET 9 runtime exported through `DOTNET_ROOT`.
-- Files/components changed: all MCP tool classes, public wire models and
-  service outcomes in `LoadOrderService`, Nexus result enums and client
-  construction, plus the earlier runtime removal and synthetic fixture seams.
+- Active milestone: Session 6, removing the last stale generator-only MO2
+  wording and Windows-path defaults.
+- Last completed checkpoint: `LegacyFixturePaths` and every
+  `ModOrganizer.ini` fixture write are deleted. Synthetic tests now pass
+  explicit native roots and profile names; manual real-data harnesses require
+  the schema-v1 Amethyst connection manifest and consume its authoritative
+  resolved plugin order. Unresolved active plugins fail loudly instead of
+  being omitted.
+- Verification performed: the strict four-project documentation build passes
+  with zero warnings and zero errors. Full Linux `ci-all` passes 110/110. The
+  separately cold `freshness-capture-guard` passes native profile switching,
+  restored/backdated profile files, concurrent status reads, single-snapshot
+  writes, and deferred refresh during writes.
+- Files/components changed: native synthetic-fixture adapter, manual
+  real-data harness arguments, profile-switch guard, removal of the legacy
+  parser and obsolete manager-file fixture writes, plus the earlier MCP
+  public-surface documentation.
 - Decisions made: test-only explicit paths remain available to synthetic
   probes, but are no longer a shipped server configuration. The obsolete
   update cache is removed instead of adapting MO2-specific `meta.ini` fields
   that Amethyst does not own. Historical changelog entries remain historical.
-- Known failures or residual risks: inherited generator probes still create
-  legacy-shaped directories and use a generator-only parser to derive native
-  roots; this does not enter release artifacts but should be simplified.
-  A parallel MSBuild invocation can fail silently while evaluating shared
+- Known failures or residual risks: generator comments and a few exploratory
+  default constants still use inherited MO2/Windows examples even though no
+  parser or runtime path consumes them; remove or rename them before declaring
+  the repository terminology-clean. A parallel MSBuild invocation can fail
+  silently while evaluating shared
   project references, whereas `-m:1` succeeds; this needs a focused build-graph
   diagnosis before CI is changed. The Ubuntu workflow definition has not yet
   been observed green on GitHub. A disposable real
   Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
   External PapyrusCompiler and BSArch execution remains post-v1. NuGet
   vulnerability metadata remains unreachable in the restricted environment.
-- Exact next action: replace the generator-only legacy fixture parser with
-  direct, explicit synthetic Amethyst fixture construction. Then diagnose the
+- Exact next action: remove the remaining generator-only MO2 terminology and
+  Windows default paths without changing probe behavior. Then diagnose the
   parallel MSBuild project-reference failure as a separate focused change.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
@@ -331,7 +334,9 @@ manual release gate.
   `4e4ec6a` records the runtime removal checkpoint; `f50465b` documents the
   complete shipped MCP public surface; `46dc68c` records that checkpoint;
   `4862429` narrows the generator command surface and makes the strict
-  four-project documentation build warning-free.
+  four-project documentation build warning-free; `f1890ef` records that audit;
+  `8d3b84f` removes the legacy fixture parser and moves manual proofs to real
+  Amethyst manifests.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
