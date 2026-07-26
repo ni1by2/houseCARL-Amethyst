@@ -257,19 +257,18 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: completed the record-removal and forwarding
-  `WritePatchBuilder` slice. The documentation now explains presence checks,
-  typed flat and nested removal, target ownership, named-source resolution,
-  collision replacement, lean master derivation, atomic serialization, and
-  post-write verification without dated incident narratives. Two remaining
-  live forwarding instructions now correctly direct users to Amethyst.
+- Last completed checkpoint: completed the header-only creation, compaction,
+  and merge-build `WritePatchBuilder` slice. The documentation now explains
+  source and overlay lifetimes, renumber ownership, donor-reference rejection,
+  NextObjectID handling, explicit master resolution, atomic serialization, and
+  written-header readback without milestone or incident-history prose.
 - Verification performed: the .NET 9 Linux solution and forced strict
   XML-documentation core build succeed with no warning from
-  `WritePatchBuilder`. Forwarding, subclass removal, FormLink removal, dry-run,
-  in-place, and write-lock guards pass. Full `ci-all` is 111/111 on Linux after
-  the final edit, and `git diff --check` passes.
-- Files/components changed: `WritePatchBuilder` removal and forwarding
-  implementation comments and messages, the tracked roadmap, and the
+  `WritePatchBuilder`. Header-only creation, compact-service,
+  compact-readback, merge-service, and remap guards pass. Full `ci-all` is
+  111/111 on Linux after the final edit, and `git diff --check` passes.
+- Files/components changed: `WritePatchBuilder` header-only creation,
+  compaction, and merge documentation, the tracked roadmap, and the
   user-facing roadmap copy.
 - Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
   boundary. Patch operations validate every request before one serialization
@@ -312,10 +311,10 @@ manual release gate.
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
   through the remaining internal implementation of `WritePatchBuilder`,
-  beginning with header-only creation, compaction, and merge builds. Replace
-  dated incident and milestone prose with concise local phase and
-  failure-boundary comments, and remove remaining live MO2 guidance. Re-run the
-  corresponding focused write family, strict XML build, and full CI.
+  covering record creation, nested creation, in-place creation, readback, and
+  sibling-reference helpers. Replace dated incident and milestone prose with
+  concise local phase and failure-boundary comments, then re-run the focused
+  create family, strict XML build, and full CI.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -345,7 +344,9 @@ manual release gate.
   documentation checkpoint; `073d409` completes the Papyrus-toolchain
   documentation checkpoint; `5274457` completes the `WritePatchBuilder`
   public-contract checkpoint; `ed72cd5` completes the first internal
-  implementation slice. The removal-and-forwarding slice is pending commit.
+  implementation slice; `ac3b1be` completes the removal-and-forwarding slice.
+  The header-only creation, compaction, and merge-build slice is pending
+  commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

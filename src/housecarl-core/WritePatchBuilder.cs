@@ -1185,12 +1185,7 @@ public static class WritePatchBuilder
             new(false, prompt, "", false, Array.Empty<ForwardedRecord>(), Array.Empty<string>(), 0) { NeedsAcknowledge = true };
     }
 
-    /// <summary>The outcome of a <see cref="CreatePlugin"/> call. <see cref="Error"/> non-null ⇒ the call was refused
-    /// (no file written) with a named reason (Q3). Otherwise the empty plugin lives at <see cref="OutputPath"/> with the
-    /// exact <see cref="PluginName"/> the caller asked for (never auto-suffixed — a header-only plugin's basename is
-    /// load-bearing). <see cref="RecordCount"/> is 0 by definition (re-read off the written file to confirm, not
-    /// assumed); <see cref="Masters"/> is empty (an empty plugin references nothing — exactly what the CK stamps on one);
-    /// <see cref="Esl"/> echoes the light-master flag as it round-tripped through the write.</summary>
+    /// <summary>Reports creation and verification of an empty, header-only plugin.</summary>
     public sealed record CreatePluginOutcome(
         bool Success, string? Error, string OutputPath, string PluginName, bool Esl,
         IReadOnlyList<string> Masters, int RecordCount, long Bytes)
@@ -1205,32 +1200,13 @@ public static class WritePatchBuilder
             new(false, error, "", "", false, Array.Empty<string>(), 0, 0);
     }
 
-    /// <summary>One external referencer's in-place repoint result (the opt-in compact rewrite): the plugin, whether its
-    /// references were successfully rewritten to the new keys, and the named reason if not (Q3 — a per-plugin failure is
-    /// reported, never silent; the file is left untouched on failure by <see cref="RemapEngine.RepointInPlace"/>).</summary>
+    /// <summary>Reports whether one external plugin was safely repointed after compaction.</summary>
+    /// <param name="Plugin">Rewritten plugin name.</param>
+    /// <param name="Success">Whether every requested reference was repointed.</param>
+    /// <param name="Error">Named failure when the plugin was left untouched.</param>
     public sealed record RepointReport(string Plugin, bool Success, string? Error);
 
-    /// <summary>The outcome of a plugin compaction call.
-    /// <see cref="NeedsAcknowledge"/> ⇒ a required first-time in-place CONSENT prompt (the operation will overwrite an
-    /// existing file — the target in the in-place lane, and/or each external referencer being repointed — so the caller
-    /// must re-call with acknowledge=true); it is NOT an error (Q3). <see cref="Error"/> non-null (with NeedsAcknowledge
-    /// false) ⇒ refused, nothing written, named reason. On success the compacted P′ is at <see cref="OutputPath"/>
-    /// (<see cref="InPlace"/> ⇒ the original file was overwritten; else a NEW file keeping the source's basename in a fresh
-    /// mod folder). <see cref="RecordsRenumbered"/> originating records moved into the (light if <see cref="Esl"/>) window;
-    /// <see cref="RecordsCopied"/> total (originating + overrides copied at their master keys). <see cref="ExternalPlugins"/>
-    /// lists plugins outside the target that reference a renumbered record — empty on the clean path; on the refused path
-    /// (externals present, no opt-in) the list IS the refusal detail; with opt-in repoint, <see cref="Repointed"/> reports
-    /// each. <see cref="PluginsScanned"/>/<see cref="UnscannableRecords"/> are the identify-pass coverage accounting.
-    /// <see cref="AssetRename"/> (null until the asset-carry runs) is the FormID-keyed-asset accounting — A1: facegen
-    /// carried to the new FormIDs (so a compacted NPC mod no longer silently dark-faces). <see cref="VoiceRename"/>
-    /// (A2, null until the carry runs) is the same for voice (.fuz/.lip), so a compacted voiced mod no longer goes mute.
-    /// <see cref="ExternalOverriders"/>
-    /// (gap #2) are plugins OUTSIDE the target that OVERRIDE a renumbered record — surfaced as a WARN (they orphan after
-    /// the renumber and houseCARL can't auto-repoint an override's identity); they never gate the compaction.
-    /// <see cref="SeqRegen"/> (A3, null until the regen runs) is the start-game-enabled-quest <c>.seq</c> accounting — a
-    /// renumber shifts the on-disk FormIDs a <c>.seq</c> lists, so a <c>.seq</c> the source SHIPPED is REBUILT from P′ (not
-    /// carried) so those quests still start; REFRESH-ONLY — a source with no <c>.seq</c> gets a named advisory, not an
-    /// invented file; a plugin with no SGE quests is a clean no-op.</summary>
+    /// <summary>Reports plugin compaction, external reference handling, and FormID-keyed asset migration.</summary>
     public sealed record CompactOutcome(
         bool Success, string? Error, bool NeedsAcknowledge, string OutputPath, string PluginName, bool InPlace, bool Esl,
         IReadOnlyList<string> Masters, int RecordsCopied, int RecordsRenumbered, long Bytes,
@@ -1254,13 +1230,7 @@ public static class WritePatchBuilder
                 Array.Empty<string>(), Array.Empty<RepointReport>(), 0, 0, Array.Empty<string>());
     }
 
-    /// <summary>The merge tool's outcome (A4): the merged plugin's identity + per-donor remap accounting + every
-    /// cross-donor conflict (load-order winner, reported never silent) + the identify-pass WARN surfaces (external
-    /// referencers AND overriders — merge never refuses on them, the donors stay installed and active until the user
-    /// swaps in MO2, so nothing breaks at write time; the report names each with the remedy) + the FormID-keyed asset
-    /// carry accounting (facegen/voice/SEQ — a merge renames the plugin, so EVERY donor NPC's facegen and EVERY voiced
-    /// line moves to the new-name folders, not just the collided ones). Merge has NO in-place lane and overwrites
-    /// nothing, so there is no consent gate.</summary>
+    /// <summary>Reports a new merged plugin, remaps, conflicts, external dependencies, and migrated assets.</summary>
     public sealed record MergeOutcome(
         bool Success, string? Error, string OutputPath, string OutputName,
         IReadOnlyList<string> Donors, IReadOnlyList<string> Masters,
@@ -1410,14 +1380,12 @@ public static class WritePatchBuilder
         }
         catch (Exception ex) { return CreatePluginOutcome.Fail($"could not build the plugin in memory: {ex.GetType().Name}: {ex.Message}"); }
 
-        // Serialize through the single WriteEngine.WritePatch chokepoint with an EMPTY known-master set → zero masters,
-        // plus the crash-atomic staged write + the FormID floor every product write gets. Nothing is on disk on a throw.
+        // Serialize atomically with an empty master context, which produces a header with no master references.
         try { WriteEngine.WritePatch(mod, Array.Empty<ISkyrimModGetter>(), outPath); }
         catch (Exception ex)
             { return CreatePluginOutcome.Fail($"writing the plugin failed (serialize or commit; nothing left on disk): {WriteEngine.Describe(ex)}"); }
 
-        // Re-open + CONFIRM the artifact (Q3 — never report success on an unverified file): zero records, the master
-        // header (empty), the ESL flag as written, the byte size.
+        // Reopen the artifact and confirm its zero records, empty master list, requested ESL flag, and byte size.
         IReadOnlyList<string> masters = Array.Empty<string>();
         int recordCount = -1; bool eslBack = false; long bytes = 0;
         string? confirmFail = null;
@@ -1442,9 +1410,7 @@ public static class WritePatchBuilder
 
         if (confirmFail is not null)
         {
-            // The file we just wrote is wrong or unverifiable — remove it so a refusal leaves NO bad artifact behind
-            // (Q3; the service's folder cleanup then finds an empty folder and removes that too). Safe here: create_plugin
-            // always writes a FRESH file in a fresh folder (no extend), so there is never a prior file to lose.
+            // This lane always writes a fresh artifact, so remove an invalid result rather than leave it behind.
             try { File.Delete(outPath); } catch { /* best-effort; the loud refusal stands regardless */ }
             return CreatePluginOutcome.Fail(confirmFail);
         }
@@ -1452,19 +1418,8 @@ public static class WritePatchBuilder
         return new CreatePluginOutcome(true, null, outPath, fileName, esl, masters, recordCount, bytes);
     }
 
-    // ======================================================================
-    //  COMPACT (A2) — the core build half of housecarl_compact_plugin (the
-    //  service does the policy half: resolve P, identify externals, consent,
-    //  folder allocation, opt-in external repoint). Renumber-mechanism + nested
-    //  coverage live in RemapEngine (remap-wave1/2). Output model = a NEW P′ or
-    //  an in-place overwrite (Aaron 2026-06-26: new-file default, in-place opt-in).
-    // ======================================================================
-
-    /// <summary>Read a plugin's ORIGINATING record FormKeys (<c>FormKey.ModKey == modKey</c>) in document order — the set
-    /// a compaction renumbers (overrides, which reference a master's record, are NOT renumbered). Opens the plugin as a
-    /// binary overlay (the lazy read path) and disposes it before returning, so no handle is held at rest (Option B).
-    /// Returns false with a named reason (Q3) if the plugin can't be parsed — the same honesty the in-place lane uses
-    /// (houseCARL won't renumber a plugin it can't fully read, lest it drop a record it couldn't parse).</summary>
+    /// <summary>Reads originating record keys in document order for compaction.</summary>
+    /// <remarks>Overrides retain their master keys and are not included. The source overlay is disposed before return.</remarks>
     public static bool TryReadOriginatingKeys(string srcPath, ModKey modKey, out IReadOnlyList<FormKey> keys, out string? error)
     {
         keys = Array.Empty<FormKey>(); error = null;
@@ -1484,8 +1439,7 @@ public static class WritePatchBuilder
         finally { (ov as IDisposable)?.Dispose(); }
     }
 
-    /// <summary>The result of the core compact build: success + the written file's masters / record accounting / byte
-    /// size, or a loud Q3 refusal with the file UNTOUCHED (a missing master, a renumber fault, a serialize fault).</summary>
+    /// <summary>Reports the core compaction artifact and renumbering counts.</summary>
     public sealed record CompactBuildResult(
         bool Success, string? Error, IReadOnlyList<string> Masters, int RecordsCopied, int RecordsRenumbered, long Bytes)
     {
@@ -1495,23 +1449,16 @@ public static class WritePatchBuilder
         public static CompactBuildResult Fail(string error) => new(false, error, Array.Empty<string>(), 0, 0, 0);
     }
 
-    /// <summary>
-    /// Build the compacted plugin P′ from <paramref name="srcPath"/> and write it to <paramref name="outPath"/> (a NEW
-    /// file, or — in the in-place lane — <paramref name="srcPath"/> itself). EAGER-loads the source mutable overlay,
-    /// renumbers EVERY record (flat + nested) into a fresh <see cref="SkyrimMod"/> via
-    /// <see cref="RemapEngine.RenumberModInto"/> under <paramref name="dict"/> (originating records → the window; overrides
-    /// copied at their master keys), sets the light flag (<paramref name="esl"/>) and the NextObjectID, resolves P's OWN
-    /// declared masters to overlays via <paramref name="resolveMasterPath"/>, and re-serializes through
-    /// <see cref="WriteEngine.WriteInPlace"/> (own masters, no baseline force, crash-atomic staged swap — the faithful
-    /// re-emit). The source overlay is DISPOSED before the write so the in-place lane (outPath == srcPath) can swap over
-    /// it. All-or-nothing (Q3): any refusal or fault leaves <paramref name="outPath"/> untouched.
-    /// </summary>
+    /// <summary>Renumbers a plugin into a fresh mutable model and atomically writes the compacted artifact.</summary>
+    /// <remarks>
+    /// Originating records use <paramref name="dict"/> while overrides retain master keys. The source is closed before
+    /// replacement, declared masters are resolved explicitly, and any failure leaves the destination unchanged.
+    /// </remarks>
     public static CompactBuildResult CompactBuild(
         string srcPath, ModKey modKey, IReadOnlyDictionary<FormKey, FormKey> dict,
         Func<string, string?> resolveMasterPath, string outPath, bool esl, uint floor)
     {
-        // 1. Build P′ in memory, then DISPOSE the source overlay (the in-place lane overwrites srcPath — its handle must
-        //    be released before the atomic swap).
+        // Build the compacted model in memory and close the source before a possible in-place replacement.
         SkyrimMod pPrime;
         RemapEngine.RenumberResult ren;
         List<string> declaredMasters;
@@ -1531,14 +1478,10 @@ public static class WritePatchBuilder
 
         if (!ren.Success) return CompactBuildResult.Fail(ren.Error!);
 
-        // NextObjectID = the next free originating id above the renumbered run (floor + #originating). WriteInPlace
-        // persists it verbatim (NoNextFormIDProcessing) — the CK reads it on the next save. Note (PR #122 review #6): for
-        // an exactly-full light master (2048 records) this lands at 0x1000, one past the ESL ceiling — INTENTIONAL and
-        // harmless: it's only header metadata for the NEXT new record, and compact creates none (it renumbers existing ones).
+        // Set the next object ID above the compacted run. A full ESL may legitimately point one past its usable window.
         pPrime.ModHeader.Stats.NextFormID = Math.Max(floor, (uint)(floor + dict.Count));
 
-        // 2. Resolve P's OWN declared masters to overlays (the faithful re-serialize set). A declared master absent from
-        //    the active order is a loud refusal (the refs into it can't resolve), file untouched.
+        // Resolve the source's declared masters before atomically serializing the compacted model.
         var overlays = new List<IDisposable>();
         try
         {
@@ -1567,9 +1510,7 @@ public static class WritePatchBuilder
         return new CompactBuildResult(true, null, declaredMasters, ren.RecordsCopied, ren.RecordsRenumbered, bytes);
     }
 
-    /// <summary>The result of the core merge build: success + the RESOLVED master set / record accounting / cross-donor
-    /// conflicts / byte size, or a loud Q3 refusal with <c>outPath</c> UNTOUCHED (an unopenable donor, an engine fault,
-    /// a dangling donor reference that would keep a donor as a master, an absent master, a serialize fault).</summary>
+    /// <summary>Reports the core merge artifact, record counts, derived masters, and donor conflicts.</summary>
     public sealed record MergeBuildResult(
         bool Success, string? Error, IReadOnlyList<string> Masters, int RecordsCopied, int RecordsRenumbered,
         IReadOnlyList<RemapEngine.MergeConflict> Conflicts, long Bytes)
@@ -1581,26 +1522,17 @@ public static class WritePatchBuilder
             new(false, error, Array.Empty<string>(), 0, 0, Array.Empty<RemapEngine.MergeConflict>(), 0);
     }
 
-    /// <summary>
-    /// Build the merged plugin M from the donors (in LOAD ORDER) and write it to <paramref name="outPath"/> (always a
-    /// NEW file — merge has no in-place lane; the donors are never touched). Opens every donor as a lazy overlay,
-    /// renumbers them into one fresh <see cref="SkyrimMod"/> via <see cref="RemapEngine.MergeModsInto"/> (load-order
-    /// winner on cross-donor conflicts, losers' un-relisted children grafted), then enforces the donor-master-survives
-    /// check (Q3, the zMerge "Clean" pattern): any link still pointing INTO a donor after the remap is a DANGLING source
-    /// reference (the donor never defined that FormID, so the dict couldn't map it) — writing it would re-declare the
-    /// donor as a master of its own merge, so the build REFUSES with the offending links NAMED. Masters =
-    /// <paramref name="masters"/> (union of donor declared masters minus the donors, load-order sorted — the
-    /// orchestrator computes it off the captured view), resolved to overlays for the master-aware serialize;
-    /// <see cref="WriteEngine.WriteInPlace"/> then derives the header's master list from actual content against them.
-    /// All-or-nothing (Q3): any refusal or fault leaves <paramref name="outPath"/> untouched.
-    /// </summary>
+    /// <summary>Merges load-ordered donors into a new plugin and atomically writes the result.</summary>
+    /// <remarks>
+    /// Donor records are remapped into one model. References that still point into a donor are rejected because they
+    /// would keep the donor as a master. The supplied non-donor masters are resolved before serialization.
+    /// </remarks>
     public static MergeBuildResult MergeBuild(
         IReadOnlyList<(string Name, string Path, ModKey Key)> donorsByLoadOrder, ModKey outKey,
         IReadOnlyDictionary<FormKey, FormKey> dict, IReadOnlyList<string> masters,
         Func<string, string?> resolveMasterPath, string outPath)
     {
-        // 1. Open every donor overlay, build M in memory, dispose the donors before the write (no handle at rest;
-        //    merge never writes over a donor, but the discipline is uniform).
+        // Open donors only while building the merged model, then release every mapping before serialization.
         var m = new SkyrimMod(outKey, SkyrimRelease.SkyrimSE);
         RemapEngine.MergeResult mr;
         var donorSet = new HashSet<ModKey>(donorsByLoadOrder.Select(d => d.Key));
@@ -1624,9 +1556,7 @@ public static class WritePatchBuilder
         finally { foreach (var d in overlays) { try { d.Dispose(); } catch { /* best-effort */ } } }
         if (!mr.Success) return MergeBuildResult.Fail(mr.Error!);
 
-        // 2. Donor-master-survives check (Q3): after RemapLinks, NO link may still point into a donor. One that does is
-        //    a reference to a FormID the donor never DEFINED (a dangling source ref — the dict maps every real donor key),
-        //    and serializing it would re-declare the donor as a master of its own merge. Named, never silent.
+        // Reject links still targeting donors; such keys were not defined and therefore could not be remapped.
         var dangling = new List<string>();
         int danglingCount = 0;
         foreach (var rec in m.EnumerateMajorRecords())
@@ -1643,14 +1573,12 @@ public static class WritePatchBuilder
                 $"be remapped, and writing it would keep the donor as a master of its own merge. Fix the source (xEdit: check for " +
                 $"deleted/injected records) or drop that donor. Samples: {string.Join("; ", dangling)}. Nothing was written.");
 
-        // 3. NextObjectID above the highest merged id (header metadata for the CK's next new record; write floor minimum,
-        //    ceiling-clamped — a donor legitimately holding 0xFFFFFF would otherwise push it past the 24-bit object range).
+        // Place NextObjectID above the merged range while remaining inside the 24-bit object-ID limit.
         uint maxUsed = 0;
         foreach (var nk in dict.Values) if (nk.ID > maxUsed) maxUsed = nk.ID;
         m.ModHeader.Stats.NextFormID = Math.Min(FormIdRange.ObjectIdMax, Math.Max(FormIdRange.EslWindowFloor, maxUsed + 1));
 
-        // 4. Resolve the computed master set to overlays (absence OR unparseability is a loud refusal — an open throw
-        //    escaping here would skip the caller's rider-folder cleanup) + the master-aware serialize.
+        // Resolve every non-donor master and serialize the merged model atomically.
         var masterOverlays = new List<IDisposable>();
         try
         {
@@ -1680,9 +1608,7 @@ public static class WritePatchBuilder
         }
         finally { foreach (var d in masterOverlays) { try { d.Dispose(); } catch { /* best-effort; never mask the write result */ } } }
 
-        // 5. Report the masters the written HEADER actually carries (Mutagen lean-derives the list from referenced
-        //    content, so a declared-but-unreferenced donor master vanishes here) — the report must match what xEdit
-        //    shows, not the pre-computed union. Read-back is best-effort: on a re-open fault, fall back to the union.
+        // Prefer masters read from the written header; fall back to the computed superset if readback fails.
         IReadOnlyList<string> writtenMasters = masters;
         long bytes = 0;
         try
