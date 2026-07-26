@@ -209,9 +209,6 @@ internal static class CreateGlobalProbe
             string mods = Path.Combine(instance, "mods");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
             Directory.CreateDirectory(Path.Combine(g7Root, "game", "Data"));
-            File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-                "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                + Path.Combine(g7Root, "game").Replace(@"\", @"\\") + ")\r\n");
 
             var mapKey = new ModKey("HcAbsGrpReadMap", ModType.Master);
             var modDir = Path.Combine(mods, "ReadMapMod");

@@ -11,9 +11,9 @@ namespace HousecarlGenerator;
 /// the new housecarl_bulk_create batch tool, nested/dialogue plan Layer A). Where nested-create-guard pins the
 /// CORE (WritePatchBuilder.CreateRecords) against a bare resolver, this pins the SERVICE LAYER —
 /// LoadOrderService.CreateRecords (single, with parent/collection) + CreateRecordsBatch (the array) — driven over a
-/// synthetic MO2 instance in temp (the write-mutex-guard synth pattern: real ModOrganizer.ini + profile + a master
+/// manager-neutral native fixture in temp (the write-mutex-guard pattern: profile roots plus a staged master
 /// mod), so the wire's NEW logic (type resolution from a string, parent/collection passthrough, per-record batch
-/// aggregation, MO2 folder-per-patch output) runs end-to-end. (The MCP argument binding above the service is generic
+/// aggregation, staging-folder-per-patch output) runs end-to-end. (The MCP argument binding above the service is generic
 /// SDK + already covered by binding-shim-guard; this drives the service methods directly, as write-mutex-guard does.)
 /// Run: dotnet run --project src/housecarl-generator -- bulk-create-guard
 ///
@@ -51,9 +51,6 @@ internal static class BulkCreateGuardProbe
             string mods = Path.Combine(instance, "mods");
             string data = Path.Combine(root, "game", "Data");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods); Directory.CreateDirectory(data);
-            File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-                "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
 
             var mKey = new ModKey("HcBcGdMaster", ModType.Master);
             var modDir = Path.Combine(mods, "MasterMod");

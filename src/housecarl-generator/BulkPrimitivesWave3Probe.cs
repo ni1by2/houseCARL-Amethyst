@@ -77,9 +77,6 @@ internal static class BulkPrimitivesWave3Probe
         string mods = Path.Combine(instance, "mods");
         Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
         Directory.CreateDirectory(Path.Combine(dir, "game", "Data"));
-        File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-            + Path.Combine(dir, "game").Replace(@"\", @"\\") + ")\r\n");
 
         var mKey = new ModKey("HcW3Master", ModType.Master);
         var masterPath = Path.Combine(mods, "MasterMod", mKey.FileName.String);
@@ -248,9 +245,6 @@ internal static class BulkPrimitivesWave3Probe
         string mods = Path.Combine(instance, "mods");
         Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
         Directory.CreateDirectory(Path.Combine(dir, "game", "Data"));
-        File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-            + Path.Combine(dir, "game").Replace(@"\", @"\\") + ")\r\n");
 
         var mKey = new ModKey("HcW3CfMaster", ModType.Master);
         var rKey = new ModKey("HcW3CfRepl", ModType.Plugin);
@@ -439,9 +433,6 @@ internal static class BulkPrimitivesWave3Probe
         string mods = Path.Combine(instance, "mods");
         Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
         Directory.CreateDirectory(Path.Combine(dir, "game", "Data"));
-        File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-            + Path.Combine(dir, "game").Replace(@"\", @"\\") + ")\r\n");
 
         var mKey = new ModKey("HcW3DiffMaster", ModType.Master);
         var rKey = new ModKey("HcW3DiffRepl", ModType.Plugin);

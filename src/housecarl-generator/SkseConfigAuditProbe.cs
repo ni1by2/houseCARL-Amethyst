@@ -284,20 +284,20 @@ internal static class SkseConfigAuditProbe
     static SkseConfigAuditData MkData(params SkseConfigFileAudit[] files)
         => new(files, files.Length, Array.Empty<string>(), false, Array.Empty<string>(), "TestProfile");
 
-    /// <summary>MANUAL real-data harness (the tier-B LIVE GATE): run the WHOLE audit against a live MO2 instance and print
-    /// exactly what housecarl_skse_config_audit would return, plus a timing line — the empirical re-check Aaron drives (the
+    /// <summary>MANUAL real-data harness (the tier-B LIVE GATE): run the WHOLE audit against a live Amethyst connection and print
+    /// exactly what housecarl_skse_config_audit would return, plus a timing line — the empirical re-check (the
     /// CI guard pins the extractor + verdict logic; this proves the full scan over real configs). NOT in ci-all (needs a
     /// real instance + game install). Read-only; touches nothing but a temp user.json.
-    /// Usage: dotnet run --project src/housecarl-generator -- skse-config-audit-real --mo2 "&lt;MO2 instance&gt;" [--filter &lt;substr&gt;]</summary>
+    /// Usage: dotnet run --project src/housecarl-generator -- skse-config-audit-real --manifest &lt;connection.json&gt; [--filter &lt;substr&gt;]</summary>
     public static int RunReal(string[] args)
     {
-        string? mo2 = ArgVal(args, "--mo2");
+        string? manifest = ArgVal(args, "--manifest");
         string? filter = ArgVal(args, "--filter");
         int max = int.TryParse(ArgVal(args, "--max"), out var m) ? m : 80_000;
-        if (mo2 is null) { Console.WriteLine("skse-config-audit-real needs --mo2 <MO2 instance folder>"); return 2; }
+        if (manifest is null) { Console.WriteLine("skse-config-audit-real needs --manifest <connection.json>"); return 2; }
 
         var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), "hc-skse-cfgaudit-" + Guid.NewGuid().ToString("N") + ".json"));
-        using var svc = SyntheticManagerFixture.Open(mo2, 0, store);
+        using var svc = LoadOrderService.WithAmethystConnection(manifest, 0, store);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var data = svc.SkseConfigAudit();
         sw.Stop();

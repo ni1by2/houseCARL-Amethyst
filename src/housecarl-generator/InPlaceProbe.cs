@@ -255,9 +255,6 @@ internal static class InPlaceProbe
             string mods = Path.Combine(inst, "mods");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
             Directory.CreateDirectory(Path.Combine(tmpDir, "game", "Data"));
-            File.WriteAllText(Path.Combine(inst, "ModOrganizer.ini"),
-                "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                + Path.Combine(tmpDir, "game").Replace(@"\", @"\\") + ")\r\n");
 
             var mMod = Path.Combine(mods, "MasterMod"); Directory.CreateDirectory(mMod);
             File.Copy(masterPath, Path.Combine(mMod, MasterName));

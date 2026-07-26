@@ -7,24 +7,24 @@ namespace HousecarlGenerator;
 /// <summary>
 /// SkyPatcher Wave-1 CRUX harness (plan dev/plans/SKYPATCHER_DISTRIBUTOR_TOOL_PLAN_2026-07-08.md §7
 /// Wave 1): stand the REAL service path (<see cref="LoadOrderService.SkyPatcherPostState"/>) up against
-/// a live MO2 instance and print one record's computed post-SkyPatcher state — the artifact Aaron
+/// a live Amethyst connection and print one record's computed post-SkyPatcher state — the artifact a reviewer
 /// verifies against xEdit + in-game (the empirical gate; the promise is proven, not reviewed).
 ///
-/// Run: dotnet run --project src/housecarl-generator skypatcher-post-state &lt;FormID:Plugin.esp&gt; --instance &lt;MO2 instance dir&gt;
+/// Run: dotnet run --project src/housecarl-generator skypatcher-post-state &lt;FormID:Plugin.esp&gt; --manifest &lt;connection.json&gt;
 /// </summary>
 internal static class SkyPatcherHarness
 {
     public static int Run(string[] args)
     {
-        string? formid = null, instance = null;
+        string? formid = null, manifest = null;
         for (int i = 0; i < args.Length; i++)
         {
-            if (args[i] == "--instance" && i + 1 < args.Length) instance = args[++i];
+            if (args[i] == "--manifest" && i + 1 < args.Length) manifest = args[++i];
             else formid ??= args[i];
         }
-        if (formid is null || instance is null)
+        if (formid is null || manifest is null)
         {
-            Console.Error.WriteLine("usage: skypatcher-post-state <FormID:Plugin.esp> --instance <MO2 instance dir>");
+            Console.Error.WriteLine("usage: skypatcher-post-state <FormID:Plugin.esp> --manifest <connection.json>");
             return 1;
         }
 
@@ -32,7 +32,7 @@ internal static class SkyPatcherHarness
         try { fk = FormKey.Factory(formid.Trim()); }
         catch (Exception ex) { Console.Error.WriteLine($"error: bad FormID '{formid}': {ex.Message}"); return 1; }
 
-        return WithCorpus(() => Run(fk, instance));
+        return WithCorpus(() => Run(fk, manifest));
     }
 
     /// <summary>corpus.json is GENERATED, not tracked — run from outside the repo root the default
@@ -56,29 +56,29 @@ internal static class SkyPatcherHarness
     }
 
     /// <summary>
-    /// The Wave-2 layer harness: the whole SkyPatcher layer + conflict report off a live MO2 instance,
+    /// The Wave-2 layer harness: the whole SkyPatcher layer + conflict report off a live Amethyst connection,
     /// rendered by the SAME Wire the housecarl_skypatcher_layer tool uses (internals-visible) — what the
     /// tool will return, verifiable before the plugin repackages.
-    /// Run: dotnet run --project src/housecarl-generator skypatcher-layer --instance &lt;MO2 instance dir&gt; [--filter x]
+    /// Run: dotnet run --project src/housecarl-generator skypatcher-layer --manifest &lt;connection.json&gt; [--filter x]
     /// </summary>
     public static int RunLayer(string[] args)
     {
-        string? instance = null, filter = null;
+        string? manifest = null, filter = null;
         for (int i = 0; i < args.Length; i++)
         {
-            if (args[i] == "--instance" && i + 1 < args.Length) instance = args[++i];
+            if (args[i] == "--manifest" && i + 1 < args.Length) manifest = args[++i];
             else if (args[i] == "--filter" && i + 1 < args.Length) filter = args[++i];
         }
-        if (instance is null)
+        if (manifest is null)
         {
-            Console.Error.WriteLine("usage: skypatcher-layer --instance <MO2 instance dir> [--filter <folder/mod/file>]");
+            Console.Error.WriteLine("usage: skypatcher-layer --manifest <connection.json> [--filter <folder/mod/file>]");
             return 1;
         }
 
         return WithCorpus(() =>
         {
             var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), $"hc-sp-harness-{Guid.NewGuid():N}.json"));
-            var svc = SyntheticManagerFixture.Open(instance, maxPlugins: 0, store);
+            var svc = LoadOrderService.WithAmethystConnection(manifest, maxPlugins: 0, store);
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var data = svc.SkyPatcherLayer();
             sw.Stop();
@@ -88,12 +88,12 @@ internal static class SkyPatcherHarness
         });
     }
 
-    static int Run(FormKey fk, string instance)
+    static int Run(FormKey fk, string manifest)
     {
         // A throwaway user-config store (the harness never writes tool paths); the service reads the
-        // instance exactly as the product does.
+        // manifest exactly as the product does.
         var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), $"hc-sp-harness-{Guid.NewGuid():N}.json"));
-        var svc = SyntheticManagerFixture.Open(instance, maxPlugins: 0, store);
+        var svc = LoadOrderService.WithAmethystConnection(manifest, maxPlugins: 0, store);
 
         Console.WriteLine("================================================================");
         Console.WriteLine(" SkyPatcher post-state harness (Wave 1 crux)");

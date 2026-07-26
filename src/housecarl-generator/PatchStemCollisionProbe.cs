@@ -45,9 +45,6 @@ internal static class PatchStemCollisionProbe
             string mods = Path.Combine(instance, "mods");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
             Directory.CreateDirectory(Path.Combine(root, "game", "Data"));
-            File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-                "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
 
             // A base mod providing an ACTIVE "Patch.esp" that carries a weapon we can edit (so the write has a real target
             // AND the default stem "Patch" collides with this plugin's basename).

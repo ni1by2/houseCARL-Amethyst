@@ -10,7 +10,7 @@ namespace HousecarlGenerator;
 /// HCBR-2026-06-09-03 — `cross_plugin_query type=Perk references=` hard-errored (opaquely) on the whole call.
 ///
 /// DIAGNOSIS (<c>perk-refs-diagnose</c>): the scan's per-record test is Mutagen's own <c>EnumerateFormLinks()</c>,
-/// which LAZILY parses subrecord content (a perk's Effects); run it over every PERK in a plugin / the whole MO2
+/// which LAZILY parses subrecord content (a perk's Effects); run it over every PERK in a plugin or active Amethyst
 /// order and report which records throw, with full exception detail. The ARR sweep found exactly ONE offender in
 /// 1,822 winner perks — 00080E:Requiem - Special Feats.esp, whose PerkEntryPointModifyActorValue carries a
 /// parameter-type flag Mutagen's model rejects (MalformedDataException) — and that single record aborted the
@@ -25,7 +25,7 @@ namespace HousecarlGenerator;
 /// throw from EnumerateFormLinks (so a GREEN is meaningful). RED before the fix, GREEN after.
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator perk-refs-guard</c>
-///      <c>dotnet run --project src/housecarl-generator perk-refs-diagnose [-- --source &lt;path&gt; | --mo2 &lt;instanceDir&gt;]</c>
+///      <c>dotnet run --project src/housecarl-generator perk-refs-diagnose [-- --source &lt;path&gt; | --manifest &lt;connection.json&gt;]</c>
 /// </summary>
 internal static class PerkRefsProbe
 {
@@ -110,27 +110,26 @@ internal static class PerkRefsProbe
         return pass ? 0 : 1;
     }
 
-    /// <summary>REAL-DATA proof (manual; needs an MO2 instance + a generated corpus.json): drive the SERVICE-layer
+    /// <summary>REAL-DATA proof (manual; needs an Amethyst connection + a generated corpus.json): drive the SERVICE-layer
     /// scan with the report's exact failing call — <c>type=Perk references=01CEAD:Skyrim.esm</c> (KYWD
     /// MagicDamageFire) — over the live order. Before the fix the whole call threw; after, it must return with no
     /// error and account any unscannable perk(s) by FormKey in the ScanNote. Match count is data-dependent and
     /// reported, not asserted.
-    /// Run: <c>dotnet run --project src/housecarl-generator perk-refs-proof -- --mo2 &lt;instanceDir&gt; --corpus &lt;corpus.json&gt; [--references XXXXXX:Plugin.esp]</c></summary>
+    /// Run: <c>dotnet run --project src/housecarl-generator perk-refs-proof -- --manifest &lt;connection.json&gt; --corpus &lt;corpus.json&gt; [--references XXXXXX:Plugin.esp]</c></summary>
     public static int RunProof(string[] args)
     {
         var f = WriteEngine.ParseFlags(args);
-        var instanceDir = f.GetValueOrDefault("mo2");
+        var manifest = f.GetValueOrDefault("manifest");
         var corpus = f.GetValueOrDefault("corpus");
-        if (instanceDir is null || corpus is null) { Console.WriteLine("SKIP: needs --mo2 <instanceDir> and --corpus <corpus.json>"); return 0; }
-        if (!Directory.Exists(instanceDir) || !File.Exists(corpus)) { Console.WriteLine($"SKIP: --mo2 or --corpus path not found"); return 0; }
+        if (manifest is null || corpus is null) { Console.WriteLine("SKIP: needs --manifest <connection.json> and --corpus <corpus.json>"); return 0; }
+        if (!File.Exists(manifest) || !File.Exists(corpus)) { Console.WriteLine("SKIP: --manifest or --corpus path not found"); return 0; }
         CorpusRulebook.CorpusPath = corpus;                                   // ResolveTypeFilter("Perk") reads the type catalog
         var refRaw = f.GetValueOrDefault("references") ?? "01CEAD:Skyrim.esm";   // the report's row-1 repro (KYWD MagicDamageFire)
         var refFk = FormKey.Factory(refRaw);
 
-        Console.WriteLine($"################  REAL-DATA PROOF — cross_plugin_query type=Perk references={refRaw} on {Path.GetFileName(instanceDir)}  ################");
+        Console.WriteLine($"################  REAL-DATA PROOF — cross_plugin_query type=Perk references={refRaw}  ################");
         Console.WriteLine();
-        var p = LegacyFixturePaths.Resolve(instanceDir);
-        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        var order = SyntheticManagerFixture.ReadConnectedOrder(manifest);
         using var resolver = LoadOrderResolver.Build(order.OrderedPaths.ToList());
         Console.WriteLine($"   resolver: {resolver.PluginCount} plugins, {resolver.RecordCount:N0} records, {resolver.ExcludedPlugins.Count} excluded");
         var svc = LoadOrderService.ForGuard(resolver, new UserConfigStore(Path.Combine(Path.GetTempPath(), "hc-perkrefs-proof.user.json")));
@@ -177,10 +176,10 @@ internal static class PerkRefsProbe
 
     public static int RunDiagnose(string[] args)
     {
-        // --mo2 <instanceDir>: sweep the WHOLE load order through the PRODUCT stream (WinnerRecordsOfType),
+        // --manifest <connection.json>: sweep the whole Amethyst load order through WinnerRecordsOfType,
         // the exact loop cross_plugin_query runs. Without it: a quick single-plugin sweep of Skyrim.esm.
         var f = HousecarlCore.WriteEngine.ParseFlags(args);
-        if (f.GetValueOrDefault("mo2") is { } instanceDir) return DiagnoseFullOrder(instanceDir);
+        if (f.GetValueOrDefault("manifest") is { } manifest) return DiagnoseFullOrder(manifest);
 
         var src = f.GetValueOrDefault("source") ?? DefaultSource;
         if (!File.Exists(src)) { Console.WriteLine($"SKIP: source plugin not found: {src}"); return 0; }
@@ -194,13 +193,12 @@ internal static class PerkRefsProbe
         return 0;
     }
 
-    static int DiagnoseFullOrder(string instanceDir)
+    static int DiagnoseFullOrder(string manifest)
     {
-        Console.WriteLine($"################  DIAGNOSIS — EnumerateFormLinks over ALL winner PERKs in the {Path.GetFileName(instanceDir)} order  ################");
+        Console.WriteLine("################  DIAGNOSIS — EnumerateFormLinks over ALL winner PERKs in the active Amethyst order  ################");
         Console.WriteLine();
-        var p = LegacyFixturePaths.Resolve(instanceDir);
-        var order = HousecarlCore.AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
-        Console.WriteLine($"   order: {order.OrderedPaths.Count} plugins (profile '{p.ProfileName}')");
+        var order = SyntheticManagerFixture.ReadConnectedOrder(manifest);
+        Console.WriteLine($"   order: {order.OrderedPaths.Count} plugins (profile '{order.ProfileName}')");
         using var resolver = HousecarlCore.LoadOrderResolver.Build(order.OrderedPaths.ToList());
         Console.WriteLine($"   resolver: {resolver.PluginCount} plugins, {resolver.RecordCount:N0} records, {resolver.ExcludedPlugins.Count} excluded");
         Console.WriteLine();

@@ -378,7 +378,7 @@ internal static class PlaceAssetProbe
 
     // ---- synthetic MO2 layout helpers (the AssetStatusProbe / FreshnessCaptureProbe pattern) ----
 
-    /// <summary>Create a synthetic MO2 instance skeleton (mods/, game/Data/, profiles/Default/, ModOrganizer.ini) and
+    /// <summary>Create a manager-neutral fixture skeleton (mods/, game/Data/, profiles/Default/) and
     /// return (modsDir, dataDir, profileDir). The caller writes the profile + any mods.</summary>
     static (string mods, string data, string prof) MakeInstance(string inst)
     {
@@ -386,7 +386,6 @@ internal static class PlaceAssetProbe
         var data = Path.Combine(inst, "game", "Data");
         var prof = Path.Combine(inst, "profiles", "Default");
         foreach (var d in new[] { mods, data, prof }) Directory.CreateDirectory(d);
-        WriteIni(inst, "Default", Path.Combine(inst, "game"));
         return (mods, data, prof);
     }
 
@@ -404,11 +403,6 @@ internal static class PlaceAssetProbe
         File.WriteAllText(Path.Combine(profDir, "Skyrim.ini"),
             "[Archive]\r\nsResourceArchiveList=" + resourceArchiveList + "\r\n");
     }
-
-    static void WriteIni(string inst, string profile, string gameDir) =>
-        File.WriteAllText(Path.Combine(inst, "ModOrganizer.ini"),
-            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(" + profile + ")\r\ngamePath=@ByteArray("
-            + gameDir.Replace(@"\", @"\\") + ")\r\n");
 
     static void WriteLoose(string baseDir, string rel, byte[] bytes)
     {

@@ -395,27 +395,27 @@ internal static class RemapWave1Probe
     }
 
     // ======================================================================
-    //  REAL — manual --mo2 run: ESL-compact a real plugin to a NEW P′ for Aaron to xEdit-verify,
+    //  REAL — manual Amethyst run: ESL-compact a real plugin to a NEW P′ for xEdit verification,
     //  and measure the identify-pass over the live order (plan §9 Wave 1 real-data gate).
     // ======================================================================
 
     /// <summary>
-    /// MANUAL real-data run (needs <c>--mo2 &lt;instanceDir&gt; --plugin &lt;Name.esp&gt;</c>; SKIPs without). ESL-compacts a
+    /// MANUAL real-data run (needs <c>--manifest &lt;connection.json&gt; --plugin &lt;Name.esp&gt;</c>; SKIPs without). ESL-compacts a
     /// REAL plugin's originating records into the 0x800–0xFFF window, emits a NEW P′ (originals untouched — written to
     /// <c>--out</c> or a temp dir) for Aaron to load in xEdit, and runs + TIMES the identify-pass over the whole live
     /// order, REPORTING (not rewriting) any external referencers. Read-only on the load order except the P′ it writes
     /// into its own output dir. Refuses LOUD on the real boundaries (too many records for the light range; a nested-only
     /// record; an unparseable plugin) — the same honest limits the guard pins, now against real data.
-    /// Run: dotnet run --project src/housecarl-generator remap-wave1-real -- --mo2 &lt;inst&gt; --plugin &lt;Name.esp&gt; [--out &lt;dir&gt;]
+    /// Run: dotnet run --project src/housecarl-generator remap-wave1-real -- --manifest &lt;connection.json&gt; --plugin &lt;Name.esp&gt; [--out &lt;dir&gt;]
     /// </summary>
     public static int RunReal(string[] args)
     {
         var f = WriteEngine.ParseFlags(args);
-        var instanceDir = f.GetValueOrDefault("mo2");
+        var instanceDir = f.GetValueOrDefault("manifest");
         var pluginName = f.GetValueOrDefault("plugin");
-        if (instanceDir is null || !Directory.Exists(instanceDir) || string.IsNullOrWhiteSpace(pluginName))
+        if (instanceDir is null || !File.Exists(instanceDir) || string.IsNullOrWhiteSpace(pluginName))
         {
-            Console.WriteLine("SKIP: needs --mo2 <instanceDir> --plugin <Name.esp>. A real ESL-compaction + identify-pass can only");
+            Console.WriteLine("SKIP: needs --manifest <connection.json> --plugin <Name.esp>. A real ESL-compaction + identify-pass can only");
             Console.WriteLine("      be measured/verified against a real load order (a synthetic fixture is the guard's job).");
             return 0;
         }
@@ -423,13 +423,12 @@ internal static class RemapWave1Probe
         Directory.CreateDirectory(outDir);
 
         Console.WriteLine("################  COMPACT/MERGE WAVE 1 — real ESL-compact + identify-pass  ################");
-        Console.WriteLine($"   instance: {instanceDir}");
+        Console.WriteLine($"   manifest: {instanceDir}");
         Console.WriteLine($"   plugin  : {pluginName}");
         Console.WriteLine($"   out     : {outDir}");
         Console.WriteLine();
 
-        var p = LegacyFixturePaths.Resolve(instanceDir);
-        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        var order = SyntheticManagerFixture.ReadConnectedOrder(instanceDir);
         var orderedPaths = order.OrderedPaths.ToList();
         var srcPath = orderedPaths.FirstOrDefault(op => string.Equals(Path.GetFileName(op), pluginName, StringComparison.OrdinalIgnoreCase));
         if (srcPath is null) { Console.WriteLine($"ABORT: '{pluginName}' is not in the active order."); return 1; }

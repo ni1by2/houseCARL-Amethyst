@@ -320,16 +320,16 @@ internal static class NativePairingProbe
     }
 
     /// <summary>The MANUAL real-data harness (the live gate, tier-B RunReal pattern): runs the whole pairing audit
-    /// against a live MO2 instance and prints the render + factual timing. NOT part of ci-all.</summary>
+    /// against a live Amethyst connection and prints the render + factual timing. NOT part of ci-all.</summary>
     public static int RunReal(string[] args)
     {
-        string? mo2 = ArgVal(args, "--mo2");
+        string? manifest = ArgVal(args, "--manifest");
         string? filter = ArgVal(args, "--filter");
         int max = int.TryParse(ArgVal(args, "--max"), out var m) ? m : 80_000;
-        if (mo2 is null) { Console.WriteLine("native-pairing-real needs --mo2 <MO2 instance folder>"); return 2; }
+        if (manifest is null) { Console.WriteLine("native-pairing-real needs --manifest <connection.json>"); return 2; }
 
         var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), "hc-native-pairing-" + Guid.NewGuid().ToString("N") + ".json"));
-        using var svc = SyntheticManagerFixture.Open(mo2, 0, store);
+        using var svc = LoadOrderService.WithAmethystConnection(manifest, 0, store);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var data = svc.NativePairingAudit();
         sw.Stop();

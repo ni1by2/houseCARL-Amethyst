@@ -273,22 +273,21 @@ internal static class ConflictDiffProbe
         Console.WriteLine($"   {what,-72}: {(ok ? "PASS" : "FAIL")}");
     }
 
-    /// <summary>REAL-DATA proof (manual; needs an MO2 instance with the Ashe plugins): the report's exact repro —
+    /// <summary>REAL-DATA proof (manual; needs an Amethyst connection with the Ashe plugins): the report's exact repro —
     /// the whole-record conflict diff of <c>E495A3:Ashe - Fire and Blood.esp</c> (MM_RelentlessFury, SPEL), whose
     /// origin and winning patch both carry exactly 1 effect but with DIFFERENT BaseEffect. The old diff said
     /// "(identical to winner)"; the content diff must report the Effects delta. Also prints the PlayerFaction
     /// (000DB1:Skyrim.esm) tree diff — the masked-regression record — for eyes-on confirmation.
-    /// Run: <c>dotnet run --project src/housecarl-generator conflict-diff-proof -- --mo2 &lt;instanceDir&gt;</c></summary>
+    /// Run: <c>dotnet run --project src/housecarl-generator conflict-diff-proof -- --manifest &lt;connection.json&gt;</c></summary>
     public static int RunProof(string[] args)
     {
         var f = WriteEngine.ParseFlags(args);
-        var instanceDir = f.GetValueOrDefault("mo2");
-        if (instanceDir is null || !Directory.Exists(instanceDir)) { Console.WriteLine("SKIP: needs --mo2 <instanceDir>"); return 0; }
+        var instanceDir = f.GetValueOrDefault("manifest");
+        if (instanceDir is null || !File.Exists(instanceDir)) { Console.WriteLine("SKIP: needs --manifest <connection.json>"); return 0; }
 
         Console.WriteLine($"################  REAL-DATA PROOF — conflict-tree content diff on {Path.GetFileName(instanceDir)}  ################");
         Console.WriteLine();
-        var p = LegacyFixturePaths.Resolve(instanceDir);
-        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        var order = SyntheticManagerFixture.ReadConnectedOrder(instanceDir);
         using var resolver = LoadOrderResolver.Build(order.OrderedPaths.ToList());
         Console.WriteLine($"   resolver: {resolver.PluginCount} plugins, {resolver.RecordCount:N0} records");
         var svc = LoadOrderService.ForGuard(resolver, new UserConfigStore(Path.Combine(Path.GetTempPath(), "hc-conflictdiff-proof.user.json")));

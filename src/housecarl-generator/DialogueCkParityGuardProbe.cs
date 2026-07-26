@@ -99,9 +99,6 @@ internal static class DialogueCkParityGuardProbe
             string mods = Path.Combine(instance, "mods");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
             Directory.CreateDirectory(Path.Combine(root, "game", "Data"));
-            File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-                "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
 
             var mKey = new ModKey("HcCkpMaster", ModType.Master);
             var modDir = Path.Combine(mods, "MasterMod");

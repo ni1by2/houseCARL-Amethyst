@@ -96,9 +96,6 @@ internal static class OverwriteResolveProbe
                 string data = Path.Combine(root, "game", "Data");
                 Directory.CreateDirectory(profiles); Directory.CreateDirectory(Path.Combine(mods, "MasterMod"));
                 Directory.CreateDirectory(ovw); Directory.CreateDirectory(data);
-                File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-                    "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                    + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
 
                 var mKey = new ModKey("HcOvwMaster", ModType.Master);
                 {

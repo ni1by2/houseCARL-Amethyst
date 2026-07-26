@@ -166,7 +166,6 @@ internal static class AssetStatusProbe
                 WriteProfile(prof, new[] { "PluginA.esp", "PluginB.esp" }, new[] { "*PluginA.esp", "*PluginB.esp" },
                              new[] { "+LooseWins", "+ModA", "+ModB" });        // LooseWins highest priority
                 WriteSkyrimIni(prof, "Skyrim - Textures.bsa");
-                WriteIni(inst, "Default", Path.Combine(inst, "game"));
 
                 var store = new UserConfigStore(Path.Combine(root, "user-d.json"));
                 using var svc = SyntheticManagerFixture.Open(inst, 0, store);
@@ -211,7 +210,6 @@ internal static class AssetStatusProbe
                 File.Copy(fixA, Path.Combine(modA, "PluginA.bsa"));
                 WriteProfile(prof, new[] { "PluginA.esp" }, new[] { "*PluginA.esp" }, new[] { "+ModA" });
                 WriteSkyrimIni(prof, "");
-                WriteIni(inst, "Default", Path.Combine(inst, "game"));
 
                 var store = new UserConfigStore(Path.Combine(root, "user-f.json"));
                 using var svc = SyntheticManagerFixture.Open(inst, 0, store);
@@ -281,7 +279,6 @@ internal static class AssetStatusProbe
                 File.WriteAllBytes(Path.Combine(modA, "PluginA.bsa"), good[..(good.Length / 3)]);   // truncated → unreadable table
                 WriteProfile(prof, new[] { "PluginA.esp" }, new[] { "*PluginA.esp" }, new[] { "+ModA" });
                 // NO Skyrim.ini → the base-archive discovery warning fires too.
-                WriteIni(inst, "Default", Path.Combine(inst, "game"));
 
                 var store = new UserConfigStore(Path.Combine(root, "user-h.json"));
                 using var svc = SyntheticManagerFixture.Open(inst, 0, store);
@@ -314,7 +311,6 @@ internal static class AssetStatusProbe
                     if (withAsset) WriteLoose(modA, switchRel);
                     WriteProfile(prof, new[] { "PluginA.esp" }, new[] { "*PluginA.esp" }, new[] { "+ModA" });
                     WriteSkyrimIni(prof, "");
-                    WriteIni(inst, "Default", Path.Combine(inst, "game"));
                     return inst;
                 }
                 var inst1 = MakeInstance("svc-i1", withAsset: true);
@@ -352,11 +348,6 @@ internal static class AssetStatusProbe
         File.WriteAllText(Path.Combine(profDir, "Skyrim.ini"),
             "[Archive]\r\nsResourceArchiveList=" + resourceArchiveList + "\r\n");
     }
-
-    static void WriteIni(string inst, string profile, string gameDir) =>
-        File.WriteAllText(Path.Combine(inst, "ModOrganizer.ini"),
-            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(" + profile + ")\r\ngamePath=@ByteArray("
-            + gameDir.Replace(@"\", @"\\") + ")\r\n");
 
     static void WriteLoose(string baseDir, string rel)
     {

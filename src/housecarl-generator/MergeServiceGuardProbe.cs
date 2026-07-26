@@ -43,9 +43,6 @@ internal static class MergeServiceGuardProbe
             string mods = Path.Combine(instance, "mods");
             string data = Path.Combine(root, "game", "Data");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods); Directory.CreateDirectory(data);
-            File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-                "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
 
             // ---- fixture mods ----
             // Base master: one weapon both donors will override.

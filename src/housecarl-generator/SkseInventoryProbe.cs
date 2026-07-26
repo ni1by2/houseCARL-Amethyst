@@ -6,23 +6,23 @@ namespace HousecarlGenerator;
 
 /// <summary>
 /// MANUAL real-data harness for housecarl_skse_inventory (SKSE-plugin-layer visibility, gap 2026-06-08). Runs the REAL
-/// service + renderer against a live MO2 instance and prints exactly what the tool would return, plus a timing line —
-/// the empirical re-check Aaron drives (the CI skse-reader-guard pins the DECODE; this proves the whole inventory over
+/// service + renderer against a live Amethyst connection and prints exactly what the tool would return, plus a timing line —
+/// the empirical re-check (the CI skse-reader-guard pins the DECODE; this proves the whole inventory over
 /// real DLLs). NOT in ci-all (needs a real instance + game install). Read-only; touches nothing but a temp user.json.
-/// Usage: dotnet run --project src/housecarl-generator -- skse-inventory-real --mo2 "&lt;MO2 instance&gt;" [--filter &lt;substr&gt;]
+/// Usage: dotnet run --project src/housecarl-generator -- skse-inventory-real --manifest &lt;connection.json&gt; [--filter &lt;substr&gt;]
 /// </summary>
 internal static class SkseInventoryProbe
 {
     public static int RunReal(string[] args)
     {
-        string? mo2 = ArgVal(args, "--mo2");
+        string? manifest = ArgVal(args, "--manifest");
         string? filter = ArgVal(args, "--filter");
         bool peek = Array.IndexOf(args, "--peek") >= 0;             // tier D: peek the filter-matched DLLs (needs --filter)
-        if (mo2 is null) { Console.WriteLine("skse-inventory-real needs --mo2 <MO2 instance folder>"); return 2; }
+        if (manifest is null) { Console.WriteLine("skse-inventory-real needs --manifest <connection.json>"); return 2; }
         if (peek && filter is null) { Console.WriteLine("--peek needs --filter (a peek is per-DLL)"); return 2; }
 
         var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), "hc-skse-real-" + Guid.NewGuid().ToString("N") + ".json"));
-        using var svc = SyntheticManagerFixture.Open(mo2, 0, store);
+        using var svc = LoadOrderService.WithAmethystConnection(manifest, 0, store);
         var sw = Stopwatch.StartNew();
         var data = svc.SkseInventory(peek ? filter : null);
         sw.Stop();

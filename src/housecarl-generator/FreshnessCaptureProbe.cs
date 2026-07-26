@@ -9,17 +9,16 @@ namespace HousecarlGenerator;
 
 /// <summary>
 /// Freshness + write-capture guard (2026-06-12 adversarial hunt F5–F8 + the PR #51 review note): the freshness
-/// machinery is what lets houseCARL promise "the answer reflects the CURRENT MO2 state" without a daemon — so a
+/// machinery is what lets houseCARL promise "the answer reflects the current manager state" without a daemon — so a
 /// freshness check that misses a change (F7/F8), or an answer composed from TWO adjacent builds (F5/F6), is a
 /// silent wrong answer (Q3), not a perf nit. Arms:
 ///
-///   1  F8/profile — MO2 "Restore Backup" rewrites the profile files with OLDER mtimes; the wall-clock
+///   1  F8/profile — restoring profile files can give them OLDER mtimes; the wall-clock
 ///      `mtime &gt; builtUtc` check is blind to a regression, so the restored order stays invisible for the
 ///      process lifetime. The fix compares last-SEEN mtimes by VALUE (!=), like the resolver always has.
 ///      Deterministic RED.
-///   2  F7+F8/ini — SetInstance stamped its ini baseline AFTER reading the instance (the one stamp-after in
-///      the file), and the profile-switch check used `&lt;=`; a backdated/restored ModOrganizer.ini profile
-///      switch is invisible forever. Deterministic RED.
+///   2  F7+F8/profile switch — switching native fixture roots while retaining old cache baselines could
+///      leave the previous profile visible. The guard requires an immediate rebuild.
 ///   3  F6/status — housecarl_load_order_status read the resolver's view and then the per-build fields
 ///      (warnings / staleness / profile dir) OUTSIDE the gate, with file I/O in between — a concurrent
 ///      freshness rebuild lands in that gap and the one status line mixes two builds. Hammer: concurrent
@@ -107,13 +106,8 @@ internal static class FreshnessCaptureProbe
                 File.Copy(masterFile, Path.Combine(mods, "MasterMod", masterName));
                 Directory.CreateDirectory(Path.Combine(mods, "ExtraMod"));
                 File.Copy(extraFile, Path.Combine(mods, "ExtraMod", extraName));
-                WriteIni(inst, "Default");
                 return inst;
             }
-            void WriteIni(string inst, string profile) =>
-                File.WriteAllText(Path.Combine(inst, "ModOrganizer.ini"),
-                    "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(" + profile + ")\r\ngamePath=@ByteArray("
-                    + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
             void WriteProfile(string profDir, string[] loadorder, string[] plugins, string[] modlist)
             {
                 Directory.CreateDirectory(profDir);
@@ -157,8 +151,7 @@ internal static class FreshnessCaptureProbe
                 var before = svc.Stats().plugins;
                 Check(before == 1 && svc.ProfileName == "Default", $"baseline on profile 'Default' — {before}/1 plugin, profile={svc.ProfileName}");
 
-                WriteIni(inst, "Second");
-                SyntheticManagerFixture.Switch(svc, inst);
+                SyntheticManagerFixture.Switch(svc, inst, profileName: "Second");
                 var after = svc.Stats().plugins;
                 Check(svc.ProfileName == "Second" && after == 2,
                       $"the synthetic profile switch was followed — profile={svc.ProfileName}, {after}/2 plugins");

@@ -21,11 +21,11 @@ if (args.Length > 0 && CiAll.TryDispatch(args[0], args[1..], out var ciRc)) retu
 // Maintenance diagnostic: re-verify the mutable-collection whitelist on a Mutagen bump.
 if (args.Length > 0 && args[0] == "vocab") return Probe.RunVocab();
 
-// SkyPatcher Wave-1 CRUX harness: one record's computed post-SkyPatcher state off a LIVE MO2 instance —
+// SkyPatcher Wave-1 CRUX harness: one record's computed post-SkyPatcher state from a live Amethyst connection —
 // the artifact the empirical gate verifies against xEdit + in-game (plan §7 Wave 1).
 if (args.Length > 0 && args[0] == "skypatcher-post-state") return SkyPatcherHarness.Run(args[1..]);
 
-// SkyPatcher Wave-2 harness: the whole-layer scan + INI-vs-INI conflict report off a LIVE MO2 instance,
+// SkyPatcher Wave-2 harness: the whole-layer scan + INI-vs-INI conflict report from a live Amethyst connection,
 // rendered exactly as housecarl_skypatcher_layer returns it (the Wave-2 empirical artifact).
 if (args.Length > 0 && args[0] == "skypatcher-layer") return SkyPatcherHarness.RunLayer(args[1..]);
 
@@ -194,11 +194,11 @@ if (args.Length > 0 && args[0] == "inplace-remove-nested-proof") return InPlaceP
 if (args.Length > 0 && args[0] == "perk-refs-diagnose") return PerkRefsProbe.RunDiagnose(args[1..]);
 
 // Perk references= crash (HCBR-2026-06-09-03): REAL-DATA proof — the report's exact failing call (type=Perk references=)
-// over a live MO2 order through the service layer. Manual; needs --mo2 + --corpus (skips without).
+// over a live Amethyst order through the service layer. Manual; needs --manifest + --corpus (skips without).
 if (args.Length > 0 && args[0] == "perk-refs-proof") return PerkRefsProbe.RunProof(args[1..]);
 
 // Conflict-tree content diff (HCBR-2026-06-09-01): REAL-DATA proof — the report's exact repro (MM_RelentlessFury's
-// "(identical to winner)" false ITM) over a live MO2 order. Manual; needs --mo2 (skips without).
+// "(identical to winner)" false ITM) over a live Amethyst order. Manual; needs --manifest (skips without).
 if (args.Length > 0 && args[0] == "conflict-diff-proof") return ConflictDiffProbe.RunProof(args[1..]);
 
 // FormID allocation floor (HCBR-2026-06-09-04): EXPLORATORY — pin the Mutagen NextFormID semantics (fresh-mod init,
@@ -217,7 +217,7 @@ if (args.Length > 0 && args[0] == "esl-real-scan") return EslFormIdProbe.RunReal
 // IN-PLACE WRITE LANE, Wave 0 (design-gating, IN_PLACE_WRITE_LANE_PLAN §5.3/§9 STEP-2): MANUAL/REAL-DATA probe —
 // no-op re-serialize a sample of REAL plugins (counter-preserving, the §5.1-correct in-place shape) and measure the
 // whole-plugin byte divergence surface (identical / header-only / body / records-changed / unloadable), so fork #1's
-// round-trip accept/refuse threshold is calibrated on measured reality. Needs --mo2 <instance>; SKIPs without (a
+// round-trip accept/refuse threshold is calibrated on measured reality. Needs --manifest <connection.json>; SKIPs without (a
 // synthetic fixture round-trips clean and would reveal nothing). Writes only to temp; read-only on the load order.
 if (args.Length > 0 && args[0] == "roundtrip-probe") return RoundTripProbe.RunProbe(args[1..]);
 
@@ -230,7 +230,7 @@ if (args.Length > 0 && args[0] == "remap-wave1-mech") return RemapWave1Probe.Run
 // it dispatches through CiAll.TryDispatch above (the ONE CI source of truth), so it is NOT listed here.
 
 // COMPACT/MERGE Wave 1 real-data run (MANUAL): ESL-compact a real plugin to a NEW P′ for Aaron to xEdit-verify, and
-// time the identify-pass over the live order. Needs --mo2 <inst> --plugin <Name.esp>; SKIPs without.
+// time the identify-pass over the live order. Needs --manifest <connection.json> --plugin <Name.esp>; SKIPs without.
 if (args.Length > 0 && args[0] == "remap-wave1-real") return RemapWave1Probe.RunReal(args[1..]);
 
 // COMPACT/MERGE Wave 2 (COMPACT_MERGE_PLAN §4): EXPLORATORY mechanism pin — settle, self-contained, whether the
@@ -239,7 +239,7 @@ if (args.Length > 0 && args[0] == "remap-wave1-real") return RemapWave1Probe.Run
 if (args.Length > 0 && args[0] == "remap-wave2-nested-mech") return RemapWave2NestedMechProbe.RunMechanism(args[1..]);
 
 // SKSE-plugin-layer visibility (gap 2026-06-08) MANUAL real-data harness: run housecarl_skse_inventory against a live
-// MO2 instance and print the render + timing (the CI skse-reader-guard pins the decode; this proves the full inventory).
+// Amethyst connection and print the render + timing (the CI skse-reader-guard pins the decode; this proves the full inventory).
 if (args.Length > 0 && args[0] == "skse-inventory-real") return SkseInventoryProbe.RunReal(args[1..]);
 
 // SKSE tier D (static peek, #199): the CI guard for the import walk / string extraction / Debug-CRT verdict / render.
@@ -247,12 +247,12 @@ if (args.Length > 0 && args[0] == "skse-inventory-real") return SkseInventoryPro
 if (args.Length > 0 && args[0] == "skse-peek-guard") return SksePeekProbe.RunGuard(args[1..]);
 
 // SKSE config audit (tier B, #199) reference-extractor + verdict CI guard, and the manual real-data harness (the live gate:
-// runs the whole audit against a live MO2 instance and prints the audit + timing).
+// runs the whole audit against a live Amethyst connection and prints the audit + timing).
 if (args.Length > 0 && args[0] == "skse-config-audit-guard") return SkseConfigAuditProbe.RunGuard(args[1..]);
 if (args.Length > 0 && args[0] == "skse-config-audit-real") return SkseConfigAuditProbe.RunReal(args[1..]);
 
 // Native-function pairing audit: the CI guard (pure extractor + classification + ladder + renderer arms) and the
-// manual real-data harness (the live gate: the whole audit against a live MO2 instance, render + timing).
+// manual real-data harness (the live gate: the whole audit against a live Amethyst connection, render + timing).
 if (args.Length > 0 && args[0] == "native-pairing-guard") return NativePairingProbe.RunGuard(args[1..]);
 if (args.Length > 0 && args[0] == "native-pairing-real") return NativePairingProbe.RunReal(args[1..]);
 

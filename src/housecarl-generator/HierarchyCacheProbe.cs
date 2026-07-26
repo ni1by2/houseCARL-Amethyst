@@ -14,8 +14,8 @@ namespace HousecarlGenerator;
 ///
 /// Fixed two ways, both locked here: ClassParentsForDecompile derives the instance paths FIRST
 /// (under the service gate, the established gate→parents lock order), and the first derivation
-/// itself invalidates any cache built before it. Self-contained: synthesizes a minimal MO2 instance
-/// (ModOrganizer.ini + profile files + a mod shipping one .psc header) in temp — no game data.
+/// itself invalidates any cache built before it. Self-contained: synthesizes native profile files and
+/// a staged mod shipping one .psc header in temp — no game data.
 /// </summary>
 internal static class HierarchyCacheProbe
 {
@@ -37,9 +37,6 @@ internal static class HierarchyCacheProbe
             string mods = Path.Combine(instance, "mods");
             string data = Path.Combine(root, "game", "Data");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods); Directory.CreateDirectory(data);
-            File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
-                "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-                + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
             File.WriteAllText(Path.Combine(profiles, "loadorder.txt"), "# header\r\n");
             File.WriteAllText(Path.Combine(profiles, "plugins.txt"), "");
             File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n+SourceMod\r\n");

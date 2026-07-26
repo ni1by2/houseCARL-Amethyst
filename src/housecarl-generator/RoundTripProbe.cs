@@ -49,19 +49,19 @@ namespace HousecarlGenerator;
 /// This is a MANUAL/real-data probe (like esl-real-scan / conflict-diff-proof / perk-refs-proof): it needs real
 /// CK-/xEdit-/Wrye-Bash-authored plugins, which a self-contained CI fixture cannot substitute for (a synthetic
 /// plugin round-trips clean by construction and would reveal nothing). It writes ONLY to the system temp dir
-/// and never mutates the real load order (read-only). SKIPs cleanly without --mo2.
+/// and never mutates the real load order (read-only). SKIPs cleanly without --manifest.
 ///
-/// Run: dotnet run --project src/housecarl-generator roundtrip-probe -- --mo2 &lt;instanceDir&gt; [--max N] [--plugins A.esp,B.esp]
+/// Run: dotnet run --project src/housecarl-generator roundtrip-probe -- --manifest &lt;connection.json&gt; [--max N] [--plugins A.esp,B.esp]
 /// </summary>
 internal static class RoundTripProbe
 {
     public static int RunProbe(string[] args)
     {
         var f = WriteEngine.ParseFlags(args);
-        var instanceDir = f.GetValueOrDefault("mo2");
-        if (instanceDir is null || !Directory.Exists(instanceDir))
+        var instanceDir = f.GetValueOrDefault("manifest");
+        if (instanceDir is null || !File.Exists(instanceDir))
         {
-            Console.WriteLine("SKIP: needs --mo2 <instanceDir>. The whole-plugin round-trip divergence surface can only be");
+            Console.WriteLine("SKIP: needs --manifest <connection.json>. The whole-plugin round-trip divergence surface can only be");
             Console.WriteLine("      measured against REAL CK-/xEdit-/Wrye-Bash-authored plugins — a synthetic fixture round-trips");
             Console.WriteLine("      clean by construction and would reveal nothing. (This is why Wave 0 is a manual probe, not a CI guard.)");
             return 0;
@@ -75,8 +75,7 @@ internal static class RoundTripProbe
         Console.WriteLine($"   instance: {instanceDir}");
         Console.WriteLine();
 
-        var p = LegacyFixturePaths.Resolve(instanceDir);
-        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        var order = SyntheticManagerFixture.ReadConnectedOrder(instanceDir);
         var orderedPaths = order.OrderedPaths.ToList();
         // filename -> winning on-disk path (a plugin filename is unique in a load order; OrderedPaths is the
         // resolved winner per plugin). The master-resolution map for step 2's .WithLoadOrder.

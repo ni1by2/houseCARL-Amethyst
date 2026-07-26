@@ -185,9 +185,6 @@ internal static class FacegenCarryProbe
         var data = Path.Combine(inst, "game", "Data");
         var prof = Path.Combine(inst, "profiles", "Default");
         foreach (var d in new[] { mods, data, prof }) Directory.CreateDirectory(d);
-        File.WriteAllText(Path.Combine(inst, "ModOrganizer.ini"),
-            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
-            + Path.Combine(inst, "game").Replace(@"\", @"\\") + ")\r\n");
         return (mods, prof);
     }
 

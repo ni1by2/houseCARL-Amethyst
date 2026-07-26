@@ -150,17 +150,16 @@ internal static class PkcuProbe
 
     /// <summary>Real-scale proof: build an explicit staged order (AmethystLoadOrder.Build → LoadOrderResolver.Build)
     /// with the malformed plugin appended, and assert the whole order resolves with ONLY that one plugin excluded — i.e.
-    /// no regression at full scale + isolation works in the real world. args: &lt;mo2InstanceDir&gt; &lt;mal.esp&gt;</summary>
+    /// no regression at full scale + isolation works in the real world. args: &lt;connection.json&gt; &lt;mal.esp&gt;</summary>
     public static int RunScaleProof(string[] args)
     {
-        if (args.Length < 2) { Console.Error.WriteLine("usage: pkcu-scale-proof <mo2InstanceDir> <mal.esp>"); return 1; }
-        var instanceDir = args[0]; var mal = args[1]; var malName = Path.GetFileName(mal);
+        if (args.Length < 2) { Console.Error.WriteLine("usage: pkcu-scale-proof <connection.json> <mal.esp>"); return 1; }
+        var manifest = args[0]; var mal = args[1]; var malName = Path.GetFileName(mal);
 
-        Console.WriteLine("== SCALE PROOF: real MO2 order + 1 malformed plugin ==");
-        var p = LegacyFixturePaths.Resolve(instanceDir);
-        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        Console.WriteLine("== SCALE PROOF: real Amethyst order + 1 malformed plugin ==");
+        var order = SyntheticManagerFixture.ReadConnectedOrder(manifest);
         var real = order.OrderedPaths.ToList();
-        Console.WriteLine($"   real order: {real.Count} plugins (profile '{p.ProfileName}')");
+        Console.WriteLine($"   real order: {real.Count} plugins (profile '{order.ProfileName}')");
         real.Add(mal);                                                     // append the malformed plugin at highest priority
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
@@ -186,7 +185,7 @@ internal static class PkcuProbe
         return pass ? 0 : 1;
     }
 
-    /// <summary>CI REGRESSION GUARD (self-contained — no external file/MO2 deps, unlike the manual proofs above, so it
+    /// <summary>CI REGRESSION GUARD (self-contained — no external game or manager state, unlike the manual proofs above, so it
     /// runs on the CI runner). SYNTHESIZES the malformed-PKCU case in code: writes a clean plugin (a keyword) + a plugin
     /// with an empty PACK, both masterless (CI has no game files), then flips the PACK's PKCU data-input count from 0 to
     /// a non-zero value so count≠inputs — the exact mismatch Mutagen throws on mid-enumeration. Asserts the resolver

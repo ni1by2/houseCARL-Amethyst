@@ -61,13 +61,6 @@ internal static class LoadOrderStatusProbe
             string Render(LoadOrderService svc, NamedProfileResult profiles, string? profileReq) =>
                 StatusWire.Render(svc.StatusData(), logs, profiles, lookup: null, cap: 80_000);
 
-            void WriteIni(string inst, string profile, string? baseDir = null)
-            {
-                var b = baseDir is null ? "" : "base_directory=@ByteArray(" + baseDir.Replace(@"\", @"\\") + ")\r\n";
-                File.WriteAllText(Path.Combine(inst, LegacyFixturePaths.IniFileName),
-                    "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(" + profile + ")\r\ngamePath=@ByteArray("
-                    + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n" + (baseDir is null ? "" : "[Settings]\r\n" + b));
-            }
             void WriteProfile(string profDir, string[] loadorder, string[] plugins, string[] modlist)
             {
                 Directory.CreateDirectory(profDir);
@@ -83,7 +76,6 @@ internal static class LoadOrderStatusProbe
                 Directory.CreateDirectory(Path.Combine(b, "mods", "MasterMod"));
                 File.Copy(masterFile, Path.Combine(b, "mods", "MasterMod", masterName));
                 Directory.CreateDirectory(inst);
-                WriteIni(inst, "Default", baseDir);
                 return inst;
             }
 
@@ -176,7 +168,8 @@ internal static class LoadOrderStatusProbe
             WriteProfile(Path.Combine(baseG, "profiles", "Default"), new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
             WriteProfile(Path.Combine(baseG, "profiles", "Second"), new[] { masterName, extraName },
                          new[] { "*" + masterName, "*" + extraName }, new[] { "+MasterMod", "+ExtraMod" });
-            using (var svc = SyntheticManagerFixture.Open(instG, 0, store))
+            using (var svc = SyntheticManagerFixture.Open(instG, 0, store, stagingDir: baseG,
+                       gameDataDir: Path.Combine(root, "game", "Data")))
             {
                 var second = svc.NamedProfileComposition("Second");
                 Check(second.InstanceMode && second.Composition is not null && second.Composition.EnabledMods.Count == 2,
