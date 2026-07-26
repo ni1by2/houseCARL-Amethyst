@@ -332,8 +332,8 @@ manual release gate.
   public `WriteEngine` slice; `2cf70a4` completes the lifecycle slice;
   `06207b1` completes `WriteEngine`; `8f70b4e` completes
   `SkyPatcherCatalog`; `0917bea` completes the Linux installer and release
-  checkpoint; `22c431d` records its evidence. The standalone-discovery
-  implementation commit is pending this checkpoint.
+  checkpoint; `22c431d` records its evidence; `e493098` completes standalone
+  Amethyst discovery and atomic manifest creation.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
