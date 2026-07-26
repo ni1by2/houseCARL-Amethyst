@@ -257,18 +257,19 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: completed `CorpusRulebook`. Public write and
-  structure request properties now have local contracts, and every validation
-  helper explains its path, verb, selector, coercion, FormLink, collection,
-  composition, polymorphic-arm, same-call-reference, or refusal boundary. Dated
-  plan and incident markers are gone, as is the obsolete MO2 startup wording.
+- Last completed checkpoint: completed `RemapEngine`. Its class and operations
+  now explain identity versus outgoing links, flat versus structural copying,
+  originating records versus overrides, external dependencies, nested
+  traversal, collision allocation, donor conflict resolution, grafting, and
+  all-or-nothing in-place repointing. Eight previously undocumented public
+  members now have local contracts.
 - Verification performed: the .NET 9 Linux solution and forced strict
-  XML-documentation core build succeed with no warning from `CorpusRulebook`.
-  Flags-bit verbs, FormLink null/removal, gendered navigation, polymorphic
-  field descent, same-shape agreement, null-arm handling, batch composition,
-  nested creation, and corpus-hygiene guards pass. Full `ci-all` is 111/111 on
-  Linux after the final edit, and `git diff --check` passes.
-- Files/components changed: `CorpusRulebook`, the tracked roadmap, and the
+  XML-documentation core build succeed with no warning from `RemapEngine`.
+  Nine focused remap, structural-compact, compact-service, merge-service,
+  external-overrider, readback, facegen, voice, and SEQ guards pass. Full
+  `ci-all` is 111/111 on Linux after the final edit, and `git diff --check`
+  passes.
+- Files/components changed: `RemapEngine`, the tracked roadmap, and the
   user-facing roadmap copy.
 - Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
   boundary. Patch operations validate every request before one serialization
@@ -298,8 +299,8 @@ manual release gate.
   `NifService`, `VoiceCheck`, `DialogueScriptCheck`, `DialogueValidate`,
   `DialogueSubtype`, `DialogueCkParity`, `CellShellCheck`,
   `ScriptPropertyCheck`, `NativePairing`, `SksePeek`, `PapyrusCompile`,
-  `ToolBridge`, `PapyrusDecompiler`, `WritePatchBuilder`, and
-  `CorpusRulebook` are complete; the
+  `ToolBridge`, `PapyrusDecompiler`, `WritePatchBuilder`, `CorpusRulebook`,
+  and `RemapEngine` are complete; the
   remaining inherited core components have not yet received the same
   declaration-by-declaration review. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
@@ -311,11 +312,10 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  through `RemapEngine`. Document FormKey remap ownership, originating versus
-  override handling, nested traversal, collision behavior, reference rewriting,
-  external repointing, and merge conflict accounting. Replace dated incident
-  and milestone prose with concise local contracts, then run remap, compact,
-  merge, strict XML, and full CI guards.
+  through `WriteEngine` in bounded slices. Begin with its public request/result
+  surface and shared atomic-write helpers, replace dated incident prose with
+  concise local contracts, then run focused write guards, strict XML, and full
+  CI.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -347,8 +347,8 @@ manual release gate.
   public-contract checkpoint; `ed72cd5` completes the first internal
   implementation slice; `ac3b1be` completes the removal-and-forwarding slice.
   `5a1fbb2` completes the header-only creation, compaction, and merge-build
-  slice; `465436b` completes `WritePatchBuilder`. The `CorpusRulebook`
-  checkpoint is pending commit.
+  slice; `465436b` completes `WritePatchBuilder`; `d16d990` completes
+  `CorpusRulebook`. The `RemapEngine` checkpoint is pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
