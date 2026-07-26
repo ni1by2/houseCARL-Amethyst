@@ -257,21 +257,22 @@ manual release gate.
 ## Current status
 
 - Active milestone: Session 6, removing inherited MO2 runtime seams.
-- Last completed checkpoint: manager-neutral load-order result, composition,
-  and plugin-source models now live outside `Mo2LoadOrder`. The shipped MCP
-  server starts only through the Amethyst connection path; its direct-root
-  product mode and the unregistered MO2 update-cache feature are gone.
-  User-visible MCP, Nexus, skill, and staging instructions use Amethyst
-  terminology, and SKSE inventory now reads manager-neutral composition.
-- Verification performed: both previously wording-sensitive
-  `bulk-primitives-wave3-guard` and `read-plugin-file-guard` pass with
-  Amethyst-specific diagnostics. The full Linux `ci-all` suite passes 111/111;
-  its intentional reduction from 112 removes the deleted MO2 metadata-cache
-  probe. The solution builds serially and `git diff --check` passes.
-- Files/components changed: shared load-order models, MCP startup and
-  load-order service, record/asset/write tool descriptions, Nexus guidance,
-  the operational skill, the CI registry, and removal of `Mo2ModMeta`,
-  `Mo2ModMetaProbe`, and `UpdateStatusTools`.
+- Last completed checkpoint: `Mo2LoadOrder` is removed. Native profile parsing
+  and explicit-root characterization now use the documented
+  `AmethystLoadOrder`; raw synthetic-fixture discovery is isolated in
+  `StagingPluginLocator`, while product resolution remains authoritative
+  `ManagerSnapshot`/filemap state. The manual order harness and command are
+  Amethyst-named and require native paths.
+- Verification performed: Amethyst load-order, overwrite-priority,
+  raw-plugin, and archive-discovery behavior was checked with focused probes.
+  The full Linux `ci-all` suite passes 111/111. The serial solution build and
+  `git diff --check` pass. Strict core XML documentation now reports only the
+  two public declarations in the obsolete `Mo2Instance` class queued next.
+- Files/components changed: `AmethystLoadOrder`, the new
+  `StagingPluginLocator`, archive discovery, load-order service, all direct
+  load-order probe consumers, and the renamed manual order harness. The
+  previous checkpoint also removed `Mo2ModMeta`, `Mo2ModMetaProbe`, and
+  `UpdateStatusTools`.
 - Decisions made: test-only explicit paths remain available to synthetic
   probes, but are no longer a shipped server configuration. The obsolete
   update cache is removed instead of adapting MO2-specific `meta.ini` fields
@@ -286,11 +287,12 @@ manual release gate.
   Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
   External PapyrusCompiler and BSArch execution remains post-v1. NuGet
   vulnerability metadata remains unreachable in the restricted environment.
-- Exact next action: move the remaining generic parsing and plugin-location
-  helpers out of `Mo2LoadOrder`, then remove the live `Mo2Instance` path from
-  `LoadOrderService` while preserving explicit-path test fixtures. Diagnose
-  the parallel build failure separately so runtime migration and build-graph
-  changes remain reviewable.
+- Exact next action: remove the live `Mo2Instance` path from
+  `LoadOrderService`. Convert inherited service probes to an internal
+  manager-neutral fixture constructor or full synthetic Amethyst layouts,
+  preserving the few freshness probes that must exercise profile switching.
+  Diagnose the parallel build failure separately so runtime migration and
+  build-graph changes remain reviewable.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -327,7 +329,8 @@ manual release gate.
   `SkyPatcherCatalog`; `0917bea` completes the Linux installer and release
   checkpoint; `22c431d` records its evidence; `e493098` completes standalone
   Amethyst discovery and atomic manifest creation; `3bee8fc` records that
-  checkpoint; `40c867f` removes the first obsolete MO2 product surfaces.
+  checkpoint; `40c867f` removes the first obsolete MO2 product surfaces;
+  `4270be4` records that runtime slice; `a194650` removes `Mo2LoadOrder`.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
