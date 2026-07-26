@@ -206,7 +206,7 @@ internal static class SksePeekProbe
             Directory.CreateDirectory(prof);
             File.WriteAllText(Path.Combine(prof, "modlist.txt"), "+SomeMod\n");   // readable; NO plugins.txt / loadorder.txt
             var warn = new List<string>();
-            var comp = Mo2LoadOrder.ReadComposition(prof, warn);
+            var comp = AmethystLoadOrder.ReadComposition(prof, warn);
             Check(comp.ActivePluginNames.Count == 0 && comp.ImplicitPluginNames.Count == 0,
                   "a profile with no plugins.txt/loadorder.txt yields an EMPTY composition (no throw — the bug's premise)");
             Check(warn.Count > 0, "…and the read SURFACES why (the warning the peek path must not discard)");

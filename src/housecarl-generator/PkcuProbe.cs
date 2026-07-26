@@ -148,7 +148,7 @@ public static class PkcuProbe
         return pass ? 0 : 1;
     }
 
-    /// <summary>Real-scale proof: build the ACTUAL MO2 order (the product path Mo2LoadOrder.Build → LoadOrderResolver.Build)
+    /// <summary>Real-scale proof: build an explicit staged order (AmethystLoadOrder.Build → LoadOrderResolver.Build)
     /// with the malformed plugin appended, and assert the whole order resolves with ONLY that one plugin excluded — i.e.
     /// no regression at full scale + isolation works in the real world. args: &lt;mo2InstanceDir&gt; &lt;mal.esp&gt;</summary>
     public static int RunScaleProof(string[] args)
@@ -158,7 +158,7 @@ public static class PkcuProbe
 
         Console.WriteLine("== SCALE PROOF: real MO2 order + 1 malformed plugin ==");
         var p = Mo2Instance.Resolve(instanceDir);
-        var order = Mo2LoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
         var real = order.OrderedPaths.ToList();
         Console.WriteLine($"   real order: {real.Count} plugins (profile '{p.ProfileName}')");
         real.Add(mal);                                                     // append the malformed plugin at highest priority

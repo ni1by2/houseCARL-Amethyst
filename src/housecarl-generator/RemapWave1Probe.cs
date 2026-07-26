@@ -429,7 +429,7 @@ public static class RemapWave1Probe
         Console.WriteLine();
 
         var p = Mo2Instance.Resolve(instanceDir);
-        var order = Mo2LoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
         var orderedPaths = order.OrderedPaths.ToList();
         var srcPath = orderedPaths.FirstOrDefault(op => string.Equals(Path.GetFileName(op), pluginName, StringComparison.OrdinalIgnoreCase));
         if (srcPath is null) { Console.WriteLine($"ABORT: '{pluginName}' is not in the active order."); return 1; }

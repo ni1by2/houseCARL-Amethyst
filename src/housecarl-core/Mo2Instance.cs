@@ -36,7 +36,7 @@ namespace HousecarlCore;
 // ======================================================================
 
 /// <summary>The four load-order roots derived from an MO2 instance folder, plus the active profile name + game root.
-/// Feed ProfileDir/ModsDir/DataDir/OverwriteDir straight to <see cref="Mo2LoadOrder.Build"/>.</summary>
+/// Feed ProfileDir/ModsDir/DataDir/OverwriteDir to <see cref="AmethystLoadOrder.Build(string,string,string,string)"/>.</summary>
 /// <param name="InstanceDir">The MO2 instance folder (contains ModOrganizer.ini).</param>
 /// <param name="ProfileName">The ACTIVE profile (ModOrganizer.ini selected_profile) — auto-detected.</param>
 /// <param name="ProfileDir">base\profiles\&lt;ProfileName&gt; — holds loadorder.txt + modlist.txt + plugins.txt.</param>

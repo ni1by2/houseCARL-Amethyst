@@ -20,13 +20,16 @@ public static class AmethystLoadOrder
     /// resolution uses the authoritative <see cref="ManagerFileIndex"/> overload below.
     /// </remarks>
     public static ModOrderResult Build(
-        string profileDir, string modsDir, string vanillaDataDir, string overwriteDir)
+        string profileDir, string modsDir, string vanillaDataDir, string overwriteDir = "")
     {
         var warnings = new List<string>();
         var composition = ReadComposition(profileDir, warnings);
         var winners = PluginWinners(
             composition.EnabledMods, modsDir, vanillaDataDir, overwriteDir, warnings);
-        return Resolve(composition, winners, warnings);
+        var searched = string.IsNullOrWhiteSpace(overwriteDir)
+            ? "no enabled staging mod or vanilla Data source provides it"
+            : "no enabled staging mod, the overwrite folder, or vanilla Data provides it";
+        return Resolve(composition, winners, warnings, searched);
     }
 
     /// <summary>Builds the active plugin order from Amethyst's authoritative filemap winner set.</summary>
@@ -49,17 +52,21 @@ public static class AmethystLoadOrder
                 && PluginExts.Contains(Path.GetExtension(logicalPath), StringComparer.OrdinalIgnoreCase))
                 winners[logicalPath] = source.HostPath;
         AddPlugins(vanillaDataDir, winners, warnings);
-        return Resolve(composition, winners, warnings);
+        return Resolve(
+            composition, winners, warnings,
+            "no Amethyst filemap or vanilla Data source provides it");
     }
 
     /// <summary>Maps active ordered plugin names to their physical winning files.</summary>
     /// <param name="composition">Parsed profile activation and ordering state.</param>
     /// <param name="winners">Case-insensitive plugin filenames mapped to physical sources.</param>
     /// <param name="warnings">Mutable warning sink returned with the result.</param>
+    /// <param name="missingSource">Plain-English description of the source set already searched.</param>
     /// <returns>Only resolved active source paths, while preserving the full requested active count.</returns>
     /// <remarks>Missing winners are reported and omitted; no deployed Data scan or guessed source is attempted.</remarks>
     static ModOrderResult Resolve(
-        ModComposition composition, Dictionary<string, string> winners, List<string> warnings)
+        ModComposition composition, Dictionary<string, string> winners,
+        List<string> warnings, string missingSource)
     {
         var inactive = new HashSet<string>(
             composition.InactivePluginNames, StringComparer.OrdinalIgnoreCase);
@@ -79,7 +86,7 @@ public static class AmethystLoadOrder
             }
 
             warnings.Add(
-                $"load order lists '{name}' but no Amethyst filemap or vanilla Data source provides it; " +
+                $"load order lists '{name}' but {missingSource}; " +
                 "refresh Amethyst and rebuild its load order");
         }
 

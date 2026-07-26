@@ -2,33 +2,31 @@ using Mutagen.Bethesda.Plugins;
 
 namespace HousecarlGenerator;
 
-// MCP step §8.5: verify Mo2LoadOrder.Build against a real profile's files (loadorder.txt + modlist.txt +
-// plugins.txt). Proves the static-file reader produces a sane true order — masters first, the user's top-priority
-// patches last, the ~110 duplicate-name plugins resolved to a real winning path — then feeds it to the real
-// LoadOrderResolver and spot-checks the depth-879 sanity record. This is the Phase-1 empirical gate before the
-// server consumes it; Phase 2 is Aaron's xEdit winner-IDENTITY cross-check.
+// Verifies AmethystLoadOrder.Build against a real native profile: masters first,
+// later winners last, and duplicate plugin names resolved from the highest-priority
+// staged provider. It then feeds that order to the production record resolver.
 //
-//   dotnet run --project src/housecarl-generator mo2-order [profileDir] [modsDir] [dataDir]
-static class Mo2OrderHarness
+//   dotnet run --project src/housecarl-generator amethyst-order [profileDir] [modsDir] [dataDir]
+static class AmethystOrderHarness
 {
-    const string DefaultProfile = @"C:\MO2\Instance\profiles\Default";
-    const string DefaultMods    = @"C:\MO2\Instance\mods";
-    const string DefaultData    = @"C:\MO2\Instance\Stock Game\Data";
-
-    // A few of the 110 duplicate-name plugins (appear in 2+ mod folders) — eyeball which mod won the priority race.
-    static readonly string[] SampleDuplicates =
-        { "1flutedarmor.esp", "beards.esp", "ccbgssse001-fish.esm", "RaceCompatibility.esm" };
-
-    public static int RunMo2Order(string[] args)
+    /// <summary>Runs a manual large-profile load-order characterization.</summary>
+    /// <param name="args">Profile, mods, and vanilla Data paths, in that order.</param>
+    /// <returns>Zero when physical order and resolver sanity checks pass.</returns>
+    public static int Run(string[] args)
     {
-        var profileDir = args.Length > 0 ? args[0] : DefaultProfile;
-        var modsDir    = args.Length > 1 ? args[1] : DefaultMods;
-        var dataDir    = args.Length > 2 ? args[2] : DefaultData;
+        if (args.Length != 3)
+        {
+            Console.WriteLine("usage: amethyst-order <profileDir> <modsDir> <vanillaDataDir>");
+            return 2;
+        }
+        var profileDir = args[0];
+        var modsDir = args[1];
+        var dataDir = args[2];
 
-        Console.WriteLine($"mo2-order: reading the TRUE active order (static profile files)\n  profile: {profileDir}\n  mods:    {modsDir}\n  data:    {dataDir}\n");
+        Console.WriteLine($"amethyst-order: reading native profile and staging state\n  profile: {profileDir}\n  mods:    {modsDir}\n  data:    {dataDir}\n");
 
         var sw = System.Diagnostics.Stopwatch.StartNew();
-        var result = Mo2LoadOrder.Build(profileDir, modsDir, dataDir);
+        var result = AmethystLoadOrder.Build(profileDir, modsDir, dataDir);
         sw.Stop();
 
         Console.WriteLine($"built in {sw.ElapsedMilliseconds} ms");
@@ -43,13 +41,6 @@ static class Mo2OrderHarness
         foreach (var p in paths.Take(6)) Console.WriteLine($"  {Tail(p)}");
         Console.WriteLine("last 6 (highest priority — expect the user's top patches, e.g. the houseCARL/Test plugins):");
         foreach (var p in paths.Skip(Math.Max(0, paths.Count - 6))) Console.WriteLine($"  {Tail(p)}");
-
-        Console.WriteLine("\nduplicate-name resolution (which mod folder won the priority race):");
-        foreach (var dup in SampleDuplicates)
-        {
-            var hit = paths.FirstOrDefault(p => string.Equals(Path.GetFileName(p), dup, StringComparison.OrdinalIgnoreCase));
-            Console.WriteLine(hit is null ? $"  {dup,-32} -> (not in the active order)" : $"  {dup,-32} -> {Tail(hit)}");
-        }
 
         if (result.Warnings.Count > 0)
         {
@@ -82,10 +73,11 @@ static class Mo2OrderHarness
         bool plausibleCount = result.ResolvedCount > 3000;
         Console.WriteLine($"\nchecks: first==Skyrim.esm={firstIsMaster}  resolved>3000={plausibleCount}  resolved==active={result.ResolvedCount == result.ActiveCount}");
         if (!firstIsMaster || !plausibleCount) { Console.WriteLine("FAIL: structural sanity check failed."); return 1; }
-        Console.WriteLine("mo2-order: OK");
+        Console.WriteLine("amethyst-order: OK");
         return 0;
     }
 
+    /// <summary>Formats a physical plugin path as its provider directory and filename.</summary>
     static string Tail(string path)
     {
         var dir = Path.GetFileName(Path.GetDirectoryName(path)) ?? "?";

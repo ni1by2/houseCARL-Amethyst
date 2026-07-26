@@ -146,13 +146,12 @@ public sealed class LoadOrderService : IDisposable
         {
             lock (_gate)
             {
-                if (!_configured) throw NotConfigured();          // fresh install / empty config → every tool prompts for the MO2 path
+                if (!_configured) throw NotConfigured();          // fresh install returns the Amethyst connection prompt
                 if (_resolver is null)
                 {
-                    EnsurePathsDerived();                         // instance mode: derive ProfileDir/ModsDir/DataDir + active profile from ModOrganizer.ini
-                    // §8.5: the TRUE active order, read statically from the MO2 profile (loadorder.txt + modlist.txt +
-                    // plugins.txt) — no VFS, no live MO2 state. See HousecarlCore.Mo2LoadOrder + memory
-                    // project_mo2_load_order_resolution.
+                    EnsurePathsDerived();
+                    // Product order comes from Amethyst activation plus authoritative filemap sources.
+                    // Synthetic explicit roots use the same activation grammar without deployed Data inference.
                     var profileMtimes = StatProfileFiles();      // stat BEFORE the read (TOCTOU): a profile write during the build is caught next call, not missed
                     var order = BuildManagerOrder();
                     _orderWarnings = order.Warnings;
@@ -255,7 +254,7 @@ public sealed class LoadOrderService : IDisposable
             return ExplainAmethystPluginAbsence(fn, profileDir);
 
         ModComposition comp;
-        try { comp = Mo2LoadOrder.ReadComposition(profileDir); }
+        try { comp = AmethystLoadOrder.ReadComposition(profileDir); }
         catch { return null; }                       // unreadable profile → say nothing rather than guess (Q3)
 
         bool ticked = comp.ActivePluginNames.Contains(fn);
@@ -271,7 +270,7 @@ public sealed class LoadOrderService : IDisposable
 
         // Ticked but absent from the index: the file itself couldn't be resolved. Locate it to say which.
         PluginFileHit[] hits;
-        try { hits = Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, fn).ToArray(); }
+        try { hits = StagingPluginLocator.Locate(comp, modsDir, dataDir, overwriteDir, fn).ToArray(); }
         catch { hits = Array.Empty<PluginFileHit>(); }
 
         if (ticked)
@@ -2051,7 +2050,7 @@ public sealed class LoadOrderService : IDisposable
     ModOrderResult BuildManagerOrder()
     {
         if (_manifestPath is null)
-            return Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
+            return AmethystLoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
         var snapshot = _managerSnapshot
             ?? throw new AmethystConfigurationException("manager snapshot is not initialized");
         return AmethystLoadOrder.Build(
@@ -2063,10 +2062,9 @@ public sealed class LoadOrderService : IDisposable
     /// <param name="profileDir">Profile to inspect; it need not be active.</param>
     /// <param name="warnings">Optional sink for missing or inconsistent profile files.</param>
     /// <returns>Manager-neutral composition without building the record index.</returns>
-    ModComposition ReadManagerComposition(string profileDir, List<string>? warnings = null) =>
-        _manifestPath is null
-            ? Mo2LoadOrder.ReadComposition(profileDir, warnings)
-            : AmethystLoadOrder.ReadComposition(profileDir, warnings);
+    static ModComposition ReadManagerComposition(
+        string profileDir, List<string>? warnings = null) =>
+        AmethystLoadOrder.ReadComposition(profileDir, warnings);
 
     /// <summary>Compares manager roots after trimming trailing separators.</summary>
     /// <param name="a">First native or legacy path spelling.</param>
@@ -5648,7 +5646,7 @@ public sealed class LoadOrderService : IDisposable
             var inactive = new List<string>();
             foreach (var m in masters)
             {
-                if (!Mo2LoadOrder.PluginFileExists(comp, modsDir, dataDir, overwriteDir, m)) { missing.Add(m); continue; }
+                if (!StagingPluginLocator.Exists(comp, modsDir, dataDir, overwriteDir, m)) { missing.Add(m); continue; }
                 bool active = comp.ActivePluginNames.Contains(m)
                               || comp.ImplicitPluginNames.Any(x => x.Equals(m, StringComparison.OrdinalIgnoreCase));
                 if (!active) inactive.Add(m);
@@ -5867,8 +5865,9 @@ public sealed class LoadOrderService : IDisposable
 
     /// <summary>Judge the SERVED half for one located file: is <paramref name="fullPath"/> the copy the install provides
     /// for its filename, and if not, which of the three distinct not-served states is it? Judged against the first hit
-    /// from an ENABLED layer — precisely the rule <see cref="Mo2LoadOrder.BuildFilenameMap"/> uses to build the real
-    /// order. NOT merely the first hit: <see cref="Mo2LoadOrder.LocatePlugin"/> also walks disabled and unlisted folders
+    /// from an enabled layer — precisely the rule <see cref="AmethystLoadOrder.Build(string,string,string,string)"/>
+    /// uses for explicit test roots. Not merely the first hit: <see cref="StagingPluginLocator.Locate(ModComposition,string,string,string,string)"/>
+    /// also walks disabled and unlisted folders
     /// that the order never consults. Compared by FULL PATH — a backup and the live copy share a filename and are
     /// different files.</summary>
     static (ServedStanding Served, string? Detail) JudgeServed(
@@ -6024,7 +6023,7 @@ public sealed class LoadOrderService : IDisposable
             // other. The tick half needs no path at all, so it is judged for EVERY direct path, junction or not.
             var fnPath = Path.GetFileName(full);
             var located = IsUnderAnyInstallRoot(full, modsDir, dataDir, overwriteDir)   // outside every root ⇒ can't be the install's copy; skip the scan
-                ? Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, fnPath)
+                ? StagingPluginLocator.Locate(comp, modsDir, dataDir, overwriteDir, fnPath)
                 : Array.Empty<PluginFileHit>();
             var (servedStanding, detail) = JudgeServed(comp, located, full);
             // WhereNamesLayer: FALSE — "direct path" identifies no layer, so a layer-off cause must name the folder.
@@ -6041,12 +6040,12 @@ public sealed class LoadOrderService : IDisposable
             // "The named mod is enabled" is NOT enough: a lower-priority enabled mod's copy is shadowed, and the game
             // loads the serving copy instead.
             var (modServed, modDetail) = JudgeServed(
-                comp, Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, fn), cand);
+                comp, StagingPluginLocator.Locate(comp, modsDir, dataDir, overwriteDir, fn), cand);
             // WhereNamesLayer: TRUE — "mod 'X'" names the folder (it carries no STATE qualifier, which is exactly why
             // the old label-equality test failed here and let the duplication through).
             return new(cand, $"mod '{mod.Trim()}'", modServed, JudgeTick(comp, fn), modDetail, true, null, null);
         }
-        var hits = Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, plugin);
+        var hits = StagingPluginLocator.Locate(comp, modsDir, dataDir, overwriteDir, plugin);
         if (hits.Count == 0)
             return new(null, "", ServedStanding.NotAnInstallCopy, TickStanding.Unregistered, null, false, null,
                 $"'{Path.GetFileName(plugin)}' is in no Amethyst staging folder (enabled, disabled, or not yet registered), overwrite, or vanilla Data. Check the filename, pass an absolute path, or pass the exact staging folder via mod=.");

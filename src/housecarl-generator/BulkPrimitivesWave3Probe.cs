@@ -483,7 +483,7 @@ public static class BulkPrimitivesWave3Probe
         smod.BeginWrite.ToPath(shadowPath).WithLoadOrder(new ISkyrimModGetter[] { m }).Write();
 
         // DATA-SERVED plugin, with a DISABLED mod folder holding the same filename. The real order
-        // (Mo2LoadOrder.BuildFilenameMap) walks overwrite → enabled mods → game Data and never looks at disabled
+        // Explicit-root winner resolution walks overwrite → enabled mods → game Data and never looks at disabled
         // folders, so Data serves this file — but LocatePlugin DOES walk disabled folders and lists that copy FIRST.
         // Judging against the first hit rather than the first ENABLED hit stamps this LIVE plugin inactive: #269's
         // symptom again, reached from the other side. Deliberately in NO enabled mod, or Data would never serve it.

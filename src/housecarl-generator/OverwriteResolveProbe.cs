@@ -8,11 +8,8 @@ using HousecarlMcp;
 namespace HousecarlGenerator;
 
 /// <summary>
-/// MO2 overwrite-folder resolution guard (2026-06-12 hunt F9, Aaron-picked full fix): plugins living in MO2's
-/// OVERWRITE folder — the top of MO2's VFS, where tool outputs land (Synthesis patches, xEdit "new file",
-/// Wrye Bash) — are listed in the profile files by MO2 but were unresolvable to houseCARL, and the warning
-/// misdiagnosed them as a stale-profile problem ("trigger a re-sort") that a re-sort cannot fix. The fix
-/// includes overwrite in the filename map at HIGHEST priority (a copy there beats every mod, MO2's own rule).
+/// Verifies that explicit staging fixtures treat overwrite as the highest-priority plugin provider.
+/// Product Amethyst mode obtains the same winner from filemap and modindex instead of scanning.
 ///
 /// Arms (all deterministic):
 ///   1  core/resolve — an overwrite-only plugin listed in the profile resolves to its overwrite path, no warning.
@@ -22,20 +19,18 @@ namespace HousecarlGenerator;
 ///      (overwriteDir="") the SAME warning omits overwrite, since it was never searched (hunt F9-3).
 ///   4  service/end-to-end — a real (synthesized) plugin only in overwrite: the service resolves the full order,
 ///      reads a record out of the overwrite plugin, and reports no warnings.
-///   5  service/freshness — the overwrite plugin enters the profile files mid-session (the MO2-refresh flow after
-///      a tool writes there); the next call picks it up.
-///   6  service/setup-confirm — the housecarl_set_mo2_instance confirmation lists the overwrite root among the
-///      derived roots, not silently omitted (hunt F9-4).
+///   5  service/freshness — after a tool writes into overwrite, a manager refresh adds the plugin to
+///      the profile files and the next call picks it up.
 ///
-/// Arms 1–3 drive Mo2LoadOrder.Build directly with dummy plugin FILES (Build maps paths; it never opens plugin
-/// content). Arms 4–5 drive the REAL service against a synthetic MO2 instance with real plugin bytes. Self-contained.
+/// Arms 1–3 drive AmethystLoadOrder.Build directly with dummy plugin files (Build maps paths; it never opens plugin
+/// content). Arms 4–5 drive the real service against a synthetic legacy fixture with real plugin bytes.
 /// </summary>
 internal static class OverwriteResolveProbe
 {
     public static int RunGuard(string[] args)
     {
         Console.WriteLine("================================================================");
-        Console.WriteLine(" overwrite-resolve guard — MO2's overwrite layer resolves, on top");
+        Console.WriteLine(" overwrite-resolve guard — overwrite staging resolves on top");
         Console.WriteLine("================================================================");
         Console.WriteLine();
         int fail = 0;
@@ -45,7 +40,7 @@ internal static class OverwriteResolveProbe
         try
         {
             // ---- arms 1-3: the core path map, with dummy plugin files ----
-            Console.WriteLine("--- 1-3: core filename map (Mo2LoadOrder.Build) ---");
+            Console.WriteLine("--- 1-3: core filename map (AmethystLoadOrder.Build) ---");
             {
                 var prof = Path.Combine(root, "core", "profile");
                 var mods = Path.Combine(root, "core", "mods");
@@ -64,7 +59,7 @@ internal static class OverwriteResolveProbe
                 File.WriteAllText(Path.Combine(prof, "plugins.txt"), "*Dup.esp\r\n*ToolOutput.esp\r\n*Gone.esp\r\n");
                 File.WriteAllText(Path.Combine(prof, "modlist.txt"), "# header\r\n+SomeMod\r\n");
 
-                var r = Mo2LoadOrder.Build(prof, mods, data, ovw);
+                var r = AmethystLoadOrder.Build(prof, mods, data, ovw);
 
                 var toolPath = r.OrderedPaths.FirstOrDefault(p => Path.GetFileName(p).Equals("ToolOutput.esp", StringComparison.OrdinalIgnoreCase));
                 Check(toolPath is not null && toolPath.StartsWith(ovw, StringComparison.OrdinalIgnoreCase),
@@ -83,7 +78,7 @@ internal static class OverwriteResolveProbe
 
                 // F9-3: explicit-paths mode passes overwriteDir="" (there IS no overwrite layer), so the same warning
                 // must NOT claim the overwrite folder was searched — that would overstate what was checked (Q3).
-                var rExplicit = Mo2LoadOrder.Build(prof, mods, data, "");
+                var rExplicit = AmethystLoadOrder.Build(prof, mods, data, "");
                 var goneWarnExplicit = rExplicit.Warnings.FirstOrDefault(w => w.Contains("Gone.esp", StringComparison.OrdinalIgnoreCase));
                 Check(goneWarnExplicit is not null, "explicit mode (overwriteDir=\"\"): a missing plugin still warns");
                 Check(goneWarnExplicit is not null && !goneWarnExplicit.Contains("overwrite", StringComparison.OrdinalIgnoreCase),
@@ -129,11 +124,11 @@ internal static class OverwriteResolveProbe
                 using var svc = LoadOrderService.WithInstance(instance, 0, store);
                 Check(svc.Stats().plugins == 1, "baseline order resolved (overwrite plugin not yet in the profile)");
 
-                // MO2 refresh after the tool ran: the profile files now list the overwrite-resident plugin
+                // Manager refresh after the tool ran: the profile files now list the overwrite-resident plugin.
                 File.WriteAllText(Path.Combine(profiles, "loadorder.txt"), "# header\r\n" + mKey.FileName + "\r\n" + tKey.FileName + "\r\n");
                 File.WriteAllText(Path.Combine(profiles, "plugins.txt"), "*" + mKey.FileName + "\r\n*" + tKey.FileName + "\r\n");
                 // Guarantee the change is detected by value: a warm run can rewrite within one OS timer tick (~15ms)
-                // of the baseline stat, leaving the mtime identical — real MO2 refreshes are always much later.
+                // of the baseline stat, leaving the mtime identical — real manager refreshes are normally later.
                 File.SetLastWriteTimeUtc(Path.Combine(profiles, "loadorder.txt"), DateTime.UtcNow.AddHours(1));
                 File.SetLastWriteTimeUtc(Path.Combine(profiles, "plugins.txt"), DateTime.UtcNow.AddHours(1));
 

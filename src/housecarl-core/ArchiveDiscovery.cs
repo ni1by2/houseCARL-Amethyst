@@ -69,7 +69,7 @@ public static class ArchiveDiscovery
         string profileDir, string modsDir, string dataDir, string overwriteDir, string gamePath)
     {
         var warnings = new List<string>();
-        var comp = Mo2LoadOrder.ReadComposition(profileDir, warnings);
+        var comp = AmethystLoadOrder.ReadComposition(profileDir, warnings);
         var archiveMap = BuildArchiveMap(comp.EnabledMods, modsDir, dataDir, overwriteDir);
         return Build(
             profileDir,

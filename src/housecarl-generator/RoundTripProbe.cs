@@ -76,7 +76,7 @@ public static class RoundTripProbe
         Console.WriteLine();
 
         var p = Mo2Instance.Resolve(instanceDir);
-        var order = Mo2LoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
+        var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
         var orderedPaths = order.OrderedPaths.ToList();
         // filename -> winning on-disk path (a plugin filename is unique in a load order; OrderedPaths is the
         // resolved winner per plugin). The master-resolution map for step 2's .WithLoadOrder.
