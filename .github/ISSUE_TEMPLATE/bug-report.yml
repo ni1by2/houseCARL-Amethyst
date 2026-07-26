@@ -33,6 +33,6 @@ body:
     id: environment
     attributes:
       label: Environment (where relevant)
-      description: Skyrim SE version, MO2 or manual install, rough load-order size.
+      description: Linux distribution, Amethyst version/profile, deployment mode, Skyrim SE version, and rough load-order size.
     validations:
       required: false

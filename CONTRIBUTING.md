@@ -12,7 +12,8 @@ The fastest reports to act on include:
 
 - **houseCARL version** — fixes often land on `main` before a release, so the version tells us whether you're hitting a known-fixed gap.
 - **Exact repro** — the tool call(s) you made and the full error or wrong output you got. Driving the server directly over stdio and quoting its stderr is gold, but not required.
-- **Environment** where relevant — Skyrim SE version, MO2 or manual install, load-order size.
+- **Environment** where relevant — Linux distribution, Amethyst version and profile, deployment
+  mode, Skyrim SE version, and rough load-order size.
 
 ## Pull requests
 

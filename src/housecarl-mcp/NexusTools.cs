@@ -232,8 +232,8 @@ public static class NexusTools
          "file's name/version/category/size — or 'no match' when no Nexus file has that hash (a hand-edited, repacked, or " +
          "non-Nexus file). Matching is across ALL games, so a hash belonging to a non-Skyrim-SE file is FLAGGED as such " +
          "rather than mis-attributed to a same-hash SSE mod (Q3). Use it to trace a mystery loose file back to its source " +
-         "mod. READ-ONLY, needs an internet connection. To get a file's MD5 first, hash it locally (e.g. PowerShell " +
-         "Get-FileHash -Algorithm MD5).")]
+         "mod. READ-ONLY, needs an internet connection. To get a file's MD5 first, hash it locally with " +
+         "`md5sum <file>`.")]
     public static Task<string> NexusIdentify(
         NexusClient nexus,
         [Description("One or more MD5 hashes (32 hex characters each), separated by commas, spaces, or newlines. " +

@@ -85,7 +85,7 @@ Why this conforms: every comma-separated item is a user-utterance keyword Claude
 **Audience calibration (per Q10 lock 2026-05-01).** Housecarl v1.0 is **modder-primary** under Aaron's corrected definitions: **modder = modlist-builder** (the user installing, configuring, conflict-resolving, and shipping a coherent modlist; needs all of Housecarl's tools). **mod-maker = isolated mod author** (creating a single mod from scratch; benefits as byproduct, not the primary audience). This **inverts** common conflations where "modder" sometimes means "consumer" and "mod-maker" means "creator" — Housecarl's terminology centers the modlist-builder, not the isolated mod author.
 
 Trigger language in shipped skills should prioritize modder-vocabulary phrasings over mod-maker-vocabulary phrasings:
-- **Prefer:** modlist names (Lorerim, Wildlander, Septim's Skyrim), plugin conflicts, ESP merges, BSA extracts, NPC outfit conflicts, leveled-list patches, override resolutions, crash logs, Papyrus log lines, MO2 instance names, USVFS overlays, load order positions
+- **Prefer:** modlist names (Lorerim, Wildlander, Septim's Skyrim), Amethyst profiles, plugin conflicts, ESP merges, BSA extracts, NPC outfit conflicts, leveled-list patches, override resolutions, crash logs, Papyrus log lines, filemap winners, staging mods, load order positions
 - **De-prioritize (still acceptable, just not lead):** "creating a new mod", "authoring SKSE plugin source", "drafting a quest from scratch", "designing custom NPC voice lines"
 
 Modder-vocabulary triggers cover the v1.0 user surface; mod-maker triggers fire less often in v1.0 (Q12 SKSE source READ is the main mod-maker-leaning capability, and even that's read-only). v1.x ships may rebalance per Q8 spectrum philosophy.

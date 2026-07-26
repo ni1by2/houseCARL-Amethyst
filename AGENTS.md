@@ -1,4 +1,4 @@
-# AGENTS.md — houseCARL
+# AGENTS.md — houseCARL-Amethyst
 
 Guidance for AI coding agents (Codex, and others that read `AGENTS.md`) working in this
 repository. houseCARL's deep operating manual is **[`CLAUDE.md`](CLAUDE.md)** — read it first;
@@ -40,15 +40,15 @@ If a change pressures any of the above, stop and raise it via the PRFAQ revalida
 
 ## Build & run
 
-- **Full plugin build:** `./scripts/build-plugin.ps1` — regenerates the reflection rulebook,
-  publishes the server (framework-dependent, **trimming off** — trimming would strip reflected
-  types and silently lose coverage), bundles skills, packs the release zip. Needs the
-  **.NET 9 SDK**, Windows, PowerShell.
+- **Full release build:** `./scripts/build-release.sh` — regenerates the reflection rulebook,
+  publishes the self-contained Linux x64 server (**trimming off** — trimming would strip
+  reflected types and silently lose coverage), bundles skills, and packs the release archive.
+  It needs the **.NET 9 SDK** and standard Linux shell tools.
 - **Iterating on the generator/engine:** `dotnet build` then `dotnet run`. A
   `dotnet build && dotnet run` can serve a **stale** binary — run `dotnet clean` first when
   verifying a generator change, or the regenerated corpus won't reflect your edit.
-- Runtime config is read from a user-config file beside the exe (not the blanked
-  `appsettings.json`); the MO2 instance is set at runtime, never hard-coded.
+- Mutable runtime config is read from the XDG configuration root. The selected
+  schema-v1 Amethyst manifest is set at runtime and never hard-coded.
 
 ## Conventions
 
@@ -56,10 +56,10 @@ If a change pressures any of the above, stop and raise it via the PRFAQ revalida
   names follow `standards/HOUSECARL_NAMING.md`.
 - The brand string **"houseCARL"** lives in exactly one place in code (the server's config).
 - **Atomic, focused commits** — one logical change per commit.
-- **Writes are non-destructive by default** — every patch is a **new** MO2 mod folder; sources
-  read-only. The one sanctioned exception is the **opt-in in-place lane** (`target=` +
-  `in_place=true`, per-plugin consent, no backup), which rewrites an existing plugin only when the
-  user explicitly asks.
+- **Writes are non-destructive by default** — every patch is a new Amethyst staging mod; sources
+  remain read-only. The sanctioned exception is the opt-in in-place lane (`target=` +
+  `in_place=true`, per-plugin consent, and `confirm_amethyst_redeploy=true`), which writes staging
+  only and remains pending until a later Amethyst deployment is verified.
 
 ## Review guidelines (for pull requests)
 
