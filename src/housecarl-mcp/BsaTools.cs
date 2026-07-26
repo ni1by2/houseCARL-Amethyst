@@ -95,17 +95,13 @@ public static class BsaTools
         return sb.ToString();
     });
 
-    /// <summary>Uses the configured external BSArch command to pack a folder into a staged archive.</summary>
+    /// <summary>Refuses repacking until the structured Proton command runner is implemented.</summary>
     [McpServerTool(Name = "housecarl_bsa_repack", Title = "Pack a folder into a .bsa archive"),
      Description(
-         "Pack a folder of loose files into a Bethesda .bsa archive (via BSArch), placed in a NEW reviewable houseCARL mod " +
-         "folder under your Amethyst staging directory (originals untouched; refresh, enable, and deploy it to use). format defaults to 'sse' (Skyrim " +
-         "Special Edition). compress defaults to FALSE — a compressed archive is smaller but BREAKS any sounds/voices it " +
-         "contains (a BSArch limitation), so only compress archives with no audio. Needs the BSArch path (auto-prompts if " +
-         "unset) and an Amethyst connection (for the output folder).")]
+         "Reserved post-v1 surface for packing loose files into a Bethesda archive. Execution is unavailable until " +
+         "houseCARL-Amethyst has a structured Proton command contract for BSArch. Native archive listing and extraction " +
+         "remain available without Proton.")]
     public static string BsaRepack(
-        LoadOrderService svc,
-        ToolPathResolver bridge,
         [Description("Full path to the source folder of loose files to pack (its tree becomes the archive's contents).")]
             string source_folder,
         [Description("Optional. The .bsa filename to create (default: the source folder's name + '.bsa').")]
@@ -117,47 +113,7 @@ public static class BsaTools
         [Description("Optional. Base name for the NEW mod folder the .bsa lands in (default 'houseCARL_Archive'); auto-suffixed if taken.")]
             string? patch_name = null,
         [Description("Optional. Filename of an existing houseCARL patch mod to place the .bsa into instead of a fresh folder. Found by plugin filename even if its Amethyst mod folder was renamed; for duplicate filenames, pass the mod-folder name.")]
-            string? into = null) => Guard.Tool("housecarl_bsa_repack", () =>
-    {
-        if (string.IsNullOrWhiteSpace(source_folder)) return "error: no source_folder given.";
-        source_folder = Path.GetFullPath(source_folder.Trim().Trim('"'));
-        if (!Directory.Exists(source_folder)) return $"error: no such folder: '{source_folder}'.";
-        if (svc.ConfigPromptOrNull() is { } cfg) return cfg;
-        if (bridge.RequireOrPrompt(ToolDependency.Bsarch, out var bsarch) is { } prompt) return prompt;
-
-        var name = string.IsNullOrWhiteSpace(archive_name)
-            ? new DirectoryInfo(source_folder).Name + ".bsa"
-            : Path.GetFileName(archive_name!.Trim().Trim('"'));
-        if (!name.EndsWith(".bsa", StringComparison.OrdinalIgnoreCase)) name += ".bsa";
-
-        LoadOrderService.RiderFolder rf;
-        try { rf = svc.ResolvePatchModFolder(patch_name, into, "houseCARL_Archive"); }
-        catch (InvalidOperationException ex) { return "error: " + ex.Message; }
-        var folder = rf.OutputDir;
-
-        // On any post-allocation failure: a genuinely-empty fresh folder is deleted (no orphan), a partial .bsa is
-        // kept and named, a reused into= folder is left alone — hunt H2 (Aaron's delete-if-empty).
-        string Refuse(string msg)
-        {
-            var left = svc.RemoveOrNameRiderResidue(rf);
-            return left is null ? msg
-                : msg + $"\nThe freshly created mod folder at '{left}' still holds a partial archive — delete it or retry with into=.";
-        }
-
-        var archive = Path.Combine(folder, name);
-        // Unknown format tokens REFUSE (Q3): a typo like 'fo4dd' must not silently pack -sse.
-        var fmtFlag = HousecarlCore.BsaArchive.TryFormatFlag(format);
-        if (fmtFlag is null)
-            return Refuse($"error: unknown format '{format}'. Legal tokens: {HousecarlCore.BsaArchive.FormatTokens}.");
-        var r = HousecarlCore.BsaArchive.Pack(bsarch!, source_folder, archive, fmtFlag, compress);
-        if (!r.Ran) return Refuse("error: " + r.RunError);
-        if (!r.Success)
-            return Refuse($"repack FAILED: no .bsa written at '{archive}'. Raw BSArch output:\n" + r.Raw);
-
-        var sb = new StringBuilder();
-        sb.Append("packed ").Append(name).Append(" (").Append(fmtFlag.TrimStart('-')).Append(compress ? ", compressed" : ", uncompressed").Append(") → ").Append(archive).Append('\n');
-        sb.Append("(a new Amethyst staging mod — refresh, enable, rebuild the filemap, and deploy it to use the archive.)");
-        if (compress) sb.Append("\nNOTE: compressed — any sounds/voices in it will not work in-game (BSArch limitation).");
-        return sb.ToString();
-    });
+            string? into = null) =>
+        "error: BSA repacking is deferred until houseCARL-Amethyst implements the planned structured Proton runner. " +
+        "Use housecarl_bsa_list and housecarl_bsa_extract for native read operations.";
 }

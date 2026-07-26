@@ -1,6 +1,6 @@
 # HOUSECARL_NAMING — houseCARL naming conventions
 
-**Status:** trimmed 2026-05-29 to the architecture-agnostic core, from the locked 2026-04-30 standard (Aaron). The original's architecture-specific sections — Python module naming, the MO2 plugin slug, and installer artifacts — are **deferred**: they return, authored fresh, when those surfaces actually exist (e.g. if the open MO2-integration question adds a Python shim). The tool-prefix rule and the rebrand-resilience principle carry forward unchanged.
+**Status:** trimmed 2026-05-29 to the architecture-agnostic core, from the locked 2026-04-30 standard (Aaron). Retired Python and manager-plugin naming rules do not apply to this native Linux fork. Installer and Amethyst integration names are authored at their owning surfaces. The tool-prefix rule and the rebrand-resilience principle carry forward unchanged.
 
 This is the authoritative naming standard for houseCARL. Every rule here is meant to be enforceable via linter, hook, or review (hooks don't exist yet — they emerge from need).
 

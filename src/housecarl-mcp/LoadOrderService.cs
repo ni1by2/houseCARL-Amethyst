@@ -2101,14 +2101,8 @@ public sealed class LoadOrderService : IDisposable
     /// <summary>The captured Amethyst profile name, or an empty string while unconfigured.</summary>
     public string ProfileName { get { lock (_gate) { return _profileName; } } }
 
-    /// <summary>The game install directory the load order points at — DataDir's PARENT (DataDir = gamePath\Data), the same
-    /// derivation the asset-discovery path uses — or null when it isn't derivable. The compile rider's auto-detect HINT: the
-    /// CK installs its compiler at &lt;gamePath&gt;\Papyrus Compiler\PapyrusCompiler.exe (6.2). NULL-SAFE by contract — it is
-    /// best-effort plumbing, so a failure here must fall through to the forcing prompt, NEVER throw and abort the compile:
-    /// returns null when unconfigured (no _configured guard would otherwise hit EnsurePathsDerived's NotConfigured throw),
-    /// when the instance is unusable (EnsurePathsDerived throws naming the missing piece — the rider's own config gate
-    /// reports that; here it's just "no hint"), or when DataDir hasn't been derived yet. Takes <see cref="_gate"/> like the
-    /// other derived-root reads; works in explicit mode too (DataDir is set directly, EnsurePathsDerived no-ops).</summary>
+    /// <summary>Returns the active Amethyst game root, or null while unconfigured or unusable.</summary>
+    /// <remarks>This null-safe diagnostic helper never invokes platform-specific game discovery.</remarks>
     public string? GameDirOrNull()
     {
         lock (_gate)
@@ -2120,16 +2114,7 @@ public sealed class LoadOrderService : IDisposable
         }
     }
 
-    /// <summary>The game directories searched for the Creation Kit compiler, in priority order.
-    /// The active profile's game root comes first, followed by GameFinder's Skyrim SE location.
-    /// This supports isolated game copies whose compiler and vanilla script sources remain in the
-    /// main installation. Results are de-duplicated and lookup failures only remove a hint.
-    /// <para>LOAD-BEARING (do NOT "simplify"): the compile rider derives the vanilla SOURCE folder from the RESOLVED
-    /// COMPILER's own game dir (<see cref="CompileTools.BuildImports"/>), NOT from these hints and NOT from the data dir — so
-    /// once the compiler resolves to the Steam install, its sibling Data\Source\Scripts is used, never the Stock Game copy's
-    /// (which usually has none). Keying sources off the data dir would re-break exactly the Stock-Game case this fixes.</para></summary>
-    // InstalledGameRuntime's memo: the resolved exe re-validated by a cheap mtime stat per call; a probed MISS is
-    // session-stable (no re-paying the GameLocator registry/Steam walk per tool call for a permanently-null answer).
+    // InstalledGameRuntime's memo revalidates the executable with a cheap mtime stat per call.
     // _gameRootsGen is the memo's INVALIDATION signal (PR #210 review finding #1): every site that re-points the game
     // roots (fixture switch or manager-layout refresh) bump it, and a memo cached at an older generation re-probes —
     // otherwise an instance switch could keep adjudicating version-LOCKED plugins against the PREVIOUS install's exe
@@ -2145,9 +2130,9 @@ public sealed class LoadOrderService : IDisposable
     /// <summary>The INSTALLED game runtime version — the dotted file version of the SkyrimSE.exe the load order runs
     /// (e.g. "1.6.1170.0") — or null when it can't be resolved. This is what turns a version-LOCKED SKSE plugin's
     /// compat list from "verify against your game version" into PASS/FAIL (native-pairing audit §4d + skse_inventory's
-    /// locked diagnostic). Candidates are exactly <see cref="CompilerGameDirHints"/> — active-profile
-    /// game directory first and the located install as fallback. BEST-EFFORT + NULL-SAFE
-    /// end to end: a miss degrades the finding wording, never fails a tool. Memoized: the resolved exe is re-validated
+    /// locked diagnostic). The only candidate is the active profile's configured game directory; houseCARL does
+    /// not use registry or Steam discovery. BEST-EFFORT + NULL-SAFE end to end: a miss degrades the finding wording,
+    /// never fails a tool. Memoized: the resolved executable is re-validated
     /// by mtime per call; a full miss is cached for the session. Renderers name the executable
     /// version used so an unexpected baseline remains visible.</summary>
     public string? InstalledGameRuntime()
@@ -2166,53 +2151,25 @@ public sealed class LoadOrderService : IDisposable
                 catch { return _runtimeVersion; }       // stat hiccup → the cached answer beats a re-probe mid-hiccup
             }
             _runtimeGen = gen; _runtimeExe = null; _runtimeVersion = null;
-            foreach (var dir in CompilerGameDirHints())
+            if (GameDirOrNull() is { } dir)
             {
                 try
                 {
                     var exe = Path.Combine(dir, "SkyrimSE.exe");
-                    if (!File.Exists(exe)) continue;
+                    if (!File.Exists(exe)) return null;
                     var fv = System.Diagnostics.FileVersionInfo.GetVersionInfo(exe);
                     // FileVersion can carry vendor noise; the numeric parts are the truth. Prefer them when present.
                     string? v = fv.FileMajorPart > 0 || fv.FileMinorPart > 0 || fv.FileBuildPart > 0 || fv.FilePrivatePart > 0
                         ? $"{fv.FileMajorPart}.{fv.FileMinorPart}.{fv.FileBuildPart}.{fv.FilePrivatePart}"
                         : string.IsNullOrWhiteSpace(fv.FileVersion) ? null : fv.FileVersion!.Trim();
-                    if (v is null) continue;
+                    if (v is null) return null;
                     _runtimeExe = exe; _runtimeExeMtime = File.GetLastWriteTimeUtc(exe); _runtimeVersion = v;
                     return v;
                 }
-                catch { /* unreadable exe → try the next candidate (best-effort) */ }
+                catch { /* unreadable executable leaves runtime version unknown */ }
             }
             return null;
         }
-    }
-
-    /// <summary>
-    /// Returns the distinct game-install directories in which an external compiler may be installed.
-    /// The active Amethyst game path comes first, followed by Mutagen's platform-specific discovery result.
-    /// </summary>
-    public IReadOnlyList<string> CompilerGameDirHints()
-    {
-        var hints = new List<string>();
-        if (GameDirOrNull() is { } loadOrderGameDir) hints.Add(loadOrderGameDir);
-        try
-        {
-            // The bundled GameFinder locator (Steam/GOG/Xbox), via Mutagen — finds the REAL Skyrim SE install (App 489830),
-            // where the Creation Kit and sources live, regardless of the active profile's isolated game root.
-            if (new Mutagen.Bethesda.Installs.GameLocator().TryGetGameDirectory(
-                    Mutagen.Bethesda.GameRelease.SkyrimSE, out var dir) && !string.IsNullOrWhiteSpace(dir.Path))
-                hints.Add(NormalizeGameDir(dir.Path));
-        }
-        catch { /* GameFinder / registry hiccup → just the load-order hint (best-effort; the prompt still names it) */ }
-        return hints.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    /// <summary>The locator returns the game-install ROOT (the folder holding the exe + Data); defend against a future build
-    /// handing back the Data folder itself by stepping up one level so the &lt;game&gt;\Papyrus Compiler\ join stays correct.</summary>
-    static string NormalizeGameDir(string p)
-    {
-        var t = p.TrimEnd('\\', '/');
-        return Path.GetFileName(t).Equals("Data", StringComparison.OrdinalIgnoreCase) ? (Path.GetDirectoryName(t) ?? t) : t;
     }
 
     /// <summary>Validates, activates, and persists a schema-v1 Amethyst connection manifest.</summary>
@@ -5037,11 +4994,11 @@ public sealed class LoadOrderService : IDisposable
     /// <summary>The resolved output location for a NON-.esp rider: the directory to WRITE into, the mod-folder ROOT
     /// (what residue cleanup operates on), and whether THIS call created the folder fresh (vs reused an into= folder,
     /// which the user owns and cleanup never touches). For the .bsa/extract riders OutputDir == ModFolder; for the
-    /// compile/decompile riders OutputDir is a subfolder (<c>Scripts\</c> / <c>Source\Scripts\</c>) under ModFolder.</summary>
+    /// the decompile rider OutputDir is <c>Source/Scripts</c> under ModFolder.</summary>
     public readonly record struct RiderFolder(string OutputDir, string ModFolder, bool CreatedFresh);
 
-    /// <summary>Resolve a houseCARL-owned MOD FOLDER under ModsDir for a NON-.esp output (compiled scripts, a packed .bsa,
-    /// extracted loose files) — the folder-per-patch model generalised beyond the .esp write path. A fresh marker-stamped
+    /// <summary>Resolve a houseCARL-owned mod folder for native non-plugin output such as extracted
+    /// loose files, decompiled sources, NIF edits, or placed assets. A fresh marker-stamped
     /// folder (<paramref name="defaultStem"/> names it when patchName is blank; auto-suffixed so a prior one is never
     /// clobbered) or <paramref name="into"/> an existing houseCARL-owned one. ORIGINALS UNTOUCHED (Q3): refuses a folder
     /// houseCARL did not create. Reads the already derived ModsDir without building the record index. Throws the trained
@@ -5059,7 +5016,7 @@ public sealed class LoadOrderService : IDisposable
             if (!string.IsNullOrWhiteSpace(into))
             {
                 // The SAME shared 4-step EXTEND resolver as the .esp write path (HCBR-2026-06-23): a renamed houseCARL patch
-                // folder is found by the .esp it holds OR by its new name, so compile / decompile / bsa_repack / place_asset
+                // folder is found by the .esp it holds OR by its new name, so decompile / extract / place_asset
                 // into= behaves exactly like record into= (before this, a renamed folder fell to a misleading "folder not
                 // found"). needEsp:false — a rider targets the FOLDER itself (it writes scripts / a .bsa / loose files into
                 // it, not an .esp), so it does NOT require a <stem>.esp to be present.
@@ -5075,107 +5032,13 @@ public sealed class LoadOrderService : IDisposable
         }
     }
 
-    /// <summary>The <c>Scripts\</c> output folder for a COMPILED .pex (the compile rider) — a houseCARL mod folder via
-    /// <see cref="ResolvePatchModFolder"/> plus its <c>Scripts\</c> subfolder, which Amethyst deploys into the
-    /// game's Data\Scripts. Carries the mod-folder root + fresh flag through for residue cleanup.</summary>
-    public RiderFolder ResolveCompiledScriptFolder(string? patchName, string? into)
-    {
-        var f = ResolvePatchModFolder(patchName, into, "houseCARL_Scripts");
-        var scripts = Path.Combine(f.ModFolder, "Scripts");
-        Directory.CreateDirectory(scripts);
-        return f with { OutputDir = scripts };
-    }
-
-    /// <summary>output_dir= escape hatch (6.3): the user names WHERE the compiled .pex lands, instead of houseCARL cutting a
-    /// fresh folder-per-patch mod folder. DECIDED contract (Aaron 2026-06-16): output_dir is a mod-folder ROOT and houseCARL
-    /// appends Scripts\ — matching <see cref="ResolveCompiledScriptFolder"/> and Amethyst's staging model so the .pex actually loads —
-    /// with a DOUBLE-SCRIPTS guard (don't append a second Scripts\ if it's already there). Does NOT call
-    /// <see cref="ResolvePatchModFolder"/> (no houseCARL mod folder is cut under ModsDir), and the folder is USER-OWNED — the
-    /// returned <see cref="RiderFolder"/> carries CreatedFresh=false, so <see cref="RemoveOrNameRiderResidue"/> never deletes
-    /// it on a failed compile (it early-returns on !CreatedFresh). <paramref name="deployWarning"/> is a Q3 note (non-null)
-    /// when the final Scripts path is under neither Amethyst staging nor game Data — the .pex compiles but the game
-    /// won't auto-load it from there, so a clean "done" is never reported for a .pex that won't deploy. Refuses loud (Q3) on
-    /// an unusable output_dir (a malformed path, or a path that names an existing FILE).</summary>
-    public RiderFolder ResolveExplicitScriptFolder(string outputDir, out string? deployWarning)
-    {
-        lock (_gate)
-        {
-            if (!_configured) throw NotConfigured();
-            EnsurePathsDerived();                          // cheap: derive ModsDir/DataDir for the deployability check, NO resolver build
-            string root;
-            try { root = Path.GetFullPath((outputDir ?? "").Trim().Trim('"')); }
-            catch (Exception ex) { throw new InvalidOperationException($"output_dir '{outputDir}' is not a usable path ({ex.Message})."); }
-            if (File.Exists(root))
-                throw new InvalidOperationException($"output_dir '{root}' is a file, not a folder. Give a mod-folder root — houseCARL appends Scripts\\.");
-
-            var (scriptsDir, appended, warn) = ScriptOutputContract(root, _modsDir, _dataDir);
-            // Friendly Q3 message if the folder can't be created — e.g. <output_dir>\Scripts already exists AS A FILE, or
-            // the path is read-only — instead of letting the IO/access exception reach Guard.Tool's generic "internal
-            // failure" (which would wrongly read as a houseCARL bug, not bad input). The File.Exists(root) guard above
-            // already catches the common "output_dir itself is a file" shape; this rounds out the rest.
-            try { Directory.CreateDirectory(scriptsDir); }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-            { throw new InvalidOperationException($"output_dir: couldn't create the output folder '{scriptsDir}' ({ex.Message}). Check the path and that it's writable."); }
-            deployWarning = warn;
-            // ModFolder = the mod-folder root (inert here — cleanup is bypassed by CreatedFresh=false — but kept honest):
-            // when the user pointed AT a Scripts\ dir, the root is its parent; otherwise the path they gave IS the root.
-            var modRoot = appended ? root : (Path.GetDirectoryName(scriptsDir.TrimEnd('\\', '/')) ?? scriptsDir);
-            return new RiderFolder(scriptsDir, modRoot, CreatedFresh: false);   // user-owned: residue cleanup never touches it
-        }
-    }
-
-    /// <summary>PURE (no filesystem access) resolution of the output_dir= contract, so the riskiest 6.3 change is provable in
-    /// CI without an Amethyst installation. Appends Scripts to a mod-folder root, with the DOUBLE-SCRIPTS GUARD (a root already ending
-    /// in a Scripts segment — any case, trailing separator tolerated — is taken as-is, never doubled). <paramref name="outputDir"/>
-    /// is expected absolute (the caller GetFullPaths it). Returns the final Scripts dir, whether Scripts\ was appended, and a
-    /// Q3 deployWarning when the result is under neither <paramref name="modsDir"/> (a staged mod's Scripts folder is deployed) nor
-    /// <paramref name="dataDir"/> (a direct game install) — the one "this won't load" case the contract can't fix by
-    /// construction, so it's surfaced rather than reported as a clean success.</summary>
-    internal static (string scriptsDir, bool appendedScripts, string? deployWarning) ScriptOutputContract(
-        string outputDir, string modsDir, string dataDir)
-    {
-        var root = outputDir.TrimEnd('\\', '/');
-        bool alreadyScripts = Path.GetFileName(root).Equals("Scripts", StringComparison.OrdinalIgnoreCase);
-        var scriptsDir = alreadyScripts ? root : Path.Combine(root, "Scripts");
-        // Deployable = the .pex will actually load. Amethyst deploys a mod folder's contents onto the game Data root, so a
-        // deployable mod Scripts\ is EXACTLY <mods>\<modFolder>\Scripts (mod folder a direct child of mods; Scripts directly
-        // under it). A bare <mods>\Scripts (no mod folder) and a nested <mods>\X\Sub\Scripts (lands at Data\Sub\Scripts, not
-        // Data\Scripts) do NOT load — so they correctly WARN (review nit: "under mods" alone was too loose). A direct game
-        // install loads exactly <data>\Scripts.
-        bool deployable = IsModScriptsFolder(scriptsDir, modsDir) || IsDataScriptsFolder(scriptsDir, dataDir);
-        string? warn = deployable ? null :
-            $"note: '{scriptsDir}' is not a folder Amethyst (or the game) loads scripts from, so the compiled .pex will not " +
-            "deploy on its own — it compiled fine, but you must place it where the game loads scripts yourself: a mod's " +
-            $"own Scripts folder ({Path.Combine("<mods>", "<YourMod>", "Scripts")}) or the game's {Path.Combine("<Data>", "Scripts")}.";
-        return (scriptsDir, !alreadyScripts, warn);
-    }
-
-    /// <summary>A Scripts folder Amethyst actually deploys: <c>&lt;modsDir&gt;/&lt;modFolder&gt;/Scripts</c> exactly — the mod
-    /// folder a DIRECT child of the mods root, Scripts directly under it (Amethyst maps a mod folder's contents onto the Data
-    /// root, so <c>&lt;mods&gt;\Scripts</c> has no mod and <c>&lt;mods&gt;\X\Sub\Scripts</c> lands at Data\Sub\Scripts). Empty
-    /// mods root (unconfigured) → false. Case-insensitive, normalized.</summary>
-    static bool IsModScriptsFolder(string scriptsDir, string modsDir)
-    {
-        if (string.IsNullOrEmpty(modsDir)) return false;
-        var modFolder = Path.GetDirectoryName(scriptsDir.TrimEnd('\\', '/'));   // expect <mods>\<modFolder>
-        return modFolder is not null && PathEquals(Path.GetDirectoryName(modFolder), modsDir);
-    }
-
-    /// <summary>A direct game install loads exactly <c>&lt;dataDir&gt;\Scripts</c> (not Data\Sub\Scripts). Empty data dir →
-    /// false. Case-insensitive, normalized.</summary>
-    static bool IsDataScriptsFolder(string scriptsDir, string dataDir)
-    {
-        if (string.IsNullOrEmpty(dataDir)) return false;
-        return PathEquals(Path.GetDirectoryName(scriptsDir.TrimEnd('\\', '/')), dataDir);
-    }
-
-    /// <summary>Case-insensitive equality of two paths after full-path normalization + trailing-separator trim (no
-    /// filesystem access). A null left side (no parent — e.g. a drive root) is never equal.</summary>
+    /// <summary>Compares two native Linux paths after full normalization and trailing-separator removal.
+    /// A null left side is never equal.</summary>
     static bool PathEquals(string? a, string b)
     {
         if (a is null) return false;
-        var comparison = OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
-        return Path.GetFullPath(a).TrimEnd('\\', '/').Equals(Path.GetFullPath(b).TrimEnd('\\', '/'), comparison);
+        return Path.GetFullPath(a).TrimEnd(Path.DirectorySeparatorChar)
+            .Equals(Path.GetFullPath(b).TrimEnd(Path.DirectorySeparatorChar), StringComparison.Ordinal);
     }
 
     /// <summary>The <c>Source\Scripts\</c> output folder for a DECOMPILED .psc (the decompile rider) — the SE-canonical
@@ -5189,11 +5052,11 @@ public sealed class LoadOrderService : IDisposable
         return f with { OutputDir = src };
     }
 
-    /// <summary>Hunt H2 (Aaron 2026-06-13): a NON-.esp rider (compile / decompile / repack) that FAILED after creating a
+    /// <summary>A non-plugin output operation that fails after creating a fresh houseCARL mod folder
     /// fresh houseCARL mod folder cleans up after itself — the .esp F4 "a refusal leaves no orphan folder" principle,
     /// generalised to the riders. If the fresh folder is GENUINELY EMPTY (holds NOTHING but our own meta.ini marker
     /// anywhere in its tree) it is DELETED, so "no output written" is true of the disk; if real output DID land (a
-    /// partial .bsa, some written .psc/.pex), the folder STAYS and its path is RETURNED so the rider can NAME it —
+    /// partial extraction or written source), the folder stays and its path is returned so the caller can name it —
     /// houseCARL never deletes content it didn't recognise as its own marker. A REUSED into= folder
     /// (<see cref="RiderFolder.CreatedFresh"/> = false) is never touched: the user owns it. Returns the leftover path to
     /// name, or null (deleted, or nothing to do). Best-effort: a cleanup hiccup never masks the rider's own outcome.</summary>
@@ -5217,8 +5080,7 @@ public sealed class LoadOrderService : IDisposable
 
     /// <summary>The <c>SEQ\</c> output folder for a generated <c>.seq</c> (the SEQ rider) — a houseCARL mod folder via
     /// <see cref="ResolvePatchModFolder"/> plus its <c>SEQ\</c> subfolder, where Amethyst deploys it into the game's
-    /// <c>Data\SEQ</c>. Sibling of <see cref="ResolveCompiledScriptFolder"/>; carries the mod-folder root + fresh flag
-    /// through for residue cleanup.</summary>
+    /// <c>Data/SEQ</c>. Carries the mod-folder root and fresh flag through for residue cleanup.</summary>
     public RiderFolder ResolveSeqFolder(string? patchName, string? into)
     {
         var f = ResolvePatchModFolder(patchName, into, "houseCARL_SEQ");

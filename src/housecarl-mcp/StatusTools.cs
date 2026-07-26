@@ -31,8 +31,8 @@ public static class StatusTools
          "each call when the profile changed — no restart needed (a 'refresh still pending' note appears only in the rare " +
          "case Amethyst was mid-write). Pass lookup= a mod folder name (e.g. 'Requiem " +
          "Lite 2') or a plugin filename (e.g. 'Requiem.esp') to ask whether houseCARL sees that one as enabled/disabled " +
-         "(mod) or active/inactive/implicit (plugin). Also reports the resolved Papyrus script-log and SKSE crash-log " +
-         "FOLDERS — where to Read logs for triage/diagnosis (auto-detected, or as set via housecarl_set_tool_path). " +
+         "(mod) or active/inactive/implicit (plugin). Also reports configured Papyrus script-log and SKSE crash-log " +
+         "FOLDERS — where to read logs for triage or diagnosis. " +
          "Does NOT modify anything.")]
     public static string LoadOrderStatus(
         LoadOrderService svc,
@@ -117,10 +117,7 @@ static class StatusWire
         return sb.ToString().TrimEnd('\n');
     }
 
-    /// <summary>Build the log-folder views for the status surface: where papyrus_logs + crash_logs resolve (saved →
-    /// auto-detected → unset), PURE (no persist — a ReadOnly status read mutates nothing). These two are the only tool deps
-    /// surfaced here because they have NO wrapping tool — the AI must be TOLD where to Read them; the compiler / BSArch deps
-    /// instead surface through their riders' forcing prompts when called.</summary>
+    /// <summary>Builds saved-or-unset log-folder views without changing user configuration.</summary>
     public static IReadOnlyList<LogFolderView> LogFolders(ToolPathResolver tools)
     {
         var views = new List<LogFolderView>(2);
@@ -143,9 +140,8 @@ static class StatusWire
         {
             sb.Append("  ").Append(l.Key).Append(": ").Append(l.Source switch
             {
-                ToolPathSource.Saved        => l.Path + "  (configured)",
-                ToolPathSource.AutoDetected => l.Path + "  (auto-detected)",
-                _                           => $"not set — call housecarl_set_tool_path(tool='{l.Key}', path='<folder>') to point houseCARL at it",
+                ToolPathSource.Saved => l.Path + "  (configured)",
+                _                    => $"not set — call housecarl_set_tool_path(tool='{l.Key}', path='<folder>') to point houseCARL at it",
             }).Append('\n');
         }
     }

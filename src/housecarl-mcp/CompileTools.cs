@@ -1,208 +1,29 @@
 using System.ComponentModel;
-using System.Text;
 using ModelContextProtocol.Server;
 
 namespace HousecarlMcp;
 
-/// <summary>
-/// Reserved post-v1 Papyrus compile surface. Native Amethyst output-path handling is retained and tested, but executing
-/// Bethesda's Windows-only compiler is refused on Linux until the structured Proton command runner is implemented.
-/// </summary>
+/// <summary>Reserves the Papyrus compilation tool name for the post-v1 Proton runner.</summary>
 [McpServerToolType]
 public static class CompileTools
 {
-    /// <summary>Refuses Linux execution until the structured Proton compiler runner is implemented.</summary>
+    /// <summary>Refuses compilation until a structured external-command contract exists.</summary>
     [McpServerTool(Name = "housecarl_compile_script", Title = "Compile a Papyrus script (.psc → .pex)"),
      Description(
-         "Post-v1 reserved tool for compiling a Papyrus script (.psc) with Bethesda's Windows-only PapyrusCompiler. " +
-         "Execution is currently unavailable in this Linux fork until the structured Proton runner is implemented. " +
-         "The retained output contract will place successful results in a new Amethyst staging mod, or in output_dir=. Pass script= the full path to the " +
-         ".psc to compile; houseCARL adds the script's own folder and the vanilla source folder (derived from the compiler's " +
-         "game dir) to the import path automatically — pass import_dirs= (';'-separated) for any extra dependency sources " +
-         "(SKSE, other mods); your folders are searched BEFORE the vanilla sources, so mod-extended copies of vanilla " +
-         "scripts (SKSE's Actor.psc etc.) win. On a compile FAILURE it returns the per-line errors as 'name(line,col): message' so you can fix " +
-         "the .psc and recompile (look unfamiliar functions up with the papyrus-reference skill); on SUCCESS it returns the " +
-         ".pex path.")]
+         "Reserved post-v1 surface for Papyrus compilation. Execution is unavailable until houseCARL-Amethyst has a " +
+         "structured Proton command contract that preserves arguments, environment, prefix, and working directory. " +
+         "Record editing, PEX decompilation, NIF operations, archive reads, and Amethyst staging remain native.")]
     public static string CompileScript(
-        LoadOrderService svc,
-        ToolPathResolver bridge,
-        [Description("Full path to the .psc source file to compile.")]
+        [Description("Full native path to the .psc source file.")]
             string script,
-        [Description("Optional. Extra import directories where dependency sources (.psc) live — SKSE, other mods — separated by ';'. The script's own folder and the vanilla source folder are added automatically; your directories are searched before vanilla (first match wins), so extended copies of vanilla scripts take precedence.")]
+        [Description("Reserved for future semicolon-separated native import directories.")]
             string? import_dirs = null,
-        [Description("Optional. Base name for the NEW patch-mod folder the .pex lands in (default 'houseCARL_Scripts'); auto-suffixed if taken.")]
+        [Description("Reserved future output-mod name.")]
             string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL staging mod to add the .pex into instead of creating a fresh folder.")]
+        [Description("Reserved future existing houseCARL staging-mod target.")]
             string? into = null,
-        [Description("Optional. Future output override: pass a native mod-folder root; houseCARL appends Scripts without doubling an existing Scripts segment.")]
-            string? output_dir = null) => Guard.Tool("housecarl_compile_script", () =>
-    {
-        if (!OperatingSystem.IsWindows())
-            return "error: PapyrusCompiler execution is deferred in houseCARL-Amethyst. The compiler is Windows-only; " +
-                   "native Linux support requires the planned structured Proton runner. Record, archive-read, PEX-decompile, " +
-                   "NIF, and Amethyst staging features remain available without Proton.";
-
-        // Legacy execution remains reachable only on Windows while the post-v1 runner is being designed.
-        if (svc.ConfigPromptOrNull() is { } cfgPrompt) return cfgPrompt;
-
-        // 2) validate the script path.
-        if (string.IsNullOrWhiteSpace(script))
-            return "error: no script given. Pass script= the full path to the .psc file to compile.";
-        script = script.Trim().Trim('"');
-        if (!File.Exists(script))
-            return $"error: no such file: '{script}'. Pass the full path to the .psc source.";
-        if (!script.EndsWith(".psc", StringComparison.OrdinalIgnoreCase))
-            return $"error: '{Path.GetFileName(script)}' is not a .psc source file.";
-        script = Path.GetFullPath(script);
-        var objectName = Path.GetFileNameWithoutExtension(script);
-        var scriptDir = Path.GetDirectoryName(script)!;
-
-        // 3) the compiler — bridge forcing function if unset (returns the trained prompt to surface). Pass the auto-detect
-        // HINTS (the CK installs its compiler under <game>\Papyrus Compiler\): the load order's own game dir first, then the
-        // located real Steam SE install — so a normal Steam+CK install AND the common Stock-Game setup (CK lives in the Steam
-        // install, not merely the active profile's game path) both resolve with no prompt; a total miss names every checked location.
-        if (bridge.RequireOrPrompt(ToolDependency.PapyrusCompiler, out var compilerExe, svc.CompilerGameDirHints()) is { } toolPrompt) return toolPrompt;
-
-        // 4) import dirs — assembled by BuildImports (the guard-probed seam).
-        var imports = BuildImports(scriptDir, compilerExe!, import_dirs);
-
-        // 5) output folder — output_dir= names a USER-OWNED location (append Scripts\, never a houseCARL patch folder; 6.3),
-        // else the default folder-per-patch with its Scripts\ subdir. output_dir= wins; patch_name=/into= are then ignored
-        // (surfaced, not silent — Q3).
-        LoadOrderService.RiderFolder rf;
-        string? deployWarning = null, outputNote = null;
-        if (!string.IsNullOrWhiteSpace(output_dir))
-        {
-            if (!string.IsNullOrWhiteSpace(patch_name) || !string.IsNullOrWhiteSpace(into))
-                outputNote = "note: output_dir= was given, so patch_name=/into= are ignored (the .pex lands in output_dir, not a houseCARL patch folder).";
-            try { rf = svc.ResolveExplicitScriptFolder(output_dir, out deployWarning); }
-            catch (InvalidOperationException ex) { return "error: " + ex.Message; }
-        }
-        else
-        {
-            try { rf = svc.ResolveCompiledScriptFolder(patch_name, into); }
-            catch (InvalidOperationException ex) { return "error: " + ex.Message; }
-        }
-
-        // 6) compile + render.
-        var result = HousecarlCore.PapyrusCompile.CompileObject(compilerExe!, objectName, imports, rf.OutputDir);
-        var rendered = Render(result, imports, userChoseOutputDir: !string.IsNullOrWhiteSpace(output_dir));
-        if (result.Success)
-        {
-            // Q3: never report a clean "done" for a .pex that won't deploy from where output_dir= put it.
-            if (deployWarning is not null) rendered += "\n" + deployWarning;
-        }
-        else
-        {
-            // A failed compile produced no .pex — clean up a genuinely-empty fresh folder, name a partial one, leave an
-            // into= reuse alone (hunt H2, Aaron's delete-if-empty). An output_dir= folder is USER-OWNED (CreatedFresh=false),
-            // so RemoveOrNameRiderResidue returns null for it by construction — never delete-if-empty a user dir.
-            var left = svc.RemoveOrNameRiderResidue(rf);
-            if (left is not null)
-                rendered += $"\nThe freshly created mod folder at '{left}' still holds partial output — delete it or retry with into=.";
-        }
-        if (outputNote is not null) rendered = outputNote + "\n" + rendered;
-        return rendered;
-    });
-
-    /// <summary>
-    /// Assemble the compiler's import-directory list. The CK compiler resolves each referenced script
-    /// to the FIRST matching .psc across these directories in order, so order is semantics: the
-    /// script's own folder first, then CALLER extras, then the vanilla sources LAST (derived from the
-    /// compiler's game dir: &lt;game&gt;\Papyrus Compiler\PapyrusCompiler.exe → &lt;game&gt;\Data\Source\Scripts,
-    /// which also holds the flags file). Vanilla last is load-bearing: mods ship EXTENDED copies of
-    /// vanilla sources (SKSE's Actor.psc/Game.psc/Form.psc above all) — ranked above the caller's
-    /// dirs, the vanilla copy wins and every call to an extended function fails "not a function or
-    /// does not exist" despite the user passing the right folder (the PEX bulk gate hit this twice;
-    /// spike findings §5.12). Exposed as the import-order-guard probe's seam.
-    /// </summary>
-    public static List<string> BuildImports(string scriptDir, string compilerExe, string? import_dirs)
-    {
-        var imports = new List<string> { scriptDir };
-        if (!string.IsNullOrWhiteSpace(import_dirs))
-            foreach (var d in import_dirs.Split(';', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries))
-                imports.Add(d.Trim('"'));
-        var gameRoot = Path.GetDirectoryName(Path.GetDirectoryName(compilerExe));
-        if (gameRoot is not null)
-        {
-            var vanilla = Path.Combine(gameRoot, "Data", "Source", "Scripts");
-            if (Directory.Exists(vanilla))
-            {
-                // The auto-added vanilla dir is authoritative-LAST: a caller re-passing it (defensively,
-                // not knowing it's auto-added) must not pin it into the caller slot and resurrect the
-                // shadowing — Distinct keeps the FIRST occurrence. (When the script ITSELF lives in the
-                // vanilla folder, that slot is the own-folder slot and stays.)
-                imports.RemoveAll(d => d.Equals(vanilla, StringComparison.OrdinalIgnoreCase)
-                                       && !d.Equals(scriptDir, StringComparison.OrdinalIgnoreCase));
-                imports.Add(vanilla);
-            }
-        }
-        return imports.Distinct(StringComparer.OrdinalIgnoreCase).ToList();
-    }
-
-    internal static string Render(HousecarlCore.CompileResult r, IReadOnlyList<string> imports, bool userChoseOutputDir)
-    {
-        var sb = new StringBuilder();
-        if (!r.Ran) return "error: " + r.RunError;   // the compiler couldn't be run at all
-
-        if (r.Success)
-        {
-            sb.Append("compile OK: ").Append(r.ObjectName).Append(".psc → ").Append(r.PexPath).Append('\n');
-            // The destination line must match where the .pex actually went (Q3 — don't claim a houseCARL patch folder for a
-            // user-chosen output_dir=, where there may be no Amethyst refresh/deploy step). Any deployability caveat for an
-            // output_dir= target is appended by the caller as deployWarning.
-            sb.Append(userChoseOutputDir
-                ? "the .pex is in the output folder you chose (path above)."
-                : "the .pex is in a houseCARL staging mod folder — refresh Amethyst, enable the mod, rebuild the filemap, and deploy.");
-            if (r.Diagnostics.Count > 0)   // a .pex WAS produced but the compiler emitted notes → surface them as warnings
-            {
-                sb.Append('\n').Append(r.Diagnostics.Count).Append(" warning(s) (the .pex compiled anyway):");
-                foreach (var d in r.Diagnostics) sb.Append("\n  ").Append(d);
-            }
-            return sb.ToString();
-        }
-
-        // failed — this run wrote no .pex (a previous build, if any, is left untouched for the user to keep or delete)
-        sb.Append("compile FAILED: ").Append(r.ObjectName).Append(".psc — no new .pex produced (any previous build is left unchanged).");
-        if (r.Diagnostics.Count > 0)
-        {
-            // MISSING-IMPORTS LEAD (HCBR-2026-06-25): when the failure is DOMINATED by unresolved-symbol/type errors, the
-            // overwhelmingly likely cause is an incomplete import_dirs — NOT a bug in the script (a single missing framework
-            // header cascades into dozens of "unknown type / is undefined" lines, plus secondary type-mismatch noise, that
-            // read like code errors). Surface that FIRST so the AI fixes the import path instead of "fixing" correct code.
-            // Gated on a >=2/3 SUPERMAJORITY of the diagnostics AND a real count (>=3): a genuine missing import is
-            // overwhelmingly unresolved (~all of the ~360 in the report), so a near-EVEN split — which could be half real
-            // syntax bugs — must NOT earn the confident "not a bug" banner (it falls to the generic tail instead). The full
-            // diagnostic list prints either way, so a missed banner only costs the lead hint, never the errors themselves.
-            int unresolved = 0;
-            foreach (var d in r.Diagnostics) if (HousecarlCore.PapyrusCompile.IsUnresolvedSymbol(d.Message)) unresolved++;
-            bool dominatedByMissingImports = unresolved >= 3 && unresolved * 3 >= r.Diagnostics.Count * 2;
-            if (dominatedByMissingImports)
-                sb.Append("\n⚠ This looks like INCOMPLETE import_dirs, not a bug in the script: ")
-                  .Append(unresolved).Append(" of ").Append(r.Diagnostics.Count)
-                  .Append(" diagnostics are unresolved-symbol/type errors (e.g. 'unknown type …', '… is undefined'). The CK " +
-                          "compiler resolves every referenced script against the import path, so a dependency whose Source\\Scripts " +
-                          "folder is missing makes ALL its calls/types fail. Re-run with import_dirs= listing EVERY dependency's " +
-                          "source folder (SKSE, SkyUI, PapyrusUtil, PO3, JContainers, …; ';'-separated) — the same set your " +
-                          "project's compile .bat passes via -i=.");
-
-            // "diagnostic(s)", not "error(s)": the CK compiler mixes warnings into a failed run's output and the
-            // parser doesn't split severities — labelling them all errors over-claims (2026-06-12 hunt render wave).
-            sb.Append('\n').Append(r.Diagnostics.Count).Append(" diagnostic(s) (errors and possibly warnings — the CK compiler mixes them):");
-            foreach (var d in r.Diagnostics) sb.Append("\n  ").Append(d);
-            // The generic tail stays for the NON-dominated case (a few resolution errors mixed with real ones); when we
-            // already led with the strong missing-imports banner, don't repeat the import line.
-            sb.Append("\nfix the .psc and recompile (look unfamiliar functions/types up with the papyrus-reference skill).");
-            if (!dominatedByMissingImports)
-                sb.Append(" If a dependency type is 'not found', its source folder may be missing from the import path — pass it via import_dirs=.");
-        }
-        else
-        {
-            // no parseable diagnostics — surface the raw compiler output rather than a silent empty failure (Q3)
-            sb.Append("\nthe compiler reported failure but no per-line diagnostics were parsed. Raw output:");
-            if (r.Stderr.Trim().Length > 0) sb.Append("\n[stderr] ").Append(r.Stderr.Trim());
-            if (r.Stdout.Trim().Length > 0) sb.Append("\n[stdout] ").Append(r.Stdout.Trim());
-        }
-        return sb.ToString();
-    }
+        [Description("Reserved future native output-mod root.")]
+            string? output_dir = null) =>
+        "error: Papyrus compilation is deferred until houseCARL-Amethyst implements the planned structured Proton runner. " +
+        "Native record, archive-read, PEX-decompile, NIF, and Amethyst staging features remain available.";
 }

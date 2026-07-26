@@ -134,7 +134,7 @@ public static class DecompileTools
     /// <paramref name="outDir"/>, filename = the OBJECT's name (the compiler's filename==ScriptName rule).
     /// NEVER overwrites: an existing target stops the call with that path reported and the file untouched.
     /// Optimizer-compiled inputs get a loud header note in the .psc itself. Exposed as the decompile-guard
-    /// probe's seam (the BuildImports pattern).</summary>
+    /// probe's seam.</summary>
     public static DecompileOutcome WriteObjects(
         PexFile pexFile, IReadOnlyDictionary<string, string>? edges, string outDir)
     {

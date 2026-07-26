@@ -6,9 +6,8 @@ namespace HousecarlMcp;
 
 /// <summary>
 /// houseCARL-Amethyst setup tools. User-owned values are validated before an atomic config update.
-///   • housecarl_set_tool_path — WHERE an external tool is (the Papyrus compiler, BSArch, or a log folder): the bridge the
-///     compile / BSA / log-access riders sit on. Auto-detects canonical homes, so it's usually only needed for BSArch or a
-///     non-standard install (<see cref="ToolPathResolver"/> + <see cref="ToolBridge"/>).
+/// <c>housecarl_set_tool_path</c> stores native diagnostic-log directories. External Windows
+/// executables remain absent until the post-v1 structured Proton runner is implemented.
 /// </summary>
 [McpServerToolType]
 public static class SetupTools
@@ -38,23 +37,18 @@ public static class SetupTools
         catch (AmethystConfigurationException ex) { return "error: " + ex.Message; }
     });
 
-    /// <summary>Validates and stores one optional external-tool or log-directory path.</summary>
-    [McpServerTool(Name = "housecarl_set_tool_path", Title = "Tell houseCARL where an external tool is"),
+    /// <summary>Validates and stores one optional diagnostic-log directory.</summary>
+    [McpServerTool(Name = "housecarl_set_tool_path", Title = "Tell houseCARL where diagnostic logs are"),
      Description(
-         "Give houseCARL the path to an external tool it drives: 'papyrus_compiler' (the Creation Kit's " +
-         "PapyrusCompiler.exe, for compiling .psc scripts to .pex), 'bsarch' (BSArch.exe, for .bsa archive " +
-         "list/extract/repack), 'papyrus_logs' (the Papyrus script-log FOLDER), or 'crash_logs' (the SKSE crash-log " +
-         "FOLDER) — the bridge houseCARL's compile / BSA / log-reading capabilities sit on. houseCARL AUTO-DETECTS the " +
-         "canonical homes for the compiler and the log folders, so you usually only need this for BSArch (no fixed home) " +
-         "or a non-standard install. VALIDATES the path — the .exe exists and looks like the right tool; the log folder " +
-         "exists — and reports exactly what's wrong if not, saving NOTHING on failure (Q3). On success it SAVES the choice " +
-         "to houseCARL.user.json so it persists across restarts, coexisting with your Amethyst connection. tool must be " +
-         "one of: papyrus_compiler, bsarch, papyrus_logs, crash_logs.")]
+         "Store a native Linux directory containing Papyrus script logs or SKSE crash logs. The directory must already " +
+         "exist. Nothing is saved on validation failure. On success the path persists in houseCARL.user.json alongside " +
+         "the Amethyst connection. Valid tool keys are papyrus_logs and crash_logs. PapyrusCompiler and BSArch execution " +
+         "remain deferred until the post-v1 structured Proton runner.")]
     public static string SetToolPath(
         ToolPathResolver bridge,
-        [Description("Which tool: 'papyrus_compiler' (CK PapyrusCompiler.exe), 'bsarch' (BSArch.exe), 'papyrus_logs' (script-log folder), or 'crash_logs' (SKSE crash-log folder).")]
+        [Description("Which log directory: 'papyrus_logs' or 'crash_logs'.")]
             string tool,
-        [Description("Full path to the tool: the .exe FILE for papyrus_compiler/bsarch, or the log DIRECTORY for papyrus_logs/crash_logs.")]
+        [Description("Absolute native Linux path to the existing log directory.")]
             string path) => Guard.Tool("housecarl_set_tool_path", () =>
     {
         if (string.IsNullOrWhiteSpace(tool))

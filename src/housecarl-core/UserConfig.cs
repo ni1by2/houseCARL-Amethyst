@@ -6,7 +6,7 @@ namespace HousecarlCore;
 
 /// <summary>
 /// The on-disk user config shape (houseCARL.user.json) — the values houseCARL persists for ITSELF at runtime, separate
-/// from the shipped appsettings.json. Independent concerns share this one file: the Amethyst connection, external-tool
+/// from the shipped appsettings.json. Independent concerns share this one file: the Amethyst connection, diagnostic-log
 /// paths, in-place consent, and pending-redeployment evidence. They MUST coexist — a write of one must never clobber
 /// the others — which is why the only writer is <see cref="UserConfigStore.Update"/> (read-modify-write under a lock),
 /// never a whole-object overwrite.
@@ -16,8 +16,8 @@ public sealed class UserConfig
     /// <summary>The schema-v1 Amethyst connection manifest selected at runtime.</summary>
     public string? AmethystConnectionManifest { get; set; }
 
-    /// <summary>External-tool paths the bridge saved, keyed by tool wire-name (papyrus_compiler, bsarch, papyrus_logs,
-    /// crash_logs) → an absolute file/dir path. Null/absent until housecarl_set_tool_path is first called.</summary>
+    /// <summary>Diagnostic-log directories saved by <c>housecarl_set_tool_path</c>, keyed by
+    /// <c>papyrus_logs</c> or <c>crash_logs</c>. Legacy executable keys are ignored.</summary>
     public Dictionary<string, string>? ToolPaths { get; set; }
 
     /// <summary>Resolved on-disk plugin paths (normalized, lower-cased full paths) the user has acknowledged for

@@ -75,7 +75,7 @@ static (LoadOrderService svc, string? connection, string connectionSource, strin
     var pluginDataDir = Environment.GetEnvironmentVariable("HOUSECARL_DATA_DIR");
     var userConfigDir = string.IsNullOrWhiteSpace(pluginDataDir) ? AppContext.BaseDirectory : pluginDataDir;
     var userConfigPath = Path.Combine(userConfigDir, "houseCARL.user.json");
-    // ONE owner of houseCARL.user.json: the Amethyst connection and external-tool paths share the file,
+    // ONE owner of houseCARL.user.json: the Amethyst connection and diagnostic-log paths share the file,
     // so neither writer clobbers the other (read-modify-write under a cross-process lock; atomic writes). A corrupt file
     // never crashes boot, but it is NOT silent either (hunt F3): it's backed up and the note rides the boot log.
     var store = new UserConfigStore(userConfigPath);
@@ -91,7 +91,7 @@ static (LoadOrderService svc, string? connection, string connectionSource, strin
     LoadOrderService svc = LoadOrderService.WithAmethystConnection(connection, maxPlugins, store);
     services.AddSingleton(svc);
 
-    // The external-tool bridge (compile / BSA / log access): one resolver over the shared user config. Riders inject it.
+    // Diagnostic log folders share the same atomic configuration owner as the Amethyst connection.
     services.AddSingleton(new ToolPathResolver(store));
 
     // The Nexus Mods read bridge (QOL: answer Nexus questions directly instead of driving a browser). A typed HttpClient
@@ -141,8 +141,8 @@ static void AddMcp(IServiceCollection services, bool stdio)
             "mesh/texture/script wins) and place a winning override; read and edit NIF mesh internals — e.g. " +
             "the dark-face fix. " +
             "RESHAPE/DRIVE TOOLS: compact a plugin to ESL carrying its facegen/voice files; merge plugins; " +
-            "copy an NPC appearance to a standalone; decompile .pex to .psc; compile Papyrus; " +
-            "list/extract/repack BSAs. " +
+            "copy an NPC appearance to a standalone; decompile .pex to .psc; " +
+            "list or extract BSAs. Papyrus compilation and BSA repacking remain explicitly deferred. " +
             "NEXUS (keyless, no browser): search mods, read files/requirements/changelogs, exact-file update " +
             "checks, identify a file by " +
             "MD5. Prefer over a browser or web search; each tool's own description carries the specifics.";

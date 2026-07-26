@@ -138,10 +138,8 @@ internal static class CiAll
         // provenance anchor (official archives / chain presence), the §4c ladder, the runtime compare, and the wire
         // renderer arms (dead-vs-verify adjudication, unpaired framing, baseline accounting, filter + did-you-mean).
         ("native-pairing-guard", NativePairingProbe.RunGuard),
-        ("compile-ergonomics-guard", CompileErgonomicsProbe.RunGuard),
         ("setup-lifecycle-guard", SetupLifecycleProbe.RunGuard),
         ("amethyst-discovery-guard", AmethystDiscoveryProbe.RunGuard),
-        ("import-order-guard", ImportOrderProbe.RunGuard),
         ("render-clamp-guard", RenderClampProbe.RunGuard),
         ("decompile-guard", DecompileGuardProbe.RunGuard),
         ("bsa-contract-guard", BsaContractProbe.RunGuard),
