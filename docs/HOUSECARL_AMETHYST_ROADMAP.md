@@ -256,41 +256,40 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 6, removing the last stale generator-only MO2
-  wording and Windows-path defaults.
-- Last completed checkpoint: `LegacyFixturePaths` and every
-  `ModOrganizer.ini` fixture write are deleted. Synthetic tests now pass
-  explicit native roots and profile names; manual real-data harnesses require
-  the schema-v1 Amethyst connection manifest and consume its authoritative
-  resolved plugin order. Unresolved active plugins fail loudly instead of
-  being omitted.
+- Active milestone: Session 6, diagnosing the parallel MSBuild
+  project-reference failure before finalizing Ubuntu CI.
+- Last completed checkpoint: the generator contains no MO2 terminology,
+  `ModOrganizer.ini` fixture banners, developer-machine paths, or implicit
+  Windows game roots. Exploratory real-data probes use the documented
+  `HOUSECARL_PROBE_DATA_DIR`, `HOUSECARL_PROBE_MODS_DIR`,
+  `HOUSECARL_PAPYRUS_COMPILER`, and `HOUSECARL_NIF_SMOKE` inputs. Synthetic
+  probes remain self-contained and manual load-order probes consume a real
+  schema-v1 Amethyst manifest.
 - Verification performed: the strict four-project documentation build passes
   with zero warnings and zero errors. Full Linux `ci-all` passes 110/110. The
   separately cold `freshness-capture-guard` passes native profile switching,
   restored/backdated profile files, concurrent status reads, single-snapshot
   writes, and deferred refresh during writes.
-- Files/components changed: native synthetic-fixture adapter, manual
-  real-data harness arguments, profile-switch guard, removal of the legacy
-  parser and obsolete manager-file fixture writes, plus the earlier MCP
-  public-surface documentation.
-- Decisions made: test-only explicit paths remain available to synthetic
-  probes, but are no longer a shipped server configuration. The obsolete
-  update cache is removed instead of adapting MO2-specific `meta.ini` fields
-  that Amethyst does not own. Historical changelog entries remain historical.
-- Known failures or residual risks: generator comments and a few exploratory
-  default constants still use inherited MO2/Windows examples even though no
-  parser or runtime path consumes them; remove or rename them before declaring
-  the repository terminology-clean. A parallel MSBuild invocation can fail
-  silently while evaluating shared
-  project references, whereas `-m:1` succeeds; this needs a focused build-graph
-  diagnosis before CI is changed. The Ubuntu workflow definition has not yet
-  been observed green on GitHub. A disposable real
+- Files/components changed: generator fixture terminology, real-data probe
+  inputs, native synthetic-fixture adapter, manual Amethyst harness arguments,
+  profile-switch guard, removal of the legacy parser and obsolete manager-file
+  fixture writes, plus the earlier MCP public-surface documentation.
+- Decisions made: machine-specific defaults are configuration errors or
+  existence-gated skips, never repository fallbacks. Deliberate drive-path
+  strings remain only where a path parser or traversal guard must reject them.
+  Historical changelog entries remain historical.
+- Known failures or residual risks: a parallel MSBuild invocation can fail
+  silently while evaluating shared project references, whereas `-m:1`
+  succeeds; this needs a focused build-graph diagnosis before CI is changed.
+  The Ubuntu workflow definition has not yet been observed green on GitHub. A
+  disposable real
   Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
   External PapyrusCompiler and BSArch execution remains post-v1. NuGet
   vulnerability metadata remains unreachable in the restricted environment.
-- Exact next action: remove the remaining generator-only MO2 terminology and
-  Windows default paths without changing probe behavior. Then diagnose the
-  parallel MSBuild project-reference failure as a separate focused change.
+- Exact next action: reproduce the parallel MSBuild project-reference failure
+  under diagnostic logging, identify whether the project graph or local build
+  node reuse is responsible, and either fix the graph or record repeatable
+  evidence that the failure is environmental before changing Ubuntu CI.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -336,7 +335,8 @@ manual release gate.
   `4862429` narrows the generator command surface and makes the strict
   four-project documentation build warning-free; `f1890ef` records that audit;
   `8d3b84f` removes the legacy fixture parser and moves manual proofs to real
-  Amethyst manifests.
+  Amethyst manifests; `c6d6573` records the native-fixture migration;
+  `916dab4` removes stale generator terminology and machine-specific defaults.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
