@@ -55,7 +55,7 @@ Beyond the core workflow, reach for the right group. Depth for the specialist ar
 
 **BSA archives** — `housecarl_bsa_list`, `housecarl_bsa_extract`, `housecarl_bsa_repack`.
 
-**Nexus (keyless, no browser)** — `housecarl_nexus_search`, `housecarl_nexus_mod`, `housecarl_nexus_check_updates`, `housecarl_nexus_identify`, `housecarl_nexus_graphql`. For a whole-order update check, start with `housecarl_update_status` (local staging metadata, no network), then confirm with `housecarl_nexus_check_updates`.
+**Nexus (keyless, no browser)** — `housecarl_nexus_search`, `housecarl_nexus_mod`, `housecarl_nexus_check_updates`, `housecarl_nexus_identify`, `housecarl_nexus_graphql`.
 
 **Setup** — `housecarl_set_amethyst_connection`, `housecarl_amethyst_status`, `housecarl_refresh`, and `housecarl_set_tool_path` for deferred external tools or log folders.
 

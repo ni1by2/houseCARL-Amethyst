@@ -34,41 +34,6 @@ namespace HousecarlCore;
 //  surfaces; Build() calls it, then adds the heavier physical-path resolution on top.
 // ======================================================================
 
-/// <summary>The resolved active order plus any non-fatal problems (Q3 — surfaced, not swallowed).</summary>
-/// <param name="OrderedPaths">Real plugin paths, masters-first → highest priority LAST (resolver winner order).</param>
-/// <param name="Warnings">Plugins listed in the order with no resolvable file, or missing profile files.</param>
-/// <param name="ActiveCount">Active plugins in the load order (the resolution target).</param>
-public sealed record ModOrderResult(
-    IReadOnlyList<string> OrderedPaths, IReadOnlyList<string> Warnings, int ActiveCount)
-{
-    public int ResolvedCount => OrderedPaths.Count;
-    public IReadOnlyDictionary<string, string> ResolvedSources { get; init; }
-        = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-}
-
-/// <summary>The manager profile's enabled/disabled composition.</summary>
-/// <param name="EnabledMods">modlist.txt `+` entries (separators excluded), priority order (top = highest).</param>
-/// <param name="DisabledMods">modlist.txt `-` entries (separators excluded) — present in MO2 but switched OFF.</param>
-/// <param name="LockedMods">Enabled `*` entries that the manager prevents users from toggling.</param>
-/// <param name="OrderedPluginNames">loadorder.txt — every plugin in load order (masters first, winner last).</param>
-/// <param name="ActivePluginNames">plugins.txt `*` entries (the `*` stripped) — explicitly checked/active.</param>
-/// <param name="InactivePluginNames">plugins.txt entries WITHOUT a `*` — present but unchecked (the game won't load them).</param>
-/// <param name="ImplicitPluginNames">in the load order but NOT listed in plugins.txt at all — the force-loaded base/CC masters.</param>
-public sealed record ModComposition(
-    IReadOnlyList<string> EnabledMods,
-    IReadOnlyList<string> DisabledMods,
-    IReadOnlyList<string> LockedMods,
-    IReadOnlyList<string> OrderedPluginNames,
-    IReadOnlySet<string> ActivePluginNames,
-    IReadOnlyList<string> InactivePluginNames,
-    IReadOnlyList<string> ImplicitPluginNames);
-
-/// <summary>One on-disk sighting of a plugin FILENAME: its real path plus a human label for WHERE it was found
-/// (the overwrite layer, a named mod folder, or the game Data folder) and whether that source is ENABLED in the
-/// profile. <see cref="Mo2LoadOrder.LocatePlugin"/> returns these so a caller can distinguish a name NO folder
-/// provides (missing), ONE folder provides (use it), or SEVERAL provide (ambiguous → surface, never guess — Q3).</summary>
-public sealed record PluginFileHit(string Path, string Where, bool Enabled);
-
 public static class Mo2LoadOrder
 {
     static readonly string[] PluginExts = PluginFile.Extensions;   // the one shared home (HousecarlCore.PluginFile) — no divergent copy

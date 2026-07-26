@@ -11,7 +11,7 @@ namespace HousecarlMcp;
 /// spinning up a browser to scrape a mod page. Two read-only tools over <see cref="NexusClient"/> (the public v2 GraphQL
 /// read API, keyless): search the catalog, and look up one mod's detail + requirements + newest MAIN file (the accurate
 /// latest version). Neither downloads or installs — that stays the mod manager's nxm handoff. Both need an internet
-/// connection and fail LOUD/clean when there isn't one (Q3); they do NOT touch the MO2 instance, so they work even when
+/// connection and fail LOUD/clean when there isn't one (Q3); they do NOT touch Amethyst state, so they work even when
 /// houseCARL has no load order configured.
 /// </summary>
 [McpServerToolType]
@@ -148,22 +148,21 @@ public static class NexusTools
          "key. The accurate question is 'is the exact FILE I installed still current?', NOT 'does my version match the " +
          "page's newest main' — a Nexus page hosts many independently-versioned files (patch hubs, ENB pages, Xtudo " +
          "mega-packs), so comparing your file to the page's single newest main is confidently WRONG for those. Pass each " +
-         "mod as 'id#fileid' — the fileid MO2 recorded for what you installed, which housecarl_update_status prints per " +
-         "row as a 'verify:' token (several files installed from one page → 'id#fileid1#fileid2'). houseCARL resolves each " +
+         "mod as 'id#fileid', using the Nexus mod and file ids from the installed download or Nexus download history " +
+         "(several files installed from one page → 'id#fileid1#fileid2'). houseCARL resolves each " +
          "installed file to its live status and reports per mod: CURRENT (your file is still a live file on the page), " +
          "OUTDATED (your file was RETIRED to OLD_VERSION/ARCHIVED — it names the newest same-name file to grab), FILE-GONE " +
          "(your file is no longer on the page — hidden/deleted, a loud unknown), or not-found (wrong id / LE/other-game). " +
          "If you pass only 'id=version' with NO fileid (a FOMOD/manual install), it degrades LOUDLY to a best-effort " +
          "'no-fileid' note — never a confident verdict, because the mod-level compare lies for multi-file pages. Batched " +
          "(dozens of mods per call). READ-ONLY, needs an internet connection (local tools work offline). Does NOT download " +
-         "or update anything — it is a REPORT. Build the list cheaply with housecarl_update_status (reads MO2's own local " +
-         "cache, no network, and prints each mod's fileid), then housecarl_nexus_mod changelog=true on anything OUTDATED " +
-         "to see what actually changed.")]
+         "or update anything — it is a REPORT. Use housecarl_nexus_mod changelog=true on anything OUTDATED to see what " +
+         "actually changed.")]
     public static Task<string> NexusCheckUpdates(
         NexusClient nexus,
         [Description("The mods to check — one entry per mod, separated by commas or newlines. Preferred (FILE-LEVEL) form: " +
-            "'id#fileid', the mod id then '#' then the Nexus file id MO2 recorded for what you installed (housecarl_update_status " +
-            "prints this as the 'verify:' token); if you installed several files from one page, add more with '#': " +
+            "'id#fileid', the mod id then '#' then the Nexus file id from the installed download or Nexus history; " +
+            "if you installed several files from one page, add more with '#': " +
             "'126608#533265, 99786#585300#585301'. Without a fileid you can pass 'id=version' (or 'id version') for a LOUD " +
             "best-effort no-fileid note, or a bare 'id' for its latest version only — e.g. '12604=6.9, 3863'. The " +
             "intra-fileid separator is '#', because ',' separates entries. Non-numeric junk is skipped and listed back to you.")]
@@ -181,7 +180,7 @@ public static class NexusTools
     }, ct);
 
     /// <summary>Parse the check-updates input — comma/newline/semicolon-separated entries. Two forms per entry:
-    /// FILE-LEVEL <c>&lt;modid&gt;#&lt;fileid&gt;[#&lt;fileid&gt;…]</c> (the honest check — the fileid(s) MO2 recorded,
+    /// FILE-LEVEL <c>&lt;modid&gt;#&lt;fileid&gt;[#&lt;fileid&gt;…]</c> (the honest check against exact installed files,
     /// several installed files on one page joined with more '#'), or VERSION/bare <c>&lt;modid&gt;[=&lt;version&gt;]</c>
     /// (a '#'-less entry — the no-fileid FOMOD/manual fallback, or a bare id for latest-only). Returns
     /// (modId, installedVersion|null, fileIds) triples plus the tokens it couldn't read (surfaced back, never silently
@@ -306,7 +305,7 @@ public static class NexusTools
 }
 
 /// <summary>Render the Nexus result records to compact, readable text. Every mod ends with its page URL so the user can
-/// click through to the manager-download button (the install handoff houseCARL deliberately leaves to MO2).</summary>
+/// click through to the manager-download button (the install handoff houseCARL deliberately leaves to Amethyst).</summary>
 static class Render
 {
     const string ModUrlBase = "https://www.nexusmods.com/skyrimspecialedition/mods/";

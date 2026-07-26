@@ -12,7 +12,7 @@ var hostArgs = args.Where(a => a != "--http").ToArray();   // strip our own flag
 if (useHttp)
 {
     var builder = WebApplication.CreateBuilder(hostArgs);
-    var (svc, explicitMode, connection, connectionSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
+    var (svc, connection, connectionSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
     AddMcp(builder.Services, stdio: false);
 
     var app = builder.Build();
@@ -27,7 +27,7 @@ if (useHttp)
     else
         app.Logger.LogInformation(
             "houseCARL-Amethyst listening on {Url} — reading {Source}; load order resolves lazily on the first tool call.",
-            url, explicitMode ? "explicit configured paths" : $"Amethyst connection '{connection}' [{connectionSource}]");
+            url, $"Amethyst connection '{connection}' [{connectionSource}]");
     app.Run(url);
 }
 else
@@ -36,7 +36,7 @@ else
     // STDIO GOTCHA: stdout IS the JSON-RPC channel — route ALL logs to stderr or they corrupt the protocol stream.
     builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
-    var (svc, explicitMode, connection, connectionSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
+    var (svc, connection, connectionSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
     AddMcp(builder.Services, stdio: true);
 
     var app = builder.Build();
@@ -50,16 +50,17 @@ else
     else
         logger.LogInformation(
             "houseCARL-Amethyst stdio server — reading {Source}; load order resolves lazily on the first tool call.",
-            explicitMode ? "explicit configured paths" : $"Amethyst connection '{connection}' [{connectionSource}]");
+            $"Amethyst connection '{connection}' [{connectionSource}]");
     await app.RunAsync();
 }
 
 // ── shared setup — MUST stay identical across transports (divergence here = stdio and http resolving the load
 //    order differently, a latent bug). Both branches call these; only the transport line itself differs. ──────────
 
-// Runtime user config wins over appsettings; explicit roots remain a local-development seam.
 // Builds + registers the LoadOrderService; returns the bits the boot log needs.
-static (LoadOrderService svc, bool explicitMode, string? connection, string connectionSource, string? configNote) SetupHouseCarl(IConfiguration config, IServiceCollection services)
+static (LoadOrderService svc, string? connection, string connectionSource, string? configNote) SetupHouseCarl(
+    IConfiguration config,
+    IServiceCollection services)
 {
     var cfg = config.GetSection("HouseCarl");
 
@@ -87,13 +88,7 @@ static (LoadOrderService svc, bool explicitMode, string? connection, string conn
     var connectionSource = fromUser ? "saved user config" : "ConnectionManifest (appsettings)";
     var maxPlugins = int.TryParse(cfg["MaxPlugins"], out var mp) ? mp : 0;
 
-    var dataDir = cfg["DataDir"]; var modsDir = cfg["ModsDir"]; var profileDir = cfg["ProfileDir"];
-    bool explicitMode = !fromUser
-        && !string.IsNullOrWhiteSpace(dataDir) && !string.IsNullOrWhiteSpace(modsDir) && !string.IsNullOrWhiteSpace(profileDir);
-
-    LoadOrderService svc = explicitMode
-        ? LoadOrderService.WithExplicitPaths(dataDir!, modsDir!, profileDir!, maxPlugins, store)
-        : LoadOrderService.WithAmethystConnection(connection, maxPlugins, store);
+    LoadOrderService svc = LoadOrderService.WithAmethystConnection(connection, maxPlugins, store);
     services.AddSingleton(svc);
 
     // The external-tool bridge (compile / BSA / log access): one resolver over the shared user config. Riders inject it.
@@ -114,7 +109,7 @@ static (LoadOrderService svc, bool explicitMode, string? connection, string conn
         c.DefaultRequestHeaders.Add("Application-Version", ServerVersion());
     });
 
-    return (svc, explicitMode, connection, connectionSource, configNote);
+    return (svc, connection, connectionSource, configNote);
 }
 
 // The MCP server registration — server identity + instructions + the attribute-registered tools. ONLY the

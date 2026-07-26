@@ -23,11 +23,11 @@ public static class SeqTools
          "Ticking 'Start Game Enabled' on a quest does NOTHING on its own — without the .seq the quest, and any dialogue or " +
          "change gated on it, silently never starts. Pass plugin= the path to the .esp/.esm/.esl (e.g. the path " +
          "housecarl_create_record reported for your patch); houseCARL reads its start-game-enabled quests and writes the " +
-         ".seq into a houseCARL mod folder you enable in MO2. If the plugin is itself in a houseCARL patch folder, the .seq " +
+         ".seq into a houseCARL staging mod you refresh, enable, and deploy through Amethyst. If the plugin is itself in a houseCARL patch folder, the .seq " +
          "defaults into THAT same folder (so enabling the one mod deploys both .esp and .seq); otherwise it lands in a fresh " +
          "folder (pass into= an existing houseCARL patch to keep them together). A plugin with no start-game-enabled quests " +
          "needs no .seq — that's reported, nothing is written. The .seq makes the quest START; it does not verify the quest " +
-         "or its dialogue is otherwise correct. Needs houseCARL pointed at your MO2 instance (for the output folder).")]
+         "or its dialogue is otherwise correct. Needs an active Amethyst connection for the output folder.")]
     public static string WriteSeq(
         LoadOrderService svc,
         [Description("Full path to the plugin (.esp/.esm/.esl) whose start-game-enabled quests need a .seq.")]

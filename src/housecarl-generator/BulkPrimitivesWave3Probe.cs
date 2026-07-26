@@ -606,7 +606,7 @@ public static class BulkPrimitivesWave3Probe
         // four different remedies — and the wrong word for a plugin (a MOD is disabled; a PLUGIN is inactive).
         Check("diff: the off-order pole NAMES the cause — the DISABLED mod folder that provides the copy",
               dPathDisabled.Error is null && dPathDisabled.A!.Where.Contains("DiffDonor")
-              && dPathDisabled.A.Where.Contains("switched OFF"));
+              && dPathDisabled.A.Where.Contains("disabled in Amethyst"));
 
         var dPathArchive = svc.DiffRecord(wFid, archivePath, replPath, new[] { "BasicStats.Damage" });
         Check("diff: a same-named backup OUTSIDE the install stays OUT-OF-LOAD-ORDER (55 vs 99) — name never decides",
@@ -663,8 +663,8 @@ public static class BulkPrimitivesWave3Probe
         //      must be distinguishable — an agent that reads "NOT active" and cannot tell unticked from shadowed from
         //      switched-off burns a search rediscovering what the tool already computed. Armed on EVERY address form,
         //      because "armed the reported lane, missed its twin" is the mistake that cost #270 four review rounds. ----
-        Check("#271 why: an UNTICKED plugin by PATH says UNTICKED and names plugins.txt (not its mod's switch)",
-              rpfUnticked.WhyNotActive is { } wU && wU.Contains("UNTICKED") && wU.Contains("plugins.txt")
+        Check("#271 why: an inactive plugin by path names plugins.txt rather than blaming its mod",
+              rpfUnticked.WhyNotActive is { } wU && wU.Contains("inactive") && wU.Contains("plugins.txt")
               && wU.Contains(unKey.FileName.String));
         Check("#271 why: the same plugin BY FILENAME gives the SAME cause — one fact, however addressed",
               rpfUntickedByName.WhyNotActive == rpfUnticked.WhyNotActive);
@@ -674,16 +674,16 @@ public static class BulkPrimitivesWave3Probe
         // is enabled and this plugin is ticked — what's wrong is WHICH copy, and the useful pointer is the winner.
         Check("#271 why: a SHADOWED copy says SHADOWED and points at the mod that serves the winning copy",
               rpfShadow.WhyNotActive is { } wS && wS.Contains("SHADOWED") && wS.Contains("DiffRepl")
-              && !wS.Contains("UNTICKED"));
+              && !wS.Contains("inactive"));
         Check("#271 why: mod= reaches the same shadowed copy and states the same cause",
               rpfModShadow.WhyNotActive is { } wMS && wMS.Contains("SHADOWED"));
         // A copy in a switched-off mod: the remedy is the LEFT pane, and the label must say so rather than blame the
         // plugin's tick (the decoy is not listed in plugins.txt at all, so a naive renderer would say "unticked").
         Check("#271 why: a copy in a DISABLED mod blames the MOD FOLDER, and never claims the plugin is unticked",
-              rpfDecoy.WhyNotActive is { } wD && wD.Contains("DataServedDecoy") && wD.Contains("switched OFF")
-              && !wD.Contains("UNTICKED"));
+              rpfDecoy.WhyNotActive is { } wD && wD.Contains("DataServedDecoy") && wD.Contains("disabled in Amethyst")
+              && !wD.Contains("inactive"));
         Check("#271 why: a same-named backup OUTSIDE the install says it is not an install copy — not 'disabled'",
-              rpfArchive.WhyNotActive is { } wA && wA.Contains("no MO2 layer was found providing this exact path"));
+              rpfArchive.WhyNotActive is { } wA && wA.Contains("no Amethyst staging layer was found providing this exact path"));
         // The other direction, and the one #269 was actually about: when the game DOES load the file, there must be
         // no cause at all — a leftover explanation would re-assert the very falsehood this issue set out to remove.
         Check("#271 why: the three ACTIVE lanes carry NO cause (null), so nothing contradicts the live file",
@@ -703,7 +703,7 @@ public static class BulkPrimitivesWave3Probe
         Check("#271 render: the mod-vs-plugin pairing is disambiguated in words, and carries the cause",
               renderUnticked.Contains("mod 'DiffUnticked' (enabled)")
               && renderUnticked.Contains("the game does NOT load this file")
-              && renderUnticked.Contains("UNTICKED in plugins.txt"));
+              && renderUnticked.Contains("inactive in plugins.txt"));
         // The FILENAME lane's Where is the located hit's OWN label, so a LayerOff cause that restates the layer says
         // the same thing twice in one sentence — output strictly worse than the "NOT active" it replaced. The path-lane
         // arms above cannot catch it: their Where is the constant "direct path", where the restatement is the only way
@@ -740,16 +740,16 @@ public static class BulkPrimitivesWave3Probe
         // duplication class, one step milder. Only the cause line explains (live-check finding, #274).
         Check("#271 render: an UNLISTED layer's label identifies only; the remedy is stated exactly once",
               rpfUnlisted.Error is null && Wire.RenderPluginFile(rpfUnlisted, 4000) is { } rUnl
-              && CountOf(rUnl, "refresh MO2") == 1 && rUnl.Contains("(UNLISTED)"));
+              && CountOf(rUnl, "refresh") == 1 && rUnl.Contains("(UNLISTED)"));
         Check("#271 why: a DISABLED mod says switch it on; an UNLISTED folder says refresh — never swapped",
-              rpfDisabledByName.WhyNotActive is { } wDis && wDis.Contains("switched OFF") && wDis.Contains("switch it on")
+              rpfDisabledByName.WhyNotActive is { } wDis && wDis.Contains("disabled in Amethyst") && wDis.Contains("enable it")
               && rpfUnlisted.Error is null && rpfUnlisted.WhyNotActive is { } wUn
               && wUn.Contains("not registered") && !wUn.Contains("switch it on"));
         // The JSON lane carries the cause too — advertised in the changelog, previously unarmed.
         var jsonUnticked = JsonWire.RenderPluginFile(rpfUntickedByName, 8000);
         var jsonLive = JsonWire.RenderPluginFile(rpfPath, 8000);
         Check("#271 json: why_not_active rides beside enabled, and is explicitly null when the game loads the file",
-              jsonUnticked.Contains("\"why_not_active\"") && jsonUnticked.Contains("UNTICKED")
+              jsonUnticked.Contains("\"why_not_active\"") && jsonUnticked.Contains("inactive")
               && jsonLive.Contains("\"why_not_active\": null"));
 
         // ---- #271 item 2: the REFUSAL sweep. A tool that reads THROUGH the load order still refuses on an unticked
@@ -757,8 +757,8 @@ public static class BulkPrimitivesWave3Probe
         //      the refusal has to say WHY. This is a second mechanism from the flag above: these paths never call the
         //      locate contract at all, they just miss the index's name table. ----
         var readUnticked = svc.ResolveRead(uwFk, unKey.FileName.String, null, false);
-        Check("#271 refusal: read_record on an UNTICKED plugin explains it is installed-but-unticked, not 'not found'",
-              readUnticked.Error is { } eU && eU.Contains("not in the load order") && eU.Contains("UNTICKED")
+        Check("#271 refusal: read_record on an inactive plugin explains it is installed but inactive",
+              readUnticked.Error is { } eU && eU.Contains("not in the load order") && eU.Contains("inactive")
               && eU.Contains("plugins.txt"));
         Check("#271 refusal: and points at the raw-read escape hatch rather than leaving a dead end",
               readUnticked.Error is { } eU2 && eU2.Contains("housecarl_read_plugin_file"));
@@ -782,14 +782,14 @@ public static class BulkPrimitivesWave3Probe
         var rpfUnreg = svc.ReadPluginFile(unregKey.FileName.String, urwFid, null, null, null, 1, null, 10);
         Check("#271 why: the SERVED copy of an unregistered plugin says so, blaming neither the tick nor the mod",
               rpfUnreg.Error is null && !rpfUnreg.Enabled && rpfUnreg.WhyNotActive is { } wR
-              && wR.Contains("not registered in MO2's load order") && !wR.Contains("UNTICKED")
+              && wR.Contains("not registered in Amethyst's load order") && !wR.Contains("inactive in plugins.txt")
               && !wR.Contains("which the game does not load"));
         // The explainer's stale-profile branch: TICKED, but no layer provides the file. "Unticked" would be a lie and
         // "not on disk anywhere" is the actual remedy-bearing fact.
         var readGhost = svc.ResolveRead(wFk, ghostName, null, false);
         Check("#271 refusal: a ticked-but-missing plugin is called stale-profile, never unticked",
               readGhost.Error is { } eG && eG.Contains("ticked in plugins.txt") && eG.Contains("stale")
-              && !eG.Contains("UNTICKED"));
+              && !eG.Contains("inactive in plugins.txt"));
 
         // The overclaim SWEEP. "the game does not load this file" is an assertion about the FILE that had lodged in
         // places describing the READ — and fixing the banner alone left it live in read_plugin_file's own tool
@@ -844,8 +844,8 @@ public static class BulkPrimitivesWave3Probe
         var readFreshPatch = svc.ResolveRead(ulwFk, unlKey.FileName.String, null, false);
         Check("#271 refusal: a just-written (unlisted) patch keeps the full_readback verify path",
               readFreshPatch.Error is { } eF && eF.Contains("full_readback=true"));
-        Check("#271 refusal: ...and is told to REFRESH MO2, not to switch on a mod MO2 has never listed",
-              readFreshPatch.Error is { } eF2 && eF2.Contains("refresh MO2", StringComparison.OrdinalIgnoreCase)
+        Check("#271 refusal: ...and is told to refresh Amethyst, not to switch on an unlisted mod",
+              readFreshPatch.Error is { } eF2 && eF2.Contains("refresh Amethyst", StringComparison.OrdinalIgnoreCase)
               && !eF2.Contains("Switch that mod on"));
         Check("#271 refusal: the retained verify sentence names the plugin, so it has a subject standing alone",
               readFreshPatch.Error is { } eF3 && eF3.Contains($"prior write into '{unlKey.FileName}'"));
@@ -858,8 +858,8 @@ public static class BulkPrimitivesWave3Probe
         // Rendering the whole message, not just the clause, is the point: this arm exists to read the sentence.
         // Two donors minimum; the unticked one is named first so its refusal is the one that fires.
         var mergeUnticked = svc.MergePlugins(new[] { unKey.FileName.String, replName }, "HcW3MergeOut.esp");
-        Check("#271 refusal: merge_plugins explains an UNTICKED donor rather than a flat not-active",
-              !mergeUnticked.Success && mergeUnticked.Error is { } eM && eM.Contains("UNTICKED")
+        Check("#271 refusal: merge_plugins explains an inactive donor rather than a flat not-active",
+              !mergeUnticked.Success && mergeUnticked.Error is { } eM && eM.Contains("inactive")
               && eM.Contains("plugins.txt"));
         Check("#271 refusal: and the merge refusal reads as whole words (no lost space at the splice)",
               mergeUnticked.Error is { } eM2 && eM2.Contains("records and conflict position from the ACTIVE order")

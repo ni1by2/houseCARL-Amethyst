@@ -176,10 +176,6 @@ public static class CiAll
         ("amethyst-filemap-guard", AmethystFileMapProbe.RunGuard),
         ("amethyst-runtime-guard", AmethystRuntimeProbe.RunGuard),
         ("amethyst-redeploy-guard", AmethystRedeployProbe.RunGuard),
-        // meta.ini Nexus-update-cache parse (Tier 0 PR review fold): the QSettings quirks + exact-key vs [installedFiles]
-        // 1\modid, the fiddliest OFFLINE logic behind housecarl_update_status — locked with synthetic fixtures. Now also
-        // pins the [installedFiles] N\fileid capture (single / multi / size=0 no-fileid) the file-level check joins on.
-        ("mo2-modmeta-guard", Mo2ModMetaProbe.RunGuard),
         // FILE-LEVEL Nexus update check (fixes the multi-file-page false positive): ComputeStatus verdicts (live→current,
         // archived→outdated+same-name pointer, missing→file-gone, no-fileid→loud fallback), the id#fileid parse, and the
         // same-modId-across-folders fileid MERGE (never dedup-drop). Pure, network-free; synthetic AMON-shaped fixtures.

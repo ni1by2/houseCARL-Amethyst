@@ -197,7 +197,8 @@ internal static class ReadPluginFileProbe
             // 7 — Q3 refusals (never a silent wrong answer)
             Console.WriteLine("\n--- 7: Q3 refusals ---");
             var miss = svc.ReadPluginFile("Nope.esp", null, null, null, null, 1, null, 500);
-            Check(miss.Mode == "error" && (miss.Error?.Contains("no mod folder") ?? false), $"a missing filename is refused, named — {miss.Error ?? "(no error!)"}");
+            Check(miss.Mode == "error" && (miss.Error?.Contains("no Amethyst staging folder") ?? false),
+                $"a missing filename is refused, named — {miss.Error ?? "(no error!)"}");
 
             var badfk = svc.ReadPluginFile("Donor.esp", "zzzzzz", null, null, null, 1, null, 500);
             Check(badfk.Mode == "error" && (badfk.Error?.Contains("bad FormID") ?? false), $"a bad FormID is refused — {badfk.Error ?? "(no error!)"}");

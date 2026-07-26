@@ -59,7 +59,7 @@ public static class CompileTools
         // 3) the compiler — bridge forcing function if unset (returns the trained prompt to surface). Pass the auto-detect
         // HINTS (the CK installs its compiler under <game>\Papyrus Compiler\): the load order's own game dir first, then the
         // located real Steam SE install — so a normal Steam+CK install AND the common Stock-Game setup (CK lives in the Steam
-        // install, not the copy MO2 points at) both resolve with no prompt; a total miss names where houseCARL looked (6.2).
+        // install, not merely the active profile's game path) both resolve with no prompt; a total miss names every checked location.
         if (bridge.RequireOrPrompt(ToolDependency.PapyrusCompiler, out var compilerExe, svc.CompilerGameDirHints()) is { } toolPrompt) return toolPrompt;
 
         // 4) import dirs — assembled by BuildImports (the guard-probed seam).
@@ -148,7 +148,7 @@ public static class CompileTools
         {
             sb.Append("compile OK: ").Append(r.ObjectName).Append(".psc → ").Append(r.PexPath).Append('\n');
             // The destination line must match where the .pex actually went (Q3 — don't claim a houseCARL patch folder for a
-            // user-chosen output_dir=, where there may be no "enable in MO2" step at all). Any deployability caveat for an
+            // user-chosen output_dir=, where there may be no Amethyst refresh/deploy step). Any deployability caveat for an
             // output_dir= target is appended by the caller as deployWarning.
             sb.Append(userChoseOutputDir
                 ? "the .pex is in the output folder you chose (path above)."

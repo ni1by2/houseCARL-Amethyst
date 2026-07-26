@@ -28,7 +28,7 @@ public static class NpcCopyTools
          "mints a FULL CLONE as a new NPC record — any donor-internal NON-appearance links on the clone (factions, " +
          "outfits, packages, scripts) are STRIPPED and each strip is reported (the clone is donor-free, loudly). The " +
          "donor may be ACTIVE (source_formid resolves via the load order) or DISABLED — pass source_plugin= (its " +
-         "filename; houseCARL locates it across enabled AND disabled MO2 mod folders, or an absolute path) and the " +
+         "filename; houseCARL locates it across enabled AND disabled Amethyst staging folders, or an absolute path) and the " +
          "read is stamped OUT-OF-LOAD-ORDER. Writes a NEW plugin (folder-per-patch) or extends an existing houseCARL " +
          "patch via into=. Originals untouched. Refuses loud on a donor-internal custom RACE (out of scope — keep the " +
          "race mod as a master), a runaway closure, or anything that would silently master the donor.")]
@@ -38,7 +38,7 @@ public static class NpcCopyTools
             string source_formid,
         [Description("Optional. Read the donor from this plugin FILE instead of the active load order — the DISABLED-donor lane. A filename ('Vivace.esp'; located across enabled+disabled mod folders, overwrite and Data) or an absolute path. An OVERRIDE PATCH of the donor works too: the read auto-widens to the donor's defining plugin (located the same way, reported in the result). Omit when the donor is active.")]
             string? source_plugin = null,
-        [Description("Optional (with source_plugin). The exact MO2 mod-folder name to read the plugin from, when the filename exists in several folders.")]
+        [Description("Optional (with source_plugin). The exact Amethyst mod-folder name to read the plugin from, when the filename exists in several folders.")]
             string? source_mod = null,
         [Description("APPLY MODE: the EXISTING NPC to dress in the donor's appearance — 'XXXXXX:Plugin.esp'. An active NPC, or a record in the target patch itself (with into=). Pass this OR new_editorid, not both.")]
             string? target_formid = null,
@@ -48,7 +48,7 @@ public static class NpcCopyTools
             string? new_name = null,
         [Description("Optional. Base name for the NEW patch plugin + mod folder (default: the new_editorid in clone mode, 'houseCARL_NpcCopy' otherwise); auto-suffixed if taken.")]
             string? patch_name = null,
-        [Description("Optional. Extend an existing houseCARL patch instead of creating a fresh one — the patch plugin's filename (found even if you renamed its MO2 folder) or the mod-folder name.")]
+        [Description("Optional. Extend an existing houseCARL patch instead of creating a fresh one — the patch plugin's filename (found even if you renamed its Amethyst staging folder) or the mod-folder name.")]
             string? into = null) => Guard.Tool("housecarl_copy_npc_appearance", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
@@ -135,7 +135,7 @@ public static class NpcCopyTools
             foreach (var f in a.Failures) sb.AppendLine($"  !! {f}");
         }
 
-        sb.AppendLine($"\nNEXT: enable the mod folder in MO2 (it holds the plugin AND the carried files) and sort the plugin; then test in-game — face, hair, lip-sync while speaking.");
+        sb.AppendLine("\nNEXT: refresh Amethyst, enable the staging mod and plugin, rebuild the filemap, and deploy; then test in-game — face, hair, lip-sync while speaking.");
         return sb.ToString().TrimEnd();
     }
 }

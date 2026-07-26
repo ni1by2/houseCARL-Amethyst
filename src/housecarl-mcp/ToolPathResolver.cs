@@ -2,14 +2,14 @@ namespace HousecarlMcp;
 
 /// <summary>
 /// The runtime bridge between houseCARL's external-tool RIDERS (compile, BSA, log access) and the user-supplied paths they
-/// need. Singleton. Sits on <see cref="UserConfigStore"/> (the saved paths, shared with the MO2-instance setting) and
+/// need. Singleton. Sits on <see cref="UserConfigStore"/> (the saved paths, shared with the Amethyst connection) and
 /// <see cref="ToolBridge"/> (the catalog, validation, auto-detect, and the trained missing-dependency prompt).
 ///
 /// Resolution order for a dependency (<see cref="Resolve"/>): (1) a path the user SAVED via housecarl_set_tool_path wins;
 /// (2) else AUTO-DETECT a canonical home and, on a hit, persist it silently so we probe once; (3) else null — the caller
 /// fires the forcing function (<see cref="RequireOrPrompt"/>), which returns the trained prompt so the AI reliably asks the
 /// user and is handed the exact resolving call. This is Q3 pointed at external deps: a RETURNED string reaches the client,
-/// where a throw would be genericized away — the same lesson the MO2 not-configured prompt proved (2026-06-02).
+/// where a throw would be genericized away — the same lesson the manager-not-configured prompt proved.
 ///
 /// Step 1 builds + proves this bridge; the riders (compile, BSA) call <see cref="RequireOrPrompt"/> as they land.
 /// </summary>
@@ -59,7 +59,7 @@ public sealed class ToolPathResolver
 
     /// <summary>Validate + SAVE a user-supplied path for a dependency (the housecarl_set_tool_path body). The path is
     /// trimmed of surrounding quotes and made absolute. On a validation failure NOTHING is saved (Q3) and the reason is
-    /// returned; on success it's written to the shared user.json (coexisting with the MO2 instance setting).
+    /// returned; on success it is written to shared user configuration alongside the Amethyst connection.
     /// <c>persistNote</c> carries a corrupt-file recovery (hunt F3 — the prior file was backed up; other saved settings
     /// were lost), rendered even on success.</summary>
     public (bool ok, string? error, bool persisted, string? persistError, string? persistNote, string resolved) Save(ToolDependency dep, string rawPath)

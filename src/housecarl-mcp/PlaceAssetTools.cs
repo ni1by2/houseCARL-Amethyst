@@ -9,22 +9,22 @@ namespace HousecarlMcp;
 
 /// <summary>
 /// houseCARL place-asset tools — place a chosen asset file (any Data-relative file) as a winning override in a NEW
-/// houseCARL-owned MO2 mod folder, the WRITE counterpart to housecarl_asset_status (which reports which copy currently
-/// wins the VFS). A precise placer: it writes a source it is handed and auto-resolves only when exactly ONE copy exists
+/// houseCARL-owned Amethyst staging mod, the WRITE counterpart to housecarl_asset_status (which reports which copy currently
+/// wins). A precise placer: it writes a source it is handed and auto-resolves only when exactly ONE copy exists
 /// (the "which copy is correct" judgment is the caller's / a skill's, not the tool's). Source bytes are read IN PROCESS —
 /// a loose file, or a single entry out of a BSA via native Mutagen (no BSArch). The write is crash-atomic and
 /// non-destructive (originals untouched; a failed fresh placement leaves no orphan). Honest (Q3): "wrote it" is NOT "it
-/// wins" — the tool reports the current winner and the required MO2 enable + sort, and never claims the fix took effect on
+/// wins" — the tool reports the current winner and the required Amethyst refresh/enable/deploy sequence, and never claims the fix took effect on
 /// write. General asset-layer; the FaceGen / dark-face case is the headline use case, driven by the facegen skill (the
 /// formid+kind input is its convenience — for any other file use asset_path).
 /// </summary>
 [McpServerToolType]
 public static class PlaceAssetTools
 {
-    [McpServerTool(Name = "housecarl_place_asset", Title = "Place ONE asset file so a chosen copy can win MO2's VFS"),
+    [McpServerTool(Name = "housecarl_place_asset", Title = "Place ONE asset file in Amethyst staging"),
      Description(
          "Place ONE asset file — ANY Data-relative file (a mesh, texture, script, sound, interface, etc.) — into a NEW " +
-         "houseCARL-owned MO2 mod folder so a CHOSEN copy can win the virtual file system. The WRITE counterpart to " +
+         "houseCARL-owned Amethyst staging mod so a CHOSEN copy can become the loose-file winner. The WRITE counterpart to " +
          "housecarl_asset_status (which reports which copy currently wins). Give the DESTINATION as asset_path (a " +
          "Data-relative path); OR, for an NPC's generated FaceGen file, as formid (the NPC's FormID 'XXXXXX:Plugin.esp') " +
          "+ kind ('mesh' = the head .nif, 'tint' = the face .dds), which houseCARL computes the path for. Give the SOURCE " +
@@ -33,7 +33,7 @@ public static class PlaceAssetTools
          "source is OMITTED, houseCARL auto-resolves: it uses the SOLE provider in your load order, and REFUSES (telling " +
          "you the candidates) if more than one provides it — it will not guess which is correct. The write is crash-atomic; " +
          "originals are never touched. IMPORTANT (and reported back): the placed copy does NOT win on write — you must " +
-         "ENABLE the new mod in MO2 and SORT it above the current winner. This tool places ONE file; to place several (or " +
+         "refresh Amethyst, enable the new mod, rebuild the filemap, order it above the current winner, and deploy. This tool places ONE file; to place several (or " +
          "an NPC's mesh AND tint together) use housecarl_bulk_place_asset.")]
     public static string PlaceAsset(
         LoadOrderService svc,
@@ -47,7 +47,7 @@ public static class PlaceAssetTools
             string? source = null,
         [Description("Optional. Base name for the NEW houseCARL mod folder the file lands in (default 'houseCARL_Assets'); auto-suffixed if taken.")]
             string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL patch mod to place into instead of a fresh folder (accumulate across calls). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing houseCARL patch mod to place into instead of a fresh folder (accumulate across calls). Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null) => Guard.Tool("housecarl_place_asset", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
@@ -58,24 +58,24 @@ public static class PlaceAssetTools
 
     [McpServerTool(Name = "housecarl_bulk_place_asset", Title = "Place MANY asset files in one houseCARL mod"),
      Description(
-         "Place MANY asset files in ONE houseCARL-owned MO2 mod folder — the batch form of housecarl_place_asset (place " +
+         "Place MANY asset files in ONE houseCARL-owned Amethyst staging mod — the batch form of housecarl_place_asset (place " +
          "several overrides at once; or, for an NPC, its FaceGen mesh AND tint together). assets is an array of " +
          "{ formid?, kind?, asset_path?, source? }: give EITHER asset_path (any Data-relative path) OR formid (an NPC " +
          "FormID — omit kind to place BOTH the FaceGen mesh and the tint; or set kind='mesh'/'tint' for just one). source " +
          "is the copy to place (a loose file path, '<archive.bsa>|<entry>', or a '.bsa' path); omit it to auto-resolve the " +
-         "sole VFS provider (an ambiguous or absent source becomes a per-asset error — the rest still place). When you give " +
+         "sole active provider (an ambiguous or absent source becomes a per-asset error — the rest still place). When you give " +
          "a FormID with no kind (placing both files), an explicit source must be a '.bsa' path (each slot's entry is " +
          "derived) — for a single loose/entry source set kind=. All files land in ONE reviewable mod folder. A malformed " +
          "spec (bad FormID, bad kind, neither/both of formid+asset_path) refuses the WHOLE call with per-spec reasons and " +
-         "places nothing. As with the single tool, the placed copies do NOT win until you enable + sort the mod in MO2 " +
-         "(reported back).")]
+         "places nothing. As with the single tool, the placed copies do NOT win until Amethyst refreshes, enables the mod, " +
+         "rebuilds its filemap, and deploys (reported back).")]
     public static string BulkPlaceAsset(
         LoadOrderService svc,
         [Description("The assets to place, all into one mod folder. Each: { formid?: 'XXXXXX:Plugin.esp', kind?: 'mesh'|'tint' (omit with formid to place BOTH), asset_path?: 'meshes/...', source?: '<loose path>' | '<archive.bsa>|<entry>' | '<archive.bsa>' }.")]
             PlaceAssetSpec[] assets,
         [Description("Optional. Base name for the NEW houseCARL mod folder (default 'houseCARL_Assets'); auto-suffixed if taken.")]
             string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL patch mod to place into instead of a fresh folder. Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing houseCARL patch mod to place into instead of a fresh folder. Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null) => Guard.Tool("housecarl_bulk_place_asset", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
@@ -165,8 +165,8 @@ public static class PlaceAssetTools
 }
 
 /// <summary>Renders a <see cref="PlaceOutcome"/> as compact, scannable text: the count, the mod folder, the discovery
-/// caveats (Q3), one line per asset (placed with its source + the current VFS winner to sort above, or a per-asset
-/// error), and — the load-bearing honesty — the EXPLICIT "this does not win until you enable + sort the mod in MO2"
+/// caveats (Q3), one line per asset (placed with its source + the current winner to order above, or a per-asset
+/// error), and the explicit refresh/enable/filemap/deploy instruction
 /// instruction whenever anything was placed.</summary>
 static class PlaceWire
 {
@@ -193,7 +193,7 @@ static class PlaceWire
             {
                 sb.Append("  OK    ").Append(r.AssetPath).Append("  (").Append(r.Bytes).Append(" bytes from ").Append(r.SourceDesc).Append(")\n");
                 sb.Append(r.CurrentWinner is not null
-                    ? $"        currently wins the VFS: {r.CurrentWinner} — sort the new mod ABOVE it\n"
+                    ? $"        current winner: {r.CurrentWinner} — order the new mod ABOVE it\n"
                     : "        nothing else provides this path — once the mod is enabled, the placed copy wins\n");
             }
             else
@@ -210,11 +210,11 @@ static class PlaceWire
         {
             bool anyContended = false;
             foreach (var r in o.Results) if (r.Placed && r.CurrentWinner is not null) { anyContended = true; break; }
-            sb.Append("\nIMPORTANT — \"wrote it\" is not \"it wins\": the placed file(s) do NOT win the VFS yet. Enable the mod '")
-              .Append(modFolder ?? "(the new folder)").Append("' in MO2");
+            sb.Append("\nIMPORTANT — \"wrote it\" is not \"it wins\": refresh Amethyst, enable the mod '")
+              .Append(modFolder ?? "(the new folder)").Append("', rebuild the filemap");
             sb.Append(anyContended
-                ? " and SORT it (left pane) ABOVE the current winner(s) listed above. Only then does the placed copy win.\n"
-                : ". Nothing else provided these path(s), so once enabled the placed copy wins (sort it above any mod you later add that also provides them).\n");
+                ? ", order it ABOVE the current winner(s), and deploy. Only then does the placed copy win.\n"
+                : ", and deploy. Nothing else provided these path(s), so the placed copy then wins.\n");
         }
 
         return sb.ToString().TrimEnd('\n');

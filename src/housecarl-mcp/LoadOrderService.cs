@@ -66,7 +66,7 @@ public sealed class LoadOrderService : IDisposable
     IReadOnlyList<string> _enabledModsAtBuild = Array.Empty<string>();             // the enabled-mod list behind the CURRENT asset build (the native-pairing loader scan walks THESE mods' Root\ folders — same capture as the view, never a second unpinned profile read); swapped with _assetResolver
     // Freshness baselines are the files' LAST-SEEN MTIMES compared by VALUE (!=), the same model the resolver itself
     // uses — NOT wall-clock stamps compared by ORDER (2026-06-12 hunt F8: `mtime > builtUtc` was blind to an mtime
-    // REGRESSION, so MO2's "Restore Backup" — which restores a profile file with an OLDER mtime — stayed invisible
+    // REGRESSION, so restoring a manager backup with an OLDER mtime once stayed invisible
     // for the process lifetime). Each baseline is statted BEFORE the read it baselines (TOCTOU: a write landing
     // during/after the read shows as a changed mtime on the next check, never absorbed).
     DateTime[] _profileMtimes = new DateTime[ProfileFileNames.Length];   // per ProfileFileNames, recorded at each order build
@@ -261,12 +261,12 @@ public sealed class LoadOrderService : IDisposable
         bool ticked = comp.ActivePluginNames.Contains(fn);
         bool unticked = comp.InactivePluginNames.Any(x => x.Equals(fn, StringComparison.OrdinalIgnoreCase));
 
-        // The headline case, and the reason this explainer exists: MO2's left pane says yes, its right pane says no.
-        // The file is sitting right there, so a bare "not in the load order" reads as "missing" and sends the reader
-        // hunting for something that is installed and one click from working.
+        // The headline case, and the reason this explainer exists: staging contains the plugin, but Amethyst has not
+        // activated it. A bare "not in the load order" reads as "missing" and sends the reader hunting for a file that
+        // is installed and one profile change from working.
         if (unticked)
-            return $"'{fn}' IS installed, but it is UNTICKED in plugins.txt (MO2's right pane), so the game does not " +
-                   "load it and houseCARL does not read it. Tick it in MO2 and re-sort — or, to read the file as-is " +
+            return $"'{fn}' IS installed, but it is inactive in plugins.txt, so the game does not " +
+                   "load it and houseCARL does not read it. Activate it in Amethyst and rebuild the load order — or, to read the file as-is " +
                    "without loading it, use housecarl_read_plugin_file (a raw, out-of-load-order read).";
 
         // Ticked but absent from the index: the file itself couldn't be resolved. Locate it to say which.
@@ -280,23 +280,23 @@ public sealed class LoadOrderService : IDisposable
             return hits.Any(h => h.Enabled)
                 ? null
                 : $"'{fn}' is ticked in plugins.txt, but no enabled mod, the overwrite folder, or the game Data folder " +
-                  "provides the file — the profile is stale (trigger an MO2 refresh / re-sort so it rewrites the profile files).";
+                  "provides the file — manager state is stale (refresh Amethyst and rebuild its load-order files).";
 
         if (hits.Length == 0) return null;           // nothing on disk by that name → a typo; let the suggester answer
 
         // On disk but the profile never mentions it. The remedy turns on WHICH layer holds it, read from the mod
         // list rather than guessed from the hit's Enabled flag: an UNLISTED folder is flagged not-enabled exactly
-        // like a disabled one, but there is nothing in MO2 to switch on — and houseCARL's own just-written patches
-        // live in an unlisted folder, so "switch the mod on" was the wrong first instruction for the single most
-        // common way to reach this message (review of PR #274, round 2).
+        // like a disabled one, but there is no registered Amethyst entry to enable. houseCARL's newly written patches
+        // also live in an unlisted folder, so "enable the mod" is the wrong first instruction for the most common way
+        // to reach this message (review of PR #274, round 2).
         var pick = hits.FirstOrDefault(h => !h.Enabled) ?? hits[0];
         var folder = Path.GetFileName(Path.GetDirectoryName(pick.Path) ?? "") ?? "";
         var remedy =
-            pick.Enabled                                                              ? "Refresh MO2 so it registers the plugin, then tick it and sort"
+            pick.Enabled                                                              ? "Refresh Amethyst so it registers the plugin, then activate it and rebuild the load order"
             : comp.DisabledMods.Any(m => m.Equals(folder, StringComparison.OrdinalIgnoreCase))
-                                                                                      ? "Switch that mod on in MO2, then tick the plugin and sort"
-                                                                                      : "MO2 has not registered that folder yet — refresh MO2, then tick the plugin and sort";
-        return $"'{fn}' is on disk in {pick.Where}, but MO2's load order does not list it, so it is not active. " +
+                                                                                      ? "Enable that mod in Amethyst, then activate the plugin and rebuild the load order"
+                                                                                      : "Amethyst has not registered that folder yet — refresh Amethyst, activate the plugin, and rebuild the load order";
+        return $"'{fn}' is on disk in {pick.Where}, but Amethyst's load order does not list it, so it is not active. " +
                $"{remedy} — or read the file as-is with housecarl_read_plugin_file.";
     }
 
@@ -442,7 +442,7 @@ public sealed class LoadOrderService : IDisposable
         if (peekFilter is { Length: > 0 })
         {
             var compWarnings = new List<string>();
-            activePlugins = PeekPluginSet(Mo2LoadOrder.ReadComposition(profileDir, compWarnings));
+            activePlugins = PeekPluginSet(ReadManagerComposition(profileDir, compWarnings));
             if (compWarnings.Count > 0) warnings = [.. warnings, .. compWarnings];
         }
         // OUTSIDE the gate: the view is pinned + handle-free (AssetResolver.Dispose is a no-op; Resolve reads only the
@@ -525,7 +525,7 @@ public sealed class LoadOrderService : IDisposable
     /// therefore looks safe and isn't — it returns an active-only set whose force-loaded masters are silently gone, and
     /// every embedded Dawnguard.esm reads "[!] NOT in your load order" on a healthy install. Keying on the input the
     /// implicit half is derived FROM covers both states (both-files-missing is just the sub-case where active is empty
-    /// too). Reachable in practice: <see cref="Mo2LoadOrder.ReadComposition"/> never throws on a missing profile file,
+    /// too). Reachable in practice: manager composition parsing does not throw on a missing profile file,
     /// the asset resolver needs only modlist.txt, and houseCARL already models the three profile files as
     /// independently mutable (it stats each for freshness) — a mid-re-sort or a fresh profile is enough.
     ///
@@ -846,7 +846,7 @@ public sealed class LoadOrderService : IDisposable
                 foreach (var src in s.Sources)
                     if (!(src.Kind == AssetKind.Bsa && officialArchives.Contains(src.ProviderName)))
                         engineProviders.Add(PairingIdentity(src, archiveShipper));
-        // "overwrite" is excluded from the rescue: a recompiled vanilla .pex in MO2's overwrite is routine (houseCARL's
+        // "overwrite" is excluded from the rescue: a recompiled vanilla .pex in Amethyst overwrite is routine (houseCARL's
         // own compile lane writes there), and letting it baseline-rescue every orphan declaration copy that also lands
         // in overwrite would silence exactly the flag this tool exists for (review finding). "Data" stays — the manual
         // game-folder SKSE install is the layout the rescue must cover; its wider-net residual is documented on Classify.
@@ -1383,7 +1383,7 @@ public sealed class LoadOrderService : IDisposable
         {
             AssetResolver.AssetView view; IReadOnlyList<string> warnings; string profileName;
             try { lock (_gate) { view = Assets.Capture(); warnings = _assetWarnings; profileName = _profileName; } }
-            catch (Exception ex) { return NifSetResult.Fail($"could not resolve the asset layer (the MO2 instance may not be readable): {ex.Message}"); }
+            catch (Exception ex) { return NifSetResult.Fail($"could not resolve the Amethyst asset layer: {ex.Message}"); }
 
             PlacementResolution place;
             try { place = view.ResolveForPlacement(rel); }
@@ -1531,7 +1531,7 @@ public sealed class LoadOrderService : IDisposable
             catch (Exception ex)
             {
                 var residue = RemoveOrNameRiderResidue(rf);              // nothing placed yet → a fresh folder is an orphan
-                return PlaceOutcome.Fail($"could not resolve the asset layer (the MO2 instance may not be readable): {ex.Message}"
+                return PlaceOutcome.Fail($"could not resolve the Amethyst asset layer: {ex.Message}"
                     + (residue is null ? "" : $" The freshly created mod folder was left at '{residue}'."));
             }
 
@@ -1721,69 +1721,11 @@ public sealed class LoadOrderService : IDisposable
             instanceDir, managerPath, view.ExcludedPlugins);
     }
 
-    /// <summary>Read MO2's OWN local Nexus update cache — the modid / version / newestVersion / ignoredVersion /
-    /// lastNexusUpdate fields in every managed mod's meta.ini — with NO network (MO2 already paid the API cost). The
-    /// cheap local pre-filter for update triage: it names which mods MO2 already learned a newer version for, plus the
-    /// raw fields so the caller can verify online. Enabled/disabled comes from the ACTIVE profile. Config-gated and uses
-    /// the same lazy path derivation as the other reads; a missing mods folder is NAMED, never a silent empty (Q3).
-    /// Only Nexus-linked mods (a real modid) become entries; hand-installed mods / separators are counted, not listed.</summary>
-    public UpdateCacheData UpdateCache()
-    {
-        string modsDir, profileDir; string? instanceDir;
-        lock (_gate)
-        {
-            if (!_configured) throw NotConfigured();               // fresh install → the tool surfaces the trained prompt
-            EnsurePathsDerived();                                  // instance mode: derive _modsDir/_profileDir from the ini (throws Q3 if unusable)
-            modsDir = _modsDir; profileDir = _profileDir; instanceDir = _instanceDir;
-        }
-
-        if (string.IsNullOrEmpty(modsDir) || !Directory.Exists(modsDir))
-            return new UpdateCacheData(modsDir, instanceDir, Array.Empty<ModUpdateEntry>(), new[] { $"the mods folder is missing: '{modsDir}'" }, 0);
-
-        // Enabled/disabled from the active profile (cheap text read, OUTSIDE the gate; explicit-paths mode may have no
-        // profile → every mod's state is 'unknown', which the render states rather than guessing).
-        var enabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var disabled = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        if (!string.IsNullOrEmpty(profileDir) && Directory.Exists(profileDir))
-        {
-            var comp = ReadManagerComposition(profileDir);
-            foreach (var e in comp.EnabledMods) enabled.Add(e);
-            foreach (var d in comp.DisabledMods) disabled.Add(d);
-        }
-
-        IEnumerable<string> dirs;
-        try { dirs = Directory.EnumerateDirectories(modsDir); }
-        catch (Exception ex)
-        { return new UpdateCacheData(modsDir, instanceDir, Array.Empty<ModUpdateEntry>(), new[] { $"cannot list the mods folder '{modsDir}': {ex.Message}" }, 0); }
-
-        var entries = new List<ModUpdateEntry>();
-        int untracked = 0;
-        foreach (var dir in dirs)
-        {
-            var folder = Path.GetFileName(dir);
-            var metaPath = Path.Combine(dir, "meta.ini");
-            if (!File.Exists(metaPath)) { untracked++; continue; }     // separators / hand-installed mods carry no meta.ini
-            var meta = Mo2ModMeta.Read(metaPath);
-            if (meta is null || meta.ModId == 0) { untracked++; continue; }   // not a Nexus-linked mod → not update-checkable
-            bool? state = enabled.Contains(folder) ? true : disabled.Contains(folder) ? false : (bool?)null;
-            entries.Add(new ModUpdateEntry(
-                folder, state, meta.ModId, meta.Version, meta.NewestVersion, meta.IgnoredVersion, meta.LastNexusUpdate,
-                meta.InstalledFileIds));
-        }
-        entries.Sort((a, b) => string.Compare(a.Folder, b.Folder, StringComparison.OrdinalIgnoreCase));
-        return new UpdateCacheData(modsDir, instanceDir, entries, Array.Empty<string>(), untracked);
-    }
-
-    /// <summary>Inspect a NAMED profile's enabled/disabled composition WITHOUT switching to it (9.2: "can't inspect an
-    /// inactive profile") — INSTANCE MODE ONLY. The profiles root is the PARENT of the active profile's dir, so MO2's
-    /// base_directory redirect is honored by construction (the active ProfileDir already incorporates it) and a stale
-    /// active-profile dir doesn't matter — every profile is a sibling folder there. Reads with the cheap text-only
-    /// <see cref="Mo2LoadOrder.ReadComposition"/>, NOT <see cref="Mo2LoadOrder.Build"/> (Build walks every enabled mod
-    /// folder — thousands of dir enumerations) — so inspecting an inactive profile never builds the record index and never
-    /// changes the active profile. EXPLICIT-paths mode has no profiles root (the dir is configured arbitrarily), so a named
-    /// read REFUSES LOUD there rather than enumerate a non-profiles folder. A <paramref name="requested"/> name matching no
-    /// profile is reported with the available names (Q3 — never a silently-empty composition); a null/blank name returns
-    /// just the available list (the discovery affordance on the default status). Case-insensitive name match.</summary>
+    /// <summary>
+    /// Inspects one Amethyst profile's activation composition without switching to it or building
+    /// the record index. A blank request returns available profiles; an unknown name reports those
+    /// choices instead of returning a misleading empty composition.
+    /// </summary>
     public NamedProfileResult NamedProfileComposition(string? requested)
     {
         bool managerMode; string profilesRoot;
@@ -1813,7 +1755,7 @@ public sealed class LoadOrderService : IDisposable
         return new NamedProfileResult(true, available, match, dir, comp, warnings);
     }
 
-    /// <summary>The USABLE profile names under <paramref name="profilesRoot"/> — each MO2 profile is one subfolder, and a
+    /// <summary>The usable profile names under <paramref name="profilesRoot"/> — each Amethyst profile is one subfolder, and a
     /// profile that's been opened at least once has a loadorder.txt (the same validity signal <see cref="Mo2Instance"/> uses
     /// for the ACTIVE profile). Folders WITHOUT one — a never-opened profile, or a stray non-profile dir — are skipped, so
     /// the list never OFFERS (and a name match never LANDS ON) a folder that would read back as an all-zero composition
@@ -1826,7 +1768,7 @@ public sealed class LoadOrderService : IDisposable
         try
         {
             return Directory.EnumerateDirectories(profilesRoot)
-                .Where(d => File.Exists(Path.Combine(d, "loadorder.txt")))   // an opened MO2 profile has loadorder.txt — skip stray/never-opened folders (Q3, accuracy over the per-folder stat)
+                .Where(d => File.Exists(Path.Combine(d, "loadorder.txt")))   // skip incomplete or never-opened profile folders
                 .Select(d => Path.GetFileName(d.TrimEnd('\\', '/')))
                 .Where(n => !string.IsNullOrEmpty(n))
                 .OrderBy(n => n, StringComparer.OrdinalIgnoreCase)
@@ -2160,13 +2102,10 @@ public sealed class LoadOrderService : IDisposable
         }
     }
 
-    /// <summary>The game directories to search for the Creation Kit's compiler, in PRIORITY ORDER — the compile rider's
-    /// auto-detect hints (6.2). [0] = the load order's OWN game dir (<see cref="GameDirOrNull"/>): correct when MO2 points
-    /// straight at a real, CK-equipped install. Then the GameFinder/Mutagen-located real Skyrim SE install(s): in the common
-    /// MO2 "Stock Game" setup (Aaron 2026-06-17) the load order points at a COPY that has NEITHER the CK nor the vanilla
-    /// script sources — both live in the Steam install — so the located install is the one that actually hits. De-duplicated,
-    /// nulls dropped. BEST-EFFORT + NULL-SAFE end to end: the locator reads the registry/Steam, so a miss or a throw just
-    /// yields fewer hints (the forcing prompt then names what was checked), it NEVER aborts the compile.
+    /// <summary>The game directories searched for the Creation Kit compiler, in priority order.
+    /// The active profile's game root comes first, followed by GameFinder's Skyrim SE location.
+    /// This supports isolated game copies whose compiler and vanilla script sources remain in the
+    /// main installation. Results are de-duplicated and lookup failures only remove a hint.
     /// <para>LOAD-BEARING (do NOT "simplify"): the compile rider derives the vanilla SOURCE folder from the RESOLVED
     /// COMPILER's own game dir (<see cref="CompileTools.BuildImports"/>), NOT from these hints and NOT from the data dir — so
     /// once the compiler resolves to the Steam install, its sibling Data\Source\Scripts is used, never the Stock Game copy's
@@ -2188,13 +2127,11 @@ public sealed class LoadOrderService : IDisposable
     /// <summary>The INSTALLED game runtime version — the dotted file version of the SkyrimSE.exe the load order runs
     /// (e.g. "1.6.1170.0") — or null when it can't be resolved. This is what turns a version-LOCKED SKSE plugin's
     /// compat list from "verify against your game version" into PASS/FAIL (native-pairing audit §4d + skse_inventory's
-    /// locked diagnostic). Candidates are exactly <see cref="CompilerGameDirHints"/> — load-order game dir first (an
-    /// MO2 "Stock Game" setup launches THAT copy's exe, and downgrade patchers rewrite it in place, so its version is
-    /// the truth), located install as fallback — one shared derivation, never a re-typed copy. BEST-EFFORT + NULL-SAFE
+    /// locked diagnostic). Candidates are exactly <see cref="CompilerGameDirHints"/> — active-profile
+    /// game directory first and the located install as fallback. BEST-EFFORT + NULL-SAFE
     /// end to end: a miss degrades the finding wording, never fails a tool. Memoized: the resolved exe is re-validated
-    /// by mtime per call; a full miss is cached for the session. Residual, documented: if MO2 launches an exe that is
-    /// neither in the load-order game dir nor the located install, the read can describe a different binary — the
-    /// renders name the version they adjudicated against so a wrong baseline is visible, not silent.</summary>
+    /// by mtime per call; a full miss is cached for the session. Renderers name the executable
+    /// version used so an unexpected baseline remains visible.</summary>
     public string? InstalledGameRuntime()
     {
         lock (_runtimeGate)
@@ -2441,7 +2378,7 @@ public sealed class LoadOrderService : IDisposable
             // disabled plugins off disk"), which fights the explainer's raw-read pointer. Round 1 dropped the whole
             // paragraph with it — and houseCARL writes its own patches into an UNLISTED mod folder, which the explainer
             // now explains, so the freshly-written-patch case (the commonest reason to hit this refusal at all) lost the
-            // full_readback verify path that is the only way to check a write without touching MO2. The write-verify
+            // full_readback verify path that is the only way to check a write before refreshing Amethyst. The write-verify
             // guidance is a fact about the tool, not a guess about the cause, so it is now unconditional; only the
             // contradicting posture line and the cause-guessing sentence are conditional (review of PR #274, round 2).
             var verify = $" To verify a write BEFORE enabling, use the write call's own read-back (full_readback=true " +
@@ -2450,8 +2387,8 @@ public sealed class LoadOrderService : IDisposable
             var tail = (cause is not null
                 ? ""
                 : " houseCARL reads load-order truth only and does not open disabled " +
-                  "plugins off disk. If this is a freshly written houseCARL patch, it isn't enabled yet: enable + sort it in " +
-                  "MO2, then re-read.") + verify;
+                  "plugins off disk. If this is a freshly written houseCARL patch, refresh Amethyst, enable it, rebuild " +
+                  "the filemap, deploy, then re-read.") + verify;
             return ReadOutcome.Fail(fk,
                 $"Plugin '{plugin}' is not in the load order ({view.PluginCount} plugins; names match the plugin FILENAME " +
                 "incl. .esp/.esm, case-insensitively)." + why + tail);
@@ -2670,7 +2607,7 @@ public sealed class LoadOrderService : IDisposable
         // OFF-ORDER: a plugin file on disk that isn't in the active order (the shared locate — cheap, no index build).
         string modsDir, dataDir, overwriteDir, profileDir;
         try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
-        catch (Exception ex) { return (null, null, $"'{plugin}' is not in the load order and the MO2 roots couldn't be derived to find it on disk: {ex.Message}"); }
+        catch (Exception ex) { return (null, null, $"'{plugin}' is not in the load order and manager roots could not be derived to find it on disk: {ex.Message}"); }
         var comp = ReadManagerComposition(profileDir);
         var loc = LocatePluginFile(comp, modsDir, dataDir, overwriteDir, plugin, mod);
         if (loc.Error is not null) return (null, null, $"'{plugin}' is not in the load order and {loc.Error}");
@@ -3093,7 +3030,7 @@ public sealed class LoadOrderService : IDisposable
                     return ErrorCheckResult.Fail(
                         $"plugin '{n}' is not in the active load order and {loc.Ambiguous.Count} mod folders provide a file with that name " +
                         $"({string.Join(", ", loc.Ambiguous.Select(h => h.Where))}) — ambiguous, refusing to guess which to sweep. " +
-                        "Enable the one you mean in MO2, or remove the duplicates.");
+                        "Enable the one you mean in Amethyst, or remove the duplicates.");
                 offOrder.Add((n, loc.Path!));
             }
             return ErrorCheck.Run(Resolver, active, limit, offOrder.Count > 0 ? offOrder : null);
@@ -3116,7 +3053,7 @@ public sealed class LoadOrderService : IDisposable
 
     /// <summary>Apply one-or-more edits as a single patch (housecarl_set_field = one op; housecarl_bulk_apply = many).
     /// Parses each op's FormID + field path + (optional) composition spec to the core's <see cref="WritePatchBuilder.PatchEdit"/>,
-    /// resolves the output path as a NEW MO2 mod folder under ModsDir (folder-per-patch — see <see cref="ResolveOutputPath"/>),
+    /// resolves the output path as a new Amethyst staging mod under ModsDir (folder-per-patch — see <see cref="ResolveOutputPath"/>),
     /// then drives the proven public cleave <see cref="WritePatchBuilder.Apply"/> (resolve winner → derive type → pre-flight
     /// ALL → override → ApplyVerb → multi-master serialize). ALL-OR-NOTHING (Q3): a single malformed op or pre-flight reject
     /// refuses the whole call with no file written. Writes go to a NEW patch by default; <paramref name="into"/> EXTENDS an
@@ -3221,7 +3158,7 @@ public sealed class LoadOrderService : IDisposable
             if (comp is null)
             {
                 try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
-                catch (Exception ex) { return $"CopyFrom off-order source locate failed to derive the MO2 roots: {ex.Message}"; }
+                catch (Exception ex) { return $"CopyFrom off-order source locate failed to derive manager roots: {ex.Message}"; }
                 comp = ReadManagerComposition(profileDir);
             }
             var loc = LocatePluginFile(comp, modsDir, dataDir, overwriteDir, e.FromPlugin!, null);
@@ -3261,7 +3198,7 @@ public sealed class LoadOrderService : IDisposable
         var targetPath = ResolveActivePluginPath(view, Path.GetFileName(target.Trim()), out var targetName);
         if (targetPath is null)
             return WritePatchBuilder.PatchOutcome.Fail(
-                $"in-place target '{target}' is not an active plugin in the load order — name a plugin enabled in MO2, by its " +
+                $"in-place target '{target}' is not an active plugin in the load order — name a plugin active in Amethyst, by its " +
                 "plugin filename (e.g. 'CoolWeapons.esp'). in-place edits the file the game actually loads. Nothing was written.");
 
         // (2) CONSENT axis — the persistent, server-enforced first-touch handshake, keyed off the resolved path. NOT a
@@ -3576,7 +3513,7 @@ public sealed class LoadOrderService : IDisposable
         var targetPath = ResolveActivePluginPath(view, Path.GetFileName(target.Trim()), out var targetName);
         if (targetPath is null)
             return WritePatchBuilder.RemovalOutcome.Fail(
-                $"in-place target '{target}' is not an active plugin in the load order — name a plugin enabled in MO2, by its " +
+                $"in-place target '{target}' is not an active plugin in the load order — name a plugin active in Amethyst, by its " +
                 "plugin filename (e.g. 'CoolWeapons.esp'). in-place removes from the file the game actually loads. Nothing was written.");
 
         // (2) CONSENT axis — the persistent, server-enforced first-touch handshake, keyed off the resolved path (shared
@@ -3711,7 +3648,7 @@ public sealed class LoadOrderService : IDisposable
         var targetPath = ResolveActivePluginPath(view, Path.GetFileName(target.Trim()), out var targetName);
         if (targetPath is null)
             return WritePatchBuilder.ForwardOutcome.Fail(
-                $"in-place target '{target}' is not an active plugin in the load order — name a plugin enabled in MO2, by its " +
+                $"in-place target '{target}' is not an active plugin in the load order — name a plugin active in Amethyst, by its " +
                 "plugin filename (e.g. 'CoolWeapons.esp'). in-place forwards into the file the game actually loads. Nothing was written.");
 
         // (2) CONSENT axis — the persistent, server-enforced first-touch handshake, keyed off the resolved path (shared
@@ -3802,17 +3739,17 @@ public sealed class LoadOrderService : IDisposable
                 return WritePatchBuilder.CreatePluginOutcome.Fail($"cannot write: ModsDir '{_modsDir}' does not exist. Check HouseCarl:ModsDir.");
 
             // COLLISION (Q3): the basename is load-bearing for a trigger, so NEVER auto-suffix — refuse loud instead.
-            // (a) an active plugin already owns this basename — a second one would shadow it (MO2 picks one by mod order).
+            // An active plugin already owns this basename, so a second staged copy would be ambiguous.
             foreach (var ext in PluginExts)                              // .esp / .esm / .esl
                 if (view.ContainsPlugin(stem + ext))
                     return WritePatchBuilder.CreatePluginOutcome.Fail(
-                        $"a plugin named '{stem + ext}' is already active in your load order — a header-only trigger needs a UNIQUE basename (a second one would shadow it, MO2 picking the winner by mod order). Choose a different name.");
+                        $"a plugin named '{stem + ext}' is already active in your load order — a header-only trigger needs a UNIQUE basename. Choose a different name.");
             // (b) a houseCARL mod folder of this exact name already exists — don't overwrite (could clobber a real patch
             //     sharing the name) and don't auto-rename (would break the basename trigger): refuse and point at it.
             var folder = Path.Combine(_modsDir, ModFolderName(stem));
             if (Directory.Exists(folder))
                 return WritePatchBuilder.CreatePluginOutcome.Fail(
-                    $"a houseCARL output folder '{ModFolderName(stem)}' already exists — houseCARL won't auto-rename a header-only plugin (its exact basename is what makes the trigger resolve). Remove that folder in MO2, or choose a different name.");
+                    $"a houseCARL output folder '{ModFolderName(stem)}' already exists — houseCARL won't auto-rename a header-only plugin (its exact basename is what makes the trigger resolve). Remove that folder in Amethyst, or choose a different name.");
 
             Directory.CreateDirectory(folder);
             var plugin = stem + ".esp";
@@ -3899,10 +3836,10 @@ public sealed class LoadOrderService : IDisposable
                     return WritePatchBuilder.CompactOutcome.Fail(
                         $"'{name}' is not in the active load order and {loc.Ambiguous.Count} mod folders provide a file with that name " +
                         $"({string.Join(", ", loc.Ambiguous.Select(h => h.Where))}) — ambiguous, refusing to guess which to compact. " +
-                        "Enable the one you mean in MO2, or remove the duplicates.");
+                        "Enable the one you mean in Amethyst, or remove the duplicates.");
                 srcPath = loc.Path!;
                 offOrderNote = $"'{name}' is not in the active load order (found: {loc.Where}) — compacted OFF-ORDER; " +
-                               "masters resolved from the active order. Enable the result in MO2 to use it.";
+                               "masters resolved from the active order. Refresh Amethyst, enable the result, rebuild the filemap, and deploy to use it.";
             }
 
             ModKey modKey;
@@ -3957,12 +3894,12 @@ public sealed class LoadOrderService : IDisposable
                         "the renumber, or handle them yourself first. Nothing was written.");
                 // repoint is only COHERENT paired with in_place (PR #122 review #1): in the new-file lane the renumbered
                 // records live ONLY in the not-yet-active P′, so repointing the externals now would leave them dangling
-                // against the still-active original until the MO2 swap — and broken if the user rejects P′. Couple them.
+                // against the still-active original until the Amethyst swap — and broken if the user rejects P′. Couple them.
                 if (!inPlace)
                     return WritePatchBuilder.CompactOutcome.Fail(
                         $"refused — repoint_externals requires in_place=true. {id.ExternalPlugins.Count} plugin(s) reference records being renumbered " +
                         $"({refList}); in the new-file lane those records exist ONLY in the not-yet-active P′, so repointing the externals now would leave " +
-                        "them dangling against the still-active original until you complete the MO2 swap (and broken if you reject P′). Either compact IN " +
+                        "them dangling against the still-active original until you complete the Amethyst swap (and broken if you reject P′). Either compact IN " +
                         "PLACE (in_place=true) so the target and its referrers move together, or handle the externals yourself after enabling P′. Nothing was written.");
             }
 
@@ -4165,7 +4102,7 @@ public sealed class LoadOrderService : IDisposable
             if (view.ContainsPlugin(outName))
                 return WritePatchBuilder.MergeOutcome.Fail(
                     $"'{outName}' is already an active plugin in your load order — the merge output must be a NEW plugin name " +
-                    "(merging over an existing plugin would shadow it in MO2).");
+                    "(merging over an existing plugin would create an ambiguous staged copy).");
 
             // ---- 1. validate + load-order-sort the donors (merge semantics are load-order semantics — Q3: sort, don't
             //      trust arg order). ONE name→position index serves the donor sort here and the master sort in step 4. ----
@@ -4176,16 +4113,13 @@ public sealed class LoadOrderService : IDisposable
             {
                 if (!view.ContainsPlugin(d))
                 {
-                    // Same trim as read_record's: once a cause is stated it carries its own remedy, and the legacy
-                    // "Enable it in MO2 first (pass the exact filename)" both conflates the vocabulary this change is
-                    // fixing (a MOD is enabled; a PLUGIN is activated) and asks for a filename that has already
-                    // resolved to a real installed plugin (review of PR #274, round 2).
+                    // Once a cause is stated it carries its own remedy; otherwise give one precise activation step.
                     var dWhy = view.ExplainAbsence(d);
                     return WritePatchBuilder.MergeOutcome.Fail(
                         $"donor '{d}' is not an active plugin in your load order." +
                         (dWhy is not null ? " " + dWhy : view.NameSuggestion(d)) +
                         " Merge reads each donor's records and conflict position from the ACTIVE order." +
-                        (dWhy is not null ? "" : " Activate it in MO2 first (pass the exact plugin filename, e.g. 'CoolMod.esp')."));
+                        (dWhy is not null ? "" : " Activate it in Amethyst first (pass the exact plugin filename, e.g. 'CoolMod.esp')."));
                 }
                 if (view.ExcludedPlugins.TryGetValue(d, out var excluded))
                     return WritePatchBuilder.MergeOutcome.Fail(
@@ -4514,7 +4448,7 @@ public sealed class LoadOrderService : IDisposable
                     if (tw is null)
                         return NpcCopyOutcome.Fail(
                             $"target {targetFk} is not present in the active load order. The target must be an ACTIVE NPC " +
-                            "(enable its plugin in MO2), or a record in the patch itself (into= that patch and use its formid).");
+                            "(activate its plugin in Amethyst), or a record in the patch itself (into= that patch and use its formid).");
                     var tb = view.GetRecord(session, tw.Value.WinnerPlugin, targetFk);
                     if (tb is not INpcGetter tnpc)
                         return NpcCopyOutcome.Fail($"target {targetFk} is a {RecordNaming.StripOverlay(tb?.GetType().Name ?? "<unfetchable>")}, not an NPC.");
@@ -4757,7 +4691,7 @@ public sealed class LoadOrderService : IDisposable
         var targetPath = ResolveActivePluginPath(view, Path.GetFileName(target.Trim()), out var targetName);
         if (targetPath is null)
             return WritePatchBuilder.CreateOutcome.Fail(
-                $"in-place target '{target}' is not an active plugin in the load order — name a plugin enabled in MO2, by its " +
+                $"in-place target '{target}' is not an active plugin in the load order — name a plugin active in Amethyst, by its " +
                 "plugin filename (e.g. 'CoolWeapons.esp'). in-place creates into the file the game actually loads. Nothing was written.");
 
         // (2) CONSENT axis — the persistent, server-enforced first-touch handshake, keyed off the resolved path (shared with
@@ -5161,7 +5095,7 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>The <c>Scripts\</c> output folder for a COMPILED .pex (the compile rider) — a houseCARL mod folder via
-    /// <see cref="ResolvePatchModFolder"/> plus its <c>Scripts\</c> subfolder, where MO2 deploys compiled Papyrus into the
+    /// <see cref="ResolvePatchModFolder"/> plus its <c>Scripts\</c> subfolder, which Amethyst deploys into the
     /// game's Data\Scripts. Carries the mod-folder root + fresh flag through for residue cleanup.</summary>
     public RiderFolder ResolveCompiledScriptFolder(string? patchName, string? into)
     {
@@ -5173,7 +5107,7 @@ public sealed class LoadOrderService : IDisposable
 
     /// <summary>output_dir= escape hatch (6.3): the user names WHERE the compiled .pex lands, instead of houseCARL cutting a
     /// fresh folder-per-patch mod folder. DECIDED contract (Aaron 2026-06-16): output_dir is a mod-folder ROOT and houseCARL
-    /// appends Scripts\ — matching <see cref="ResolveCompiledScriptFolder"/> + MO2's deploy model so the .pex actually loads —
+    /// appends Scripts\ — matching <see cref="ResolveCompiledScriptFolder"/> and Amethyst's staging model so the .pex actually loads —
     /// with a DOUBLE-SCRIPTS guard (don't append a second Scripts\ if it's already there). Does NOT call
     /// <see cref="ResolvePatchModFolder"/> (no houseCARL mod folder is cut under ModsDir), and the folder is USER-OWNED — the
     /// returned <see cref="RiderFolder"/> carries CreatedFresh=false, so <see cref="RemoveOrNameRiderResidue"/> never deletes
@@ -5301,7 +5235,7 @@ public sealed class LoadOrderService : IDisposable
     // ---- Layer B unit D: write the start-game-enabled-quest .seq file (housecarl_write_seq) ----
 
     /// <summary>The <c>SEQ\</c> output folder for a generated <c>.seq</c> (the SEQ rider) — a houseCARL mod folder via
-    /// <see cref="ResolvePatchModFolder"/> plus its <c>SEQ\</c> subfolder, where MO2 deploys it into the game's
+    /// <see cref="ResolvePatchModFolder"/> plus its <c>SEQ\</c> subfolder, where Amethyst deploys it into the game's
     /// <c>Data\SEQ</c>. Sibling of <see cref="ResolveCompiledScriptFolder"/>; carries the mod-folder root + fresh flag
     /// through for residue cleanup.</summary>
     public RiderFolder ResolveSeqFolder(string? patchName, string? into)
@@ -5434,8 +5368,8 @@ public sealed class LoadOrderService : IDisposable
         }
     }
 
-    /// <summary>The MO2 mod-folder name for a patch stem. The "houseCARL - " prefix groups our patches in MO2's left
-    /// pane and is the human-visible ownership signal (the meta.ini marker is the structural one).</summary>
+    /// <summary>The Amethyst staging-folder name for a patch stem. The prefix groups generated
+    /// patches and is the human-visible ownership signal; meta.ini is the structural marker.</summary>
     static string ModFolderName(string stem) => "houseCARL - " + stem;
 
     /// <summary>Plugin extensions stripped from a caller-supplied patch name (case-insensitive). NOT every dot — see
@@ -5896,8 +5830,8 @@ public sealed class LoadOrderService : IDisposable
                                 ? "that mod folder is switched off in Amethyst — enable it, then refresh and sort"
                                 : $"it is provided by mod '{CauseDetail}', which is switched off in Amethyst — enable it, then refresh and sort"
                             : WhereNamesLayer
-                                ? "that mod folder is switched OFF in MO2 — switch it on, then re-sort"
-                                : $"it is provided by mod '{CauseDetail}', which is switched OFF in MO2 — switch it on, then re-sort");
+                                ? "that mod folder is disabled in Amethyst — enable it, rebuild the filemap, and deploy"
+                                : $"it is provided by mod '{CauseDetail}', which is disabled in Amethyst — enable it, rebuild the filemap, and deploy");
                         break;
                     case ServedStanding.ModUnregisteredLayer:
                         parts.Add(Amethyst
@@ -5905,8 +5839,8 @@ public sealed class LoadOrderService : IDisposable
                                 ? "Amethyst has not registered that mod folder — refresh, then enable the plugin and sort"
                                 : $"it is provided by mod '{CauseDetail}', which Amethyst has not registered — refresh, then enable the plugin and sort"
                             : WhereNamesLayer
-                                ? "MO2 has not registered that mod folder — refresh MO2, then tick the plugin and sort"
-                                : $"it is provided by mod '{CauseDetail}', which MO2 has not registered — refresh MO2, then tick the plugin and sort");
+                                ? "Amethyst has not registered that mod folder — refresh, enable the plugin, and rebuild the load order"
+                                : $"it is provided by mod '{CauseDetail}', which Amethyst has not registered — refresh, enable the plugin, and rebuild the load order");
                         break;
                     case ServedStanding.NotAnInstallCopy:
                         // States what was CHECKED, not a verdict on the file. This arm is also reached when the path
@@ -5915,17 +5849,17 @@ public sealed class LoadOrderService : IDisposable
                         // of overclaim this whole change exists to delete (review of PR #274, round 2).
                         parts.Add(Amethyst
                             ? "no authoritative Amethyst source was found providing this exact path"
-                            : "no MO2 layer was found providing this exact path");
+                            : "no Amethyst staging layer was found providing this exact path");
                         break;
                 }
                 if (Tick == TickStanding.Unticked)
                     parts.Add(Amethyst
                         ? $"'{name}' is inactive in plugins.txt"
-                        : $"'{name}' is UNTICKED in plugins.txt (MO2's right pane)");
+                        : $"'{name}' is inactive in plugins.txt");
                 else if (Tick == TickStanding.Unregistered && Served == ServedStanding.Serves)
                     parts.Add(Amethyst
                         ? $"'{name}' is not registered in Amethyst's load order (refresh Amethyst to pick it up)"
-                        : $"'{name}' is not registered in MO2's load order (refresh MO2 to pick it up)");
+                        : $"'{name}' is not registered in Amethyst's load order (refresh Amethyst to pick it up)");
                 return parts.Count == 0 ? null : string.Join("; and ", parts);
             }
         }
@@ -6115,7 +6049,7 @@ public sealed class LoadOrderService : IDisposable
         var hits = Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, plugin);
         if (hits.Count == 0)
             return new(null, "", ServedStanding.NotAnInstallCopy, TickStanding.Unregistered, null, false, null,
-                $"'{Path.GetFileName(plugin)}' is in no mod folder (enabled, disabled, or not-yet-listed in MO2), the overwrite folder, or the game Data folder. Check the filename, pass an absolute path, or (if it's an MO2 mod) the exact folder via mod=.");
+                $"'{Path.GetFileName(plugin)}' is in no Amethyst staging folder (enabled, disabled, or not yet registered), overwrite, or vanilla Data. Check the filename, pass an absolute path, or pass the exact staging folder via mod=.");
         if (hits.Count > 1) return new(null, "", ServedStanding.NotAnInstallCopy, TickStanding.Unregistered, null, false, hits, null);
         var (oneServed, oneDetail) = JudgeServed(comp, hits, hits[0].Path);
         // WhereNamesLayer: TRUE — Where IS the located hit's own label, folder and state both.
@@ -6136,7 +6070,7 @@ public sealed class LoadOrderService : IDisposable
         catch { return false; }
     }
 
-    /// <summary>Is <paramref name="fullPath"/> inside any MO2/game root? Used ONLY to skip work — a file outside
+    /// <summary>Is <paramref name="fullPath"/> inside any manager/game root? Used only to skip work — a file outside
     /// every root cannot be a copy the install provides — so the enabled/disabled CLASSIFICATION itself stays with
     /// the one shared locate, never re-derived here.</summary>
     static bool IsUnderAnyInstallRoot(string fullPath, params string[] roots)
@@ -6325,7 +6259,7 @@ public sealed record ConflictNodeView(string Plugin, RecordFields Record);
 
 /// <summary>The data behind housecarl_load_order_status. <see cref="Composition"/> is the fresh enabled/disabled picture;
 /// <see cref="ResolvedPluginCount"/> + <see cref="Warnings"/> are the resolver's actual last-build state;
-/// <see cref="ProfileChanged"/> is true only when a refresh was attempted but is still pending (e.g. MO2 was mid-write) —
+/// <see cref="ProfileChanged"/> is true only when a refresh was attempted but is still pending (for example, Amethyst was mid-write) —
 /// houseCARL re-reads automatically on the next tool call; no restart. <see cref="ExcludedPlugins"/> (name → reason) are
 /// plugins dropped from the index this build (unopenable, or carrying a record Mutagen can't parse) — surfaced so the
 /// user can fix/remove them (Q3).</summary>
@@ -6340,27 +6274,6 @@ public sealed record LoadOrderStatusData(
     string? InstanceDir,        // the resolved MO2 instance folder houseCARL is pointed at; null ⇒ explicit-paths / unconfigured mode
     string? ManagerPath,
     IReadOnlyDictionary<string, string> ExcludedPlugins);
-
-/// <summary>The data behind housecarl_update_status: MO2's own local Nexus update cache read from meta.ini, with no
-/// network. <see cref="Entries"/> is one row per Nexus-linked mod (installed vs newest version, modid, enabled state);
-/// <see cref="UntrackedCount"/> is how many mod folders were skipped as not Nexus-linked (no meta.ini or no modid).
-/// <see cref="Problems"/> carries any Q3 read faults (e.g. a missing mods folder), never a silent empty.</summary>
-public sealed record UpdateCacheData(
-    string ModsDir,
-    string? InstanceDir,
-    IReadOnlyList<ModUpdateEntry> Entries,
-    IReadOnlyList<string> Problems,
-    int UntrackedCount);
-
-/// <summary>One Nexus-linked mod's update-cache row. <see cref="Newest"/> empty ⇒ MO2 never learned a newer version.
-/// MO2's own "update available" rule: <see cref="Newest"/> is set, non-empty, != <see cref="Installed"/>, and !=
-/// <see cref="Ignored"/>. <see cref="Enabled"/> is null when the mod isn't in the active profile (state unknown).
-/// <see cref="LastUpdate"/> is unix-seconds of MO2's last Nexus check (staleness signal). <see cref="InstalledFileIds"/>
-/// are the exact Nexus file id(s) MO2 installed (from meta.ini <c>[installedFiles]</c>) — the FILE-level currency join
-/// key that makes a live check immune to the multi-file-page false positive; empty for a FOMOD/manual install.</summary>
-public sealed record ModUpdateEntry(
-    string Folder, bool? Enabled, int ModId, string? Installed, string? Newest, string? Ignored, string? LastUpdate,
-    IReadOnlyList<int> InstalledFileIds);
 
 /// <summary>The result of <see cref="LoadOrderService.NamedProfileComposition"/> — the profiles affordance behind
 /// housecarl_load_order_status' profile= param. <see cref="InstanceMode"/> is false in explicit-paths mode (no profiles

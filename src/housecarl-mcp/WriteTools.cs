@@ -47,7 +47,7 @@ public static class WriteTools
             string[]? values = null,
         [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken so a prior patch is never overwritten. Ignored if into= is given.")]
             string patch_name = "Patch",
-        [Description("Optional. Filename of an existing patch (from a prior call) to EXTEND with this edit instead of writing a fresh one — the way to accumulate edits into one patch across calls/sessions. Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing patch (from a prior call) to EXTEND with this edit instead of writing a fresh one — the way to accumulate edits into one patch across calls/sessions. Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to edit IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
             string? target = null,
@@ -57,7 +57,7 @@ public static class WriteTools
             bool acknowledge = false,
         [Description("Amethyst in-place safety gate. Set true to confirm that staging is written first and Amethyst must rebuild its filemap and redeploy before the game sees the edit.")]
             bool confirm_amethyst_redeploy = false,
-        [Description("When true, the read-back is the FULL deep field-by-field dump of the touched record (every field, not just the edited leaf) — confirm the write landed and nothing else was disturbed, WITHOUT enabling the patch in MO2. For an IN-PLACE edit the touched-record verify ALWAYS runs and is shown COMPACTLY by default (re-read-clean + what landed, every record); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
+        [Description("When true, the read-back is the FULL deep field-by-field dump of the touched record, confirming the staged write before Amethyst refresh/deploy. In-place edits always verify compactly; true expands the dump. The read-back proves file content, not deployed load-order visibility.")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
             int max_chars = 0,
@@ -113,7 +113,7 @@ public static class WriteTools
             string? from_file = null,
         [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken. Ignored if into= is given.")]
             string patch_name = "Patch",
-        [Description("Optional. Filename of an existing patch to EXTEND with these edits instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing patch to EXTEND with these edits instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to edit IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
             string? target = null,
@@ -123,7 +123,7 @@ public static class WriteTools
             bool acknowledge = false,
         [Description("Amethyst in-place safety gate. Set true to confirm that staging is written first and Amethyst must rebuild its filemap and redeploy before the game sees the edit.")]
             bool confirm_amethyst_redeploy = false,
-        [Description("When true, the read-back is the FULL deep field-by-field dump of every record this call touched (not just the edited leaves) — confirm composed structures (conditions, container entries) landed and nothing else was disturbed, WITHOUT enabling the patch in MO2. For an IN-PLACE edit the touched-record verify ALWAYS runs and is shown COMPACTLY by default (per record: re-read-clean + what landed, covering ALL of them); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
+        [Description("When true, the read-back is the FULL deep field-by-field dump of every touched staged record. In-place edits always verify compactly; true expands the dump. The read-back proves file content, not deployed load-order visibility.")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
             int max_chars = 0,
@@ -239,7 +239,7 @@ public static class WriteTools
         LoadOrderService svc,
         [Description("The record's FormID as 'XXXXXX:Plugin.esp' — the record to drop.")]
             string formid,
-        [Description("DEFAULT LANE: filename of the houseCARL patch to remove the record from (e.g. 'MyMerge.esp' or 'MyMerge') — must be a patch houseCARL created that carries this record. Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match). REQUIRED unless you use the in-place lane (target + in_place); omit it then.")]
+        [Description("DEFAULT LANE: filename of the houseCARL patch to remove the record from (e.g. 'MyMerge.esp' or 'MyMerge') — must be a patch houseCARL created that carries this record. Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead. REQUIRED unless you use the in-place lane (target + in_place); omit it then.")]
             string? patch = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to remove the record from IN PLACE — including one houseCARL didn't author — instead of from a houseCARL patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with patch. Drops only a record the TARGET itself defines or overrides; a FormID it doesn't carry is refused. OMIT this (the default) to drop the record from a houseCARL patch and leave every original untouched.")]
             string? target = null,
@@ -294,7 +294,7 @@ public static class WriteTools
             string? grid = null,
         [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken. Ignored if into= is given.")]
             string patch_name = "Patch",
-        [Description("Optional. Filename of an existing houseCARL patch to add this new record to instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing houseCARL patch to add this new record to instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead.")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to create the new record straight INTO, IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. Full create parity in place — incl. a nested record (parent=): a parent the target already owns is edited to host the child, a parent from another plugin is overridden in (exactly as the patch lane does). OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
             string? target = null,
@@ -304,7 +304,7 @@ public static class WriteTools
             bool acknowledge = false,
         [Description("Amethyst in-place safety gate. Set true to confirm staging-only write plus a required Amethyst redeploy.")]
             bool confirm_amethyst_redeploy = false,
-        [Description("When true, the read-back is the FULL deep field-by-field dump of the created record (every field, not just the fields you set). For an IN-PLACE create the touched-record verify ALWAYS runs and is shown COMPACTLY by default (re-read-clean + field count per record); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
+        [Description("When true, the response includes a FULL deep read-back of the created staged record. In-place creation always verifies compactly; true expands it. The read-back proves file content, not deployed load-order visibility.")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
             int max_chars = 0) => Guard.Tool("housecarl_create_record", () =>
@@ -345,7 +345,7 @@ public static class WriteTools
             CreateOp[] records,
         [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken. Ignored if into= is given.")]
             string patch_name = "Patch",
-        [Description("Optional. Filename of an existing houseCARL patch to add these new records to instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing houseCARL patch to add these new records to instead of writing a fresh one (accumulate across calls/sessions). Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead.")]
             string? into = null,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to create the new records straight INTO, IN PLACE — including one houseCARL didn't author — instead of writing a new patch (e.g. 'CoolWeapons.esp'). Requires in_place=true; mutually exclusive with into=. Full create parity in place — incl. a nested one-shot (a topic AND its lines, a cell AND its refs): a same-call or target-owned parent hosts the child, a parent from another plugin is overridden in (exactly as the patch lane does). OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
             string? target = null,
@@ -355,7 +355,7 @@ public static class WriteTools
             bool acknowledge = false,
         [Description("Amethyst in-place safety gate. Set true to confirm staging-only write plus a required Amethyst redeploy.")]
             bool confirm_amethyst_redeploy = false,
-        [Description("When true, the read-back is the FULL deep field-by-field dump of each created record. For an IN-PLACE create the touched-record verify ALWAYS runs and is shown COMPACTLY by default (re-read-clean + field count per record); true expands it to the deep dump. (The read-back is the written file's content, NOT load-order truth — the patch/edit wins nothing until enabled + sorted in MO2.)")]
+        [Description("When true, the response includes a FULL deep read-back of each created staged record. In-place creation always verifies compactly; true expands it. The read-back proves file content, not deployed load-order visibility.")]
             bool full_readback = false,
         [Description("Optional. Max characters for the whole response; past it the read-back is cut with an explicit notice (never silent). 0 = a safe default kept under the host's per-response token limit; raise it to widen a full_readback=true dump.")]
             int max_chars = 0) => Guard.Tool("housecarl_bulk_create", () =>
@@ -399,9 +399,9 @@ public static class WriteTools
             string from_plugin,
         [Description("Optional. Base filename for the new patch (default 'Patch'); auto-suffixed if taken so a prior patch is never overwritten. Ignored if into= is given.")]
             string patch_name = "Patch",
-        [Description("Optional. Filename of an existing houseCARL patch to ADD these forwards to instead of writing a fresh one (accumulate across calls — e.g. forward from a different source plugin into the same patch). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match). If the patch already carries a forwarded FormKey, its existing override is REPLACED by from_plugin's body.")]
+        [Description("Optional. Filename of an existing houseCARL patch to ADD these forwards to instead of writing a fresh one. Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead. Existing overrides with the same FormKey are replaced.")]
             string? into = null,
-        [Description("When true, the response ALSO returns each forwarded record IN FULL, read back from the written patch file on disk (every field, deep). The pre-enable verification: confirm the copied version is exactly the source's, WITHOUT enabling the patch in MO2 (the written file's content, not load-order truth).")]
+        [Description("When true, the response returns each forwarded record IN FULL from the staged patch. This verifies file content before Amethyst refresh/deploy; it is not load-order truth.")]
             bool full_readback = false,
         [Description("Optional. IN-PLACE LANE (opt-in): the filename of an EXISTING active plugin to forward INTO in place — including one houseCARL didn't author — instead of writing a new patch (e.g. 'MyHandmadePatch.esp'). Requires in_place=true; mutually exclusive with into=. A FormKey the target already carries is REPLACED by from_plugin's body (xEdit's copy-as-override overwrite). OMIT this (the default) to write a NEW patch and leave every original untouched — the recommended lane.")]
             string? target = null,
@@ -437,7 +437,7 @@ public static class WriteTools
          "or a houseCARL folder of that name already exists, it REFUSES loud rather than rename or overwrite (Q3). Pass " +
          "esl=true for the lightest trigger (a header-only light plugin consumes no consequential load-order slot; with " +
          "zero records the ESL FormID-range rule is trivially satisfied). author/description are optional TES4 header " +
-         "text. Returns the plugin path + mod folder — enable + sort it in MO2 to use it. To author actual records, use " +
+         "text. Returns the plugin path + staging folder — refresh Amethyst, enable it, rebuild the filemap, and deploy to use it. To author actual records, use " +
          "housecarl_create_record / housecarl_bulk_create instead.")]
     public static string CreatePlugin(
         LoadOrderService svc,
@@ -465,14 +465,14 @@ public static class WriteTools
          "frees a load-order slot. esl=false instead renumbers contiguously from 0x800 with NO light flag/ceiling (to close " +
          "FormID gaps). OUTPUT (default): a NEW plugin keeping the SOURCE'S EXACT basename (so other mods that list it as a " +
          "master still resolve) in a fresh houseCARL mod folder — your ORIGINAL is untouched; review the new one in xEdit, " +
-         "then in MO2 enable its folder and DISABLE the original mod (same basename — MO2 serves one). in_place=true instead " +
+         "then refresh Amethyst, enable its folder, disable the original mod, rebuild the filemap, and deploy (same basename — one copy wins). in_place=true instead " +
          "OVERWRITES the original (xEdit's norm; rides the in-place consent, NO backup; needs acknowledge=true). " +
          "THE SAFETY (Q3): renumbering breaks any reference from OUTSIDE this plugin (they'd point at FormIDs that vanish). " +
          "houseCARL scans the WHOLE load order for such external referencers (a one-pass walk — can take ~25s on a big order): " +
          "if NONE, it's a clean compaction; if SOME, the call is REFUSED and lists them, UNLESS repoint_externals=true, which " +
          "ALSO rewrites each of them in place to follow the renumber (needs acknowledge=true; no backup of them either). " +
          "The target need NOT be active: a plugin on disk but not (yet) in the load order — e.g. the patch houseCARL just " +
-         "wrote, before the MO2 refresh — is resolved by filename across ALL mod folders and compacted OFF-ORDER (its " +
+         "wrote, before the Amethyst refresh — is resolved by filename across ALL staging folders and compacted OFF-ORDER (its " +
          "declared masters must still be active). An override-only plugin with esl=true takes the FLAG-ONLY lane: nothing " +
          "to renumber, every record copies verbatim, the ESL flag is set (always valid — the light window only constrains " +
          "originating records). Refuses loud + writes nothing on: the plugin found nowhere on disk / ambiguous across " +
@@ -515,12 +515,12 @@ public static class WriteTools
          "follow the renumber: every donor NPC's facegen and every voiced line are carried into the new plugin-name folders " +
          "(those paths embed the plugin NAME, so ALL donor facegen/voice moves, not just collisions), and a .seq is refreshed " +
          "when any donor shipped one. THE SAFETY (Q3): plugins OUTSIDE the merge that reference or override donor records are " +
-         "WARNED and NAMED, never refused — the donors stay active until you swap in MO2, so nothing breaks at write time; the " +
+         "WARNED and NAMED, never refused — the donors stay active until you complete the Amethyst swap, so nothing breaks at write time; the " +
          "remedy is to include those patches in the merge set or re-point them before disabling the donors. Refuses loud + " +
          "writes nothing on: a donor not active / unparseable / not on disk; an output name already in the load order; a " +
          "dangling donor-internal reference (a donor referencing a FormID no donor defines); a declared master not active. " +
-         "AFTER: review the merged plugin in xEdit, enable its mod folder in MO2, then deactivate the donor PLUGINS (right " +
-         "pane) but KEEP the donor MOD FOLDERS enabled (left pane) — merge carries only the FormID-keyed files the rename " +
+         "AFTER: review the merged plugin in xEdit, refresh Amethyst, enable its staging folder, deactivate the donor PLUGINS, " +
+         "rebuild the filemap, and deploy, but KEEP the donor MOD FOLDERS enabled — merge carries only the FormID-keyed files the rename " +
          "breaks (facegen/voice/seq); every other donor asset (meshes, textures, scripts, BSA contents) is still referenced " +
          "BY PATH from the merged records and loads from the donor folders. Caveat: a donor .bsa stops auto-loading once its " +
          "same-named plugin is inactive — extract it into the mod folder (housecarl_bsa_extract) or load it via a same-named " +
@@ -623,7 +623,7 @@ public static class WriteTools
 
     /// <summary>The full_readback=true read-back section (HCBR-2026-06-11-02 wave (b)): each touched/created record IN FULL,
     /// re-read from the written file on disk. Labeled as exactly that — the written file's content, NOT load-order
-    /// truth (the patch wins nothing until enabled in MO2) — so the caller can't mistake it for a winner read.
+    /// truth (the patch is not game-visible until Amethyst enables and deploys it) — so the caller cannot mistake it for a winner read.
     /// Char-budget-bounded with an explicit notice (Q3), same convention as the read tools — now at the LOWER
     /// <see cref="Wire.ReadbackMaxChars"/> default so the cut-off output stays under the host token ceiling and the
     /// truncation note actually reaches the caller (HCBR-2026-06-28-01).</summary>
@@ -804,7 +804,7 @@ public static class WriteTools
     }
 
     /// <summary>Confirmation for housecarl_create_plugin: the empty plugin's path + mod folder, its ESL flag, master
-    /// header (none), record count (0) and byte size, plus the MO2 enable reminder and what the trigger does. On
+    /// header (none), record count (0) and byte size, plus the Amethyst deployment reminder and what the trigger does. On
     /// refusal, the named reason (Q3) so the caller can fix and retry.</summary>
     static string RenderCreatePlugin(WritePatchBuilder.CreatePluginOutcome o)
     {
@@ -946,7 +946,7 @@ public static class WriteTools
         if (sr.Failures.Count > 25) sb.Append("  SEQ WARN: … (+").Append(sr.Failures.Count - 25).Append(" more)\n");
     }
 
-    /// <summary>Merge confirmation (A4): the merged plugin's identity + the MO2 swap instruction, per-donor id
+    /// <summary>Merge confirmation (A4): the merged plugin's identity + the Amethyst swap instruction, per-donor id
     /// accounting, cross-donor conflict resolutions (load-order winner — reported, never silent), the WARN surfaces
     /// (external referencers/overriders with the remedy), the asset-carry accounting, and the saves/ESL pointers.
     /// On refusal, the named reason (Q3). internal: the merge guard asserts warnings reach user output.</summary>
@@ -989,7 +989,7 @@ public static class WriteTools
             if (o.Conflicts.Count > 25) sb.Append("  … (+").Append(o.Conflicts.Count - 25).Append(" more)\n");
         }
 
-        // The A4 posture: WARN loud + proceed — the donors stay installed and ACTIVE until the user swaps in MO2, so
+        // The A4 posture: WARN loud + proceed — the donors stay installed and active until the user completes the Amethyst swap, so
         // nothing is broken at write time; the report names every affected plugin and the remedy. (Unlike compact, which
         // refuses on referencers: a compact's renumber takes effect under the SAME plugin name, a merge's only when the
         // user disables the donors — the user holds the switch here.)
@@ -1128,7 +1128,7 @@ public static class WriteTools
             rendered++;
         }
         if (anyReadIncomplete)
-            sb.Append("  note: a BSA failed to read this scan, so an \"absent\" above may merely be unscanned — verify in MO2.\n");
+            sb.Append("  note: a BSA failed to read this scan, so an \"absent\" above may merely be unscanned — verify in Amethyst and in game.\n");
         if (report.CheckError is not null)
             sb.Append("  voice check could not run: ").Append(report.CheckError).Append(" — the records WERE created; verify voice files manually.\n");
     }
@@ -1206,7 +1206,7 @@ public static class WriteTools
             rendered++;
         }
         if (anyReadIncomplete)
-            sb.Append("  note: a BSA failed to read this scan, so a \"missing .pex\" above may merely be unscanned — verify in MO2.\n");
+            sb.Append("  note: a BSA failed to read this scan, so a \"missing .pex\" above may merely be unscanned — verify in Amethyst and in game.\n");
         if (report.CheckError is not null)
             sb.Append("  result-script check could not run: ").Append(report.CheckError).Append(" — the records WERE created; verify the script binding manually.\n");
     }

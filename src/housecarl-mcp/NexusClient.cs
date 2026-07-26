@@ -216,8 +216,8 @@ public sealed class NexusClient
 
     static readonly IReadOnlyList<InstalledFileCurrency> NoFiles = Array.Empty<InstalledFileCurrency>();
 
-    /// <summary>Group the check-update requests by modId — NOT dedupe-drop. A Nexus page split across several MO2 mod
-    /// folders (e.g. one Xtudo pack per creature) shares a modId, and each folder installed a DIFFERENT file; keeping only
+    /// <summary>Group the check-update requests by modId — NOT dedupe-drop. Several installed downloads from one Nexus
+    /// page can share a modId while using different files; keeping only
     /// the first would silently un-check the rest (the multi-folder-page silent-drop class). So merge every entry's file
     /// ids (order-preserving, deduped) under its modId, and keep the FIRST non-empty installed version for the
     /// no-file-id fallback display. Returns the modId order (first-seen) + the per-modId merged state. Internal for the CI

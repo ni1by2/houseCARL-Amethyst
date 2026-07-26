@@ -290,7 +290,7 @@ public static class ReadTools
          "MISSING MASTERS — a master a plugin DECLARES that is not present in the active order (its dependency is not " +
          "installed/enabled — the most common load-order break); (3) PARSE failures — records houseCARL/Mutagen could not " +
          "read (per record), plus whole plugins the index excluded as unparseable. A scoped name NOT in the active order " +
-         "is resolved on disk (any mod folder — enabled, disabled, or not yet listed in MO2) and swept OFF-ORDER: its own " +
+         "is resolved on disk (any staging folder — enabled, disabled, or not yet registered by Amethyst) and swept OFF-ORDER: its own " +
          "records, links resolved against the active order PLUS the file's own definitions — the pre-enable verify sweep " +
          "for a patch houseCARL just wrote. Read-only — writes nothing. BOUNDARY " +
          "(never a silent claim of more — Q3): this covers the FormLink-resolution / missing-master / parse class. It does " +
@@ -343,7 +343,7 @@ public static class ReadTools
 
     [McpServerTool(Name = "housecarl_read_plugin_file", ReadOnly = true, Title = "Read a plugin file directly (active or not)"),
      Description(
-         "Read ONE plugin file straight off disk — INCLUDING a plugin DISABLED in MO2 — returning THAT FILE's own " +
+         "Read ONE plugin file straight off disk — INCLUDING a plugin DISABLED in Amethyst — returning THAT FILE's own " +
          "version of a record, NOT the load-order winner. Where housecarl_read_record resolves the ACTIVE order, this " +
          "reaches an inactive/arbitrary plugin: give it a filename (located even inside a DISABLED mod folder) or an " +
          "absolute path. Modes: formid= reads one record's fields (compact `path = token`, same format as read_record); " +
@@ -364,7 +364,7 @@ public static class ReadTools
             string? formid = null,
         [Description("Optional. Enumerate the records of this type the file defines/overrides — a signature ('NPC_','HDPT') or catalog name ('Npc','HeadPart'). Mutually exclusive with formid=. Omit BOTH formid= and type= for a record-type summary of the whole file.")]
             string? type = null,
-        [Description("Optional. When a bare FILENAME is provided by more than one MO2 mod folder, the exact mod folder name to read from — disambiguates instead of guessing. Ignored for an absolute path.")]
+        [Description("Optional. When a bare FILENAME is provided by more than one Amethyst staging folder, the exact mod folder name to read from — disambiguates instead of guessing. Ignored for an absolute path.")]
             string? mod = null,
         [Description("Optional. With formid=: dotted field paths to read (e.g. 'HeadParts', 'FaceMorph', 'Name'); index a list/dict element with BRACKETS (e.g. 'HeadParts[0]'). Omit to dump every modeled field one level deep.")]
             string[]? fields = null,
@@ -1035,7 +1035,7 @@ static class Wire
         sb.Append('\n');
         sb.Append("masters: ").Append(o.Masters.Count == 0 ? "none" : string.Join(", ", o.Masters)).Append('\n');
         if (o.MissingMasters.Count > 0)
-            sb.Append("  ! declared master(s) NOT installed anywhere in the MO2 install: ").Append(string.Join(", ", o.MissingMasters))
+            sb.Append("  ! declared master(s) NOT installed anywhere in Amethyst staging or vanilla Data: ").Append(string.Join(", ", o.MissingMasters))
               .Append("  (install them — the file will not load in-game without them)\n");
         if (o.InactiveMasters.Count > 0)
             sb.Append("  ! declared master(s) installed but NOT ACTIVE in the load order (in a disabled mod, or unchecked): ")

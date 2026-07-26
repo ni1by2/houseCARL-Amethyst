@@ -5,11 +5,11 @@ using ModelContextProtocol.Server;
 namespace HousecarlMcp;
 
 /// <summary>
-/// houseCARL asset tool. Read-only. Resolves Data-relative asset paths through MO2's virtual file system — which mod or
+/// houseCARL asset tool. Read-only. Resolves Data-relative asset paths through Amethyst's authoritative winner map — which mod or
 /// BSA provides each asset, and which copy actually WINS in game (loose files beat BSA-packed; among BSAs the
 /// latest-loaded plugin's wins) — the file-layer counterpart to a record's load-order winner. General asset-layer; the
 /// FaceGen / dark-face skill is one consumer. The asset resolver discovers the active BSAs by construction from the same
-/// static MO2 profile read the load order uses (per-plugin "X.bsa"/"X - Textures.bsa" + Skyrim.ini base archives), holds
+/// same Amethyst profile snapshot the load order uses (per-plugin "X.bsa"/"X - Textures.bsa" + Skyrim.ini base archives), holds
 /// ZERO archive handles at rest (arch #3), and refreshes by mtime — no daemon, no live tracking.
 /// </summary>
 [McpServerToolType]
@@ -17,10 +17,10 @@ public static class AssetTools
 {
     [McpServerTool(Name = "housecarl_asset_status", ReadOnly = true, Title = "Asset status — which mod/BSA wins for a Data-relative path"),
      Description(
-         "Resolve one or more Data-relative asset paths through Mod Organizer 2's virtual file system and report, for " +
+         "Resolve one or more Data-relative asset paths through Amethyst's filemap and report, for " +
          "each, WHICH copy the game actually uses: the winning source, every source that provides it (loose mods, the " +
          "overwrite folder, the game Data folder, and active BSAs), whether more than one source contends, and whether " +
-         "the asset is absent. Precedence is the real engine/MO2 rule — loose files beat BSA-packed, among loose the " +
+         "the asset is absent. Precedence follows Skyrim and Amethyst — loose files beat BSA-packed, among loose the " +
          "higher-priority mod (then overwrite) wins, among BSAs the later-loaded plugin's archive wins. This is the " +
          "file-layer counterpart to the load-order winner of a record: use it to answer 'which mod provides this file / " +
          "who is this asset coming from / is this texture loose or in a BSA / is this asset even present / why isn't my " +

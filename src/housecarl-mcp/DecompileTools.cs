@@ -33,7 +33,7 @@ public static class DecompileTools
          "patterns are detected, but detection is best-effort: a result WITHOUT the note does not prove the .pex " +
          "came from the CK compiler. Any " +
          "function the engine cannot prove is emitted as a LOUD failure comment with its raw bytecode (the .psc then " +
-         "won't compile as-is) — never silently wrong source. Needs houseCARL pointed at your MO2 instance for the " +
+         "won't compile as-is) — never silently wrong source. Needs an active Amethyst connection for the " +
          "output folder; no compiler or external tool required.")]
     public static string DecompileScript(
         LoadOrderService svc,
@@ -41,10 +41,10 @@ public static class DecompileTools
             string pex,
         [Description("Optional. Base name for the NEW patch-mod folder the .psc lands in (default 'houseCARL_Scripts'); auto-suffixed if taken.")]
             string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL patch mod to add the .psc into instead of creating a fresh folder (accumulate sources; pairs with housecarl_compile_script's into=). Found by the plugin's filename even if you've renamed its MO2 mod folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
+        [Description("Optional. Filename of an existing houseCARL patch mod to add the .psc into instead of creating a fresh folder (accumulate sources; pairs with housecarl_compile_script's into=). Found by the plugin's filename even if you've renamed its Amethyst staging folder; for two patches sharing a filename, pass the mod-folder name here instead (folder & plugin names need not match).")]
             string? into = null) => Guard.Tool("housecarl_decompile_script", () =>
     {
-        // 1) MO2 must be configured — the .psc lands under the instance's mods folder.
+        // The Amethyst connection supplies the staging folder where the source is written.
         if (svc.ConfigPromptOrNull() is { } cfgPrompt) return cfgPrompt;
 
         // 2) validate the pex path.
