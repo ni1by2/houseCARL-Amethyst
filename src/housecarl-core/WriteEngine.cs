@@ -640,9 +640,7 @@ public static class WriteEngine
         return null;
     }
 
-    // ======================================================================
-    //  GENERIC PATCH-MOD LIFECYCLE  (plan §4.1; step-1 confirm done via write-api)
-    // ======================================================================
+    // Resolve flat and nested records into a mutable patch.
 
     /// <summary>True iff <paramref name="source"/> lives in a NESTED group (no flat <c>SkyrimGroup&lt;T&gt;</c>) and so
     /// needs the source link cache to reconstruct its parent chain when overridden (Cell / the Placed* family / INFO /
@@ -659,8 +657,8 @@ public static class WriteEngine
 
     /// <summary>The Type to hand Mutagen's typed <c>Remove(FormKey, Type, throwIfUnknown)</c> for
     /// <paramref name="record"/>: the record's FLAT GROUP's <c>T</c> when one matches, else the runtime type (nested-group
-    /// records — the shape the remove-record-probe proved reaches Cell/Placed*/INFO/Navmesh/Landscape). The flat-group
-    /// answer matters for the abstract-base groups (Global, GameSetting): HCBR-2026-07-08-01 F3 proved that passing a
+    /// records such as Cell, Placed*, INFO, Navmesh, and Landscape). The flat-group
+    /// answer matters for abstract-base groups such as Global and GameSetting: passing a
     /// concrete SUBCLASS of the group's T (a <c>GlobalShort</c> under <c>SkyrimGroup&lt;Global&gt;</c>) makes Mutagen's
     /// remove routing silently NO-OP — <c>throwIfUnknown:true</c> notwithstanding — while the group's own T removes
     /// correctly. Same <see cref="EnumerateFlatGroups"/> enumeration as every other flat-vs-nested decision (no drift).</summary>
@@ -672,8 +670,8 @@ public static class WriteEngine
     }
 
     /// <summary>The flat groups' (T, getter-interface) pairs for <see cref="SkyrimMod"/>, MEMOIZED (the
-    /// <see cref="_abstractGroups"/> precedent): pure reflection metadata, constant for the process lifetime —
-    /// <see cref="RemovalTypeFor"/> runs per record when the remove lanes index a whole plugin (PR #163 review #2),
+    /// <see cref="_abstractGroups"/> precedent): pure reflection metadata, constant for the process lifetime.
+    /// <see cref="RemovalTypeFor"/> runs once per record when a remove operation indexes a whole plugin,
     /// so the per-call property walk was an avoidable O(records × properties). Derived from the SAME
     /// <see cref="EnumerateFlatGroups"/> enumeration (no drift).</summary>
     static IReadOnlyList<(Type tMajor, Type getterIface)> FlatGroupTypes => _flatGroupTypes.Value;
@@ -689,7 +687,7 @@ public static class WriteEngine
     /// <paramref name="sourceLinkCache"/> and reconstructs its parent chain in the patch. The flat-vs-nested
     /// decision is ONE point — does a flat group match? — by construction; everything downstream of resolution
     /// (<see cref="ApplyVerb"/>, coercion, absent-materialization) is the SAME settable-record path for both
-    /// (wave 3; mechanism scouted + proven by NestedProbe). <paramref name="sourceLinkCache"/> is optional and
+    /// as verified by the nested-record guard. <paramref name="sourceLinkCache"/> is optional and
     /// unused for flat records, so existing flat-only callers are unaffected; a nested record without it fails loud.
     /// </summary>
     public static IMajorRecord GenericGetOrAddAsOverride(
@@ -726,13 +724,12 @@ public static class WriteEngine
     /// <c>SkyrimGroup&lt;T&gt;</c>, so <see cref="TryResolveGroup"/> can't reach them. Resolves the record's
     /// CONTEXT by FormKey from the source link cache (the context knows the parent chain), then
     /// <c>GetOrAddAsOverride</c> reconstructs that chain in the patch mod and returns a settable override root —
-    /// fed straight into the SAME <see cref="ApplyVerb"/> path as a flat record. Proven end-to-end by the wave-3
-    /// scout (<c>NestedProbe</c>) across every distinct nested container shape against vanilla Skyrim.esm, source
-    /// byte-untouched.
+    /// fed straight into the SAME <see cref="ApplyVerb"/> path as a flat record. The nested-record guard covers
+    /// each supported parent-container shape and verifies the source remains unchanged.
     ///
     /// By FormKey, NOT typed <c>EnumerateMajorRecordContexts&lt;T,TG&gt;</c>: the latter throws
     /// InvalidCastException on the sparse placed subtypes (a sibling cast to the wrong <c>IPlaced*Getter</c>);
-    /// by-FormKey <c>ResolveContext</c> is unaffected (scout §6.1). The MethodInfo is re-resolved off the LIVE
+    /// by-FormKey <c>ResolveContext</c> is unaffected. The MethodInfo is re-resolved from the live
     /// (closed-generic) cache — an open-generic definition can't be invoked on the closed instance.
     /// </summary>
     static IMajorRecord NestedGetOrAddAsOverride(SkyrimMod patchMod, IMajorRecordGetter source, ILinkCache? sourceLinkCache)
@@ -819,27 +816,9 @@ public static class WriteEngine
         }
     }
 
-    // ======================================================================
-    //  CREATE front-end (capability arc — the last build). The sibling of
-    //  GenericGetOrAddAsOverride: where that OVERRIDES an existing record into
-    //  the patch, this ALLOCATES a brand-new one. Both resolve their group from
-    //  the SAME EnumerateFlatGroups enumeration, so the create surface IS the
-    //  flat-group surface BY CONSTRUCTION — every concrete flat record type is
-    //  createable, nothing else is silently treated as covered (CLAUDE.md §3).
-    //
-    //  A small minority of flat groups are typed by an ABSTRACT base — exactly two
-    //  by construction (SkyrimGroup<Global>, SkyrimGroup<GameSetting>); a Global is
-    //  stored as a GlobalFloat / GlobalInt / GlobalShort, never a bare Global. The
-    //  generic AddNew path can't close Mutagen's AddNew<T> with an abstract T (it
-    //  throws), so abstract-group create takes a distinct branch keyed off the
-    //  runtime hierarchy (T.IsAssignableFrom(concrete) && !concrete.IsAbstract):
-    //  the caller names the CONCRETE arm ('GlobalFloat'), which is constructed via
-    //  the same ConstructRecord/AllocateNextFormKey helpers the nested create uses
-    //  and Add()-ed to the group's own instance Add(T) (a SkyrimGroup<T> is NOT an
-    //  IList). Naming the bare abstract base ('Global') stays a loud refusal that
-    //  lists the arms (Q3 — never a guessed default). The arm set is discovered, not
-    //  hand-listed, so the branch serves GMST and any future abstract group equally.
-    // ======================================================================
+    // Creation uses the same flat-group inventory as override resolution.
+    // Abstract groups such as Global require a named concrete subtype because
+    // Mutagen cannot instantiate or add the abstract base.
 
     /// <summary>Every flat group whose T is ABSTRACT, paired with its concrete-arm record Types — discovered by walking
     /// the SAME <see cref="EnumerateFlatGroups"/> enumeration that defines the create surface, testing <c>T.IsAbstract</c>,
@@ -847,7 +826,7 @@ public static class WriteEngine
     /// <see cref="GenericAddNew"/> keys off it). By construction: the abstract-group set IS Mutagen's (two today —
     /// Global, GameSetting), and each base's arm set IS its concrete subtype set — neither is hand-listed.
     ///
-    /// MEMOIZED (the <see cref="OverrideMethod"/> precedent): the result is pure reflection METADATA (<c>PropertyInfo</c>
+    /// Memoized because the result is pure reflection metadata (<c>PropertyInfo</c>
     /// + <c>Type</c>s), constant for the process lifetime and PATCH-INDEPENDENT, so the ~10k-type <c>GetTypes()</c> walk
     /// runs once. <see cref="CanCreateType"/> calls this ≥2× on EVERY create (incl. common Keyword/Spell creates and every
     /// record of a bulk_create), so the cache is a pure win. The per-patch group INSTANCE is NOT cached — callers resolve
@@ -892,9 +871,9 @@ public static class WriteEngine
     }
 
     /// <summary>Can a brand-new record of <paramref name="typeName"/> (a catalog name, e.g. "Keyword") be created by the
-    /// generic create dispatch? True iff a flat <c>SkyrimGroup&lt;T&gt;</c> models it with a CONCRETE T, OR
+    /// generic create dispatch? True when a flat <c>SkyrimGroup&lt;T&gt;</c> models it with a concrete T, or
     /// <paramref name="typeName"/> is a concrete ARM of an abstract group (e.g. "GlobalFloat" under SkyrimGroup&lt;Global&gt;).
-    /// The two false cases are the named loud-fail boundaries (Q3 — surfaced, never a silent wrong create): NO flat group ⇒ a
+    /// The two false cases are explicit boundaries: no flat group means a
     /// nested/placed record (Cell/Placed*/INFO/Navmesh/Landscape) that needs parent context; the bare ABSTRACT base
     /// ('Global'/'GameSetting') ⇒ name a concrete arm (the message lists the DISCOVERED arms — never a guessed default).
     /// <paramref name="reason"/> carries the user-facing explanation when false. Mod-instance-free (walks
@@ -909,7 +888,7 @@ public static class WriteEngine
             if (string.Equals(tm.Name, typeName, StringComparison.OrdinalIgnoreCase))
             {
                 // The bare abstract base ('Global'/'GameSetting'). The record is always stored as one of its concrete
-                // arms — name which (Q3, no guessed default). Arms are DISCOVERED, not hand-listed (cornerstone §3).
+                // arms — require the caller to name one. Arms are discovered rather than hand-listed.
                 var arms = EnumerateAbstractGroups().First(g => g.baseType == tm).arms.Select(a => a.Name);
                 reason = $"'{typeName}' is an abstract record group — a {typeName} is always stored as one of its concrete " +
                          $"subtypes ({string.Join(" / ", arms)}). Name the concrete subtype to create (e.g. {tm.Name}Float).";
@@ -941,13 +920,13 @@ public static class WriteEngine
     /// (the same allocator the nested create draws from, so the floor + counter are shared) and added through the group's own
     /// instance <c>Add(T)</c> — a <c>SkyrimGroup&lt;T&gt;</c> is NOT an IList, and Mutagen's generic AddNew&lt;T&gt; can't be
     /// closed with the abstract base. The new record's master is the patch itself. <paramref name="editorId"/> sets the EditorID
-    /// (null uses the engine-assigned one). Throws loud (Q3) on the boundaries via <see cref="CanCreateType"/> — callers
+    /// (null uses the engine-assigned one). Throws on the boundaries named by <see cref="CanCreateType"/> — callers
     /// pre-flight with that, so a throw here means the surface changed under us.</summary>
     public static IMajorRecord GenericAddNew(SkyrimMod patchMod, string typeName, string? editorId)
     {
         if (!CanCreateType(typeName, out var reason)) throw new InvalidOperationException(reason);
-        EnsureFormIdFloor(patchMod);   // a counter rehydrated below 0x800 would hand AddNew engine-reserved IDs (HCBR-2026-06-09-04)
-        EnsureAllocatable(patchMod);   // …and a counter past the 24-bit object-ID ceiling can't allocate — fail loud (Q3)
+        EnsureFormIdFloor(patchMod);
+        EnsureAllocatable(patchMod);
 
         // Abstract-group arm (GlobalFloat / GameSettingFloat / …): construct the concrete arm + Add(T) it (the abstract T
         // can't go through InvokeAddNew). CanCreateType admitted the arm, so resolution here can't fail benignly.
@@ -963,7 +942,7 @@ public static class WriteEngine
     /// <summary>Construct a concrete abstract-group arm (<paramref name="armType"/>, e.g. <c>GlobalFloat</c>) at
     /// <paramref name="formKey"/> and add it to its group via the group's own instance <c>Add(T)</c> method (reflected —
     /// a <c>SkyrimGroup&lt;T&gt;</c> is NOT an IList, so the nested-create IList.Add path would crash). The same
-    /// <see cref="ConstructRecord"/> idiom the nested create uses. Throws loud (Q3) if the expected <c>Add(T)</c> shape
+    /// <see cref="ConstructRecord"/> idiom the nested create uses. Throws if the expected <c>Add(T)</c> shape
     /// is absent — never a silent no-op.</summary>
     static IMajorRecord AddConcreteArmToGroup(object group, Type armType, FormKey formKey, string? editorId)
     {
@@ -985,7 +964,7 @@ public static class WriteEngine
     /// edits to a live record would re-Add keyword/effect list entries), and the stable FormKey keeps cross-record
     /// links and external references (script properties, SKSE framework configs) valid across re-runs.
     ///
-    /// Three collisions are refused LOUD (Q3), never absorbed into a replace:
+    /// Three collisions are refused rather than absorbed into a replace:
     ///   - an OVERRIDE the patch carries (another plugin's record, matched by its carried EditorID): replacing it
     ///     would serialize a blank override that GUTS the original plugin's record — the opposite of
     ///     originals-untouched. Overrides are edited with set_field/bulk_apply, never re-created.
@@ -1055,8 +1034,8 @@ public static class WriteEngine
     }
 
     /// <summary>Remove a record from a flat group by FormKey. Tries the group's own instance <c>Remove(FormKey)</c>
-    /// first, then falls back to the same Mutagen static-extension scan <see cref="InvokeAddNew"/> uses (Q3 —
-    /// fails loud if neither shape exists, never a silent no-op).</summary>
+    /// first, then falls back to the same Mutagen static-extension scan <see cref="InvokeAddNew"/> uses.
+    /// Throws if neither shape exists rather than treating the removal as successful.</summary>
     static void InvokeRemove(object group, FormKey formKey)
     {
         var instance = group.GetType().GetMethod("Remove", new[] { typeof(FormKey) });
@@ -1116,12 +1095,9 @@ public static class WriteEngine
     /// bit pattern; the CK, ESL compaction, and xEdit checks all assume the 0x800+ floor) AND past every record the patch
     /// ITSELF already defines (so a tampered/legacy counter can never re-allocate a live ID). Never lowers the counter.
     ///
-    /// Why this exists (HCBR-2026-06-09-04): Mutagen's serializer keeps the header counter in sync by ITERATION
-    /// (<c>NextFormIDOption.Iterate</c> = max originating FormID present, measured by formid-floor-probe S2) — an
-    /// override-only patch (the bulk_apply/set_field shape) therefore persists <c>NextObjectID = 0</c>, and a later
-    /// extend (<c>into=</c>) rehydrates that 0 straight into the allocator: under header 1.71 Mutagen itself accepts
-    /// the lower range (<c>GetDefaultInitialNextFormID(null)</c> == 0, probe S1), so AddNew happily allocated 000000.
-    /// Called at BOTH chokepoints: <see cref="GenericAddNew"/> (every allocation ≥ 0x800 by construction, healing
+    /// Mutagen derives the counter from originating records. An override-only patch can therefore persist
+    /// <c>NextObjectID = 0</c>, which a later extension would otherwise feed back into the allocator.
+    /// Called at both chokepoints: <see cref="GenericAddNew"/> (every allocation ≥ 0x800 by construction, healing
     /// patches already on disk with a zeroed counter) and <see cref="WritePatch(SkyrimMod,IReadOnlyList{ISkyrimModGetter},string)"/>
     /// (every written patch PERSISTS a floored counter — see the NoNextFormIDProcessing note there).
     /// </summary>
@@ -1137,9 +1113,9 @@ public static class WriteEngine
 
     /// <summary>Guard that the patch can still allocate: its NextObjectID counter must be within the 24-bit object-ID
     /// space (≤ <see cref="FormIdRange.ObjectIdMax"/>). Past it (a tampered header, or a truly full plugin) no
-    /// allocation is possible — fail LOUD here, at the allocation boundary (Q3), NOT in <see cref="EnsureFormIdFloor"/>:
-    /// a full-but-valid patch must still SERIALIZE (WritePatch floors the same counter), it just can't grow (PR #30
-    /// review). The four create entry points (flat / nested / exterior-cell / interior-cell) share this one guard so
+    /// allocation is possible. Refuse here at the allocation boundary, not in <see cref="EnsureFormIdFloor"/>:
+    /// a full-but-valid patch must still serialize (WritePatch floors the same counter), but cannot grow. The four
+    /// create entry points (flat, nested, exterior cell, and interior cell) share this one guard so
     /// the ceiling and its message live in ONE place rather than four identical copies.</summary>
     static void EnsureAllocatable(SkyrimMod patchMod)
     {
@@ -1153,7 +1129,7 @@ public static class WriteEngine
     /// <c>SkyrimGroup&lt;T&gt;</c> (a direct GetMethod misses it — measured by create-probe C1): like
     /// <c>GetOrAddAsOverride</c> it's a GENERIC EXTENSION (IGroupMixIns) in a Mutagen static class, so it's located the same
     /// way <see cref="OverrideMethod"/> finds its method, closed with the group's T, and the receiver is verified to accept
-    /// the live group before invoke (Q3). Iterates candidates (no commit-to-first cache) so a wrong-shaped AddNew overload
+    /// the live group before invocation. It iterates candidates so a wrong-shaped AddNew overload
     /// can't shadow the right one — the proven create-probe resolver.</summary>
     static IMajorRecord InvokeAddNew(object group, Type tMajor, string? editorId)
     {
@@ -1174,32 +1150,21 @@ public static class WriteEngine
             $"Could not locate an AddNew({(withEdid ? "string" : "")}) extension accepting {group.GetType().Name} in the Mutagen assemblies.");
     }
 
-    // ======================================================================
-    //  NESTED CREATE front-end (nested/dialogue plan, Layer A — STEP 0 proven).
-    //  The sibling of NestedGetOrAddAsOverride: where that OVERRIDES an existing
-    //  nested record into the patch, this ALLOCATES a brand-new child INTO a
-    //  parent's modeled child-collection. By construction for the FormKey-
-    //  parented families (an INFO under a DialogTopic; a Placed* into a Cell):
-    //  the add-target collection is found REFLECTIVELY — the child type alone
-    //  picks it (outcome i) or the caller names one of the parent's enumerable
-    //  child-collections (outcome ii) — never a hand-coded per-family selector.
-    //  The parent must already be settable IN the patch (the caller overrides or
-    //  creates it first). Coordinate-keyed parents (an exterior Cell under the
-    //  FormKey-LESS WorldspaceBlock/SubBlock structs) are a SEPARATE §4-(b) seam,
-    //  not reachable here — TryFindNestedCollection fails loud for them (Q3).
-    // ======================================================================
+    // Nested creation reflects the parent's child collections. The child type
+    // selects a unique collection, or the caller names one when several fit.
+    // Coordinate-keyed cells use the separate block-tree helpers below.
 
     /// <summary>Resolve a catalog/record-type name to its concrete Mutagen record <see cref="Type"/>. The namespace
     /// is <c>Mutagen.Bethesda.Skyrim</c> by construction (the Loqui convention). Null ⇒ absent from the modeled set,
-    /// a real coverage gap to surface (Q3), never a value to guess.</summary>
+    /// a real coverage gap to surface rather than a type to guess.</summary>
     public static Type? ResolveConcreteRecordType(string catalogName)
         => typeof(IArmorGetter).Assembly.GetType("Mutagen.Bethesda.Skyrim." + catalogName);
 
     /// <summary>Can a brand-new <paramref name="childCatalogName"/> record be created as a nested child of a parent of
     /// <paramref name="parentType"/>, into <paramref name="collectionName"/> (null = the unique collection that accepts
-    /// the child)? The by-construction add-target test (nested plan §1.4 Q2): the parent's settable child-collections are
+    /// the child)? The parent's settable child collections are
     /// found reflectively, so "createable-under" is defined by the model, not a hand-coded per-family list. Every false
-    /// (no such containment, an ambiguous unnamed target, an unknown collection name) names what it checked (Q3).</summary>
+    /// (no such containment, an ambiguous unnamed target, an unknown collection name) names what it checked.</summary>
     public static bool CanCreateNested(string childCatalogName, Type parentType, string? collectionName, out string? reason)
     {
         var childType = ResolveConcreteRecordType(childCatalogName);
@@ -1215,7 +1180,7 @@ public static class WriteEngine
     /// generic add-target resolver. Reflects the parent's list/ExtendedList properties whose element type the child
     /// satisfies. Outcomes: exactly one match ⇒ derivable by type (i), returned; several ⇒ the caller must NAME one
     /// (<paramref name="collectionName"/> picks it) (ii); zero ⇒ the child cannot nest under this parent (a real
-    /// containment boundary, Q3). <paramref name="error"/> names the unnamed-ambiguous / no-containment / bad-name cases;
+    /// containment boundary. <paramref name="error"/> names the unnamed-ambiguous, no-containment, and bad-name cases;
     /// null on success.</summary>
     static bool TryFindNestedCollection(Type parentType, Type childType, string? collectionName,
         out PropertyInfo? prop, out List<string> matches, out string? error)
@@ -1287,7 +1252,7 @@ public static class WriteEngine
 
     /// <summary>Allocate the next LOCAL FormKey from the patch's own allocator (<c>GetNextFormKey</c>), discovered
     /// reflectively. The caller floors the counter first (<see cref="EnsureFormIdFloor"/>), so the returned id is in
-    /// the 0x800+ ESP-local range and shares the SAME incrementing counter flat <c>AddNew</c> draws from (STEP 0).</summary>
+    /// the 0x800+ ESP-local range and shares the same incrementing counter used by flat <c>AddNew</c>.</summary>
     static FormKey AllocateNextFormKey(SkyrimMod patchMod)
     {
         var m = patchMod.GetType().GetMethods(BindingFlags.Public | BindingFlags.Instance)
@@ -1299,9 +1264,9 @@ public static class WriteEngine
     /// <summary>The CREATE front-end for a NESTED record: allocate a brand-new <paramref name="childCatalogName"/> child
     /// into <paramref name="parentInPatch"/>'s modeled child-collection (named, or the unique one), returning a settable
     /// root fed into the SAME <see cref="ApplyVerb"/> path as a flat create or an override. The new record gets a fresh
-    /// local 0x800+ FormKey from the SAME floor/counter as flat <see cref="GenericAddNew"/> (the nested plan §1.5 inherited
-    /// item — proven sharing in STEP 0). The parent MUST already be settable in the patch (overridden or created by the
-    /// caller). Throws loud (Q3) via <see cref="TryFindNestedCollection"/> on a containment/ambiguity the pre-flight
+    /// local 0x800+ FormKey from the same floor and counter as flat <see cref="GenericAddNew"/>. The parent must already
+    /// be settable in the patch (overridden or created by the caller). Throws via <see cref="TryFindNestedCollection"/>
+    /// on a containment or ambiguity the pre-flight
     /// (<see cref="CanCreateNested"/>) should have caught — a throw here means the surface changed under us.</summary>
     public static IMajorRecord NestedAddNew(SkyrimMod patchMod, IMajorRecord parentInPatch,
         string childCatalogName, string? collectionName, string? editorId)
@@ -1313,7 +1278,7 @@ public static class WriteEngine
         if (prop!.GetValue(parentInPatch) is not System.Collections.IList list)
             throw new InvalidOperationException($"nested create: collection '{prop.Name}' on '{parentInPatch.GetType().Name}' is not an addable list.");
 
-        EnsureFormIdFloor(patchMod);   // a rehydrated (into=) counter below 0x800 would hand engine-reserved IDs (HCBR-2026-06-09-04)
+        EnsureFormIdFloor(patchMod);
         EnsureAllocatable(patchMod);
         var child = ConstructRecord(childType, AllocateNextFormKey(patchMod));
         if (editorId is not null) child.EditorID = editorId;
@@ -1321,22 +1286,10 @@ public static class WriteEngine
         return child;
     }
 
-    // ======================================================================
-    //  COORDINATE-KEYED CREATE (the §4-(b) seam) — cells, the one family whose
-    //  structural parents are FormKey-LESS block structs the FormKey locator
-    //  (NestedAddNew) cannot address: exterior cells under WorldspaceBlock/
-    //  WorldspaceSubBlock, interior cells under CellBlock/CellSubBlock. Placed
-    //  by DERIVED block arithmetic, not a parent FormKey. STEP-0 proven
-    //  (CoordCellProbe, round-tripped vs vanilla): exterior block=floor(grid/32)
-    //  subblock=floor(grid/8) (4000/4000); interior block=id%10 subblock=(id/10)%10
-    //  (590/590); thin Worldspace override (a 1-cell delta, not all of Tamriel).
-    //  ONE generic algorithm per cell-kind — NOT a per-type shim (dev/plans/
-    //  COORD_KEYED_CELL_CREATE_BUILD_2026-06-20.md). Mutagen DROPS the OFST
-    //  seek-cache on write (Aaron-accepted 2026-06-20); the engine rebuilds it
-    //  from the block tree at load. A created cell is a STRUCTURAL SHELL —
-    //  lighting/land/navmesh stay the author's (the shell report surfaces this
-    //  loudly; the engine stays policy-free, Q3).
-    // ======================================================================
+    // Cells are filed under FormKey-less block structures. Exterior cells use
+    // grid-derived block coordinates; interior cells use object-ID digits.
+    // Created cells are structural shells: lighting, landscape, and navmesh
+    // remain explicit authoring work.
 
     /// <summary>Signed integer floor division (toward -∞) — the exterior block/subblock index from a (possibly
     /// negative) cell grid coordinate. C# truncates toward zero (<c>-1/8 == 0</c>), but the cell at grid -1 sits in
@@ -1349,13 +1302,12 @@ public static class WriteEngine
     /// <see cref="WorldspaceBlock"/> + <see cref="WorldspaceSubBlock"/> structs (the add-target is the model's block tree,
     /// not a FormKey lookup), constructs the <see cref="Cell"/> with its Grid set and <c>IsInteriorCell</c> OFF, allocates
     /// a fresh local 0x800+ FormKey from the SAME floored counter as flat/nested create, and adds it. Returns the new cell
-    /// (settable, fed into the same <see cref="ApplyVerb"/> path). STEP-0 proven (CoordCellProbe).</summary>
+    /// (settable, fed into the same <see cref="ApplyVerb"/> path).</summary>
     public static Cell AddExteriorCell(SkyrimMod patchMod, Worldspace worldspaceInPatch, int gridX, int gridY, string? editorId)
     {
-        // Floor + dedup BEFORE mutating the block tree (a failed call discards the patch, but ordering it like
-        // AddInteriorCell keeps the no-mutation-before-validation property clean — PR #94 review nit).
+        // Validate the coordinate and EditorID before mutating the block tree.
         EnsureNoDuplicateCellEditorId(patchMod, editorId);   // no silent duplicate on an into= re-run (cells have a stable EditorID)
-        EnsureFormIdFloor(patchMod);   // 0x800 floor, exactly like flat/nested create (HCBR-2026-06-09-04)
+        EnsureFormIdFloor(patchMod);
         EnsureAllocatable(patchMod);
         int bx = FloorDiv(gridX, 32), by = FloorDiv(gridY, 32), sx = FloorDiv(gridX, 8), sy = FloorDiv(gridY, 8);
         var block = worldspaceInPatch.SubCells.FirstOrDefault(b => b.BlockNumberX == bx && b.BlockNumberY == by);
@@ -1377,7 +1329,7 @@ public static class WriteEngine
     }
 
     /// <summary>CREATE an INTERIOR cell — files into the patch's top-level <see cref="SkyrimMod.Cells"/> group by the
-    /// cell's OWN FormID digits (block = id%10, subblock = (id/10)%10 — STEP-0 proven 590/590 vanilla). The FormKey is
+    /// cell's own FormID digits (block = id%10, subblock = (id/10)%10). The FormKey is
     /// allocated FIRST (the digits key off it), then the <see cref="CellBlock"/>/<see cref="CellSubBlock"/> are
     /// found-or-constructed. <c>IsInteriorCell</c> ON. Returns the new cell (settable, fed into the same
     /// <see cref="ApplyVerb"/> path).</summary>
@@ -1400,11 +1352,11 @@ public static class WriteEngine
         return cell;
     }
 
-    /// <summary>Refuse loud (Q3) if <paramref name="patchMod"/> ALREADY defines a cell with <paramref name="editorId"/>.
+    /// <summary>Refuse if <paramref name="patchMod"/> already defines a cell with <paramref name="editorId"/>.
     /// Coordinate-keyed cell create does NOT upsert (unlike flat <see cref="GenericUpsertNew"/>), so an into= re-run would
     /// otherwise silently APPEND a second cell at the same identity — and a cell DOES carry a stable EditorID (the flat
     /// nested-children carve-out's "no stable handle to de-dup on" rationale, WritePatchBuilder, does not transfer to
-    /// cells; PR #94 review). A no-op on a fresh patch (no prior cells). Within a single bulk_create, same-editorid specs
+    /// cells. A no-op on a fresh patch (no prior cells). Within a single bulk_create, same-editorid specs
     /// are already caught by the pre-flight's per-call editorid set; this closes the cross-call into= gap.</summary>
     static void EnsureNoDuplicateCellEditorId(SkyrimMod patchMod, string? editorId)
     {
@@ -1437,20 +1389,19 @@ public static class WriteEngine
         throw new InvalidOperationException("Could not locate GetOrAddAsOverride extension in Mutagen assemblies.");
     }
 
-    /// <summary>Port of the spike's WritePatch — already generic. Ties output filename to ModKey. The single-known-
-    /// master case (the standalone harness opens ONE source plugin); delegates to the multi-master overload with a
-    /// one-element set, so both paths share one BeginWrite incantation + filename check.</summary>
+    /// <summary>
+    /// Writes a new patch when only one source master is known. Delegates to the
+    /// multi-master overload so filename, master, and atomic-write rules cannot drift.
+    /// </summary>
     internal static void WritePatch(SkyrimMod patchMod, ISkyrimModGetter sourceMod, string outputPath)
         => WritePatch(patchMod, new[] { sourceMod }, outputPath);
 
     /// <summary>
-    /// Multi-master WritePatch — the MCP-wave capability the single-source standalone harness could not reach.
-    /// Hands the serializer the FULL set of known masters (the whole load order's overlays, via the resolver), so a
-    /// patch record that references forms across SEVERAL plugins serializes with every needed master in its header.
+    /// Writes a new patch with the supplied load-order overlays available for master resolution.
+    /// A patch that references forms across several plugins therefore serializes with every needed master in its header.
     /// Mutagen syncs the header master list to what the records ACTUALLY reference, so offering the whole order is
-    /// correct AND lean — only the referenced masters land (the write-proof's byte-identity-vs-native across phases
-    /// 3/4/6/7/9/11, all run with the full <c>allMasters</c> set, is the standing proof of this). A referenced master
-    /// absent from <paramref name="knownMasters"/> still fails loud (Q3) — never a silent wrong patch. This is what
+    /// correct and lean: only referenced masters land. A referenced master
+    /// absent from <paramref name="knownMasters"/> fails instead of producing an invalid patch. This is what
     /// makes a cross-master merge patch (e.g. a leveled list pulling entries from several mods) writable; the
     /// single-master overload above is the degenerate one-master case.
     /// </summary>
@@ -1468,10 +1419,10 @@ public static class WriteEngine
         // yet list the masters the new references need, so its master-sort throws MissingModException. WithLoadOrder
         // gives the real order to sort against; the master LIST stays lean — Mutagen derives it from the records'
         // actual FormLinks (only-referenced), the load order only resolves + orders them. A referenced master absent
-        // from the set still fails loud (Q3).
+        // from the set still fails explicitly.
         //
-        // BASELINE MASTERS (Aaron 2026-06-02): every Skyrim plugin MUST carry Skyrim.esm + Update.esm — exactly what the
-        // Creation Kit stamps on every plugin ("if ck stamps both then we should too"). A masterless plugin (e.g. a
+        // Every generated Skyrim plugin carries Skyrim.esm and Update.esm, matching
+        // Creation Kit output. A masterless plugin (for example, one containing only a
         // self-contained CREATED record references nothing, so the derived set is empty) is malformed by convention.
         // WithExtraIncludedMasters force-includes them ON TOP of the derived set: a no-op for any already referenced
         // (idempotent — no duplicate, bytes unchanged, so the existing byte-identity proofs are unaffected), and the fix
@@ -1480,7 +1431,7 @@ public static class WriteEngine
         // single-master test harness) from throwing on an unresolvable extra master. The master LIST stays otherwise lean.
         var ordered = knownMasters as ISkyrimModGetter[] ?? knownMasters.ToArray();
         var baseline = BaselineMasters.Where(bm => ordered.Any(km => km.ModKey == bm)).ToArray();
-        // FORMID FLOOR (HCBR-2026-06-09-04): Mutagen's default NextFormID handling re-derives the persisted
+        // Mutagen's default NextFormID handling re-derives the persisted
         // HEDR.NextObjectID by ITERATING originating records (max + 1, or 0 when there are none — formid-floor-probe
         // S2), so an override-only patch lands on disk with a 0 counter that a later extend rehydrates straight into
         // the allocator. NoNextFormIDProcessing makes the serializer persist OUR in-memory counter verbatim (probe S5),
@@ -1489,26 +1440,18 @@ public static class WriteEngine
         // so a freed ID is never re-allocated). Every product write funnels through here, so every houseCARL-written
         // plugin carries a conventional counter regardless of which tool created it.
         EnsureFormIdFloor(patchMod);
-        // ATOMIC WRITE (Q3): stage + commit. Serializing IN PLACE has two failure shapes once a patch lives in an
-        // MO2 mods folder: a crash mid-serialize leaves a truncated .esp (a torn original), and an external folder
-        // watcher (MO2 refreshing its plugin list) can open a half-written file. Staging into a sibling temp dir and
-        // committing via AtomicFile.Commit (File.Replace over an existing target — the Win32 atomic-replace primitive —
-        // or a rename onto a fresh one) means the target path only ever holds the OLD complete file or the NEW complete
-        // file, never a missing or partial one: true crash-ATOMIC replacement, not merely crash-TEAR safety. NOTE: this
-        // does NOT relax the PR #24 self-lock guard
-        // (ReleaseOverlay + AllMastersExcept before the serialize): a swap onto a still-mapped target fails exactly
-        // like an in-place write would, so callers must still release every handle they hold on the target first.
-        // Staging buys crash-tear safety and shrinks the external-watcher window; the handle discipline stays
-        // load-bearing.
-        // SERIALIZE-BOUNDARY NULL-ARM CATCH (HCBR-2026-06-15-01 PR-C, PART B): Mutagen's binary writer dereferences a
+        // Serialize beside the target and atomically replace it so the destination
+        // always names either the prior complete file or the new complete file.
+        // Callers must still release their own overlays before replacement.
+        //
+        // Mutagen's binary writer dereferences a
         // record's modeled sub-fields as it writes; a COMPOSED record that left a REQUIRED polymorphic sub-field unset
         // (the canonical case: a Condition composed without its Data arm) is null at that deref → a bare
         // NullReferenceException carrying NO field name. Pre-flight can't reject it: the corpus DOES now carry faithful
         // polymorphic nullability (S4 Track D), but that flag is NOT a "required arm at serialize" signal — Condition.Data
-        // reads Nullable=false and throws when null, yet NpcConfiguration.Level ALSO reads Nullable=false and serializes
+        // reads Nullable=false and throws when null, yet NpcConfiguration.Level also reads Nullable=false and serializes
         // fine when null (nullarm-guard B2). A pre-flight gate on the flag would over-reject a legitimately-absent field
-        // like Level, or need a hand-curated required-arm list (cornerstone §3) — so there is still no by-construction
-        // required/optional signal to gate on. The serialize boundary is the honest place to fail it (Q3). WritePatchStaged
+        // like Level, or need a hand-curated required-arm list. The serialize boundary is the reliable place to fail it. WritePatchStaged
         // already discards its temp on any throw, so nothing is on disk; re-stamp ONLY a null-arm NRE — whether BARE (the
         // synchronous case, e.g. Condition.Data) OR wrapped in the parallel writer's nested AggregateException (a null
         // required sub-field can take either serialize path) — as a NAMED refusal via RootNullArm; other serialize errors
@@ -1523,7 +1466,7 @@ public static class WriteEngine
     /// A re-stamped wrapper (e.g. <see cref="NullArmSerializeException"/> over the raw writer NRE) otherwise hides the
     /// discriminating inner signal at the user surface — so the serialize-failure render sites use this to keep the
     /// loud NAMED outer message AND the inner that distinguishes a genuine engine NRE from a composed-null-arm one
-    /// (the codebase's InnerException-unwrap idiom). Q3 — no opaque, no signal-stripping error.</summary>
+    /// without hiding the underlying diagnostic.</summary>
     internal static string Describe(Exception ex)
         => ex.InnerException is { } inner
             ? $"{ex.GetType().Name}: {ex.Message} [inner: {inner.GetType().Name}: {inner.Message}]"
@@ -1534,14 +1477,14 @@ public static class WriteEngine
     /// sub-field (canonically a COMPOSED record missing a required polymorphic arm — a Condition without its Data arm)
     /// is dereferenced by Mutagen's writer as a bare NRE. But that writer runs record writes through a PARALLEL path,
     /// so the SAME NRE can surface WRAPPED — one or more nested <see cref="AggregateException"/>s around a Mutagen
-    /// <c>SubrecordException</c> (HCBR-2026-07-04 captured a doubly-nested one). A bare-<see cref="NullReferenceException"/>
+    /// <c>SubrecordException</c>. A bare-<see cref="NullReferenceException"/>
     /// catch misses the wrapped shape and lets the opaque AggregateException render raw instead of as the loud NAMED
     /// refusal — so, regardless of which serialize path a record takes, this normalizes both. It flattens the aggregate
     /// nesting (<see cref="AggregateException.Flatten"/>) and, for each leaf, walks its
     /// <see cref="Exception.InnerException"/> chain to the ROOT cause — re-stamping ONLY when EVERY leaf's root is a
     /// <see cref="NullReferenceException"/> (the whole failure IS the null-arm case), returning the first such NRE as the
     /// preserved inner. Any leaf whose root is NOT an NRE returns null, so that genuine other error keeps its own type +
-    /// message (Q3 — never mask an unrelated throw). (The discovery case — a single-gender GenderedItem formlink half —
+    /// message rather than masking an unrelated throw. (The single-gender GenderedItem FormLink case
     /// is now prevented at the root by <see cref="EmptyFormLinkOf"/>, so this stays as the general safety net for the
     /// composition null-arm that can still occur.) Unit-covered by nullarm-guard R1–R5.</summary>
     internal static NullReferenceException? RootNullArm(Exception ex)
@@ -1567,9 +1510,8 @@ public static class WriteEngine
     }
 
     /// <summary>Stage 1 of the atomic write: serialize the patch into a temp SUBDIRECTORY beside the target —
-    /// same filename (Mutagen's writer ties filename to ModKey), same parent directory (guarantees same NTFS
-    /// volume so the stage-2 rename is atomic). Does not open the target file itself. Cleans its temp on serialize
-    /// failure (Q3 — a failed stage leaves no residue).</summary>
+    /// same filename (Mutagen's writer ties filename to ModKey), same parent directory (keeps the stage and target on
+    /// the same filesystem for atomic replacement). Does not open the target file itself. Cleans its temp on failure.</summary>
     static string WritePatchStaged(SkyrimMod patchMod, ISkyrimModGetter[] ordered, ModKey[] baseline, string outputPath)
     {
         var tmpDir = Path.Combine(Path.GetDirectoryName(outputPath)!, ".housecarl-tmp");
@@ -1594,8 +1536,8 @@ public static class WriteEngine
 
     /// <summary>Stage 2 of the atomic write: swap the staged temp over the target via AtomicFile.Commit — crash-atomic
     /// File.Replace when the target exists, a rename when it does not (stage 1 guaranteed same-volume placement).
-    /// Requires the PR #24 handle discipline to already hold (no handle of ours on the target). Temp is removed
-    /// afterward; a cleanup failure never masks the result (Q3).</summary>
+    /// Requires callers to have released houseCARL's handles on the target. Temp is removed afterward; a cleanup
+    /// failure never masks the write result.</summary>
     static void CommitStagedPatch(string tmpPath, string outputPath)
     {
         try { AtomicFile.Commit(tmpPath, outputPath); }
@@ -1620,14 +1562,12 @@ public static class WriteEngine
     /// no Skyrim.esm/Update.esm baseline force-include (<c>WritePatch</c>'s
     /// <c>WithExtraIncludedMasters</c> would ADD masters the author never declared, reindexing the file) and no
     /// <see cref="EnsureFormIdFloor"/> (<c>NoNextFormIDProcessing</c> persists the author's <c>HEDR.NextObjectID</c>
-    /// verbatim). This is EXACTLY the probe's incantation (<c>RoundTripProbe</c>: <c>.WithLoadOrder(&lt;own declared
-    /// masters&gt;).NoNextFormIDProcessing().Write()</c>) — the surface against which model C ("verify the touched
-    /// records, trust Mutagen for the rest") was measured (~80% benign reorder, ZERO record drops), so routing in-place
-    /// through it (not WritePatch) is what makes that result actually transfer. <paramref name="ownMasters"/> is the
+    /// verbatim). The round-trip guard exercises the same
+    /// <c>.WithLoadOrder(&lt;own declared masters&gt;).NoNextFormIDProcessing().Write()</c> call. <paramref name="ownMasters"/> is the
     /// target's OWN declared masters, resolved to overlays in load order (Mutagen orders + lean-derives the list exactly
     /// as it did for the probe). Stage + crash-atomic swap (<see cref="AtomicFile.Commit"/>) is shared with the patch
-    /// lane, so the original only ever holds the OLD or the NEW complete file. The caller MUST already hold the PR #24
-    /// self-lock discipline (every overlay it holds on the target released) — here on a FOREIGN target.</summary>
+    /// lane, so the original only ever holds the old or the new complete file. The caller must have released every
+    /// houseCARL overlay on the target before calling this method.</summary>
     public static void WriteInPlace(SkyrimMod targetMod, IReadOnlyList<ISkyrimModGetter> ownMasters, string outputPath)
     {
         var expected = targetMod.ModKey.FileName.String;
@@ -1649,8 +1589,8 @@ public static class WriteEngine
 
     /// <summary>Stage 1 of the in-place write — the probe-faithful re-serialize: own declared masters as the load order,
     /// the counter persisted verbatim (<c>NoNextFormIDProcessing</c>, NO floor), NO baseline force-include. Stages into
-    /// the <c>.housecarl-tmp</c> sibling of the target (same parent ⇒ same NTFS volume ⇒ the stage-2 swap is atomic),
-    /// and cleans its temp on a serialize failure (Q3 — a failed stage leaves no residue, the original untouched).</summary>
+    /// the <c>.housecarl-tmp</c> sibling of the target so the stage and target share a filesystem,
+    /// and cleans its temp on a serialization failure.</summary>
     static string WriteInPlaceStaged(SkyrimMod targetMod, ISkyrimModGetter[] ordered, string outputPath)
     {
         var tmpDir = Path.Combine(Path.GetDirectoryName(outputPath)!, ".housecarl-tmp");
@@ -1673,7 +1613,7 @@ public static class WriteEngine
     }
 
     /// <summary>The base-game masters EVERY Skyrim plugin must carry — Skyrim.esm + Update.esm, exactly what the Creation
-    /// Kit stamps on every plugin (Aaron 2026-06-02: "if ck stamps both then we should too"). Force-included on every
+    /// Kit stamps on every plugin. Force-included on every
     /// <see cref="WritePatch(SkyrimMod, IReadOnlyList{ISkyrimModGetter},string)"/> via WithExtraIncludedMasters so even a
     /// self-contained created record yields a valid, conventionally-mastered plugin. Both ship with SE → always present in
     /// the order, so this never fails; the load order sorts them (Skyrim.esm before Update.esm). Proven by master-probe.</summary>

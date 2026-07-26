@@ -257,17 +257,18 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: completed the public `WriteEngine` documentation
-  slice. The engine boundary, diagnostic harnesses, coercion audit, Mutagen API
-  discovery, and write-specific exception data and constructors now have
-  stable contracts. Broken and ambiguous XML references were corrected without
-  changing write behavior.
+- Last completed checkpoint: completed the `WriteEngine` lifecycle
+  documentation slice. Flat and nested overrides, abstract and concrete
+  creation, idempotent upsert, nested and coordinate-keyed placement, FormID
+  allocation, master derivation, staged serialization, null-arm handling, and
+  in-place re-emission now have stable local contracts without historical
+  milestone or Windows filesystem assumptions in their explanatory prose.
 - Verification performed: the .NET 9 Linux solution and forced strict
   XML-documentation core build succeed with no warning from `WriteEngine`.
-  Mutagen API discovery, the 19-sample coercion self-test, the 7,411-leaf
-  coercion audit, condition-arm expansion, null-arm serialization, and atomic
-  replacement guards pass. Full `ci-all` is 111/111 on Linux after the final
-  edit, and `git diff --check` passes.
+  Header-only creation, write locking, guarded in-place editing, FormID floor,
+  upsert, nested creation, coordinate cells, null-arm serialization, and
+  atomic replacement guards pass. Full `ci-all` is 111/111 on Linux after the
+  final edit, and `git diff --check` passes.
 - Files/components changed: `WriteEngine`, the tracked roadmap, and the
   user-facing roadmap copy.
 - Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
@@ -310,11 +311,11 @@ manual release gate.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
-- Exact next action: continue `WriteEngine` through its generic override,
-  creation, nested placement, FormID allocation, master derivation, staged
-  serialization, and in-place re-emission helpers. Replace dated incident prose
-  with concise local contracts, then run focused lifecycle, creation, atomic,
-  strict XML, and full CI guards.
+- Exact next action: complete `WriteEngine` through path navigation, verbs,
+  collection mutation, composition, polymorphic and gendered arms, FormLink
+  modes, coercion, and reflection utilities. Replace dated incident prose with
+  concise local contracts, then run the focused write/corpus family, strict
+  XML, and full CI.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -347,8 +348,8 @@ manual release gate.
   implementation slice; `ac3b1be` completes the removal-and-forwarding slice.
   `5a1fbb2` completes the header-only creation, compaction, and merge-build
   slice; `465436b` completes `WritePatchBuilder`; `d16d990` completes
-  `CorpusRulebook`; `e61882b` completes `RemapEngine`. The public `WriteEngine`
-  checkpoint is pending commit.
+  `CorpusRulebook`; `e61882b` completes `RemapEngine`; `52b66cf` completes the
+  public `WriteEngine` slice. The lifecycle slice is pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
