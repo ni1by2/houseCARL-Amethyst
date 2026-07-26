@@ -203,7 +203,7 @@ upgrade/uninstall preserve user configuration.
 ### Session 7 — CI, documentation, and v1 release candidate
 
 - [x] Move the required workflow definition to Ubuntu.
-- [ ] Confirm the new Ubuntu workflow on GitHub and run all CI-safe probes.
+- [x] Confirm the new Ubuntu workflow on GitHub and run all CI-safe probes.
 - [x] Add installer-lifecycle and end-to-end synthetic Amethyst tests.
 - [x] Add reproducible package validation and leak scanning.
 - [ ] Complete installation, workflow, safety and troubleshooting docs.
@@ -256,40 +256,34 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 6, diagnosing the parallel MSBuild
-  project-reference failure before finalizing Ubuntu CI.
-- Last completed checkpoint: the generator contains no MO2 terminology,
-  `ModOrganizer.ini` fixture banners, developer-machine paths, or implicit
-  Windows game roots. Exploratory real-data probes use the documented
-  `HOUSECARL_PROBE_DATA_DIR`, `HOUSECARL_PROBE_MODS_DIR`,
-  `HOUSECARL_PAPYRUS_COMPILER`, and `HOUSECARL_NIF_SMOKE` inputs. Synthetic
-  probes remain self-contained and manual load-order probes consume a real
-  schema-v1 Amethyst manifest.
-- Verification performed: the strict four-project documentation build passes
-  with zero warnings and zero errors. Full Linux `ci-all` passes 110/110. The
-  separately cold `freshness-capture-guard` passes native profile switching,
-  restored/backdated profile files, concurrent status reads, single-snapshot
-  writes, and deferred refresh during writes.
-- Files/components changed: generator fixture terminology, real-data probe
-  inputs, native synthetic-fixture adapter, manual Amethyst harness arguments,
-  profile-switch guard, removal of the legacy parser and obsolete manager-file
-  fixture writes, plus the earlier MCP public-surface documentation.
-- Decisions made: machine-specific defaults are configuration errors or
-  existence-gated skips, never repository fallbacks. Deliberate drive-path
-  strings remain only where a path parser or traversal guard must reject them.
-  Historical changelog entries remain historical.
-- Known failures or residual risks: a parallel MSBuild invocation can fail
-  silently while evaluating shared project references, whereas `-m:1`
-  succeeds; this needs a focused build-graph diagnosis before CI is changed.
-  The Ubuntu workflow definition has not yet been observed green on GitHub. A
-  disposable real
-  Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
-  External PapyrusCompiler and BSArch execution remains post-v1. NuGet
-  vulnerability metadata remains unreachable in the restricted environment.
-- Exact next action: reproduce the parallel MSBuild project-reference failure
-  under diagnostic logging, identify whether the project graph or local build
-  node reuse is responsible, and either fix the graph or record repeatable
-  evidence that the failure is environmental before changing Ubuntu CI.
+- Active milestone: Session 7 documentation and real-profile release gates.
+- Last completed checkpoint: the Ubuntu workflow is enabled and green on
+  GitHub. Its first runs exposed two deterministic case-collision failures in
+  the loose-asset resolver. Linux may contain both `meshes` and `Meshes`; the
+  resolver now searches every case-equivalent branch instead of trusting host
+  enumeration order.
+- Verification performed: .NET SDK 9.0.316 builds the four-project solution
+  with zero warnings and zero errors. Local `ci-all` passes 110/110, both
+  formerly failing probes pass in the matching SDK container, and the separate
+  cold freshness guard passes all five arms. Hosted run
+  [30219985950](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/30219985950)
+  passes build, 110/110 probes, cold freshness, self-contained release
+  packaging, checksum creation, architecture inspection, and `.exe` exclusion.
+- Files/components changed: `BethesdaPath` case-equivalent host resolution,
+  explicit workflow dispatch support, hosted-failure diagnostics, and the
+  generator portability boundary recorded in the preceding checkpoint.
+- Decisions made: Linux case-colliding directories represent one Bethesda
+  namespace, so resolution must backtrack across equivalent branches. The
+  earlier parallel MSBuild worker exit occurs only inside the restricted Codex
+  filesystem sandbox; the untouched graph builds in parallel outside it and
+  on GitHub, so no project-graph workaround is warranted.
+- Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
+  profile remains the Session 7 manual release gate. Installation/workflow,
+  troubleshooting, v1 checklist, and rollback documentation still require
+  final review. External PapyrusCompiler and BSArch execution remains post-v1.
+- Exact next action: finish the stale Windows/MO2 product-surface audit, then
+  complete the user documentation and v1 release/rollback checklist before
+  requesting the real-profile hardlink validation.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -337,6 +331,9 @@ manual release gate.
   `8d3b84f` removes the legacy fixture parser and moves manual proofs to real
   Amethyst manifests; `c6d6573` records the native-fixture migration;
   `916dab4` removes stale generator terminology and machine-specific defaults.
+  `bd2ad7` enables explicit hosted workflow dispatch; `3face07` adds
+  failure-only hosted asset diagnostics; `5468aa9` fixes Linux
+  case-colliding path resolution and is green in hosted run `30219985950`.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
