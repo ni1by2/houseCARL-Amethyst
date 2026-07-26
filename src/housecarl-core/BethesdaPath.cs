@@ -110,32 +110,54 @@ public static class BethesdaPath
     /// </remarks>
     public static bool TryResolveExisting(string root, string path, out string resolved)
     {
-        var current = root;
-        foreach (var segment in Normalize(path).Split('\\'))
+        var canonical = Normalize(path);
+        var segments = canonical.Split('\\');
+        if (TryResolve(root, segments, 0, out resolved)) return true;
+        resolved = Under(root, canonical);
+        return false;
+    }
+
+    /// <summary>Searches case-equivalent Linux entries until one complete Bethesda path resolves.</summary>
+    /// <param name="current">Actual-cased native directory for the current search level.</param>
+    /// <param name="segments">Validated Bethesda path segments.</param>
+    /// <param name="index">Segment currently being matched.</param>
+    /// <param name="resolved">Complete actual-cased path on success; otherwise empty.</param>
+    /// <returns>True when this branch resolves every remaining segment.</returns>
+    /// <remarks>
+    /// Linux permits sibling names such as <c>meshes</c> and <c>Meshes</c>, although Skyrim treats them as
+    /// one logical directory. Trying every case-equivalent branch avoids accepting whichever entry the host
+    /// filesystem happens to enumerate first.
+    /// </remarks>
+    static bool TryResolve(string current, string[] segments, int index, out string resolved)
+    {
+        string[] matches;
+        try
         {
-            string? match;
-            try
-            {
-                match = Directory.EnumerateFileSystemEntries(current)
-                    .FirstOrDefault(entry =>
-                        string.Equals(Path.GetFileName(entry), segment, StringComparison.OrdinalIgnoreCase));
-            }
-            catch
-            {
-                resolved = Under(root, path);
-                return false;
-            }
-
-            if (match is null)
-            {
-                resolved = Under(root, path);
-                return false;
-            }
-            current = match;
+            matches = Directory.EnumerateFileSystemEntries(current)
+                .Where(entry => string.Equals(
+                    Path.GetFileName(entry),
+                    segments[index],
+                    StringComparison.OrdinalIgnoreCase))
+                .OrderByDescending(entry => string.Equals(
+                    Path.GetFileName(entry),
+                    segments[index],
+                    StringComparison.Ordinal))
+                .ToArray();
         }
+        catch { resolved = ""; return false; }
 
-        resolved = current;
-        return true;
+        foreach (var match in matches)
+        {
+            if (index == segments.Length - 1)
+            {
+                resolved = match;
+                return true;
+            }
+            if (Directory.Exists(match) && TryResolve(match, segments, index + 1, out resolved))
+                return true;
+        }
+        resolved = "";
+        return false;
     }
 
     /// <summary>Creates the consistent caller-facing error used by every Bethesda-path guard.</summary>
