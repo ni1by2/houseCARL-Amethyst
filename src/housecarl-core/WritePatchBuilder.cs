@@ -750,31 +750,16 @@ public static class WritePatchBuilder
         return resolved.ToArray();
     }
 
-    /// <summary>
-    /// Remove WHOLE records the patch ITSELF carries — literal drop-from-plugin (<c>mod.Remove(FormKey)</c>), NOT
-    /// flag-as-deleted (Aaron-locked 2026-06-02). The companion to <see cref="Apply"/>: where Apply overrides a
-    /// load-order winner INTO the patch, this drops a record OUT of it — a created record, or an override the patch
-    /// accumulated via <c>into=</c>. A master's own record can't be literally removed (it lives in the master); only
-    /// the patch's override of it is dropped, so the load-order winner reverts by absence.
-    ///
-    /// <para>ONE call shape serves flat AND nested groups: Mutagen's <c>Remove(FormKey, Type, throwIfUnknown)</c> reaches
-    /// every group (incl. the nested Cell/Placed*/INFO/Navmesh/Landscape families) — no flat-vs-nested fork, no
-    /// parent-chain reconstruction (proven by the remove-record-probe: the bare <c>Remove(FormKey)</c> is [Obsolete],
-    /// and the typed overload was measured to remove a nested Cell too, Q7). Clean-masters rides along for free: the
-    /// serialize re-derives the header from the SURVIVING records' links, so a master orphaned by the removal drops
-    /// automatically (probe Q5).</para>
-    ///
-    /// <para>PRESENT-CHECK FIRST (Q3 — no silent non-removal): <c>Remove</c> is a silent <c>void</c> no-op on a
-    /// key the patch doesn't carry, so every target is verified carried before any removal, and the WHOLE call is refused
-    /// (nothing written) if ANY isn't — the all-or-nothing contract <see cref="Apply"/> uses. The patch must already
-    /// exist (removal targets a patch houseCARL created); the caller resolves + ownership-gates the path.</para>
-    /// </summary>
+    /// <summary>Removes complete records carried by an existing houseCARL patch.</summary>
+    /// <remarks>
+    /// Every target is confirmed present before mutation because Mutagen removal can silently no-op. Typed removal
+    /// handles flat and nested records, and serialization derives a lean master list from the surviving content.
+    /// </remarks>
     public static RemovalOutcome RemoveRecords(LoadOrderResolver resolver, IReadOnlyList<FormKey> targets, string outPath)
     {
         if (targets.Count == 0) return RemovalOutcome.Fail("no records to remove supplied.");
 
-        // Per-call overlay session (Option B): the known-master set for the re-serialize is opened through it and
-        // disposed when the method returns — no handle held at rest.
+        // Scope all master overlays to this call.
         using var session = resolver.OpenSession();
 
         var fileName = Path.GetFileName(outPath);
@@ -785,10 +770,7 @@ public static class WritePatchBuilder
         try { patchMod = SkyrimMod.CreateFromBinary(outPath, SkyrimRelease.SkyrimSE); }
         catch (Exception ex) { return RemovalOutcome.Fail($"cannot open patch to remove from ({fileName}): {ex.GetType().Name}: {ex.Message}"); }
 
-        // Present-check: index what the patch ACTUALLY carries (one enumeration — walks flat + nested), so a target the
-        // patch doesn't define is refused loud rather than silently no-op'd by Remove. Captures type+editorid for the
-        // report AND the removal-routing type: the record's FLAT GROUP's T, not the concrete runtime type — a subclass
-        // of an abstract group's T (GlobalShort) makes Mutagen's Remove silently no-op (HCBR-2026-07-08-01 F3).
+        // Index carried records once. Removal uses each record's group type because a concrete subtype can no-op.
         var carried = new Dictionary<FormKey, (string type, string? edid, Type runtime)>();
         foreach (var r in patchMod.EnumerateMajorRecords())
             carried[r.FormKey] = (RecordNaming.StripOverlay(r.GetType().Name), r.EditorID, WriteEngine.RemovalTypeFor(r));
@@ -814,12 +796,7 @@ public static class WritePatchBuilder
                 $"refused — {problems.Count} of {targets.Count} target(s) not carried by the patch; NOTHING removed:\n  - "
                 + string.Join("\n  - ", problems));
 
-        // Literal drop-from-group (NOT flag-as-deleted). The typed overload Remove(FormKey, Type, throwIfUnknown) is
-        // Mutagen's blessed path (the bare Remove(FormKey) is [Obsolete] — "use as a last resort"), and the
-        // remove-record-probe (Q7) proved it reaches NESTED records (Cell/Placed*/INFO/Navmesh/Landscape) too, not just
-        // flat groups — so ONE call shape serves every record type by construction. The runtime type captured in the
-        // present-check routes it straight to the right group; throwIfUnknown:true keeps an unrecognized type loud (Q3),
-        // never a silent no-op. A throw here AFTER the present-check passed is a real engine inconsistency — surfaced.
+        // Remove the complete record from its typed group rather than setting the record's deleted flag.
         try
         {
             foreach (var rr in toRemove)
@@ -834,18 +811,12 @@ public static class WritePatchBuilder
         if (RemoveSurvivors(patchMod, toRemove) is { } survived)
             return RemovalOutcome.Fail(survived + $" '{fileName}' is UNTOUCHED.");
 
-        // Serialize ONCE with the full known-master set; Mutagen keeps the header lean (only-referenced), so a master
-        // orphaned by the removal drops here automatically. A referenced master genuinely absent still fails loud (Q3).
-        // Two-part active-patch self-lock guard (Heisen 2026-06-08 + PR #24 review): no mapped handle on the file we're
-        // about to write may survive to the serialize, from ANY source. ReleaseOverlay closes one we already hold (Apply's
-        // Phase-1 winner fetch, when re-editing the patch's OWN override — there the winner IS the target); AllMastersExcept
-        // keeps the target out of the master set. (writelock-probe / writelock-apply-probe; both halves guarded.)
+        // Release any mapping on the patch, exclude it from the master context, and serialize surviving content once.
         session.ReleaseOverlay(patchMod.ModKey.FileName.String);
         try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath); }
         catch (Exception ex) { return RemovalOutcome.Fail($"writing the patch after removal failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}"); }
 
-        // Re-open: report the (possibly shrunk) master header + how many records remain (0 ⇒ the patch is now an inert
-        // header-only plugin the user can disable/delete). Dispose the overlay so the file isn't left mmap'd for a later call.
+        // Reopen the output to report its derived masters and surviving record count, then release the mapping.
         IReadOnlyList<string> masters = Array.Empty<string>();
         int remaining = 0; long bytes = 0;
         ISkyrimModGetter? back = null;
@@ -862,12 +833,8 @@ public static class WritePatchBuilder
         return new RemovalOutcome(true, null, outPath, toRemove, masters, remaining, bytes);
     }
 
-    /// <summary>IN-MEMORY absence verify run BEFORE any serialize, shared by both remove lanes: Mutagen's typed
-    /// <c>Remove</c> can no-op WITHOUT throwing (<c>throwIfUnknown:true</c> notwithstanding — HCBR-2026-07-08-01 F3
-    /// proved it for a concrete subclass of an abstract group's T), so trusting the void return and serializing anyway
-    /// rewrites the whole file to no effect and only the post-write verify catches it. Checking the mutable mod first
-    /// keeps a future no-op loud with the file UNTOUCHED (Q3). Null ⇒ all targets gone; else the refusal text (the
-    /// caller appends its lane's file-untouched suffix).</summary>
+    /// <summary>Confirms in memory that every requested record was removed before any serialization.</summary>
+    /// <returns>Null when all targets are absent; otherwise a named no-op failure.</returns>
     static string? RemoveSurvivors(SkyrimMod mod, IReadOnlyList<RemovedRecord> toRemove)
     {
         var mustBeGone = toRemove.Select(rr => rr.Target).ToHashSet();
@@ -879,43 +846,22 @@ public static class WritePatchBuilder
                "no-op'd without throwing; a real inconsistency surfaced BEFORE any rewrite, not swallowed (Q3).";
     }
 
-    /// <summary>
-    /// Remove WHOLE records IN PLACE — the in-place write lane's Wave-2 sibling of <see cref="RemoveRecords"/> and the
-    /// remove counterpart of <see cref="ApplyInPlace"/>. Drops a record the TARGET's own file carries (one it DEFINES, or
-    /// an override it HOLDS) back over the user's ORIGINAL file, instead of dropping it from a houseCARL patch. REUSES
-    /// every in-place mechanic <see cref="ApplyInPlace"/> proved: a per-call overlay session, the ContainsPlugin/
-    /// ExcludedPlugins refusal (never re-serialize a plugin Mutagen can't fully parse — that would risk dropping the
-    /// record it couldn't read, Q3), an EAGER CreateFromBinary of the SINGLE target (NEVER the order — the legacy
-    /// 12–14 GB RAM trap), <see cref="LoadOrderResolver.OverlaySession.ReleaseOverlay"/> before the swap (the self-lock
-    /// guard, here on a FOREIGN target), own-declared-masters re-emit via <see cref="WriteEngine.WriteInPlace"/> (NOT
-    /// WritePatch — no Skyrim.esm/Update.esm baseline force-include, the author's HEDR.NextObjectID preserved), and the
-    /// crash-atomic swap.
-    ///
-    /// <para>REMOVAL SEMANTICS are <see cref="RemoveRecords"/>'s, unchanged: PRESENT-CHECK FIRST against what the TARGET
-    /// carries (Q3 — a key the file doesn't carry is REFUSED, the whole call, nothing written; <c>Remove</c> is a silent
-    /// no-op otherwise), then the typed <c>Remove(FormKey, Type, throwIfUnknown)</c> that reaches every group (flat AND
-    /// nested). MASTER-PRUNE rides along for free exactly as the patch lane gets it: <see cref="WriteEngine.WriteInPlace"/>
-    /// hands Mutagen the target's own masters as the resolution context and lean-derives the emitted header from the
-    /// SURVIVING records' links, so a master the removal orphaned drops from the header automatically. The model-C
-    /// touched-record verify is applied to a removal as ABSENCE — every removed FormKey is confirmed GONE on the
-    /// re-opened on-disk file (confirm what you DROPPED actually went; Mutagen is trusted for the untouched rest).</para>
-    ///
-    /// <para>The caller (the service in-place branch) has already resolved <paramref name="targetPath"/> to the real
-    /// active-plugin path, run the consent handshake, and checked the writable parent — exactly as it does for
-    /// <see cref="ApplyInPlace"/>. Returns <see cref="RemovalOutcome.InPlace"/>=true on success.</para>
-    /// </summary>
+    /// <summary>Removes complete records from an existing staging plugin and atomically replaces that plugin.</summary>
+    /// <remarks>
+    /// The target must be active and fully readable. Every record is confirmed present, removed by typed group, and
+    /// confirmed absent both before serialization and after reopening the replacement. The service owns consent and
+    /// Amethyst redeployment confirmation.
+    /// </remarks>
     public static RemovalOutcome RemoveRecordsInPlace(
         LoadOrderResolver resolver, IReadOnlyList<FormKey> targets, string targetPath, string targetName)
     {
         if (targets.Count == 0) return RemovalOutcome.Fail("no records to remove supplied.");
 
-        // Per-call overlay session (Option B), same as ApplyInPlace: every read (the master set for the re-serialize) is
-        // opened THROUGH it and disposed when the method returns — no handle held at rest.
+        // Scope all master overlays to this call.
         using var session = resolver.OpenSession();
         var fileName = Path.GetFileName(targetPath);
 
-        // --- Phase 1: the target must be an active, FULLY-PARSEABLE plugin (the ApplyInPlace guard — never re-serialize a
-        //     plugin Mutagen excluded, which would risk dropping the record it couldn't read on the rewrite, Q3). ---
+        // Refuse inactive or excluded targets before opening a mutable copy.
         var view = resolver.Capture();
         if (!view.ContainsPlugin(targetName))
             return RemovalOutcome.Fail($"in-place target '{targetName}' is not an active plugin in the load order.{view.AbsenceClause(targetName)}");
@@ -924,9 +870,7 @@ public static class WritePatchBuilder
                 $"cannot remove from '{targetName}' in place: it was EXCLUDED from this session ({excluded}) — houseCARL won't " +
                 "re-serialize a plugin it can't fully parse (that would risk dropping a record it couldn't read, Q3). The file is UNTOUCHED.");
 
-        // --- Phase 2: open the TARGET mutably. EAGER, the SINGLE plugin only — NEVER the load order. CreateFromBinary is
-        //     the same call ApplyInPlace uses; an unparseable plugin throws here and is REFUSED, never silently
-        //     re-emitted minus the record Mutagen couldn't read (Q3). ---
+        // Load only the target as a mutable plugin and refuse incomplete parses.
         if (!File.Exists(targetPath))
             return RemovalOutcome.Fail($"in-place target '{fileName}' not found on disk at {targetPath} — the file is untouched.");
         SkyrimMod targetMod;
@@ -936,11 +880,7 @@ public static class WritePatchBuilder
         if (!string.Equals(targetMod.ModKey.FileName.String, fileName, StringComparison.OrdinalIgnoreCase))
             return RemovalOutcome.Fail($"in-place ModKey '{targetMod.ModKey.FileName}' must match the target filename '{fileName}'.");
 
-        // --- Phase 3: present-check against what the TARGET carries (RemoveRecords' contract, unchanged). One enumeration
-        //     (flat + nested) captures type+editorid for the report AND the removal-routing type — the record's FLAT
-        //     GROUP's T, not the concrete runtime type: a subclass of an abstract group's T (GlobalShort) makes Mutagen's
-        //     Remove silently no-op (HCBR-2026-07-08-01 F3). A key the file doesn't define/override is REFUSED loud —
-        //     in-place removes only what the file OWNS. ---
+        // Index the target's carried records once and reject any target it does not own.
         var carried = new Dictionary<FormKey, (string type, string? edid, Type runtime)>();
         foreach (var r in targetMod.EnumerateMajorRecords())
             carried[r.FormKey] = (RecordNaming.StripOverlay(r.GetType().Name), r.EditorID, WriteEngine.RemovalTypeFor(r));
@@ -966,9 +906,7 @@ public static class WritePatchBuilder
                 $"refused — {problems.Count} of {targets.Count} target(s) not carried by '{fileName}'; NOTHING removed:\n  - "
                 + string.Join("\n  - ", problems));
 
-        // --- Phase 4: literal drop-from-group (NOT flag-as-deleted), the typed overload RemoveRecords proved reaches
-        //     nested groups (Cell/Placed*/INFO/Navmesh/Landscape) too. throwIfUnknown:true keeps an unrecognized type
-        //     loud (Q3). A throw AFTER the present-check passed is a real engine inconsistency — surfaced, not swallowed. ---
+        // Remove each complete record from its typed group and verify the in-memory absence.
         try
         {
             foreach (var rr in toRemove)
@@ -983,11 +921,7 @@ public static class WritePatchBuilder
         if (RemoveSurvivors(targetMod, toRemove) is { } survived)
             return RemovalOutcome.Fail(survived + $" Your original '{fileName}' is UNTOUCHED.");
 
-        // --- Phase 5: re-serialize the WHOLE target back over itself (model C — WriteInPlace, NOT WritePatch). Release
-        //     the target overlay first (the self-lock guard on a FOREIGN target: ReleaseOverlay disposes every session
-        //     overlay on the target — none here, since the present-check read targetMod directly, not via an overlay, but
-        //     the discipline is kept identical to ApplyInPlace). Resolve the target's OWN declared masters; Mutagen orders
-        //     against them and lean-derives the emitted header from the SURVIVING records, so an orphaned master drops. ---
+        // Release target mappings and atomically reserialize against its declared masters.
         session.ReleaseOverlay(fileName);
         var masterOverlays = new List<IDisposable>();
         try
@@ -1000,9 +934,7 @@ public static class WritePatchBuilder
         }
         finally { foreach (var d in masterOverlays) { try { d.Dispose(); } catch { /* best-effort; never mask the write result */ } } }
 
-        // --- Phase 6: re-open the now-rewritten file; report its (possibly shrunk) master header + how many records
-        //     remain, and VERIFY each removed FormKey is ABSENT (the model-C touched-record verify applied to a removal
-        //     as absence). One enumeration counts survivors AND catches any removed key that wrongly survived. ---
+        // Reopen the replacement, report surviving records and masters, and confirm every removed key is absent.
         IReadOnlyList<string> masters = Array.Empty<string>();
         int remaining = 0; long bytes = 0;
         ISkyrimModGetter? back = null;
@@ -1029,10 +961,8 @@ public static class WritePatchBuilder
         return new RemovalOutcome(true, null, targetPath, toRemove, masters, remaining, bytes) { InPlace = true };
     }
 
-    /// <summary>Phase-1 source resolution SHARED by <see cref="ForwardRecords"/> and <see cref="ForwardRecordsInPlace"/>:
-    /// resolve each spec's body from its NAMED plugin (NOT the load-order winner) off ONE captured view, collecting ALL
-    /// problems (Q3 — refuse the whole call if any; <paramref name="refusal"/> non-null ⇒ the caller fails with it).
-    /// <paramref name="selfIsTarget"/> only shapes the self-forward message (output patch vs in-place target).</summary>
+    /// <summary>Resolves complete record bodies from each explicitly named source plugin using one captured view.</summary>
+    /// <returns>Resolved sources; <paramref name="refusal"/> names all failures when any source is unusable.</returns>
     static List<(ForwardSpec spec, IMajorRecordGetter body, string priorWinner, bool wasWinner)> ResolveForwardSources(
         LoadOrderResolver.OverlaySession session, LoadOrderResolver.IndexView view,
         IReadOnlyList<ForwardSpec> specs, string fileName, bool selfIsTarget, out string? refusal)
@@ -1040,10 +970,7 @@ public static class WritePatchBuilder
         var resolved = new List<(ForwardSpec spec, IMajorRecordGetter body, string priorWinner, bool wasWinner)>(specs.Count);
         var problems = new List<string>();
         var seen = new HashSet<FormKey>();
-        // AbsenceClause costs a profile parse plus (for anything not already unticked) a whole-install folder sweep, and
-        // `specs` is unbounded — a batch naming the same bad from_plugin 500 times would pay it 500 times for one
-        // answer. Memoized per CALL, not per resolver: the explainer reads the profile fresh by design, and a cache
-        // living longer than one refusal batch is exactly the staleness it refuses to have (review of PR #274).
+        // Memoize absence explanations within this batch because each explanation may inspect the profile and install.
         var absenceMemo = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
         string Absence(string plugin)
         {
@@ -1079,35 +1006,22 @@ public static class WritePatchBuilder
         return resolved;
     }
 
-    /// <summary>
-    /// Forward records INTO an EXISTING plugin the user owns, IN PLACE — the forward lane's sibling of
-    /// <see cref="ApplyInPlace"/> (HCBR-2026-07-08-01 F4: <c>into=</c> is reserved for houseCARL-owned patches, so a
-    /// non-houseCARL original gets forwards through THIS explicit, consent-gated lane instead). Semantics:
-    /// <list type="bullet">
-    /// <item>SOURCE: each body resolves from its NAMED plugin exactly as <see cref="ForwardRecords"/> Phase 1 (the
-    /// shared <see cref="ResolveForwardSources"/>).</item>
-    /// <item>COLLISION = REPLACE: a FormKey the target already carries has its existing record dropped
-    /// (<see cref="WriteEngine.RemovalTypeFor"/> + the no-op verify) before the copy — the same xEdit
-    /// copy-as-override-into overwrite the default lane's extend now performs (F1), flagged per record.</item>
-    /// <item>SERIALIZE: model C via <see cref="WriteEngine.WriteInPlace"/> against the WHOLE known-master set (the
-    /// in-place create/edit lanes' context) — the header grows from the copied bodies' actual links (F2's mechanic),
-    /// the author's counter survives, no baseline force-include. Atomic swap; any failure leaves the original intact.</item>
-    /// </list>
-    /// CONSENT + the persistent acknowledge handshake are enforced by the SERVICE before this is reached. The full
-    /// read-back (default ON, like every in-place lane) verifies each forwarded record landed on the re-opened file.
-    /// </summary>
+    /// <summary>Copies named source record versions into an existing staging plugin and atomically replaces it.</summary>
+    /// <remarks>
+    /// Existing target records are removed and verified absent before replacement. The serializer derives masters from
+    /// copied content while preserving the target's counter. The service owns consent and redeployment confirmation.
+    /// </remarks>
     public static ForwardOutcome ForwardRecordsInPlace(
         LoadOrderResolver resolver, IReadOnlyList<ForwardSpec> specs, string targetPath, string targetName,
         bool fullReadback = true, bool dryRun = false)
     {
         if (specs.Count == 0) return ForwardOutcome.Fail("no records to forward supplied.");
 
-        // Per-call overlay session (Option B), same as ApplyInPlace — no handle held at rest.
+        // Scope source overlays and link caches to this call.
         using var session = resolver.OpenSession();
         var fileName = Path.GetFileName(targetPath);
 
-        // --- Phase 1: target guards (the ApplyInPlace posture — never re-serialize a plugin Mutagen can't fully
-        //     parse) + source resolution off ONE captured view. ---
+        // Validate the target and resolve every named source from one captured view.
         var view = resolver.Capture();
         if (!view.ContainsPlugin(targetName))
             return ForwardOutcome.Fail($"in-place target '{targetName}' is not an active plugin in the load order.{view.AbsenceClause(targetName)}");
@@ -1118,7 +1032,7 @@ public static class WritePatchBuilder
         var resolved = ResolveForwardSources(session, view, specs, targetName, selfIsTarget: true, out var refusal);
         if (refusal is not null) return ForwardOutcome.Fail(refusal);
 
-        // --- Phase 2: open the TARGET mutably (EAGER, the single plugin only — never the order). ---
+        // Load only the target as a mutable plugin.
         if (!File.Exists(targetPath))
             return ForwardOutcome.Fail($"in-place target '{fileName}' not found on disk at {targetPath} — the file is untouched.");
         SkyrimMod targetMod;
@@ -1127,14 +1041,11 @@ public static class WritePatchBuilder
             { return ForwardOutcome.Fail($"cannot open '{fileName}' to forward into in place ({WriteEngine.Describe(ex)}) — a plugin Mutagen can't parse is refused, not re-emitted minus what it couldn't read (Q3). The file is UNTOUCHED."); }
         if (!string.Equals(targetMod.ModKey.FileName.String, fileName, StringComparison.OrdinalIgnoreCase))
             return ForwardOutcome.Fail($"in-place ModKey '{targetMod.ModKey.FileName}' must match the target filename '{fileName}'.");
-        // Declared masters before any mutation — diffed against the re-opened header for the master-grow re-sort
-        // note (PR #163 review #1; see MasterGrowNote).
+        // Capture declared masters so newly required load-order relationships can be reported.
         var mastersBefore = targetMod.ModHeader.MasterReferences
             .Select(m => m.Master.FileName.String).ToHashSet(StringComparer.OrdinalIgnoreCase);
 
-        // --- Phase 3: replace-or-copy each source body into the TARGET (the F1 semantic — a carried FormKey is
-        //     REPLACED, verified dropped before the copy; nothing is serialized until Phase 4, so any refusal here
-        //     leaves the on-disk file untouched). ---
+        // Replace an existing carried record or copy a new override into the mutable target.
         var alreadyCarried = new Dictionary<FormKey, IMajorRecord>();
         foreach (var r in targetMod.EnumerateMajorRecords())
             alreadyCarried[r.FormKey] = r;
@@ -1169,8 +1080,7 @@ public static class WritePatchBuilder
             }
         }
 
-        // --- #225 DRY RUN: stop AT the point of no return (see Apply's twin block). patchLane:false — WriteInPlace
-        //     adds no baseline masters. The would-grow re-sort note is phrased predictively. ---
+        // Dry run stops before replacement and previews masters derived by the in-place serializer.
         if (dryRun)
         {
             if (DryRunMastersPreview(targetMod, resolver, patchLane: false, out var wouldMasters) is { } dryErr)
@@ -1183,12 +1093,11 @@ public static class WritePatchBuilder
                 DryRun = true, InPlace = true, ReadBack = dryBack,
                 Note = wouldGrow.Count == 0 ? null :
                     $"the real write would ADD {string.Join(", ", wouldGrow)} as master(s) of '{fileName}' — a plugin " +
-                    "loads only if its masters load BEFORE it, so re-sort your load order (LOOT / MO2) after the real write.",
+                    "loads only if its masters load BEFORE it, so re-sort your load order in Amethyst after the real write.",
             };
         }
 
-        // --- Phase 4: model-C re-serialize over the original (WriteInPlace, whole known-master set — the copied
-        //     bodies' links grow the header; the self-lock ReleaseOverlay first; atomic swap). ---
+        // Release target mappings and atomically serialize against all other active plugins.
         session.ReleaseOverlay(fileName);
         try { WriteEngine.WriteInPlace(targetMod, session.AllMastersExcept(fileName), targetPath); }
         catch (MissingModException ex)
@@ -1196,12 +1105,12 @@ public static class WritePatchBuilder
             return ForwardOutcome.Fail(
                 $"writing '{fileName}' in place failed: the forwarded records reference a plugin that is NOT active in " +
                 $"the load order ({ex.Message}) — a reference into an inactive plugin can't resolve in game. " +
-                "Enable that plugin in MO2 and retry. The existing file is untouched.");
+                "Enable that plugin in Amethyst and retry. The existing file is untouched.");
         }
         catch (Exception ex)
             { return ForwardOutcome.Fail($"writing '{fileName}' in place failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}"); }
 
-        // --- Phase 5: re-open + report masters/bytes + the touched-record verify (default ON for in-place). ---
+        // Reopen the replacement to report masters and verify every copied record from disk.
         IReadOnlyList<string> masters = Array.Empty<string>();
         IReadOnlyList<FullReadback>? readBack = null;
         long bytes = 0;
@@ -1221,10 +1130,7 @@ public static class WritePatchBuilder
             { ReadBack = readBack, InPlace = true, Note = MasterGrowNote(fileName, mastersBefore, masters) };
     }
 
-    /// <summary>One record to FORWARD: take plugin <see cref="FromPlugin"/>'s version of <see cref="Target"/> and carry
-    /// it INTO the patch as an override (xEdit's "copy as override into"). Unlike <see cref="PatchEdit"/> there is no
-    /// path/verb — the WHOLE source record is deep-copied verbatim, so the SOURCE plugin (not the load-order winner)
-    /// decides the content.</summary>
+    /// <summary>Identifies a complete record version to copy from a named plugin.</summary>
     public sealed record ForwardSpec
     {
         /// <summary>Gets the record FormKey to forward.</summary>
@@ -1246,12 +1152,7 @@ public static class WritePatchBuilder
         FormKey Target, string RecordType, string? EditorId, string FromPlugin, string PriorWinner, bool WasAlreadyWinner,
         bool ReplacedExisting = false);
 
-    /// <summary>The outcome of a <see cref="ForwardRecords"/> call. <see cref="Error"/> non-null ⇒ the whole call was
-    /// refused (no file written) with a named, recoverable reason (Q3 — a source plugin not in the order / excluded /
-    /// the output itself / one that doesn't define the target). Otherwise the patch at <see cref="OutputPath"/> carries
-    /// each forwarded record; <see cref="Masters"/> is its lean header (the forwarded content's ORIGIN master + whatever
-    /// it references — NOT the source plugin, which is copied FROM, never mastered ON). <see cref="ReadBack"/> is the
-    /// opt-in full read-back of every forwarded record (null unless requested).</summary>
+    /// <summary>Reports a complete-record forwarding operation and its derived master list.</summary>
     public sealed record ForwardOutcome(
         bool Success, string? Error, string OutputPath, bool Extended,
         IReadOnlyList<ForwardedRecord> Forwarded, IReadOnlyList<string> Masters, long Bytes)
@@ -1259,23 +1160,16 @@ public static class WritePatchBuilder
         /// <summary>Gets optional full-record verification results.</summary>
         public IReadOnlyList<FullReadback>? ReadBack { get; init; }
 
-        /// <summary>True ⇒ the forwards were written INTO the target's own file (<see cref="ForwardRecordsInPlace"/> —
-        /// the in-place write lane), not a houseCARL patch folder. Mirrors <see cref="PatchOutcome"/>.</summary>
+        /// <summary>Gets whether records were written into an existing staging plugin.</summary>
         public bool InPlace { get; init; }
 
-        /// <summary>True ⇒ NOT a write and NOT an error: the server-enforced first-touch in-place CONSENT handshake.
-        /// <see cref="Error"/> carries the prompt verbatim (re-call with acknowledge=true). Rendered as a confirmation
-        /// prompt, never "error:" (Q3). Nothing was written. Mirrors <see cref="PatchOutcome.NeedsAcknowledge"/>.</summary>
+        /// <summary>Gets whether the service must obtain first-touch consent before writing.</summary>
         public bool NeedsAcknowledge { get; init; }
 
-        /// <summary>An optional Q3 honesty note appended to a SUCCESSFUL outcome — a side effect that didn't land cleanly
-        /// even though the write did. Null when there's nothing to add. Mirrors <see cref="PatchOutcome.Note"/>.</summary>
+        /// <summary>Gets a successful-write warning or required follow-up note.</summary>
         public string? Note { get; init; }
 
-        /// <summary>True ⇒ this Success came from a DRY RUN (#225): the real forward pipeline ran (source resolve,
-        /// replace-or-copy into the in-memory mod, the reference-resolution check) and STOPPED before the serialize —
-        /// NOTHING was written. <see cref="Forwarded"/> is what WOULD be copied; <see cref="Masters"/> is the expected
-        /// (link-derived, preview) master set; <see cref="Bytes"/> is 0. Mirrors <see cref="PatchOutcome.DryRun"/>.</summary>
+        /// <summary>Gets whether the pipeline stopped before serialization and wrote nothing.</summary>
         public bool DryRun { get; init; }
 
         /// <summary>Creates an unsuccessful forwarding outcome.</summary>
@@ -1284,9 +1178,9 @@ public static class WritePatchBuilder
         public static ForwardOutcome Fail(string error) =>
             new(false, error, "", false, Array.Empty<ForwardedRecord>(), Array.Empty<string>(), 0);
 
-        /// <summary>The first-touch in-place consent handshake: no write, no error — a required confirmation carrying the
-        /// trade-off <paramref name="prompt"/> (the caller re-calls with acknowledge=true). Mirrors
-        /// <see cref="PatchOutcome.NeedsAck"/>.</summary>
+        /// <summary>Creates a no-write outcome requesting first-touch consent.</summary>
+        /// <param name="prompt">Consent prompt shown to the caller.</param>
+        /// <returns>The confirmation-required outcome.</returns>
         public static ForwardOutcome NeedsAck(string prompt) =>
             new(false, prompt, "", false, Array.Empty<ForwardedRecord>(), Array.Empty<string>(), 0) { NeedsAcknowledge = true };
     }
@@ -1387,54 +1281,27 @@ public static class WritePatchBuilder
                 Array.Empty<string>(), Array.Empty<string>(), 0, 0, Array.Empty<string>(), 0);
     }
 
-    /// <summary>
-    /// FORWARD a NAMED plugin's version of each record INTO the patch as an override — xEdit's "copy as override into",
-    /// the inverse of <see cref="Apply"/>'s winner-override. Where Apply/Create author NEW content, this re-asserts an
-    /// EARLIER plugin's already-authored version over a later override (the HCBR-2026-06-21 case: restore ATweaks'
-    /// Searing-Sun spell over Sacrilege's). The whole source record is DEEP-COPIED via
-    /// <see cref="WriteEngine.GenericGetOrAddAsOverride"/> — the SAME override primitive <see cref="Apply"/> uses, so
-    /// it's generic over EVERY record type by construction (the nested Cell/Placed*/INFO/Navmesh/Landscape families
-    /// included, via the source link cache). There is NO field edit, so NO rulebook pre-flight: a complete, valid source
-    /// record copied verbatim is legal by definition (the rulebook validates field EDITS, of which this has none).
-    ///
-    /// <para>Forwarding copies CONTENT, it does not add a master: the patch overrides the target's ORIGIN FormKey with
-    /// the source's body, so the source plugin is read FROM, never recorded as a master — the resulting header carries
-    /// the origin master + whatever the forwarded content references (exactly what xEdit's "copy as override into a new
-    /// patch" produces). Forwarding the ORIGIN master's own version reverts the record to vanilla.</para>
-    ///
-    /// <para>Q3 — every refusal is named and the WHOLE call is all-or-nothing (no partial patch): a source plugin not in
-    /// the order, EXCLUDED (unparseable), the OUTPUT patch itself (a no-op self-forward), the SAME target twice, or one
-    /// that simply doesn't DEFINE the target — the distinct null shapes
-    /// <see cref="LoadOrderResolver.IndexView.GetRecord"/> returns, told apart here so the caller gets the real reason.
-    /// A forwarded version that WAS already the winner is reported (<see cref="ForwardedRecord.WasAlreadyWinner"/>), not
-    /// silently dropped. <paramref name="extend"/>=false writes a fresh patch; =true adds to an existing one (into=).
-    /// <paramref name="fullReadback"/> reads every forwarded record back IN FULL off the written file (the pre-enable
-    /// verify loop — see <see cref="FullReadback"/>).</para>
-    /// </summary>
+    /// <summary>Copies complete record versions from named plugins into a new or existing patch.</summary>
+    /// <remarks>
+    /// Source bodies come from the named plugins rather than current winners. Existing patch records are replaced,
+    /// every source is resolved before mutation, and the written patch is reopened for optional full-record verification.
+    /// </remarks>
     public static ForwardOutcome ForwardRecords(
         LoadOrderResolver resolver, IReadOnlyList<ForwardSpec> specs, string outPath, bool extend, bool fullReadback = false,
         bool dryRun = false)
     {
         if (specs.Count == 0) return ForwardOutcome.Fail("no records to forward supplied.");
 
-        // Per-call overlay session (Option B): every source plugin this forward reads is opened THROUGH it and disposed
-        // when the method returns — no handle held at rest (the same model Apply / RemoveRecords / CreateRecords use).
+        // Scope source overlays and link caches to this call.
         using var session = resolver.OpenSession();
         var fileName = Path.GetFileName(outPath);
 
-        // --- Phase 1: resolve each source body from its NAMED plugin (NOT the load-order winner) + classify any miss
-        //     (Q3 — collect ALL problems, then refuse the whole call if any). ONE captured build answers every spec (the
-        //     hunt-F5 one-view discipline Apply follows: a freshness rebuild mid-loop can't mix two builds' resolutions).
-        //     PERF (accuracy-over-perf, not a blocker): each GetRecord re-enumerates from_plugin's overlay, so N targets
-        //     from ONE source = N in-memory walks of that overlay (the file is opened ONCE — the session caches it). Fine
-        //     for realistic use (re-assert a few of a mod's records); if a "forward 100 records out of a huge overhaul"
-        //     case ever bites, the clean fix is a single-pass batch fetch keyed by from_plugin (group specs by source,
-        //     enumerate the overlay once collecting all wanted FormKeys) — deferred until measured. ---
+        // Resolve every named source from one captured view before opening or changing the output patch.
         var view = resolver.Capture();
         var resolved = ResolveForwardSources(session, view, specs, fileName, selfIsTarget: false, out var refusal);
         if (refusal is not null) return ForwardOutcome.Fail(refusal);
 
-        // --- Phase 2: open (extend) or create the patch mod (identical to Apply Phase 2). ---
+        // Open the existing output for extension or create a fresh patch.
         SkyrimMod patchMod;
         if (extend)
         {
@@ -1450,15 +1317,7 @@ public static class WritePatchBuilder
         if (!string.Equals(patchMod.ModKey.FileName.String, fileName, StringComparison.OrdinalIgnoreCase))
             return ForwardOutcome.Fail($"patch ModKey '{patchMod.ModKey.FileName}' must match output filename '{fileName}'.");
 
-        // --- Phase 3: deep-copy each source body INTO the patch as an override. NO ApplyVerb — the copy IS the forward
-        //     (GenericGetOrAddAsOverride duplicates the source's whole content; a nested record gets the source overlay's
-        //     link cache on demand, the SAME session.LinkCacheFor path Apply uses + guards). A FormKey the patch ALREADY
-        //     carries (an extend) is REPLACED — its existing record dropped first, then the source body copied — the
-        //     xEdit copy-as-override-into semantic (HCBR-2026-07-08-01 F1: GetOrAdd's get-semantics on a collision kept
-        //     the existing record and SKIPPED the copy while still reporting "forwarded" — a silent wrong result; the
-        //     drop also lets the serialize grow the master list from the NEW body, which the skip path never did).
-        //     A throw here is a real engine inconsistency — fail the WHOLE call (no partial patch; nothing has been
-        //     serialized, the on-disk file is untouched), surfaced not swallowed (Q3). ---
+        // Replace any carried target, verify its absence, then deep-copy the named source body into the patch.
         var alreadyCarried = new Dictionary<FormKey, IMajorRecord>();
         if (extend)
             foreach (var r in patchMod.EnumerateMajorRecords())
@@ -1473,8 +1332,7 @@ public static class WritePatchBuilder
                 if (alreadyCarried.TryGetValue(spec.Target, out var existing))
                 {
                     ((IMajorRecordEnumerable)patchMod).Remove(spec.Target, WriteEngine.RemovalTypeFor(existing), throwIfUnknown: true);
-                    // The typed Remove can no-op WITHOUT throwing (F3's sibling defect) — verify the slot is genuinely
-                    // empty before the copy, else GetOrAdd would silently return the old record again (Q3).
+                    // Confirm the old record is absent because typed removal can return without removing it.
                     if (patchMod.EnumerateMajorRecords().Any(x => x.FormKey == spec.Target))
                         return ForwardOutcome.Fail(
                             $"cannot replace {spec.Target}: the patch already carries this record and its existing " +
@@ -1496,8 +1354,7 @@ public static class WritePatchBuilder
             }
         }
 
-        // --- #225 DRY RUN: stop AT the point of no return (see Apply's twin block) — the copies above landed in the
-        //     in-memory mod only; report what WOULD be forwarded + the expected masters, write nothing. ---
+        // Dry run reports the in-memory copies and predicted masters without serializing.
         if (dryRun)
         {
             if (DryRunMastersPreview(patchMod, resolver, patchLane: true, out var wouldMasters) is { } dryErr)
@@ -1507,15 +1364,13 @@ public static class WritePatchBuilder
             return new ForwardOutcome(true, null, outPath, extend, forwarded, wouldMasters, 0) { DryRun = true, ReadBack = dryBack };
         }
 
-        // --- Phase 4: serialize ONCE with the FULL known-master set (identical to Apply Phase 4 — release any overlay
-        //     on the target before the serialize + keep the target out of the master set; the two-part self-lock guard). ---
+        // Release output mappings, exclude the output from the master context, and serialize once.
         session.ReleaseOverlay(patchMod.ModKey.FileName.String);
         try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath); }
         catch (Exception ex)
             { return ForwardOutcome.Fail($"writing the patch failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}"); }
 
-        // --- Phase 5: re-open + report the (lean, derived) master header + bytes — and, on request, each forwarded
-        //     record's FULL read-back off that same re-opened file (see Apply's Phase 5). Dispose the overlay after. ---
+        // Reopen the output to report derived masters and optional full-record verification.
         IReadOnlyList<string> masters = Array.Empty<string>();
         IReadOnlyList<FullReadback>? readBack = null;
         long bytes = 0;
