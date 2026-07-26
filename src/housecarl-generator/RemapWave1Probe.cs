@@ -428,7 +428,7 @@ public static class RemapWave1Probe
         Console.WriteLine($"   out     : {outDir}");
         Console.WriteLine();
 
-        var p = Mo2Instance.Resolve(instanceDir);
+        var p = LegacyFixturePaths.Resolve(instanceDir);
         var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
         var orderedPaths = order.OrderedPaths.ToList();
         var srcPath = orderedPaths.FirstOrDefault(op => string.Equals(Path.GetFileName(op), pluginName, StringComparison.OrdinalIgnoreCase));

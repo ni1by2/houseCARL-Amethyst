@@ -329,7 +329,7 @@ public static class NativePairingProbe
         if (mo2 is null) { Console.WriteLine("native-pairing-real needs --mo2 <MO2 instance folder>"); return 2; }
 
         var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), "hc-native-pairing-" + Guid.NewGuid().ToString("N") + ".json"));
-        using var svc = LoadOrderService.WithInstance(mo2, 0, store);
+        using var svc = SyntheticManagerFixture.Open(mo2, 0, store);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var data = svc.NativePairingAudit();
         sw.Stop();

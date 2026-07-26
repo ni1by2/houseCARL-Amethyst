@@ -93,7 +93,7 @@ public static class CreatePluginGuardProbe
             File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n+MasterMod\r\n");
 
             var store = new UserConfigStore(Path.Combine(root, "houseCARL.user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
             svc.Stats();   // warm the lazy index once
 
             // WIRE-CREATE + EXACT-NAME: the service writes the EXACT-named header-only plugin in a houseCARL folder.
@@ -138,7 +138,7 @@ public static class CreatePluginGuardProbe
             // exist". A separate, un-warmed service over the same instance exercises the cold path the warmed `svc`
             // above masks. RED before the fix (derive paths before the _modsDir check), GREEN after.
             {
-                using var cold = LoadOrderService.WithInstance(instance, 0, store);
+                using var cold = SyntheticManagerFixture.Open(instance, 0, store);
                 var o = cold.CreatePlugin("HcCpCold");
                 Check("COLD-START: create_plugin as the first op on a fresh service succeeds (derives ModsDir; no false config error)",
                     o.Success && Path.GetFileName(o.OutputPath) == "HcCpCold.esp",

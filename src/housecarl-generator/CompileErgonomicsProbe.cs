@@ -54,19 +54,20 @@ internal static class CompileErgonomicsProbe
             Check(explicitSvc.GameDirOrNull() == game,
                   "explicit mode: GameDirOrNull = DataDir's parent (the game install dir)");
 
-            // unconfigured: no instance, not configured → null (not a throw).
-            var unconfigured = LoadOrderService.WithInstance(null, 0, store);
+            // Unconfigured Amethyst mode has no manifest or game root and must remain null-safe.
+            var unconfigured = LoadOrderService.WithAmethystConnection(null, 0, store);
             bool unconfThrew = false; string? unconfResult = null;
             try { unconfResult = unconfigured.GameDirOrNull(); } catch { unconfThrew = true; }
             Check(!unconfThrew && unconfResult is null, "unconfigured: GameDirOrNull returns null (never throws)");
 
-            // an UNUSABLE instance dir: configured (non-blank), but EnsurePathsDerived throws on Resolve → caught → null.
-            var badInstance = LoadOrderService.WithInstance(
-                Path.Combine(Path.GetTempPath(), "hc-no-such-instance-" + Guid.NewGuid().ToString("N")), 0, store);
+            // A configured but missing manifest fails derivation internally; this best-effort hint still returns null.
+            var badInstance = LoadOrderService.WithAmethystConnection(
+                Path.Combine(Path.GetTempPath(), "hc-no-such-manifest-" + Guid.NewGuid().ToString("N"), "connection.json"),
+                0, store);
             bool badThrew = false; string? badResult = null;
             try { badResult = badInstance.GameDirOrNull(); } catch { badThrew = true; }
             Check(!badThrew && badResult is null,
-                  "unusable instance: GameDirOrNull returns null, does NOT throw (best-effort hint — the rider's config gate reports the real problem)");
+                  "unusable Amethyst connection: GameDirOrNull returns null, does not throw");
 
             // CompilerGameDirHints: the ordered auto-detect hint list. [0] = the load-order game dir; then the located real
             // Steam install (environment-dependent — absent on a CI runner with no Skyrim, verified on Aaron's rig). NULL-SAFE

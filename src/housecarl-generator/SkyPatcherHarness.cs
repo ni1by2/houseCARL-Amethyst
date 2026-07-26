@@ -78,7 +78,7 @@ public static class SkyPatcherHarness
         return WithCorpus(() =>
         {
             var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), $"hc-sp-harness-{Guid.NewGuid():N}.json"));
-            var svc = LoadOrderService.WithInstance(instance, maxPlugins: 0, store);
+            var svc = SyntheticManagerFixture.Open(instance, maxPlugins: 0, store);
             var sw = System.Diagnostics.Stopwatch.StartNew();
             var data = svc.SkyPatcherLayer();
             sw.Stop();
@@ -93,7 +93,7 @@ public static class SkyPatcherHarness
         // A throwaway user-config store (the harness never writes tool paths); the service reads the
         // instance exactly as the product does.
         var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), $"hc-sp-harness-{Guid.NewGuid():N}.json"));
-        var svc = LoadOrderService.WithInstance(instance, maxPlugins: 0, store);
+        var svc = SyntheticManagerFixture.Open(instance, maxPlugins: 0, store);
 
         Console.WriteLine("================================================================");
         Console.WriteLine(" SkyPatcher post-state harness (Wave 1 crux)");

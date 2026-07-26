@@ -75,7 +75,7 @@ internal static class ReadPluginFileProbe
             }
 
             var store = new UserConfigStore(Path.Combine(root, "user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
 
             // 1 — locate + read a DISABLED donor by filename (the whole point)
             Console.WriteLine("--- 1: locate + read a plugin inside a DISABLED mod folder ---");

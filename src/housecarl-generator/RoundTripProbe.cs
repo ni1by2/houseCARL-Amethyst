@@ -75,7 +75,7 @@ public static class RoundTripProbe
         Console.WriteLine($"   instance: {instanceDir}");
         Console.WriteLine();
 
-        var p = Mo2Instance.Resolve(instanceDir);
+        var p = LegacyFixturePaths.Resolve(instanceDir);
         var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
         var orderedPaths = order.OrderedPaths.ToList();
         // filename -> winning on-disk path (a plugin filename is unique in a load order; OrderedPaths is the

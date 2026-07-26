@@ -108,7 +108,7 @@ public static class BulkPrimitivesWave3Probe
         }
 
         var store = new UserConfigStore(Path.Combine(dir, "houseCARL.user.json"));
-        using var svc = LoadOrderService.WithInstance(instance, 0, store);
+        using var svc = SyntheticManagerFixture.Open(instance, 0, store);
         svc.Stats();   // warm the lazy index once, off the clock
 
         string llFid = $"{llFk.ID:X6}:{llFk.ModKey.FileName}";
@@ -305,7 +305,7 @@ public static class BulkPrimitivesWave3Probe
         catch { CorpusGenerator.GenerateAll(genDir, Path.Combine(dir, "corpus-ref")); CorpusRulebook.CorpusPath = Path.Combine(genDir, "corpus.json"); }
 
         var store = new UserConfigStore(Path.Combine(dir, "houseCARL.user.json"));
-        using var svc = LoadOrderService.WithInstance(instance, 0, store);
+        using var svc = SyntheticManagerFixture.Open(instance, 0, store);
         svc.Stats();
 
         string wFid = $"{wFk.ID:X6}:{wFk.ModKey.FileName}";
@@ -558,7 +558,7 @@ public static class BulkPrimitivesWave3Probe
         catch { CorpusGenerator.GenerateAll(genDir, Path.Combine(dir, "corpus-ref")); CorpusRulebook.CorpusPath = Path.Combine(genDir, "corpus.json"); }
 
         var store = new UserConfigStore(Path.Combine(dir, "houseCARL.user.json"));
-        using var svc = LoadOrderService.WithInstance(instance, 0, store);
+        using var svc = SyntheticManagerFixture.Open(instance, 0, store);
         svc.Stats();
 
         string wFid = $"{wFk.ID:X6}:{wFk.ModKey.FileName}";

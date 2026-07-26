@@ -1,7 +1,7 @@
-namespace HousecarlCore;
+namespace HousecarlGenerator;
 
 // ======================================================================
-//  Mo2Instance — derive the four load-order roots from ONE path: the MO2
+//  LegacyFixturePaths — derive the four load-order roots from ONE path: the MO2
 //  instance folder, read out of its ModOrganizer.ini (launch-arc item 3,
 //  2026-06-02). The user configures a single "where is your MO2?" path;
 //  ProfileDir / ModsDir / DataDir are derived, and the ACTIVE profile is
@@ -46,10 +46,10 @@ namespace HousecarlCore;
 /// <param name="OverwriteDir">base\overwrite — MO2's overwrite layer, the HIGHEST-priority file source (tool outputs:
 /// Synthesis, xEdit "new file", Wrye Bash land plugins here, and MO2 lists them in the profile files). Derived but NOT
 /// required to exist (a fresh instance may lack it; resolution just skips a missing folder).</param>
-public sealed record Mo2InstancePaths(
+internal sealed record LegacyFixturePathSet(
     string InstanceDir, string ProfileName, string ProfileDir, string ModsDir, string DataDir, string GamePath, string OverwriteDir);
 
-public static class Mo2Instance
+internal static class LegacyFixturePaths
 {
     public const string IniFileName = "ModOrganizer.ini";
 
@@ -58,7 +58,7 @@ public static class Mo2Instance
 
     /// <summary>Derive the load-order roots from an instance folder, or THROW (Q3, a clear actionable message naming what's
     /// missing) if it isn't a usable MO2 instance. Use <see cref="Validate"/> when you want the problems without an exception.</summary>
-    public static Mo2InstancePaths Resolve(string instanceDir)
+    internal static LegacyFixturePathSet Resolve(string instanceDir)
     {
         var problems = new List<string>();
         var paths = Derive(instanceDir, problems);
@@ -70,7 +70,7 @@ public static class Mo2Instance
 
     /// <summary>Non-throwing derive for the cheap freshness re-check: true + paths on success, false on any problem (paths
     /// left null). Never throws — a transient read (MO2 mid-write) just yields false and the caller keeps its last good set.</summary>
-    public static bool TryResolve(string instanceDir, out Mo2InstancePaths? paths)
+    internal static bool TryResolve(string instanceDir, out LegacyFixturePathSet? paths)
     {
         paths = Derive(instanceDir, null);
         return paths is not null;
@@ -78,7 +78,7 @@ public static class Mo2Instance
 
     /// <summary>Validate a candidate instance folder for the setup tool: never throws; returns whether it's usable, the
     /// derived paths (null if not), and the specific problems (Q3) to show the user so they can fix the path.</summary>
-    public static (bool ok, Mo2InstancePaths? paths, IReadOnlyList<string> problems) Validate(string instanceDir)
+    internal static (bool ok, LegacyFixturePathSet? paths, IReadOnlyList<string> problems) Validate(string instanceDir)
     {
         var problems = new List<string>();
         var paths = Derive(instanceDir, problems);
@@ -101,7 +101,7 @@ public static class Mo2Instance
     /// <summary>The single derive worker. Populates <paramref name="problems"/> (when provided) with every missing/invalid
     /// piece, and returns the paths ONLY when all required pieces resolve to real folders — otherwise null (the validity
     /// gate is independent of the problems list, so TryResolve with a null list still fails correctly).</summary>
-    static Mo2InstancePaths? Derive(string instanceDir, List<string>? problems)
+    static LegacyFixturePathSet? Derive(string instanceDir, List<string>? problems)
     {
         if (string.IsNullOrWhiteSpace(instanceDir)) { problems?.Add("no path was given"); return null; }
         instanceDir = instanceDir.Trim().TrimEnd('\\', '/');
@@ -154,7 +154,7 @@ public static class Mo2Instance
 
         // Overwrite is derived like mods/profiles (base-relative, the portable default measured on Aaron's real ini)
         // but never gates validity — a missing folder just means no overwrite-provided plugins.
-        return new Mo2InstancePaths(instanceDir, profile!, profileDir, modsDir, dataDir, gamePath!, Path.Combine(basePath, "overwrite"));
+        return new LegacyFixturePathSet(instanceDir, profile!, profileDir, modsDir, dataDir, gamePath!, Path.Combine(basePath, "overwrite"));
     }
 
     /// <summary>First <c>key=</c> line's raw value (the key matched case-insensitively, ignoring section headers — the keys

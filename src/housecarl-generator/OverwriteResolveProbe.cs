@@ -121,7 +121,7 @@ internal static class OverwriteResolveProbe
                 File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n+MasterMod\r\n");
 
                 var store = new UserConfigStore(Path.Combine(root, "user.json"));
-                using var svc = LoadOrderService.WithInstance(instance, 0, store);
+                using var svc = SyntheticManagerFixture.Open(instance, 0, store);
                 Check(svc.Stats().plugins == 1, "baseline order resolved (overwrite plugin not yet in the profile)");
 
                 // Manager refresh after the tool ran: the profile files now list the overwrite-resident plugin.

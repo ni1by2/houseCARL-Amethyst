@@ -136,7 +136,7 @@ internal static class DialogueCkParityGuardProbe
             CorpusRulebook.CorpusPath = Path.Combine(genDir, "corpus.json");
 
             var store = new UserConfigStore(Path.Combine(root, "houseCARL.user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
             svc.Stats();   // warm the lazy index once
 
             // ---- INFO-AUTOFILL: create a topic + nested INFO with only a Prompt → written INFO has FavorLevel=None +

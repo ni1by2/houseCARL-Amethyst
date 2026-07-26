@@ -96,7 +96,7 @@ public static class SksePluginReader
 
     /// <summary>Read one DLL's static SKSE manifest off disk. Never throws for a bad/odd file — an unreadable image is
     /// reported as <see cref="SksePluginKind.Unreadable"/> with the reason (Q3). Reads the file with a plain read-share
-    /// stream (no handle held at rest — the file is closed before return), consistent with houseCARL's "MO2/xEdit can
+    /// stream (no handle held at rest — the file is closed before return), consistent with houseCARL's "Amethyst/xEdit can
     /// move plugins freely" invariant.</summary>
     public static SksePluginInfo Read(string filePath)
     {

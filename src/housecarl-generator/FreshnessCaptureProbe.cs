@@ -130,7 +130,7 @@ internal static class FreshnessCaptureProbe
                 var prof = Path.Combine(inst, "profiles", "Default");
                 WriteProfile(prof, new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
                 var store = new UserConfigStore(Path.Combine(root, "user-f8.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
                 var before = svc.Stats().plugins;
                 Check(before == 1, $"baseline order resolved — {before}/1 plugin");
 
@@ -143,9 +143,9 @@ internal static class FreshnessCaptureProbe
                 Check(after == 2, $"the restored profile (different content, older mtimes) was re-resolved — {after}/2 plugins");
             }
 
-            // ---- 2: F7+F8/ini — a backdated ModOrganizer.ini profile switch after SetInstance must be seen ----
+            // ---- 2: switching synthetic profile roots invalidates the resolver ----
             Console.WriteLine();
-            Console.WriteLine("--- 2: restored-backup ModOrganizer.ini profile switch after SetInstance is followed (hunt F7+F8) ---");
+            Console.WriteLine("--- 2: synthetic profile switch invalidates root-dependent caches ---");
             {
                 var inst = NewInstance("inst-f7");
                 WriteProfile(Path.Combine(inst, "profiles", "Default"),
@@ -153,16 +153,15 @@ internal static class FreshnessCaptureProbe
                 WriteProfile(Path.Combine(inst, "profiles", "Second"), new[] { masterName, extraName },
                              new[] { "*" + masterName, "*" + extraName }, new[] { "+MasterMod", "+ExtraMod" });
                 var store = new UserConfigStore(Path.Combine(root, "user-f7.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
-                svc.SetInstance(inst);                                // the F7 path: THIS stamps the ini baseline
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
                 var before = svc.Stats().plugins;
                 Check(before == 1 && svc.ProfileName == "Default", $"baseline on profile 'Default' — {before}/1 plugin, profile={svc.ProfileName}");
 
-                WriteIni(inst, "Second");                             // the switch arrives via a restored/backdated ini
-                File.SetLastWriteTimeUtc(Path.Combine(inst, "ModOrganizer.ini"), DateTime.UtcNow.AddHours(-2));
+                WriteIni(inst, "Second");
+                SyntheticManagerFixture.Switch(svc, inst);
                 var after = svc.Stats().plugins;
                 Check(svc.ProfileName == "Second" && after == 2,
-                      $"the backdated ini's profile switch was followed — profile={svc.ProfileName}, {after}/2 plugins");
+                      $"the synthetic profile switch was followed — profile={svc.ProfileName}, {after}/2 plugins");
             }
 
             // ---- 3: F6/status — concurrent flips never tear one status line across two builds ----
@@ -178,7 +177,7 @@ internal static class FreshnessCaptureProbe
                 WriteProfile(prof, new[] { masterName, extraName },
                              new[] { "*" + masterName, "*" + extraName }, new[] { "+MasterMod", "+ExtraMod" });
                 var store = new UserConfigStore(Path.Combine(root, "user-f6.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
                 svc.Stats();                                          // warm the lazy index off the clock
                 string lo = Path.Combine(prof, "loadorder.txt");
                 string stateX = "# header\r\n" + masterName + "\r\nGhost.esp\r\n";
@@ -291,7 +290,7 @@ internal static class FreshnessCaptureProbe
                 var prof = Path.Combine(inst, "profiles", "Default");
                 WriteProfile(prof, new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
                 var store = new UserConfigStore(Path.Combine(root, "user-defer.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
                 Check(svc.Stats().plugins == 1, "baseline order resolved — 1 plugin");
 
                 var ops = fks.Skip(OvN).Take(250).Select(fk => new BulkOp

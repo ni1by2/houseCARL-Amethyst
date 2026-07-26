@@ -238,7 +238,7 @@ public static class CreateGlobalProbe
             string? globErr = null, gmstErr = null;
             try
             {
-                using var svc = LoadOrderService.WithInstance(instance, 0, store);
+                using var svc = SyntheticManagerFixture.Open(instance, 0, store);
                 svc.Stats();   // warm the lazy index once
 
                 var glob = svc.CrossQuery("Global", null, null, false, null, null, 50);

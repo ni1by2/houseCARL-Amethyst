@@ -157,7 +157,7 @@ internal static class PlaceAssetProbe
                 File.WriteAllText(Path.Combine(wrong, "Dummy.esp"), "x");    // a resolvable plugin path; never parsed
 
                 var store = new UserConfigStore(Path.Combine(root, "user-d.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
 
                 // before: the wrong copy wins
                 Check(svc.AssetStatus(new[] { FacegenRel }).Results[0].Hit?.Winner?.Source == "WrongFace",
@@ -195,7 +195,7 @@ internal static class PlaceAssetProbe
                 WriteProfile(prof, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
                 WriteSkyrimIni(prof, "");
                 var store = new UserConfigStore(Path.Combine(root, "user-e.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
 
                 var expect = AssetResolver.TryReadArchiveEntry(fixA, FacegenRel)!;
                 var outcome = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, fixA) }, patchName: null, into: null);
@@ -231,7 +231,7 @@ internal static class PlaceAssetProbe
                     WriteProfile(prof, new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, new[] { "+OnlyMod" });
                     WriteSkyrimIni(prof, "");
                     var store = new UserConfigStore(Path.Combine(root, "user-f1.json"));
-                    using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                    using var svc = SyntheticManagerFixture.Open(inst, 0, store);
                     var r = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, null) }, null, null).Results[0];
                     Check(r.Placed, $"a SOLE provider auto-resolves with no source= — {(r.Placed ? "ok" : r.Error)}");
                 }
@@ -244,7 +244,7 @@ internal static class PlaceAssetProbe
                     WriteProfile(prof, new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, new[] { "+ModA", "+ModB" });
                     WriteSkyrimIni(prof, "");
                     var store = new UserConfigStore(Path.Combine(root, "user-f2.json"));
-                    using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                    using var svc = SyntheticManagerFixture.Open(inst, 0, store);
                     var r = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, null) }, null, null).Results[0];
                     Check(!r.Placed && r.Error!.Contains("ambiguous"), $"TWO providers + no source= is REFUSED (no guess) — {r.Error}");
                 }
@@ -255,7 +255,7 @@ internal static class PlaceAssetProbe
                     WriteProfile(prof, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
                     WriteSkyrimIni(prof, "");
                     var store = new UserConfigStore(Path.Combine(root, "user-f3.json"));
-                    using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                    using var svc = SyntheticManagerFixture.Open(inst, 0, store);
                     var r = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, null) }, null, null).Results[0];
                     Check(!r.Placed && r.Error!.Contains("no copy to auto-place"), $"NO provider + no source= is REFUSED with guidance — {r.Error}");
                 }
@@ -274,7 +274,7 @@ internal static class PlaceAssetProbe
                 WriteProfile(prof, new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, new[] { "+GMod" });
                 WriteSkyrimIni(prof, "");
                 var store = new UserConfigStore(Path.Combine(root, "user-g.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
 
                 // all-failed FRESH batch → NO orphan folder left
                 var allFail = svc.PlaceAssets(new[] { new PlaceRequest(@"meshes\absent\x.nif", null) }, "GHostFolder", null);
@@ -337,7 +337,7 @@ internal static class PlaceAssetProbe
                 WriteProfile(prof, Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
                 WriteSkyrimIni(prof, "");
                 var store = new UserConfigStore(Path.Combine(root, "user-h.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
 
                 var srcV1 = Path.Combine(root, "v1.nif"); File.WriteAllBytes(srcV1, new byte[] { 1, 1, 1 });
                 var srcV2 = Path.Combine(root, "v2.nif"); var v2 = new byte[] { 2, 2, 2, 2, 2, 2 }; File.WriteAllBytes(srcV2, v2);

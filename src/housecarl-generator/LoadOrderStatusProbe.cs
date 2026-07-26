@@ -7,19 +7,17 @@ using HousecarlMcp;
 namespace HousecarlGenerator;
 
 /// <summary>
-/// Instance-describe + named-profile read guard (HCBR-2026-06-15-01 item 9.2 / PR-I). housecarl_load_order_status used to
-/// report the profile NAME but never the resolved INSTANCE PATH (which MO2 instance houseCARL is pointed at — easy to lose
-/// track of), and it could not inspect an INACTIVE profile. The fix surfaces the instance path and adds a profile= read
-/// that reports any sibling profile's composition WITHOUT switching to it. The Q3 hazards this guards:
-///   • the instance path must come from the SAME gated snapshot as the rest of the status line (never re-derived);
+/// Verifies manager-neutral load-order status and read-only inspection of sibling profiles.
+/// The relevant correctness hazards are:
+///   • a synthetic fixture must never be mislabeled as a live manager connection;
 ///   • inspecting an inactive profile must NOT switch the active profile and must NOT build the record index (cheap text
 ///     parse only);
 ///   • an unknown profile name must NAME the available options, never render a silently-empty composition;
 ///   • explicit-paths mode has no profiles root, so a named read must refuse LOUD there, never enumerate an arbitrary dir.
 ///
 /// Arms (each asserts the service DATA and the RENDERED text the user actually sees):
-///   A  instance path surfaced — instance mode: StatusData().InstanceDir == the configured folder; header renders "instance: &lt;path&gt;".
-///   B  explicit-paths mode — a REAL WithExplicitPaths service (not ForGuard): InstanceDir == null; header renders "explicit-paths mode".
+///   A  synthetic roots are not reported as a live manager instance.
+///   B  explicit-paths mode renders the direct synthetic-root label.
 ///   C  named/inactive read — a two-profile instance (Default active, Second inactive, DISTINCT comps): profile='Second'
 ///      returns Second's composition (≠ Default's), the active profile stays 'Default' (no switch), match is case-insensitive.
 ///   D  not found — an unknown name yields no composition but NAMES the available profiles (Q3); the render says so.
@@ -32,7 +30,7 @@ namespace HousecarlGenerator;
 ///   I  inspected-read warnings — a profile with loadorder.txt but no modlist.txt surfaces the read warning under the
 ///      inspection block, so a 0-enabled-mods render is never silently mistaken for a genuinely-empty profile (review fold).
 ///
-/// Self-contained: synthetic MO2 instances + one synthesized master plugin in temp; no game data, no corpus (reads only).
+/// Self-contained: synthetic staging layouts plus one synthesized master plugin; no copyrighted data.
 /// </summary>
 internal static class LoadOrderStatusProbe
 {
@@ -66,7 +64,7 @@ internal static class LoadOrderStatusProbe
             void WriteIni(string inst, string profile, string? baseDir = null)
             {
                 var b = baseDir is null ? "" : "base_directory=@ByteArray(" + baseDir.Replace(@"\", @"\\") + ")\r\n";
-                File.WriteAllText(Path.Combine(inst, Mo2Instance.IniFileName),
+                File.WriteAllText(Path.Combine(inst, LegacyFixturePaths.IniFileName),
                     "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(" + profile + ")\r\ngamePath=@ByteArray("
                     + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n" + (baseDir is null ? "" : "[Settings]\r\n" + b));
             }
@@ -89,34 +87,32 @@ internal static class LoadOrderStatusProbe
                 return inst;
             }
 
-            // ---- A: instance mode surfaces the resolved instance path ----
-            Console.WriteLine("--- A: instance path surfaced (instance mode) ---");
+            // ---- A: a synthetic fixture is not mislabeled as a live manager instance ----
+            Console.WriteLine("--- A: synthetic fixture has no live manager-instance label ---");
             string instA = MakeInstance("inst-a");
             WriteProfile(Path.Combine(instA, "profiles", "Default"), new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
             // One store, shared by every arm: nothing here calls SetInstance / set_tool_path, so houseCARL.user.json is
             // never written — each arm points a fresh service at its own synthetic instance.
             var store = new UserConfigStore(Path.Combine(root, "user.json"));
-            using (var svc = LoadOrderService.WithInstance(instA, 0, store))
+            using (var svc = SyntheticManagerFixture.Open(instA, 0, store))
             {
                 var data = svc.StatusData();
-                Check(data.InstanceDir == instA, $"InstanceDir == the configured instance folder (got '{data.InstanceDir}')");
                 Check(data.ProfileName == "Default", $"ProfileName == 'Default' (got '{data.ProfileName}')");
                 var text = Render(svc, svc.NamedProfileComposition(null), null);
-                Check(text.Contains("instance: " + instA), "rendered header carries the 'instance: <path>' line");
+                Check(text.Contains("direct synthetic roots"), "rendered header identifies direct synthetic roots");
             }
 
             // ---- B: explicit-paths mode renders "explicit-paths mode" (REAL WithExplicitPaths, not ForGuard) ----
             Console.WriteLine();
-            Console.WriteLine("--- B: explicit-paths mode (InstanceDir null) — real WithExplicitPaths over synthesized plugins ---");
+            Console.WriteLine("--- B: explicit-paths mode over synthesized plugins ---");
             string instB = MakeInstance("inst-b");
             string profB = Path.Combine(instB, "profiles", "Default");
             WriteProfile(profB, new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
             using (var svc = LoadOrderService.WithExplicitPaths(Path.Combine(root, "game", "Data"), Path.Combine(instB, "mods"), profB, 0, store))
             {
                 var data = svc.StatusData();
-                Check(data.InstanceDir is null, "explicit-paths mode → InstanceDir is null");
                 var text = Render(svc, svc.NamedProfileComposition(null), null);
-                Check(text.Contains("explicit-paths mode"), "rendered header shows 'explicit-paths mode' (not a bogus path)");
+                Check(text.Contains("direct synthetic roots"), "rendered header shows direct synthetic roots");
             }
 
             // ---- C: named/inactive read — Second's composition, active profile unchanged ----
@@ -126,7 +122,7 @@ internal static class LoadOrderStatusProbe
             WriteProfile(Path.Combine(instC, "profiles", "Default"), new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
             WriteProfile(Path.Combine(instC, "profiles", "Second"), new[] { masterName, extraName },
                          new[] { "*" + masterName, "*" + extraName }, new[] { "+MasterMod", "+ExtraMod" });
-            using (var svc = LoadOrderService.WithInstance(instC, 0, store))
+            using (var svc = SyntheticManagerFixture.Open(instC, 0, store))
             {
                 var second = svc.NamedProfileComposition("Second");
                 Check(second.InstanceMode && second.Composition is not null, "Second resolved (instance mode, composition present)");
@@ -180,7 +176,7 @@ internal static class LoadOrderStatusProbe
             WriteProfile(Path.Combine(baseG, "profiles", "Default"), new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
             WriteProfile(Path.Combine(baseG, "profiles", "Second"), new[] { masterName, extraName },
                          new[] { "*" + masterName, "*" + extraName }, new[] { "+MasterMod", "+ExtraMod" });
-            using (var svc = LoadOrderService.WithInstance(instG, 0, store))
+            using (var svc = SyntheticManagerFixture.Open(instG, 0, store))
             {
                 var second = svc.NamedProfileComposition("Second");
                 Check(second.InstanceMode && second.Composition is not null && second.Composition.EnabledMods.Count == 2,
@@ -195,7 +191,7 @@ internal static class LoadOrderStatusProbe
             string instH = MakeInstance("inst-h");
             WriteProfile(Path.Combine(instH, "profiles", "Default"), new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
             Directory.CreateDirectory(Path.Combine(instH, "profiles", "_NotAProfile"));   // a stray dir — no loadorder.txt (e.g. a backup or never-opened profile)
-            using (var svc = LoadOrderService.WithInstance(instH, 0, store))
+            using (var svc = SyntheticManagerFixture.Open(instH, 0, store))
             {
                 var disc = svc.NamedProfileComposition(null);
                 Check(disc.AvailableProfiles.Contains("Default") && !disc.AvailableProfiles.Contains("_NotAProfile"),
@@ -214,7 +210,7 @@ internal static class LoadOrderStatusProbe
             Directory.CreateDirectory(profI);
             File.WriteAllText(Path.Combine(profI, "loadorder.txt"), "# header\r\n" + masterName + "\r\n");
             File.WriteAllText(Path.Combine(profI, "plugins.txt"), "*" + masterName + "\r\n");
-            using (var svc = LoadOrderService.WithInstance(instI, 0, store))
+            using (var svc = SyntheticManagerFixture.Open(instI, 0, store))
             {
                 var partial = svc.NamedProfileComposition("Partial");
                 Check(partial.Composition is not null, "the partial profile still reads (loadorder.txt present → listed + matched)");
@@ -245,7 +241,7 @@ internal static class LoadOrderStatusProbe
             // J2: the suggestion reaches the RENDERED lookup= verdict the user actually sees.
             string instJ = MakeInstance("inst-j");
             WriteProfile(Path.Combine(instJ, "profiles", "Default"), new[] { masterName }, new[] { "*" + masterName }, new[] { "+MasterMod" });
-            using (var svc = LoadOrderService.WithInstance(instJ, 0, store))
+            using (var svc = SyntheticManagerFixture.Open(instJ, 0, store))
             {
                 // masterName is "HcLosMaster.esm" — look it up WITHOUT the extension (the bare folder/no-ext case).
                 string noExt = Path.GetFileNameWithoutExtension(masterName);

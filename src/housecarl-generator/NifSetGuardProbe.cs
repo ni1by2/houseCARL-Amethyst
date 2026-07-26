@@ -202,7 +202,7 @@ internal static class NifSetGuardProbe
                 File.WriteAllText(Path.Combine(mod, "Dummy.esp"), "x");
                 WriteProfile(prof, new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, new[] { "+FaceMod" });
                 WriteSkyrimIni(prof);
-                using var svc = HousecarlMcp.LoadOrderService.WithInstance(inst, 0, new UserConfigStore(Path.Combine(svcRoot, "u-new.json")));
+                using var svc = SyntheticManagerFixture.Open(inst, 0, new UserConfigStore(Path.Combine(svcRoot, "u-new.json")));
 
                 var res = svc.NifSet(MeshRel, new[] { new NifSetOp(NifSetOpKind.SetFlags, "GuardShape", Flags: 0x800000E) }, null, "FaceFix", null, inPlace: false, acknowledge: false);
                 Check(res.Error is null && res.OutputModFolder is not null, $"new-folder lane writes a verified mesh into a fresh houseCARL folder — {res.Error ?? "ok"}");
@@ -223,7 +223,7 @@ internal static class NifSetGuardProbe
                 WriteProfile(prof, new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, new[] { "+FaceMod" });
                 WriteSkyrimIni(prof);
                 var loosePath = BethesdaPath.Under(mod, MeshRel);
-                using var svc = HousecarlMcp.LoadOrderService.WithInstance(inst, 0, new UserConfigStore(Path.Combine(svcRoot, "u-ip.json")));
+                using var svc = SyntheticManagerFixture.Open(inst, 0, new UserConfigStore(Path.Combine(svcRoot, "u-ip.json")));
 
                 var r1 = svc.NifSet(MeshRel, new[] { new NifSetOp(NifSetOpKind.SetFlags, "GuardShape", Flags: 0x800000E) }, null, null, null, inPlace: true, acknowledge: false);
                 Check(r1.NeedsAcknowledge && r1.Report is null, $"in-place FIRST call without acknowledge → consent prompt, nothing written — {(r1.NeedsAcknowledge ? "prompt" : "NO PROMPT")}");

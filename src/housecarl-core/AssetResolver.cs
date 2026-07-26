@@ -381,7 +381,7 @@ public sealed class AssetResolver : IDisposable
         // Project the concrete sources down to the display providers — the on-disk paths are placement-only.
         var providers = sources.Select(s => new AssetProvider(s.ProviderName, s.Kind)).ToList();
         // Ambiguous when >1 source provides it (contention), or a loose copy coexists with a BSA copy (the edge the
-        // common-rule model can't promise exactly under MO2 managed archives).
+        // common-rule model cannot promise exactly for manager-controlled archives).
         return new AssetHit(rel, true, providers[0], providers, providers.Count > 1);
     }
 

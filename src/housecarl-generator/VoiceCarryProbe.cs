@@ -58,7 +58,7 @@ public static class VoiceCarryProbe
                 WriteProfile(prof, new[] { key.FileName.String }, new[] { "*" + key.FileName }, new[] { "+VoiceNf" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "newfile"), 0, new UserConfigStore(Path.Combine(root, "user-nf.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "newfile"), 0, new UserConfigStore(Path.Combine(root, "user-nf.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("VoiceNf.esp");
@@ -96,7 +96,7 @@ public static class VoiceCarryProbe
                 WriteProfile(prof, new[] { key.FileName.String }, new[] { "*" + key.FileName }, new[] { "+VoiceIp" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "inplace"), 0, new UserConfigStore(Path.Combine(root, "user-ip.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "inplace"), 0, new UserConfigStore(Path.Combine(root, "user-ip.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("VoiceIp.esp", inPlace: true, acknowledge: true);
@@ -134,7 +134,7 @@ public static class VoiceCarryProbe
                 WriteProfile(prof, new[] { key.FileName.String }, new[] { "*" + key.FileName }, new[] { "+VoiceMl" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "multi"), 0, new UserConfigStore(Path.Combine(root, "user-ml.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "multi"), 0, new UserConfigStore(Path.Combine(root, "user-ml.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("VoiceMl.esp", inPlace: true, acknowledge: true);
@@ -161,7 +161,7 @@ public static class VoiceCarryProbe
                 WriteProfile(prof, new[] { key.FileName.String }, new[] { "*" + key.FileName }, new[] { "+VoiceNone" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "novoice"), 0, new UserConfigStore(Path.Combine(root, "user-nv.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "novoice"), 0, new UserConfigStore(Path.Combine(root, "user-nv.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("VoiceNone.esp");

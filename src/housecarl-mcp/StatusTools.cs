@@ -72,7 +72,7 @@ static class StatusWire
         var sb = new StringBuilder();
         sb.Append("load order status — profile '").Append(d.ProfileName).Append("'\n");
         if (d.ManagerPath is not null) sb.Append("connection: ").Append(d.ManagerPath).Append('\n');
-        else sb.Append("instance: ").Append(d.InstanceDir ?? "explicit-paths mode").Append('\n'); // legacy probe seam
+        else sb.Append("connection: direct synthetic roots\n");
         sb.Append("mods:    ").Append(c.EnabledMods.Count).Append(" enabled (")
           .Append(c.LockedMods.Count).Append(" locked) · ").Append(c.DisabledMods.Count).Append(" disabled\n");
         sb.Append("plugins in load order: ").Append(c.OrderedPluginNames.Count).Append('\n');

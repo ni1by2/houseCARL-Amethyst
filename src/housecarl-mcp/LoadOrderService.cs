@@ -18,16 +18,13 @@ namespace HousecarlMcp;
 /// ORDER comes from the active Amethyst profile's loadorder.txt/plugins.txt activation state and its authoritative
 /// filemap/modindex winners. The server reads real native staging paths; deployed Data is never scanned to infer
 /// provenance. Freshness is autonomous and lazy: each tool call checks manager-owned inputs and rebuilds only when
-/// profile, winner, or deployment state changed. Legacy MO2/explicit constructors remain temporarily for inherited
-/// probes and are removed by the Linux packaging milestone.
+/// profile, winner, or deployment state changed. Direct roots exist only as an internal synthetic-test seam.
 /// </summary>
 public sealed class LoadOrderService : IDisposable
 {
-    // AMETHYST mode (the Linux product): the stable manifest selects an IModManagerLayout. Each freshness
-    // check re-reads deploy_state.json, so profile switches update every effective root without a restart.
-    // EXPLICIT and legacy INSTANCE modes remain only for inherited regression probes until Session 6 removes
-    // their public/packaging surface. UNCONFIGURED mode still boots and returns the connection prompt.
-    string? _instanceDir;                          // legacy probe seam; null in Amethyst product mode
+    // Amethyst product mode follows the manifest-backed layout. Direct roots are confined to synthetic probes.
+    /// <summary>Profiles root exposed only to inherited synthetic fixtures.</summary>
+    string? _fixtureProfilesRoot;
     /// <summary>Validated manifest path selecting Amethyst product mode; null in legacy/explicit probes.</summary>
     string? _manifestPath;
 
@@ -48,15 +45,15 @@ public sealed class LoadOrderService : IDisposable
     // Serializes the WHOLE resolve→stage→commit of every .esp write (2026-06-12 hunt F2): the MCP SDK dispatches tool
     // calls CONCURRENTLY, and without this two same-name writes could allocate the same folder (UniqueStem TOCTOU) and
     // cross-commit through the fixed .housecarl-tmp staging path — R1's success message shipping R2's bytes. Writes are
-    // seconds-long and rare; serializing them is correct (accuracy over perf). SetInstance takes it too, so an instance
-    // switch can never tear a write in flight across instances. Lock order where both are held: _writeGate THEN _gate.
+    // seconds-long and rare; serializing them is correct. Manager and fixture switches take it too, so a switch
+    // cannot tear a write across roots. Lock order where both are held: _writeGate then _gate.
     readonly object _writeGate = new();
     LoadOrderResolver? _resolver;
     CorpusRulebook? _rulebook;
     IReadOnlyList<string> _orderWarnings = Array.Empty<string>();
     // facegen-diagnostics Phase 2: the VFS-aware asset resolver (housecarl_asset_status), built LAZILY and only on an
     // ASSET query — a pure-record session never pays for it — and kept fresh the same way _resolver is. Dropped +
-    // rebuilt whenever the active profile changes (InvalidateAssetResolver in ReResolve / SetInstance): an enabled-mod
+    // rebuilt whenever the active profile changes: an enabled-mod
     // toggle changes the loose roots and the active-archive set, not just the plugin order. CHEAP to build (it reads BSA
     // file-TABLES, not the ~10s/180MB record index), so a full rebuild on a profile change is fine. See memory
     // project_facegen_diagnostics_resolver.
@@ -70,13 +67,11 @@ public sealed class LoadOrderService : IDisposable
     // for the process lifetime). Each baseline is statted BEFORE the read it baselines (TOCTOU: a write landing
     // during/after the read shows as a changed mtime on the next check, never absorbed).
     DateTime[] _profileMtimes = new DateTime[ProfileFileNames.Length];   // per ProfileFileNames, recorded at each order build
-    DateTime _iniMtime = DateTime.MinValue;                              // ModOrganizer.ini (instance-mode profile-switch baseline)
     IReadOnlyList<string> _resolvedPaths = Array.Empty<string>();   // ordered paths the current snapshot was built from (the cheap "did the order actually change?" check)
 
     static readonly string[] ProfileFileNames = { "loadorder.txt", "modlist.txt", "plugins.txt" };
 
-    /// <summary>Creates one service in Amethyst, legacy-instance, explicit-path, or unconfigured mode.</summary>
-    /// <param name="instanceDir">Legacy instance root; null for Amethyst/explicit/unconfigured modes.</param>
+    /// <summary>Creates one service in Amethyst, direct-root fixture, or unconfigured mode.</summary>
     /// <param name="dataDir">Initial vanilla Data root for explicit mode; otherwise empty until derivation.</param>
     /// <param name="modsDir">Initial staging root for explicit mode; otherwise empty until derivation.</param>
     /// <param name="profileDir">Initial profile root for explicit mode; otherwise empty until derivation.</param>
@@ -84,10 +79,9 @@ public sealed class LoadOrderService : IDisposable
     /// <param name="maxPlugins">Optional positive resolver cap; zero means unlimited.</param>
     /// <param name="store">Shared atomic owner of persisted user configuration.</param>
     /// <param name="manifestPath">Amethyst connection manifest, or null outside product mode.</param>
-    LoadOrderService(string? instanceDir, string dataDir, string modsDir, string profileDir, bool configured,
+    LoadOrderService(string dataDir, string modsDir, string profileDir, bool configured,
                      int maxPlugins, UserConfigStore store, string? manifestPath = null)
     {
-        _instanceDir = instanceDir;
         _manifestPath = manifestPath;
         _dataDir = dataDir;
         _modsDir = modsDir;
@@ -98,34 +92,82 @@ public sealed class LoadOrderService : IDisposable
         _store = store;
     }
 
-    /// <summary>INSTANCE mode (product default): derive the load-order roots + active profile from ONE MO2 instance folder
-    /// (lazily, on the first build). A null/blank <paramref name="instanceDir"/> ⇒ UNCONFIGURED (boots; tools prompt for the
-    /// path). The instance is re-read on a profile switch, so a mid-session switch is followed.</summary>
-    public static LoadOrderService WithInstance(string? instanceDir, int maxPlugins, UserConfigStore store)
-        => new(string.IsNullOrWhiteSpace(instanceDir) ? null : instanceDir.Trim(),
-               "", "", "", configured: !string.IsNullOrWhiteSpace(instanceDir), maxPlugins, store);
-
     /// <summary>Creates Linux product mode from an optional persisted Amethyst manifest.</summary>
     /// <param name="manifestPath">Manifest to activate lazily, or null/blank for a bootable unconfigured server.</param>
     /// <param name="maxPlugins">Optional positive resolver cap; zero means unlimited.</param>
     /// <param name="store">Shared user-configuration store.</param>
     /// <returns>A service that follows Amethyst profile switches without restarting.</returns>
     public static LoadOrderService WithAmethystConnection(string? manifestPath, int maxPlugins, UserConfigStore store)
-        => new(null, "", "", "", configured: !string.IsNullOrWhiteSpace(manifestPath), maxPlugins, store,
+        => new("", "", "", configured: !string.IsNullOrWhiteSpace(manifestPath), maxPlugins, store,
                string.IsNullOrWhiteSpace(manifestPath) ? null : manifestPath.Trim());
 
-    /// <summary>EXPLICIT mode (dev / non-portable override): the three roots are configured directly; no ModOrganizer.ini is
-    /// read and no profile-switch watch runs (the paths are fixed for the process lifetime).</summary>
+    /// <summary>Creates a direct-root developer fixture with no manager parser or profile-switch watcher.</summary>
     public static LoadOrderService WithExplicitPaths(string dataDir, string modsDir, string profileDir, int maxPlugins, UserConfigStore store)
-        => new(null, dataDir, modsDir, profileDir, configured: true, maxPlugins, store);
+        => new(dataDir, modsDir, profileDir, configured: true, maxPlugins, store);
+
+    /// <summary>Creates a manager-neutral service fixture from already derived native roots.</summary>
+    /// <param name="dataDir">Synthetic vanilla Data root.</param>
+    /// <param name="modsDir">Synthetic staged-mod root.</param>
+    /// <param name="profileDir">Synthetic active profile directory.</param>
+    /// <param name="overwriteDir">Synthetic overwrite staging directory.</param>
+    /// <param name="profilesRoot">Optional parent containing sibling synthetic profiles.</param>
+    /// <param name="maxPlugins">Optional positive resolver cap; zero means unlimited.</param>
+    /// <param name="store">Isolated fixture configuration store.</param>
+    /// <returns>A service that exercises record and asset behavior without a manager-specific parser.</returns>
+    internal static LoadOrderService WithFixturePaths(
+        string dataDir, string modsDir, string profileDir, string overwriteDir,
+        string? profilesRoot, int maxPlugins, UserConfigStore store)
+    {
+        var service = new LoadOrderService(
+            dataDir, modsDir, profileDir, configured: true, maxPlugins, store);
+        service._overwriteDir = overwriteDir;
+        service._fixtureProfilesRoot = profilesRoot;
+        return service;
+    }
+
+    /// <summary>Repoints an inherited synthetic fixture and invalidates every root-dependent cache.</summary>
+    /// <param name="dataDir">Replacement vanilla Data root.</param>
+    /// <param name="modsDir">Replacement staged-mod root.</param>
+    /// <param name="profileDir">Replacement active profile.</param>
+    /// <param name="overwriteDir">Replacement overwrite root.</param>
+    /// <param name="profilesRoot">Optional sibling-profile root.</param>
+    /// <remarks>This internal seam has no persistence or manager parsing and is never used by the product.</remarks>
+    internal void SwitchFixturePaths(
+        string dataDir, string modsDir, string profileDir,
+        string overwriteDir, string? profilesRoot)
+    {
+        lock (_writeGate)
+        lock (_gate)
+        {
+            _manifestPath = null;
+            _layout = null;
+            _managerSnapshot = null;
+            _dataDir = dataDir;
+            _modsDir = modsDir;
+            _profileDir = profileDir;
+            _profileName = Path.GetFileName(profileDir.TrimEnd('\\', '/'));
+            _overwriteDir = overwriteDir;
+            _fixtureProfilesRoot = profilesRoot;
+            _configured = true;
+            _resolver?.Dispose();
+            _resolver = null;
+            _assetResolver?.Dispose();
+            _assetResolver = null;
+            _resolvedPaths = Array.Empty<string>();
+            _profileMtimes = new DateTime[ProfileFileNames.Length];
+            _orderWarnings = Array.Empty<string>();
+            InvalidateClassParents();
+            Interlocked.Increment(ref _gameRootsGen);
+        }
+    }
 
     /// <summary>TEST SEAM (the harness' CI regression guards only): wrap a PREBUILT resolver so a guard can drive
-    /// the service-layer query logic (CrossQuery's scan loop) on synthetic plugins — no MO2 profile, no user config
+    /// the service-layer query logic on synthetic plugins without a manager profile or user config
     /// on disk. Explicit-mode freshness checks no-op (no ini, empty profile dir); the caller owns the resolver's
     /// lifetime. Never used by the product.</summary>
     internal static LoadOrderService ForGuard(LoadOrderResolver resolver, UserConfigStore store)
     {
-        var svc = new LoadOrderService(null, "", "", "", configured: true, maxPlugins: 0, store);
+        var svc = new LoadOrderService("", "", "", configured: true, maxPlugins: 0, store);
         svc._resolver = resolver;
         return svc;
     }
@@ -134,8 +176,7 @@ public sealed class LoadOrderService : IDisposable
     /// mod provides (stale profile files). Surfaced, never swallowed. Empty until the resolver first builds.</summary>
     public IReadOnlyList<string> OrderWarnings => _orderWarnings;
 
-    /// <summary>The write pre-flight rulebook (corpus.json), loaded once. CorpusPath is set absolute at startup (§8.4),
-    /// so this resolves regardless of the MO2-launched process's CWD.</summary>
+    /// <summary>The write pre-flight rulebook, loaded once from the absolute startup corpus path.</summary>
     CorpusRulebook Rulebook => _rulebook ??= CorpusRulebook.Load();
 
     /// <summary>The resolver, built on first access and kept fresh on every subsequent access. Throws (loud, Q3)
@@ -236,7 +277,7 @@ public sealed class LoadOrderService : IDisposable
     /// cheap three-file text parse, this runs only on a REFUSAL (never on a hot path), and a stale answer here would be
     /// the precise failure this whole issue is about — telling someone a plugin is unticked after they ticked it.</para>
     /// <para>The ROOTS are read live from the service's own fields for the same reason, NOT captured when the resolver
-    /// was built: a profile switch reassigns them (RederiveIfIniChanged) but only rebuilds the resolver when the
+    /// was built: a profile switch reassigns them (RefreshManagerLayout) but only rebuilds the resolver when the
     /// resolved PATH LIST changed, so two profiles with identical active sets and different UNTICKED lists would leave
     /// a captured closure reading the old profile's plugins.txt — answering "not registered" for a plugin that is
     /// merely unticked, which is precisely the confusion this explainer exists to end (review of PR #274).</para>
@@ -377,7 +418,7 @@ public sealed class LoadOrderService : IDisposable
     /// none is built (a pure-record session never pays for the asset resolver). Caller holds <see cref="_gate"/>.</summary>
     void InvalidateAssetResolver() { _assetResolver?.Dispose(); _assetResolver = null; }
 
-    /// <summary>Resolve a batch of Data-relative asset paths through the MO2 VFS (housecarl_asset_status): for each,
+    /// <summary>Resolves Data-relative asset paths through the captured Amethyst winner view: for each,
     /// which source provides it and which copy WINS (loose beats BSA; among BSAs the higher plugin rank). ONE
     /// <see cref="AssetResolver.Capture"/> for the whole batch, so every path AND the build-level BsaFailures /
     /// ReadIncomplete caveat describe a single build (Q3). A drive-rooted or '..'-escaping path is a per-path
@@ -867,7 +908,7 @@ public sealed class LoadOrderService : IDisposable
         }
 
         // SKSE-CORE sanity input: is an skse64 loader visible at all? Two places to look (§4b's optional note):
-        // the game ROOT (a manual install), and each enabled mod's Root\ folder — the MO2 Root Builder layout, where
+        // the game root and each enabled mod's Root/ folder — the external-tool layout where
         // the loader lives at mods\<mod>\Root\skse64_loader.exe and only materializes in the game root at launch
         // (live-gate finding: ARR ships SKSE exactly this way, and the root-only check false-noted it). The mod list
         // is the SAME capture as the view (never a second unpinned profile read). Tri-state (Q3, review finding): a
@@ -1358,7 +1399,7 @@ public sealed class LoadOrderService : IDisposable
     /// them to <see cref="NifService.Set"/> (which applies + VERIFIES with the two offset-immune gates, or refuses loud —
     /// nothing is written to disk unless it verified), then place the verified bytes. Two lanes, mirroring the record
     /// write lanes:
-    ///   • DEFAULT (non-destructive): write into a NEW houseCARL-owned MO2 mod folder (same relative path) that the modder
+    ///   • DEFAULT (non-destructive): write into a new houseCARL-owned Amethyst staging mod that the modder
     ///     enables + sorts ABOVE the current winner so the edited copy WINS the VFS — originals untouched. A BSA-packed
     ///     source naturally becomes a loose winning override this way.
     ///   • IN-PLACE (opt-in, <paramref name="inPlace"/>): OVERWRITE the winning LOOSE file where it sits, riding the SAME
@@ -1501,7 +1542,7 @@ public sealed class LoadOrderService : IDisposable
 
     // ---- facegen-diagnostics Phase 3: place an asset so the correct copy WINS the VFS (housecarl_place_asset) ----
 
-    /// <summary>Place one-or-more assets (FaceGen .nif/.dds, or any Data-relative file) into a NEW houseCARL-owned MO2 mod
+    /// <summary>Places assets into a new houseCARL-owned Amethyst staging mod
     /// folder so the CORRECT copy can win the VFS (housecarl_place_asset = one; housecarl_bulk_place_asset = many). For
     /// each request: resolve its current providers (auto-resolve a source when none was named — sole provider used, &gt;1
     /// refused as ambiguous, 0 refused with guidance), read the source bytes IN PROCESS (a loose file, or a single entry
@@ -1703,7 +1744,7 @@ public sealed class LoadOrderService : IDisposable
         // the count from one, the warnings beside it from another. The fresh composition stays OUTSIDE the gate by
         // design (it is documented as always-current and is not judged against the resolver's build).
         LoadOrderResolver.IndexView view; IReadOnlyList<string> warnings; bool profileChanged; string profileDir; string profileName;
-        string? instanceDir; string? managerPath;
+        string? managerPath;
         lock (_gate)
         {
             view = Resolver.Capture();                             // force build/refresh; ONE build for count + exclusions (HCBR-2026-06-11-02)
@@ -1711,13 +1752,12 @@ public sealed class LoadOrderService : IDisposable
             profileChanged = ProfileFilesChanged();
             profileDir = _profileDir;
             profileName = _profileName;                            // captured under the SAME gate (hunt F6) — one snapshot, never re-derived at render
-            instanceDir = _instanceDir;                            // the configured MO2 instance folder; null ⇒ explicit-paths / unconfigured mode
             managerPath = _manifestPath;
         }
         var comp = ReadManagerComposition(profileDir);             // FRESH composition (always current)
         return new LoadOrderStatusData(
             comp, warnings, view.PluginCount, _maxPlugins, profileChanged, profileDir, profileName,
-            instanceDir, managerPath, view.ExcludedPlugins);
+            managerPath, view.ExcludedPlugins);
     }
 
     /// <summary>
@@ -1732,8 +1772,9 @@ public sealed class LoadOrderService : IDisposable
         {
             if (!_configured) throw NotConfigured();              // fresh install → the tool returns the trained prompt
             EnsurePathsDerived();                                 // instance mode: derive the ACTIVE ProfileDir (cheap ini read; throws Q3 if the instance is unusable)
-            managerMode = _instanceDir is not null || _manifestPath is not null;
-            profilesRoot = managerMode ? (Path.GetDirectoryName(_profileDir.TrimEnd('\\', '/')) ?? "") : "";
+            managerMode = _manifestPath is not null || _fixtureProfilesRoot is not null;
+            profilesRoot = _fixtureProfilesRoot
+                ?? (managerMode ? (Path.GetDirectoryName(_profileDir.TrimEnd('\\', '/')) ?? "") : "");
         }
 
         var name = string.IsNullOrWhiteSpace(requested) ? null : requested.Trim();
@@ -1754,9 +1795,8 @@ public sealed class LoadOrderService : IDisposable
         return new NamedProfileResult(true, available, match, dir, comp, warnings);
     }
 
-    /// <summary>The usable profile names under <paramref name="profilesRoot"/> — each Amethyst profile is one subfolder, and a
-    /// profile that's been opened at least once has a loadorder.txt (the same validity signal <see cref="Mo2Instance"/> uses
-    /// for the ACTIVE profile). Folders WITHOUT one — a never-opened profile, or a stray non-profile dir — are skipped, so
+    /// <summary>The usable profile names under <paramref name="profilesRoot"/>. Each opened Amethyst profile has
+    /// loadorder.txt. Folders without it are skipped, so
     /// the list never OFFERS (and a name match never LANDS ON) a folder that would read back as an all-zero composition
     /// (Q3: don't present an uninitialized folder as an empty profile). Sorted case-insensitively. Never throws — an
     /// unreadable/absent root yields an empty list, so the caller surfaces "no profiles" honestly rather than failing the
@@ -1776,7 +1816,7 @@ public sealed class LoadOrderService : IDisposable
         catch { return Array.Empty<string>(); }                  // root vanished / access denied — empty, not a thrown status read
     }
 
-    /// <summary>True if any of the three MO2 profile files' mtimes DIFFERS from the last build's baseline — the user
+    /// <summary>True if any of the three active profile files differs from the last build's baseline — the user
     /// toggled mods/plugins, re-sorted, or RESTORED A BACKUP since, so the resolver's resolved set is behind the live
     /// profile. Compared by value (!=), like the resolver's own plugin sweep: a restored backup carries an OLDER
     /// mtime, which an is-newer comparison was blind to (hunt F8). Caller holds <see cref="_gate"/>.</summary>
@@ -1803,15 +1843,15 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>To-do #6 — LAZY freshness, run on each tool call once the snapshot exists. Two signals, both cheap-mtime:
-    /// (1) instance mode — did the user SWITCH PROFILES (ModOrganizer.ini changed)? then re-derive the roots + re-resolve
-    /// against the new profile (<see cref="RederiveIfIniChanged"/>). (2) did the ACTIVE profile's files change (a toggle /
+    /// (1) did Amethyst switch profiles or change manager-owned inputs? Refresh the layout.
+    /// (2) did the active profile's files change (a toggle /
     /// re-sort)? then CHEAPLY re-resolve, paying the ~12s deep re-index ONLY when the resolved order actually changed — so a
     /// no-plugin toggle, or a change that nets back to the same order, costs ~nothing. NEVER fires BETWEEN tool calls (no
     /// watcher / no loop), so an actively-sorting/switching user can't make the server thrash. Caller holds <see cref="_gate"/>;
     /// <see cref="_resolver"/> is non-null.</summary>
     void RefreshOnProfileChange()
     {
-        if (RederiveIfIniChanged()) return;                      // instance mode: a profile SWITCH already re-derived + re-resolved
+        if (RefreshManagerLayout()) return;                      // a profile switch already re-derived and re-resolved
         if (!ProfileFilesChanged()) return;                      // nothing touched the active profile → nothing to do
         ReResolve();
     }
@@ -1819,38 +1859,22 @@ public sealed class LoadOrderService : IDisposable
     /// <summary>Refreshes manager roots when the active profile or manager-owned inputs change.</summary>
     /// <returns>True when a changed manager snapshot was installed and re-resolution ran.</returns>
     /// <remarks>
-    /// Amethyst mode delegates freshness and fail-loud validation to <see cref="IModManagerLayout"/>. The
-    /// legacy branch retains its prior best-effort ini behavior only for inherited probes. Caller holds
-    /// <see cref="_gate"/>.
+    /// Amethyst mode delegates freshness and fail-loud validation to <see cref="IModManagerLayout"/>.
+    /// Direct-root fixtures have no manager layout to refresh. Caller holds <see cref="_gate"/>.
     /// </remarks>
-    bool RederiveIfIniChanged()
+    bool RefreshManagerLayout()
     {
-        if (_manifestPath is not null)
-        {
-            EnsurePathsDerived();
-            if (_layout is null || !_layout.RefreshIfStale()) return false;
-            var snapshot = _layout.Capture();
-            bool rootsChanged = !PathEq(snapshot.ProfileDir, _profileDir) || !PathEq(snapshot.ModsDir, _modsDir)
-                                || !PathEq(snapshot.VanillaDataDir, _dataDir) || !PathEq(snapshot.OverwriteDir, _overwriteDir);
-            Apply(snapshot);
-            if (rootsChanged) InvalidateClassParents();
-            ReResolve();
-            return true;
-        }
-        if (_instanceDir is null) return false;                  // explicit/override mode — no ini to watch
-        var ini = Mo2Instance.IniPath(_instanceDir);
-        if (!File.Exists(ini)) return false;                     // missing/mid-replace → keep last good, retry next call
-        var iniMtime = SafeMtime(ini);                           // stat BEFORE the read (TOCTOU): an ini write during/after TryResolve is caught next call
-        if (iniMtime == _iniMtime) return false;                 // compared by VALUE — a restored-backup ini (OLDER mtime) is a change too (hunt F8)
-        if (!Mo2Instance.TryResolve(_instanceDir, out var p) || p is null) return false;   // mid-write/invalid → keep last good, retry next call
-        _iniMtime = iniMtime;                                    // advance only on a clean read
-        bool switched = !PathEq(p.ProfileDir, _profileDir) || !PathEq(p.ModsDir, _modsDir) || !PathEq(p.DataDir, _dataDir)
-                        || !PathEq(p.OverwriteDir, _overwriteDir);
-        if (!switched) return false;                             // ini touched but nothing we resolve from changed
-        _profileDir = p.ProfileDir; _modsDir = p.ModsDir; _dataDir = p.DataDir; _profileName = p.ProfileName; _overwriteDir = p.OverwriteDir;
-        System.Threading.Interlocked.Increment(ref _gameRootsGen);   // the game roots moved → the runtime memo re-probes (PR #210 review #1)
-        InvalidateClassParents();                                // the mods tree may have moved — drop the cached hierarchy with it
-        ReResolve();                                             // a new profile ⇒ the order differs ⇒ ReResolve deep-re-indexes
+        if (_manifestPath is null) return false;
+        EnsurePathsDerived();
+        if (_layout is null || !_layout.RefreshIfStale()) return false;
+        var snapshot = _layout.Capture();
+        bool rootsChanged = !PathEq(snapshot.ProfileDir, _profileDir)
+                            || !PathEq(snapshot.ModsDir, _modsDir)
+                            || !PathEq(snapshot.VanillaDataDir, _dataDir)
+                            || !PathEq(snapshot.OverwriteDir, _overwriteDir);
+        Apply(snapshot);
+        if (rootsChanged) InvalidateClassParents();
+        ReResolve();
         return true;
     }
 
@@ -1895,14 +1919,13 @@ public sealed class LoadOrderService : IDisposable
             _profileMtimes = profileMtimes;
         }
         // paths.Count == 0 → almost certainly a transient mid-write read; keep the last good snapshot and DON'T advance the
-        // baseline, so the next tool call re-checks and self-recovers once MO2 finishes writing.
+        // baseline, so the next tool call re-checks after Amethyst finishes writing.
     }
 
     /// <summary>Derives effective manager paths on first use.</summary>
     /// <remarks>
-    /// Product mode validates and captures the Amethyst manifest. Explicit mode is already derived. The
-    /// legacy instance branch remains for inherited probes until Session 6 removes it. Caller holds
-    /// <see cref="_gate"/>.
+    /// Product mode validates and captures the Amethyst manifest. Direct-root fixtures are already derived.
+    /// Caller holds <see cref="_gate"/>.
     /// </remarks>
     void EnsurePathsDerived()
     {
@@ -1916,13 +1939,7 @@ public sealed class LoadOrderService : IDisposable
             }
             return;
         }
-        if (_instanceDir is null) return;                        // explicit mode — roots configured directly
-        if (_profileDir.Length > 0) return;                      // already derived (a prior build / SetInstance); RederiveIfIniChanged owns later updates
-        var iniMtime = SafeMtime(Mo2Instance.IniPath(_instanceDir));   // stat BEFORE the read (TOCTOU): an ini write during/after Resolve is caught next call
-        var p = Mo2Instance.Resolve(_instanceDir);               // throws (Q3) naming the missing piece if not a usable instance
-        _profileDir = p.ProfileDir; _modsDir = p.ModsDir; _dataDir = p.DataDir; _profileName = p.ProfileName; _overwriteDir = p.OverwriteDir;
-        _iniMtime = iniMtime;
-        InvalidateClassParents();                                // _modsDir just gained a value — a cache built before derivation is baseline-only (hunt F1)
+        // Direct-root fixtures already supplied every effective path.
     }
 
     /// <summary>Installs a freshly captured manager snapshot as the service's active path and deployment state.</summary>
@@ -2111,7 +2128,7 @@ public sealed class LoadOrderService : IDisposable
     // InstalledGameRuntime's memo: the resolved exe re-validated by a cheap mtime stat per call; a probed MISS is
     // session-stable (no re-paying the GameLocator registry/Steam walk per tool call for a permanently-null answer).
     // _gameRootsGen is the memo's INVALIDATION signal (PR #210 review finding #1): every site that re-points the game
-    // roots (SetInstance, RederiveIfIniChanged's switch) bumps it, and a memo cached at an older generation re-probes —
+    // roots (fixture switch or manager-layout refresh) bump it, and a memo cached at an older generation re-probes —
     // otherwise an instance switch could keep adjudicating version-LOCKED plugins against the PREVIOUS install's exe
     // (a silently wrong PASS/FAIL), or stay stuck at a prior instance's null forever. A lock-free Interlocked counter,
     // NOT a locked reset: the bump sites hold _gate, and taking _runtimeGate under _gate would invert the
@@ -2174,7 +2191,7 @@ public sealed class LoadOrderService : IDisposable
         try
         {
             // The bundled GameFinder locator (Steam/GOG/Xbox), via Mutagen — finds the REAL Skyrim SE install (App 489830),
-            // where the Creation Kit + sources live, regardless of where MO2's load order points.
+            // where the Creation Kit and sources live, regardless of the active profile's isolated game root.
             if (new Mutagen.Bethesda.Installs.GameLocator().TryGetGameDirectory(
                     Mutagen.Bethesda.GameRelease.SkyrimSE, out var dir) && !string.IsNullOrWhiteSpace(dir.Path))
                 hints.Add(NormalizeGameDir(dir.Path));
@@ -2190,47 +2207,6 @@ public sealed class LoadOrderService : IDisposable
         var t = p.TrimEnd('\\', '/');
         return Path.GetFileName(t).Equals("Data", StringComparison.OrdinalIgnoreCase) ? (Path.GetDirectoryName(t) ?? t) : t;
     }
-
-    /// <summary>Point houseCARL at an MO2 instance folder — first-run setup AND switching between instances ("jump around").
-    /// VALIDATES it (<see cref="Mo2Instance.Resolve"/> throws a clear Q3 message if it isn't usable — nothing is changed or
-    /// persisted on failure), then re-points the live service (derives the roots + active profile, drops the cached resolver
-    /// so the next tool call rebuilds against the new instance) and PERSISTS the choice to the user config file so it
-    /// survives a restart. Returns the derived paths + whether the persist succeeded, for the tool's confirmation.</summary>
-    public (Mo2InstancePaths paths, bool persisted, string? persistError, string? persistNote) SetInstance(string instanceDir)
-    {
-        // The ini baseline is statted BEFORE Resolve reads the instance (hunt F7 — this was the one stamp-AFTER-the-read
-        // in the file: an MO2 ini write landing between Resolve's read and the stamp was absorbed into the baseline and
-        // its profile switch stayed invisible forever). Statting first makes a during/after-read write show as a changed
-        // mtime on the next call — the same TOCTOU discipline every other baseline here follows.
-        var iniMtime = SafeMtime(Mo2Instance.IniPath(instanceDir.Trim()));
-        var paths = Mo2Instance.Resolve(instanceDir);            // throws (Q3) if not a usable MO2 instance — the tool renders the reason
-        lock (_writeGate)                                        // hunt F2: an instance switch waits for any in-flight write — never tears one across instances
-        lock (_gate)
-        {
-            _instanceDir = paths.InstanceDir;
-            _dataDir = paths.DataDir; _modsDir = paths.ModsDir; _profileDir = paths.ProfileDir; _profileName = paths.ProfileName;
-            _overwriteDir = paths.OverwriteDir;
-            _iniMtime = iniMtime;
-            _configured = true;
-            _resolver?.Dispose(); _resolver = null;              // force a rebuild against the new instance on the next query
-            _assetResolver?.Dispose(); _assetResolver = null;    // the asset resolver rebuilds against the new instance too (Phase 2)
-            _resolvedPaths = Array.Empty<string>();
-            _profileMtimes = new DateTime[ProfileFileNames.Length];   // unset — the next build records fresh baselines against the new profile
-            _orderWarnings = Array.Empty<string>();
-            InvalidateClassParents();                            // every sibling cache drops on a switch — the hierarchy too (PR #47 review)
-            System.Threading.Interlocked.Increment(ref _gameRootsGen);   // new instance = possibly a different game install — the runtime memo must re-probe, never adjudicate B's locked plugins against A's exe (PR #210 review #1)
-        }
-        var (persisted, persistError, persistNote) = PersistInstanceDir(paths.InstanceDir);
-        return (paths, persisted, persistError, persistNote);
-    }
-
-    /// <summary>Persist the chosen instance dir through the shared <see cref="UserConfigStore"/> (read-modify-write), so it
-    /// survives a restart AND coexists with any saved tool paths — the store never clobbers the other concern's field.
-    /// Best-effort + HONEST (Q3): a write failure (e.g. a read-only data dir) is reported, not swallowed — the session
-    /// still works, but the user is told the choice won't survive a restart. <c>note</c> carries a corrupt-file recovery
-    /// (hunt F3 — the prior file was backed up; other saved settings were lost), rendered even on success.</summary>
-    (bool ok, string? error, string? note) PersistInstanceDir(string instanceDir)
-        => (true, null, null); // legacy synthetic-test path; the Linux product persists only Amethyst manifests
 
     /// <summary>Validates, activates, and persists a schema-v1 Amethyst connection manifest.</summary>
     /// <param name="manifestPath">Absolute native path to connection.json.</param>
@@ -2250,7 +2226,6 @@ public sealed class LoadOrderService : IDisposable
         lock (_writeGate)
         lock (_gate)
         {
-            _instanceDir = null;
             _manifestPath = snapshot.ManifestPath;
             _layout = layout;
             Apply(snapshot);
@@ -3004,7 +2979,7 @@ public sealed class LoadOrderService : IDisposable
     /// (<see cref="LocatePluginFileOnDisk"/> — enabled, disabled, AND unlisted mod folders) and swept OFF-ORDER: its
     /// own overlay, links resolved against the active order + the file's own records. This is the pre-enable verify
     /// lane (HCBR-2026-07-14-02 gap 3) — the pre-ship dangling-ref sweep of a patch houseCARL just wrote, BEFORE the
-    /// MO2 refresh puts it in plugins.txt. A name found nowhere, or in several folders, still fails loud (Q3).</para></summary>
+    /// Amethyst refresh puts it in plugins.txt. A name found nowhere, or in several folders, still fails loud.</para></summary>
     public ErrorCheckResult CheckErrors(IReadOnlyList<string>? plugins, int limit)
     {
         if (plugins is { Count: > 0 })
@@ -3111,7 +3086,7 @@ public sealed class LoadOrderService : IDisposable
 
             // P8b: pre-resolve any CopyFrom source that is OFF-ORDER (from_plugin on disk but NOT in the active order —
             // the "copy from the disabled OLD patch" case). Active-order sources are resolved INSIDE Apply via its own
-            // captured view (sharing the winner's build); only off-order files need the MO2 on-disk locate here, and
+            // captured view; only off-order synthetic files need the staging locator here, and
             // their overlays must stay OPEN through the serialize (CopyField deep-copies through them) — disposed after.
             Dictionary<WritePatchBuilder.PatchEdit, IMajorRecordGetter>? copyFromSources = null;
             List<IDisposable>? offOrderOverlays = null;
@@ -3296,7 +3271,7 @@ public sealed class LoadOrderService : IDisposable
     /// <summary>Writable-parent pre-flight for the in-place swap (§6 layer 3): the staged temp is a sibling of the
     /// target, so prove the parent is writable NOW, loud, rather than degrade to a non-atomic write later. True (with a
     /// named <paramref name="why"/>) ⇒ refuse. Probes by writing + deleting an empty sibling temp. This checks the PARENT
-    /// is writable — NOT that the target file isn't EXTERNALLY locked (MO2/xEdit mid-operation); that case isn't
+    /// is writable — not that the target file is free from an external editor lock; that case is not
     /// pre-empted here but surfaces LOUD at the <c>File.Replace</c> swap with the original byte-intact (the correct Q3
     /// outcome, not a corruption path), so it needs no separate pre-flight.</summary>
     static bool InPlaceParentUnwritable(string targetPath, out string why)
@@ -3324,16 +3299,16 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>Stamp the distinct <c>[houseCARL] editedInPlace=&lt;ISO&gt;</c> audit line into the target mod's
-    /// <c>meta.ini</c> (the MO2-undeployed mod-root file) — a breadcrumb that houseCARL touched this user mod, WITHOUT
+    /// <c>meta.ini</c> in the staging-mod root — a breadcrumb that houseCARL touched this user mod, without
     /// ever writing <c>generated=true</c> (so <see cref="IsHouseCarlOwned"/> still reads FALSE and a later into= can't
     /// blind-overwrite it — the safety property). PRESERVES every existing line (merges into / creates the
-    /// <c>[houseCARL]</c> section), and only for an MO2 mod folder under ModsDir (never pollutes the game Data dir for a
+    /// <c>[houseCARL]</c> section), and only for an Amethyst staging folder under ModsDir (never pollutes game Data for a
     /// loose plugin). Best-effort: returns a Q3 note on failure (the edit already succeeded), null on success or N/A.</summary>
     string? MergeEditedInPlaceMarker(string? modFolder)
     {
         try
         {
-            if (string.IsNullOrEmpty(modFolder) || !IsUnderModsDir(modFolder)) return null;   // N/A for a non-MO2 target
+            if (string.IsNullOrEmpty(modFolder) || !IsUnderModsDir(modFolder)) return null;
             var meta = Path.Combine(modFolder, "meta.ini");
             var stamp = $"editedInPlace={DateTime.UtcNow:o}";
             var lines = File.Exists(meta) ? File.ReadAllLines(meta).ToList() : new List<string>();
@@ -3366,7 +3341,7 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>True iff <paramref name="folder"/> is ModsDir itself or a folder directly/indirectly under it — the gate
-    /// that keeps the editedInPlace marker out of the game Data dir for a loose (non-MO2-managed) in-place target.</summary>
+    /// that keeps the editedInPlace marker out of game Data for a non-staging in-place target.</summary>
     bool IsUnderModsDir(string folder)
     {
         if (string.IsNullOrEmpty(_modsDir)) return false;
@@ -3779,7 +3754,7 @@ public sealed class LoadOrderService : IDisposable
     /// <paramref name="acknowledge"/>=true — a first call without it returns a CONFIRM prompt listing exactly what will be
     /// rewritten (never a silent original-file edit).</para>
     ///
-    /// <para>An INACTIVE target (on disk but not in the load order — the fresh houseCARL patch pre-MO2-refresh, or a
+    /// <para>An inactive target (on disk but not in the load order — a fresh houseCARL patch before Amethyst refresh, or a
     /// disabled mod) is resolved by filename via the shared locate contract and compacted OFF-ORDER; its declared
     /// masters must still be active (HCBR-2026-07-14-02 gap 3). An override-only target with esl=true takes the
     /// FLAG-ONLY lane (empty remap; the write sets the light flag).</para>
@@ -3819,7 +3794,7 @@ public sealed class LoadOrderService : IDisposable
             {
                 // NOT in the active order → resolve the FILE on disk (enabled, disabled, AND unlisted mod folders — the
                 // shared locate contract). This is the pre-enable finishing lane (HCBR-2026-07-14-02 gap 3): ESL-flagging
-                // the patch houseCARL just wrote, BEFORE the MO2 refresh puts it in plugins.txt. The requirement that
+                // the patch houseCARL just wrote before Amethyst refresh puts it in plugins.txt. The requirement that
                 // actually protects correctness is unchanged: every DECLARED MASTER must be active (CompactBuild refuses
                 // otherwise), and the external-referencer scan still runs over the active order — which, for a plugin
                 // nothing active can master, is exactly the right (empty) answer.
@@ -3926,7 +3901,7 @@ public sealed class LoadOrderService : IDisposable
                 return WritePatchBuilder.CompactOutcome.Fail(unwritable);
 
             // 5. output location — in-place (overwrite the original) or a NEW file keeping the source's EXACT basename in
-            //    a fresh houseCARL mod folder (so its masters still resolve; the user swaps the folder in MO2 to use it).
+            //    a fresh houseCARL staging folder, so its masters resolve until the user switches to it in Amethyst.
             string outPath; bool createdFresh = false; RiderFolder rf = default;
             if (inPlace) outPath = srcPath;
             else
@@ -4059,7 +4034,7 @@ public sealed class LoadOrderService : IDisposable
     /// NEW name (collision-only renumber — the first donor in load order keeps its object IDs; cross-donor conflicts
     /// on the same record resolve to the LOAD-ORDER WINNER and are reported; a losing donor's un-relisted nested
     /// children graft into the winner). The donors are NEVER touched — new-file lane only, no consent gate; the user
-    /// reviews M in xEdit, enables its folder, and deactivates the donor PLUGINS in MO2 (the donor MOD FOLDERS stay
+    /// reviews M in xEdit, enables its folder, and deactivates the donor plugins in Amethyst (the donor mod folders stay
     /// enabled — the merged records still reference the donors' path-keyed assets, which only those folders serve;
     /// the carries cover ONLY the FormID-keyed facegen/voice/seq). External referencers AND overriders
     /// of donor records are WARNED loud and named (never a refusal: nothing breaks at write time — the donors stay
@@ -4148,7 +4123,7 @@ public sealed class LoadOrderService : IDisposable
             if (!plan.Success) return WritePatchBuilder.MergeOutcome.Fail(plan.Error!);
 
             // ---- 3. identify-pass — WARN-and-proceed (the A4 posture; unlike compact this NEVER refuses: the donors stay
-            //      installed and ACTIVE until the user swaps in MO2, so nothing breaks at write time. The report names each
+            //      installed and active until the user swaps them in Amethyst, so nothing breaks at write time.
             //      affected plugin with the remedy — include it in the merge set, or handle it before disabling the donors.) ----
             var targets = plan.Dict.Keys.ToHashSet();
             var transformSet = new HashSet<string>(donorNames, StringComparer.OrdinalIgnoreCase);
@@ -4485,7 +4460,7 @@ public sealed class LoadOrderService : IDisposable
                 //         which may be released by now). Donor-disk direct lanes exist for BOTH donor-side files —
                 //         the named file's folder AND the auto-widened defining plugin's (review finding: a widened
                 //         copy's facegen lives in the DEFINING mod's folder, not the override patch's) — but only
-                //         under an MO2 mod folder, NEVER the game Data folder, where every vanilla BSA would
+                //         under an Amethyst staging folder, never game Data, where every vanilla BSA would
                 //         misclassify as "the donor's" (review finding). ----
                 NpcAssetOutcome assets;
                 try
@@ -4975,7 +4950,7 @@ public sealed class LoadOrderService : IDisposable
         => dotted.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
 
     /// <summary>Resolve a patch's output path under the FOLDER-PER-PATCH model (Aaron-locked 2026-06-02): each patch is
-    /// its OWN MO2 mod folder — <c>&lt;ModsDir&gt;\houseCARL - &lt;name&gt;\&lt;name&gt;.esp</c> — so every houseCARL
+    /// its own Amethyst staging folder — <c>&lt;ModsDir&gt;/houseCARL - &lt;name&gt;/&lt;name&gt;.esp</c> — so every houseCARL
     /// plugin is a first-class mod the user enables / orders / removes independently. A NEW patch always creates a fresh,
     /// marker-stamped folder (name auto-suffixed _001… so a prior reviewed patch is never clobbered);
     /// <paramref name="into"/> EXTENDS an existing houseCARL-owned patch (replace / modify its own plugins).
@@ -5061,7 +5036,7 @@ public sealed class LoadOrderService : IDisposable
     /// extracted loose files) — the folder-per-patch model generalised beyond the .esp write path. A fresh marker-stamped
     /// folder (<paramref name="defaultStem"/> names it when patchName is blank; auto-suffixed so a prior one is never
     /// clobbered) or <paramref name="into"/> an existing houseCARL-owned one. ORIGINALS UNTOUCHED (Q3): refuses a folder
-    /// houseCARL didn't create. Derives ModsDir CHEAPLY (reads ModOrganizer.ini; NO ~10s index build). Throws the trained
+    /// houseCARL did not create. Reads the already derived ModsDir without building the record index. Throws the trained
     /// prompt when unconfigured. Reuses the same ownership/marker helpers as the .esp write path. The returned
     /// <see cref="RiderFolder.CreatedFresh"/> flag drives <see cref="RemoveOrNameRiderResidue"/> on a rider failure.</summary>
     public RiderFolder ResolvePatchModFolder(string? patchName, string? into, string defaultStem)
@@ -5110,7 +5085,7 @@ public sealed class LoadOrderService : IDisposable
     /// <see cref="ResolvePatchModFolder"/> (no houseCARL mod folder is cut under ModsDir), and the folder is USER-OWNED — the
     /// returned <see cref="RiderFolder"/> carries CreatedFresh=false, so <see cref="RemoveOrNameRiderResidue"/> never deletes
     /// it on a failed compile (it early-returns on !CreatedFresh). <paramref name="deployWarning"/> is a Q3 note (non-null)
-    /// when the final Scripts\ path is under neither the MO2 mods tree nor the game's Data — the .pex compiles but the game
+    /// when the final Scripts path is under neither Amethyst staging nor game Data — the .pex compiles but the game
     /// won't auto-load it from there, so a clean "done" is never reported for a .pex that won't deploy. Refuses loud (Q3) on
     /// an unusable output_dir (a malformed path, or a path that names an existing FILE).</summary>
     public RiderFolder ResolveExplicitScriptFolder(string outputDir, out string? deployWarning)
@@ -5333,7 +5308,7 @@ public sealed class LoadOrderService : IDisposable
     void InvalidateClassParents() { lock (_classParentsLock) { _classParents = null; _classParentsNote = null; } }
 
     /// <summary>The decompiler's child→parent class map: committed vanilla baseline (beside the exe) + loose .psc
-    /// headers across the MO2 mods tree (mods that ship sources — SKSE, PO3, …). Built on FIRST decompile call,
+    /// headers across Amethyst staging mods that ship sources. Built on the first decompile call,
     /// cached for process lifetime (a SOFT input by construction: missing pieces = explicit casts in the output,
     /// never wrong code — the note names any degraded mode, Q3). The input pex's own folder is topped up per call
     /// by the tool, not here (it varies per input). Paths derive FIRST (under the gate — the established
@@ -5490,7 +5465,7 @@ public sealed class LoadOrderService : IDisposable
 
     /// <summary>houseCARL-OWNED mod folders under ModsDir holding a plugin file named <paramref name="espFileName"/> at
     /// their root — the decoupled resolver behind <c>into=</c>. The .esp basename is FIXED (SPID <c>_DISTR</c>, the CSF
-    /// JSON, and masters all bind the patch by its filename), while the MO2 mod-FOLDER name is the user's to rename for
+    /// JSON, and masters all bind the patch by its filename), while the Amethyst staging-folder name is the user's to rename for
     /// organization; so an extend finds the patch by the plugin it holds, not by the folder's current name. Ownership-gated
     /// (the marker) so a user mod that merely shares the basename is NEVER returned (originals untouched, Q3). Full .esp paths.</summary>
     List<string> OwnedFoldersHolding(string espFileName)
@@ -5536,7 +5511,7 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>A mod folder is houseCARL-owned iff its <c>meta.ini</c> carries the <c>[houseCARL] generated=true</c>
-    /// marker. The marker lives in meta.ini — the one mod-root file MO2 does NOT deploy into the game Data folder — so it
+    /// marker. The marker lives in staging-root meta.ini, which Amethyst does not deploy into game Data, so it
     /// never pollutes Data. FAIL-SAFE (Q3): a missing / stripped marker reads as NOT owned, so houseCARL refuses to
     /// modify the folder rather than risk touching a user mod.</summary>
     static bool IsHouseCarlOwned(string folder)
@@ -5578,7 +5553,7 @@ public sealed class LoadOrderService : IDisposable
 
     // ---- housecarl_read_plugin_file : a RAW, out-of-load-order read of ONE plugin FILE (active or not) ----
 
-    /// <summary>Read ONE plugin file directly off disk — INCLUDING a plugin DISABLED in MO2 — returning THAT FILE's
+    /// <summary>Reads one plugin file directly from disk, including a plugin inactive in Amethyst, returning that file's
     /// own version of a record (<paramref name="formid"/>), the records of a type it defines (<paramref name="type"/>),
     /// or a record-type summary (neither). The standalone-copy chain's Stage-1 enabler: it reaches a donor you're
     /// REMOVING from the active order, which the resolver (active profile only) cannot see.
@@ -5612,7 +5587,7 @@ public sealed class LoadOrderService : IDisposable
             catch (Exception ex) { return PluginFileOutcome.Fail(plugin, $"bad FormID '{formid}': {ex.Message}. Expected 'XXXXXX:Plugin.esp', e.g. '000D62:Vivace.esp'."); }
         }
 
-        // Derive the MO2 roots CHEAPLY (read ModOrganizer.ini; NO ~10s index build). Never touches the resolver.
+        // Read already derived manager roots without touching the record resolver.
         string modsDir, dataDir, overwriteDir, profileDir;
         try { lock (_gate) { EnsurePathsDerived(); modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; profileDir = _profileDir; } }
         catch (Exception ex) { return PluginFileOutcome.Fail(plugin, ex.Message); }
@@ -6001,7 +5976,7 @@ public sealed class LoadOrderService : IDisposable
         ModComposition comp, string modsDir, string dataDir, string overwriteDir, string plugin, string? mod)
     {
         // A plugin's TICK state is a DIFFERENT fact from its mod folder's switch: a plugin can sit in an enabled mod
-        // and be unchecked in MO2's right pane, and the game then does not load it. Every lane below returns the pair
+        // and be inactive in plugins.txt, in which case the game does not load it. Every lane below returns the pair
         // (served, tick) the renderers state as "active" / "NOT active — <why>", so BOTH halves are judged in every
         // lane, by the SAME two helpers (JudgeServed / JudgeTick) — a lane computing one of them its own way is the
         // divergence that cost #270 four review rounds. Implicit base/CC masters are force-loaded and never listed in
@@ -6056,7 +6031,7 @@ public sealed class LoadOrderService : IDisposable
     }
 
     /// <summary>Does the user's `plugin` argument denote a PATH (use verbatim — the "inspect any file" case) rather
-    /// than a bare filename (locate in the MO2 folders)? True if rooted or carrying a directory separator: 'C:\..\X.esp'
+    /// than a bare filename? True if rooted or carrying a directory separator: '/tmp/X.esp'
     /// or 'mods\M\X.esp' is a path; a bare 'X.esp' is a filename.</summary>
     static bool LooksLikePath(string s) => Path.IsPathRooted(s) || s.Contains('\\') || s.Contains('/');
 
@@ -6269,8 +6244,7 @@ public sealed record LoadOrderStatusData(
     int MaxPlugins,
     bool ProfileChanged,
     string ProfileDir,
-    string ProfileName,         // the ACTIVE profile (instance mode: MO2's selected_profile; explicit: the dir name) — captured under the gate, not re-derived at render
-    string? InstanceDir,        // the resolved MO2 instance folder houseCARL is pointed at; null ⇒ explicit-paths / unconfigured mode
+    string ProfileName,
     string? ManagerPath,
     IReadOnlyDictionary<string, string> ExcludedPlugins);
 

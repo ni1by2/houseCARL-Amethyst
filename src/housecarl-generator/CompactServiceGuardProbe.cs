@@ -108,7 +108,7 @@ public static class CompactServiceGuardProbe
                 "# header\r\n" + string.Join("\r\n", "+DepMod", "+OverMod", "+LibMod", "+SelfMod", "+BaseMod") + "\r\n");
 
             var store = new UserConfigStore(Path.Combine(root, "houseCARL.user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
             svc.Stats();   // warm the lazy index once
 
             // ---- CLEAN: self-contained nested mod -> NEW-file compact, every record in the ESL window, light-flagged ----

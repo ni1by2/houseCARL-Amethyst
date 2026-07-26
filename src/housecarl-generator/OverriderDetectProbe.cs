@@ -55,7 +55,7 @@ public static class OverriderDetectProbe
                     new[] { "*" + pKey.FileName, "*" + qKey.FileName }, new[] { "+OvrDependent", "+OvrTarget" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "ovr"), 0, new UserConfigStore(Path.Combine(root, "user-ovr.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "ovr"), 0, new UserConfigStore(Path.Combine(root, "user-ovr.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("OvrTarget.esp");
@@ -88,7 +88,7 @@ public static class OverriderDetectProbe
                     new[] { "*" + pKey.FileName, "*" + rKey.FileName }, new[] { "+RefDependent", "+RefTarget" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "ref"), 0, new UserConfigStore(Path.Combine(root, "user-ref.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "ref"), 0, new UserConfigStore(Path.Combine(root, "user-ref.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("RefTarget.esp");

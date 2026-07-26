@@ -170,7 +170,6 @@ public static class CiAll
         // loader rule), and the render arms — load-order cross-check, the machine-checked "will not load" wording, the
         // framing line, and the bare-peek loud error.
         ("skse-peek-guard", SksePeekProbe.RunGuard),
-        ("mo2instance-probe", Mo2InstanceProbe.RunProbe),
         ("amethyst-layout-guard", AmethystLayoutProbe.RunGuard),
         ("amethyst-load-order-guard", AmethystLoadOrderProbe.RunGuard),
         ("amethyst-filemap-guard", AmethystFileMapProbe.RunGuard),

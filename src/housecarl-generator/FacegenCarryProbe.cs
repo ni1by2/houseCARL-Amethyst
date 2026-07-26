@@ -46,7 +46,7 @@ public static class FacegenCarryProbe
                 WriteProfile(prof, new[] { faceKey.FileName.String }, new[] { "*" + faceKey.FileName }, new[] { "+FaceMod" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "newfile"), 0, new UserConfigStore(Path.Combine(root, "user-nf.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "newfile"), 0, new UserConfigStore(Path.Combine(root, "user-nf.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("FaceMod.esp");
@@ -85,7 +85,7 @@ public static class FacegenCarryProbe
                 WriteProfile(prof, new[] { faceKey.FileName.String }, new[] { "*" + faceKey.FileName }, new[] { "+FaceIp" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "inplace"), 0, new UserConfigStore(Path.Combine(root, "user-ip.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "inplace"), 0, new UserConfigStore(Path.Combine(root, "user-ip.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("FaceIp.esp", inPlace: true, acknowledge: true);
@@ -131,7 +131,7 @@ public static class FacegenCarryProbe
                 WriteProfile(prof, new[] { faceKey.FileName.String }, new[] { "*" + faceKey.FileName }, new[] { "+FaceAlias" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "alias"), 0, new UserConfigStore(Path.Combine(root, "user-alias.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "alias"), 0, new UserConfigStore(Path.Combine(root, "user-alias.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("FaceAlias.esp", inPlace: true, acknowledge: true);
@@ -161,7 +161,7 @@ public static class FacegenCarryProbe
                 WriteProfile(prof, new[] { faceKey.FileName.String }, new[] { "*" + faceKey.FileName }, new[] { "+NoFg" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "nofg"), 0, new UserConfigStore(Path.Combine(root, "user-no.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "nofg"), 0, new UserConfigStore(Path.Combine(root, "user-no.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("NoFg.esp");

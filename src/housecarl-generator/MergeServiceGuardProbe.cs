@@ -160,7 +160,7 @@ public static class MergeServiceGuardProbe
                 "# header\r\n" + string.Join("\r\n", "+OvrMod", "+DepMod", "+BMod", "+AMod", "+BaseMod") + "\r\n");
 
             var store = new UserConfigStore(Path.Combine(root, "houseCARL.user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
             svc.Stats();   // warm the lazy index once
 
             byte[] aBytesBefore = File.ReadAllBytes(Path.Combine(aDir, aKey.FileName.String));

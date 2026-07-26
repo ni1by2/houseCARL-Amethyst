@@ -157,7 +157,7 @@ public static class PkcuProbe
         var instanceDir = args[0]; var mal = args[1]; var malName = Path.GetFileName(mal);
 
         Console.WriteLine("== SCALE PROOF: real MO2 order + 1 malformed plugin ==");
-        var p = Mo2Instance.Resolve(instanceDir);
+        var p = LegacyFixturePaths.Resolve(instanceDir);
         var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
         var real = order.OrderedPaths.ToList();
         Console.WriteLine($"   real order: {real.Count} plugins (profile '{p.ProfileName}')");

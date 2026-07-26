@@ -76,7 +76,7 @@ internal static class BulkCreateGuardProbe
             CorpusRulebook.CorpusPath = Path.Combine(genDir, "corpus.json");
 
             var store = new UserConfigStore(Path.Combine(root, "houseCARL.user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
             svc.Stats();   // warm the lazy index once
 
             // ---- FLAT: single flat Keyword create, no parent ----

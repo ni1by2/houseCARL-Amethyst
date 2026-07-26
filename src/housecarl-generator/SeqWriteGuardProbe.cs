@@ -181,7 +181,7 @@ internal static class SeqWriteGuardProbe
             string profiles = Path.Combine(instance, "profiles", "Default");
             string mods = Path.Combine(instance, "mods");
             Directory.CreateDirectory(profiles); Directory.CreateDirectory(mods);
-            Directory.CreateDirectory(Path.Combine(root, "game", "Data"));   // Mo2Instance.Resolve requires <gamePath>\Data
+            Directory.CreateDirectory(Path.Combine(root, "game", "Data"));   // LegacyFixturePaths.Resolve requires <gamePath>\Data
             File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
                 "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
                 + Path.Combine(root, "game").Replace(@"\", @"\\") + ")\r\n");
@@ -190,7 +190,7 @@ internal static class SeqWriteGuardProbe
             File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n");
 
             var store = new UserConfigStore(Path.Combine(root, "houseCARL.user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
 
             // SERVICE-WRITE + SAME-FOLDER: a houseCARL-OWNED patch folder under mods, holding an SGE-quest plugin.
             string ownedFolder = Path.Combine(mods, "houseCARL - HcSeqSvc");

@@ -52,7 +52,7 @@ public static class SeqRegenProbe
                 WriteSkyrimIni(prof);
                 PlantSourceSeq(mods, "SeqNf", qOld);                       // the source mod SHIPPED a (now-stale) .seq → the refresh-only gate fires
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "newfile"), 0, new UserConfigStore(Path.Combine(root, "user-nf.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "newfile"), 0, new UserConfigStore(Path.Combine(root, "user-nf.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("SeqNf.esp");
@@ -91,7 +91,7 @@ public static class SeqRegenProbe
                 Directory.CreateDirectory(Path.GetDirectoryName(seqPath)!);
                 File.WriteAllBytes(seqPath, SeqFile.Serialize(new[] { oldOnDisk }));
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "inplace"), 0, new UserConfigStore(Path.Combine(root, "user-ip.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "inplace"), 0, new UserConfigStore(Path.Combine(root, "user-ip.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("SeqIp.esp", inPlace: true, acknowledge: true);
@@ -123,7 +123,7 @@ public static class SeqRegenProbe
                 WriteSkyrimIni(prof);
                 PlantSourceSeq(mods, "SeqMl", qa);                         // the source SHIPPED a .seq → the refresh-only gate fires
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "multi"), 0, new UserConfigStore(Path.Combine(root, "user-ml.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "multi"), 0, new UserConfigStore(Path.Combine(root, "user-ml.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("SeqMl.esp");
@@ -156,7 +156,7 @@ public static class SeqRegenProbe
                 WriteProfile(prof, new[] { key.FileName.String }, new[] { "*" + key.FileName }, new[] { "+SeqNone" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "nosge"), 0, new UserConfigStore(Path.Combine(root, "user-ns.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "nosge"), 0, new UserConfigStore(Path.Combine(root, "user-ns.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("SeqNone.esp");
@@ -179,7 +179,7 @@ public static class SeqRegenProbe
                 WriteProfile(prof, new[] { key.FileName.String }, new[] { "*" + key.FileName }, new[] { "+SeqNoSrc" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "nosrc"), 0, new UserConfigStore(Path.Combine(root, "user-nosrc.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "nosrc"), 0, new UserConfigStore(Path.Combine(root, "user-nosrc.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("SeqNoSrc.esp");
@@ -209,7 +209,7 @@ public static class SeqRegenProbe
                 WriteProfile(prof, new[] { key.FileName.String }, new[] { "*" + key.FileName }, new[] { "+SeqSepSeq", "+SeqSep" });
                 WriteSkyrimIni(prof);
 
-                using var svc = LoadOrderService.WithInstance(Path.Combine(root, "sep"), 0, new UserConfigStore(Path.Combine(root, "user-sep.json")));
+                using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "sep"), 0, new UserConfigStore(Path.Combine(root, "user-sep.json")));
                 svc.Stats();
 
                 var o = svc.CompactPlugin("SeqSep.esp");
@@ -244,7 +244,7 @@ public static class SeqRegenProbe
 
                 using (new FileStream(seqPath, FileMode.Open, FileAccess.ReadWrite, FileShare.None))   // exclusive lock → the refresh write fails
                 {
-                    using var svc = LoadOrderService.WithInstance(Path.Combine(root, "warn"), 0, new UserConfigStore(Path.Combine(root, "user-warn.json")));
+                    using var svc = SyntheticManagerFixture.Open(Path.Combine(root, "warn"), 0, new UserConfigStore(Path.Combine(root, "user-warn.json")));
                     svc.Stats();
 
                     var o = svc.CompactPlugin("SeqWarn.esp", inPlace: true, acknowledge: true);

@@ -72,7 +72,7 @@ internal static class PatchStemCollisionProbe
 
             string fid = $"{weapFk.ID:X6}:{weapFk.ModKey.FileName}";
             var store = new UserConfigStore(Path.Combine(root, "houseCARL.user.json"));
-            using var svc = LoadOrderService.WithInstance(instance, 0, store);
+            using var svc = SyntheticManagerFixture.Open(instance, 0, store);
             svc.Stats();                                                       // warm the lazy index once, off the clock
 
             BulkOp Dmg(int v) => new() { Formid = fid, FieldPath = "BasicStats.Damage", Verb = "Set", Value = v.ToString() };

@@ -51,7 +51,7 @@ internal static class HierarchyCacheProbe
             Console.WriteLine("--- 1: hierarchy requested before any path derivation ---");
             {
                 var store = new UserConfigStore(Path.Combine(root, "userA.json"));
-                using var svc = LoadOrderService.WithInstance(instance, 0, store);
+                using var svc = SyntheticManagerFixture.Open(instance, 0, store);
                 var (edges, _) = svc.ClassParentsForDecompile();
                 Check(edges.TryGetValue("HcGuardChild", out var p1) && p1 == "HcGuardParent",
                       "FIRST call already sees the mods-tree edge (paths derive before the build)");
@@ -66,7 +66,7 @@ internal static class HierarchyCacheProbe
             Console.WriteLine("--- 2: derive-first control ---");
             {
                 var store = new UserConfigStore(Path.Combine(root, "userB.json"));
-                using var svc = LoadOrderService.WithInstance(instance, 0, store);
+                using var svc = SyntheticManagerFixture.Open(instance, 0, store);
                 svc.ResolveDecompiledSourceFolder(null, null);
                 var (edges, _) = svc.ClassParentsForDecompile();
                 Check(edges.TryGetValue("HcGuardChild", out var p) && p == "HcGuardParent",

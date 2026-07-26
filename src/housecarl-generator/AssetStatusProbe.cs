@@ -169,7 +169,7 @@ internal static class AssetStatusProbe
                 WriteIni(inst, "Default", Path.Combine(inst, "game"));
 
                 var store = new UserConfigStore(Path.Combine(root, "user-d.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
 
                 var data2 = svc.AssetStatus(new[] { FacegenRel, RankRel, @"meshes\nope\missing.nif", @"C:\Windows\evil.nif" });
                 var rFace = data2.Results[0];
@@ -214,7 +214,7 @@ internal static class AssetStatusProbe
                 WriteIni(inst, "Default", Path.Combine(inst, "game"));
 
                 var store = new UserConfigStore(Path.Combine(root, "user-f.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
 
                 const string newRel = @"meshes\new\added.nif";
                 Check(svc.AssetStatus(new[] { newRel }).Results[0].Hit is { Exists: false }, "the new asset is absent before its mod is enabled");
@@ -284,7 +284,7 @@ internal static class AssetStatusProbe
                 WriteIni(inst, "Default", Path.Combine(inst, "game"));
 
                 var store = new UserConfigStore(Path.Combine(root, "user-h.json"));
-                using var svc = LoadOrderService.WithInstance(inst, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst, 0, store);
 
                 var resp = svc.AssetStatus(new[] { FacegenRel });
                 Check(resp.BsaFailures.Count >= 1 && resp.BsaFailures.Any(f => f.Contains("PluginA")),
@@ -320,9 +320,9 @@ internal static class AssetStatusProbe
                 var inst1 = MakeInstance("svc-i1", withAsset: true);
                 var inst2 = MakeInstance("svc-i2", withAsset: false);
                 var store = new UserConfigStore(Path.Combine(root, "user-i.json"));
-                using var svc = LoadOrderService.WithInstance(inst1, 0, store);
+                using var svc = SyntheticManagerFixture.Open(inst1, 0, store);
                 Check(svc.AssetStatus(new[] { switchRel }).Results[0].Hit is { Exists: true }, "the asset is present under instance 1");
-                svc.SetInstance(inst2);
+                SyntheticManagerFixture.Switch(svc, inst2);
                 Check(svc.AssetStatus(new[] { switchRel }).Results[0].Hit is { Exists: false },
                       "after SetInstance to instance 2, the asset answer follows the NEW instance (the switch dropped the asset resolver)");
             }

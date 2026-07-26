@@ -55,7 +55,7 @@ public static class ErrorCheck
     /// LOUD (Q3) with no partial result.
     /// <para><paramref name="offOrder"/> — plugin FILES to sweep that are NOT in the active order (name + on-disk path;
     /// the caller located them), the pre-enable verify lane (HCBR-2026-07-14-02 gap 3: a patch houseCARL just wrote is
-    /// not in plugins.txt until the MO2 refresh, yet its pre-ship dangling-ref sweep is exactly when check_errors is
+    /// not in plugins.txt until Amethyst refresh, yet its pre-ship dangling-reference sweep is exactly when check_errors is
     /// wanted). Each is opened as its OWN overlay; its links resolve against the active order PLUS the file's own
     /// records (a patch's link to its own new record is not dangling), and a declared master absent from the active
     /// order is a MISSING MASTER finding — same classes, same rendering, plus an OFF-ORDER stamp in the result.</para></summary>

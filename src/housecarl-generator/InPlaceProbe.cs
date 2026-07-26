@@ -271,7 +271,7 @@ public static class InPlaceProbe
             File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n+UserMod\r\n+MasterMod\r\n");
 
             var store = new UserConfigStore(Path.Combine(tmpDir, "I.user.json"));
-            using var svc = LoadOrderService.WithInstance(inst, 0, store);
+            using var svc = SyntheticManagerFixture.Open(inst, 0, store);
             svc.Stats();   // warm the lazy index once
 
             var edit = new[] { new BulkOp { Formid = fmtWfk, FieldPath = "BasicStats.Damage", Verb = "Set", Value = "61" } };

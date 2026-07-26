@@ -245,7 +245,7 @@ public static class NpcCopyProbe
                 modlist: new[] { "+ContestMod", "+FollowerMod", "+KeepMod", "+FakeVanilla", "-DonorMod", "-Donor2Mod", "-DonorLookMod", "-OrphanPatchMod", "-TwinModA", "-TwinModB", "-TwinPatchMod" });
             WriteSkyrimIni(prof);
 
-            using var svc = LoadOrderService.WithInstance(inst, 0, new UserConfigStore(Path.Combine(root, "user.json")));
+            using var svc = SyntheticManagerFixture.Open(inst, 0, new UserConfigStore(Path.Combine(root, "user.json")));
             svc.Stats();
 
             // ================= 1. APPLY — disabled donor's appearance onto the active follower =================

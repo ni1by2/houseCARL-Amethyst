@@ -287,7 +287,7 @@ public static class ConflictDiffProbe
 
         Console.WriteLine($"################  REAL-DATA PROOF — conflict-tree content diff on {Path.GetFileName(instanceDir)}  ################");
         Console.WriteLine();
-        var p = Mo2Instance.Resolve(instanceDir);
+        var p = LegacyFixturePaths.Resolve(instanceDir);
         var order = AmethystLoadOrder.Build(p.ProfileDir, p.ModsDir, p.DataDir, p.OverwriteDir);
         using var resolver = LoadOrderResolver.Build(order.OrderedPaths.ToList());
         Console.WriteLine($"   resolver: {resolver.PluginCount} plugins, {resolver.RecordCount:N0} records");

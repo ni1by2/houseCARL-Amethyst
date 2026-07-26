@@ -297,7 +297,7 @@ public static class SkseConfigAuditProbe
         if (mo2 is null) { Console.WriteLine("skse-config-audit-real needs --mo2 <MO2 instance folder>"); return 2; }
 
         var store = new UserConfigStore(Path.Combine(Path.GetTempPath(), "hc-skse-cfgaudit-" + Guid.NewGuid().ToString("N") + ".json"));
-        using var svc = LoadOrderService.WithInstance(mo2, 0, store);
+        using var svc = SyntheticManagerFixture.Open(mo2, 0, store);
         var sw = System.Diagnostics.Stopwatch.StartNew();
         var data = svc.SkseConfigAudit();
         sw.Stop();
