@@ -267,9 +267,10 @@ Run the complete CI-safe probe suite with:
 dotnet run --project src/housecarl-generator -- ci-all
 ```
 
-The current Linux baseline is 108/108 probes passing. Two obsolete probes for
+The current Linux baseline is 111/111 probes passing. Two obsolete probes for
 direct Windows executable execution were removed when that runtime was
-deferred to the post-v1 structured Proton runner. CI fixtures are
+deferred; the latest upstream merge added three native guards for deleted
+records and verified asset-path hints. CI fixtures are
 synthetic and contain no copyrighted Skyrim data. A disposable real
 Skyrim/Amethyst hardlink profile remains a manual v1 release gate.
 

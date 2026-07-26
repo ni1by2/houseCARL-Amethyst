@@ -9,7 +9,7 @@ complete only when its exit gate is supported by recorded evidence.
 - Product: **houseCARL-Amethyst**, GPL-3.0-only.
 - Platform: Linux x86_64, distributed as a self-contained bundle.
 - AI hosts: Codex and Claude Code over MCP stdio.
-- Manager: Amethyst only; the public MO2/Windows surface will be removed.
+- Manager: Amethyst only; the public MO2/Windows surface is removed.
 - Connection setup: a standalone command shipped inside houseCARL-Amethyst.
   No Amethyst-side plugin or companion product is required.
 - Profiles: shared and profile-specific staging are both required.
@@ -26,8 +26,8 @@ complete only when its exit gate is supported by recorded evidence.
 
 ## Pinned upstream inputs
 
-- houseCARL: `3fb962b87137c1ff25db0a191c7e27a4a5215da2`
-- Amethyst Mod Manager: `30f4efb5349e95f04968fca9b809130a34f6032a`
+- houseCARL: `7904854708c15a8afec0d256037aee3b49e5a336`
+- Amethyst Mod Manager: `f28550c1d39c4a03c2fac08afe1ebf6f4c4576a8`
 - Fork directory: `houseCARL-Amethyst/`
 
 ## Architecture contracts
@@ -257,29 +257,29 @@ manual release gate.
 ## Current status
 
 - Active milestone: Session 7 disposable real-profile hardlink release gate.
-- Last completed checkpoint: the Windows executable/runtime seams were removed,
-  the final source-documentation and terminology audit completed, and the Linux
-  installation, troubleshooting, release, and rollback guides were added.
+- Last completed checkpoint: upstream houseCARL through `7904854` was merged,
+  retaining native Amethyst fixture and manifest boundaries. Amethyst through
+  `f28550c` was reviewed; its new changes are Meson/Flatpak packaging work and
+  do not change the profile, deployment-state, filemap, or mod-index contracts.
 - Verification performed: .NET SDK 9.0.316 builds the four-project solution
-  with zero warnings and zero errors. Local `ci-all` passes 108/108; the count
-  intentionally fell by two when obsolete direct-Windows-execution probes were
-  deleted. The separate cold freshness guard passes all five arms. Hosted run
+  with zero warnings and zero errors, including the strict XML-documentation
+  gate. Local `ci-all` passes 111/111; the count is the prior 108-probe native
+  baseline plus three upstream deleted-record and verified asset-path guards.
+  The separate cold freshness guard passes all five arms. Hosted run
   [30219985950](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/30219985950)
   passes the preceding 110-probe checkpoint, cold freshness, self-contained
   packaging, checksum creation, architecture inspection, and `.exe` exclusion.
-  Two current-source release builds produced the identical SHA-256
-  `3f08425ea79b58cfe319b275d5334db07d71d41a9898ec41cb7767e13dfc67fa`.
-- Files/components changed: native archive-owner classification, contributor
-  guidance, tool-path configuration and deferred-tool responses, obsolete
-  Windows execution probes, README, installation guide, troubleshooting guide,
-  and release/rollback checklist.
-- Decisions made: v1 accepts only explicit native diagnostic-log directories;
-  the reserved Papyrus compile and BSA repack calls fail with an actionable
-  post-v1 Proton deferral. No executable path or implicit Wine/registry
-  discovery remains in the live product.
+  Two merged-source release builds produced the identical SHA-256
+  `fda599f07913dec3ff8401560badb4b4351355ddf59d4d30c7cb42d2ef801056`.
+- Files/components changed: upstream sweep scopes and JSON output, deleted-body
+  link rules, NIF shader/slot inspection, verified asset-root suggestions,
+  native fixture adaptation, and documentation for every new declaration.
+- Decisions made: upstream behavior was retained, but its new synthetic MO2
+  fixture was replaced with the manager-neutral native fixture seam and raw
+  Bethesda paths are converted before Linux filesystem access.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
   profile remains the Session 7 manual release gate. External
-  PapyrusCompiler and BSArch execution remains post-v1. The latest source still
+  PapyrusCompiler and BSArch execution remains post-v1. The merged source still
   requires a fresh hosted Ubuntu run after it is pushed.
 - Exact next action: push the current checkpoint, dispatch and verify hosted
   Ubuntu CI, then request the disposable real-profile hardlink validation.
@@ -336,7 +336,9 @@ manual release gate.
   `737a474` records that hosted evidence; `6834f8d` makes archive-owner
   classification use native paths; `1a62bde` updates contributor guidance;
   `6db9a58` removes the live Windows external-tool runtime and its obsolete
-  probes; `d9404d5` adds the Linux user and release documentation.
+  probes; `d9404d5` adds the Linux user and release documentation; `908f999`
+  records that checkpoint; `dd9369d` merges upstream through `7904854` while
+  retaining the fork's native Amethyst and documentation contracts.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

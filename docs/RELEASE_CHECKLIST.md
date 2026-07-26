@@ -18,7 +18,7 @@ candidate. Do not mark the roadmap complete from synthetic evidence alone.
 - [ ] `dotnet restore` succeeds with .NET 9.
 - [ ] `dotnet build housecarl.sln --configuration Release` completes with no
   warnings or errors.
-- [ ] `ci-all` passes all 108 registered CI probes.
+- [ ] `ci-all` passes all 111 registered CI probes.
 - [ ] The cold `freshness-capture-guard` passes all five arms.
 - [ ] GitHub's Ubuntu workflow passes build, probes, cold freshness, package
   creation, checksum checks, ELF architecture inspection, and `.exe`
