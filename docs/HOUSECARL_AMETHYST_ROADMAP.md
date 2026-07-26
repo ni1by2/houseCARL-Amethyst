@@ -256,44 +256,48 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 6, removing inherited MO2 runtime seams.
-- Last completed checkpoint: live `Mo2Instance` mode is removed. Core and MCP
-  contain no `Mo2Instance`, `Mo2LoadOrder`, `WithInstance`, `SetInstance`,
-  `ModOrganizer.ini`, or MO2 terminology. The server has one product mode:
-  manifest-backed Amethyst; manager-neutral direct roots remain internal test
-  seams only. The obsolete instance parser and its dedicated probe no longer
-  ship in core or MCP.
-- Verification performed: focused load-order status, compiler null-safety,
-  profile freshness/switch, asset-cache switch, overwrite, raw-plugin, and
-  Amethyst order checks pass. Full Linux `ci-all` passes 110/110; the count
-  intentionally dropped by one with the removed legacy-instance parser probe.
-  The strict core XML-documentation build now passes with zero warnings.
-  Strict MCP documentation exposes 117 inherited undocumented public members,
-  which is the next documentation tranche rather than a hidden clean claim.
-- Files/components changed: load-order service construction, refresh,
-  switching, status model/rendering, all service fixtures, core runtime
-  comments, removal of core `Mo2Instance`, and an unshipped generator-only
-  adapter for inherited directory fixtures.
+- Active milestone: Session 6, completing the human-readable code audit after
+  removal of inherited MO2 runtime seams.
+- Last completed checkpoint: every public declaration in the shipped core,
+  MCP server, and Linux installer now passes the strict CS1591 documentation
+  gate. The MCP pass documents every tool entry point, request/result model,
+  enum member, factory, constructor, and disposable service boundary. Live
+  core and MCP remain free of MO2 runtime types and terminology.
+- Verification performed: strict documentation builds pass for
+  `housecarl-core`, `housecarl-mcp`, and `housecarl-setup`; core and setup have
+  zero warnings, while MCP retains one intentional Mutagen obsolete-API
+  warning unrelated to documentation. Full Linux `ci-all` passes 110/110 when
+  `DOTNET_ROOT` names the repository-local .NET 9 runtime. A first run without
+  that variable produced 109/110 because `binding-shim-guard` launches the MCP
+  apphost, which correctly reported that it could not locate a system runtime;
+  the isolated guard and full suite both pass with the required environment.
+- Files/components changed: all MCP tool classes, public wire models and
+  service outcomes in `LoadOrderService`, Nexus result enums and client
+  construction, plus the earlier runtime removal and synthetic fixture seams.
 - Decisions made: test-only explicit paths remain available to synthetic
   probes, but are no longer a shipped server configuration. The obsolete
   update cache is removed instead of adapting MO2-specific `meta.ini` fields
   that Amethyst does not own. Historical changelog entries remain historical.
-- Known failures or residual risks: inherited generator probes still create
-  legacy-shaped directories and use a generator-only parser to derive their
+- Known failures or residual risks: the strict generator documentation audit
+  exposes 109 inherited public probe/generator declarations. Most source files
+  already contain detailed class-level and inline rationale, but their entry
+  functions need concise local contracts before the full-project
+  declaration-by-declaration gate is honest. Inherited generator probes still
+  create legacy-shaped directories and use a generator-only parser to derive
   native roots; this does not enter release artifacts but should be simplified.
-  Strict MCP documentation has 117 missing-member errors. A parallel MSBuild
-  invocation can fail silently while evaluating shared project references, whereas
-  `-m:1` succeeds; this needs a focused build-graph diagnosis before CI is
-  changed. The Ubuntu workflow definition has not yet been observed green on
-  GitHub. A disposable real
+  A parallel MSBuild invocation can fail silently while evaluating shared
+  project references, whereas `-m:1` succeeds; this needs a focused build-graph
+  diagnosis before CI is changed. The Ubuntu workflow definition has not yet
+  been observed green on GitHub. A disposable real
   Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
   External PapyrusCompiler and BSArch execution remains post-v1. NuGet
   vulnerability metadata remains unreachable in the restricted environment.
-- Exact next action: document the MCP public surface declaration by
-  declaration until its strict CS1591 build is clean, starting with tool entry
-  methods and the public result/request models. Then simplify the remaining
-  generator-only legacy fixture parser and diagnose the parallel build failure
-  as separate focused changes.
+- Exact next action: document the 109 generator/probe entry declarations
+  without weakening CS1591 or adding repetitive filler. Reuse each probe's
+  existing detailed rationale and add a short local function contract stating
+  what is checked, what input is accepted, and what the exit code means. Then
+  simplify the generator-only legacy fixture parser and diagnose the parallel
+  build failure as separate focused changes.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -333,7 +337,9 @@ manual release gate.
   checkpoint; `40c867f` removes the first obsolete MO2 product surfaces;
   `4270be4` records that runtime slice; `a194650` removes `Mo2LoadOrder`.
   `feefe53` records that helper migration; `a25aac4` removes live
-  `Mo2Instance` mode and isolates inherited fixture parsing outside runtime.
+  `Mo2Instance` mode and isolates inherited fixture parsing outside runtime;
+  `4e4ec6a` records the runtime removal checkpoint; `f50465b` documents the
+  complete shipped MCP public surface.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
