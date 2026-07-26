@@ -257,18 +257,19 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: completed the `WriteEngine` lifecycle
-  documentation slice. Flat and nested overrides, abstract and concrete
-  creation, idempotent upsert, nested and coordinate-keyed placement, FormID
-  allocation, master derivation, staged serialization, null-arm handling, and
-  in-place re-emission now have stable local contracts without historical
-  milestone or Windows filesystem assumptions in their explanatory prose.
+- Last completed checkpoint: completed `WriteEngine`. Path parsing and
+  navigation, field copying, scalar/dictionary/list verbs, structured
+  composition, polymorphic and gendered arms, FormLink clearing and same-call
+  references, FormLink-or-index targets, coercion, reflection utilities, and
+  write-specific exception categories now have concise local contracts.
+  Private helpers that previously depended on distant block prose are now
+  explained at their declarations.
 - Verification performed: the .NET 9 Linux solution and forced strict
   XML-documentation core build succeed with no warning from `WriteEngine`.
-  Header-only creation, write locking, guarded in-place editing, FormID floor,
-  upsert, nested creation, coordinate cells, null-arm serialization, and
-  atomic replacement guards pass. Full `ci-all` is 111/111 on Linux after the
-  final edit, and `git diff --check` passes.
+  Fourteen focused condition, bulk-write, nested, polymorphic, same-shape,
+  corpus-hygiene, null-arm, FormLink, flags, gendered, asset-link, and coercion
+  guards pass. Full `ci-all` is 111/111 on Linux after the final edit, and
+  `git diff --check` passes.
 - Files/components changed: `WriteEngine`, the tracked roadmap, and the
   user-facing roadmap copy.
 - Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
@@ -300,7 +301,7 @@ manual release gate.
   `DialogueSubtype`, `DialogueCkParity`, `CellShellCheck`,
   `ScriptPropertyCheck`, `NativePairing`, `SksePeek`, `PapyrusCompile`,
   `ToolBridge`, `PapyrusDecompiler`, `WritePatchBuilder`, `CorpusRulebook`,
-  and `RemapEngine` are complete; the
+  `RemapEngine`, and `WriteEngine` are complete; the
   remaining inherited core components have not yet received the same
   declaration-by-declaration review. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
@@ -311,11 +312,11 @@ manual release gate.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
-- Exact next action: complete `WriteEngine` through path navigation, verbs,
-  collection mutation, composition, polymorphic and gendered arms, FormLink
-  modes, coercion, and reflection utilities. Replace dated incident prose with
-  concise local contracts, then run the focused write/corpus family, strict
-  XML, and full CI.
+- Exact next action: document `SkyPatcherCatalog`, including each filter,
+  operation-shape, tractability, and key-role enum member plus catalog loading,
+  validation, lookup, and semantic classification helpers. Then run the
+  SkyPatcher catalog, field-map, parser, apply, conflict, strict XML, and full
+  CI guards.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -349,7 +350,8 @@ manual release gate.
   `5a1fbb2` completes the header-only creation, compaction, and merge-build
   slice; `465436b` completes `WritePatchBuilder`; `d16d990` completes
   `CorpusRulebook`; `e61882b` completes `RemapEngine`; `52b66cf` completes the
-  public `WriteEngine` slice. The lifecycle slice is pending commit.
+  public `WriteEngine` slice; `2cf70a4` completes the lifecycle slice. The
+  final `WriteEngine` slice is pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

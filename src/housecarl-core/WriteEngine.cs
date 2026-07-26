@@ -189,6 +189,7 @@ public static class WriteEngine
         var formkeyRaw = f.GetValueOrDefault("formkey");
         if (editorid is null && formkeyRaw is null) { Console.Error.WriteLine("error: locate the record with --editorid <EDID> or --formkey <id:Master.esm>"); return 1; }
 
+        // Render one operation compactly for command-line diagnostics.
         static string Label(WriteRequest r) =>
             $"{r.Verb} {string.Join('.', r.Path)}{(r.Key is not null ? "[" + r.Key + "]" : "")}{(r.Value is not null ? " = " + r.Value : "")}";
 
@@ -378,6 +379,7 @@ public static class WriteEngine
             if (leaf is null) return $"(no field {leafName})";
             var val = leaf.GetValue(current);
             if (val is null) return "(null)";
+            // Keep diagnostic values short while preserving invariant formatting.
             static string Fmt(object? o) =>
                 o is null ? "(null)" : o is IFormLinkGetter fl ? fl.FormKey.ToString() : o.ToString() ?? "(null)";
             if (key is not null)
@@ -1489,6 +1491,7 @@ public static class WriteEngine
     /// composition null-arm that can still occur.) Unit-covered by nullarm-guard R1–R5.</summary>
     internal static NullReferenceException? RootNullArm(Exception ex)
     {
+        // Walk one wrapper chain to its root exception.
         static NullReferenceException? Root(Exception e)
         {
             while (e.InnerException is { } inner) e = inner;   // Mutagen wraps the writer NRE in a SubrecordException (parallel path)
@@ -1544,6 +1547,7 @@ public static class WriteEngine
         finally { CleanupStaged(tmpPath); }
     }
 
+    /// <summary>Best-effort removal of a staged plugin and its empty private directory.</summary>
     static void CleanupStaged(string tmpPath)
     {
         try
@@ -1654,7 +1658,7 @@ public static class WriteEngine
     /// <summary>
     /// Walk <c>req.Path</c> from the record root, then apply <c>req.Verb</c> at the leaf. A plain hop descends a
     /// substruct (materializing an absent one); a bracketed hop (<c>Effects[0]</c>) steps INTO a collection
-    /// element (wave-1 collection-nav). Dispatch at the leaf is on its <i>runtime</i> shape (dict / list /
+    /// element. Dispatch at the leaf is on its <i>runtime</i> shape (dict, list, or
     /// scalar), so execution stays corpus-independent: the corpus drives pre-flight (<see cref="CorpusRulebook"/>),
     /// reflection drives the write.
     /// </summary>
@@ -1669,7 +1673,7 @@ public static class WriteEngine
             // No bracket → descend a substruct. Writable-by-construction: an ABSENT intermediate optional substruct
             // (null) is materialized so a field inside it can be set — "set a field in a data block the record lacks"
             // must work, not throw. Multi-level absent chains materialize one hop at a time. (Other half of approach A.)
-            // A bracket (Effects[0]) → step INTO that collection element and keep descending (wave-1 collection-nav).
+            // A bracket such as Effects[0] steps into the collection element.
             current = segKey is null
                 ? (p.GetValue(current) ?? MaterializeSubstruct(current, p, segName))
                 : StepIntoElement(current, p, segName, segKey, materialize: true);   // write path may materialize a gendered arm on demand
@@ -1680,7 +1684,7 @@ public static class WriteEngine
             // A gendered field at the LEAF (Set Priority[0]) renders as [0]/[1] but is NOT a list/dict — redirect to the
             // named halves, not the list-verb message. Runtime twin of CorpusRulebook's "GenderedItem<" leaf recogniser
             // (two recognisers that must agree). Pre-flight normally gates this first; the engine keeps the message honest
-            // for any direct / CLI --op call that bypasses pre-flight. (HCBR-2026-06-15-01 PR-H follow-up.)
+            // for direct or command-line calls that bypass pre-flight.
             if (ResolveProperty(current.GetType(), leafName) is { } gp && GenderedInterface(gp.PropertyType) is not null)
                 throw new InvalidOperationException(
                     $"Gendered field '{leafName}' on {current.GetType().Name} renders as [0]/[1] but is not a list — set " +
@@ -1706,17 +1710,13 @@ public static class WriteEngine
         ApplyScalarVerb(current, leaf, req);
     }
 
-    // ======================================================================
-    //  P8b — CopyFrom: transplant a FIELD's value from another plugin's version of a record into the patch's copy.
-    //  The reflection-generic generalisation of the hand-typed NpcAppearanceCopy.CopyAppearanceFields: by construction,
-    //  every transplantable field KIND is covered by the shape of the target property + source value, not a per-type
-    //  list. Owned-child record collections are refused at PRE-FLIGHT (CorpusRulebook.CopyFromLegality) — this only
-    //  ever runs on a transplantable leaf. Byte-identity of copy-then-readback is proven by bulk-primitives-wave3-guard.
-    // ======================================================================
+    // CopyFrom transplants a field between two versions of the same record.
+    // Runtime property shape selects the copy strategy, avoiding per-record
+    // wiring. Pre-flight excludes owned-child record collections.
 
     /// <summary>Deep-copy the value at <paramref name="path"/> from <paramref name="source"/>'s version of a record into
     /// the patch's settable copy <paramref name="target"/>. An ABSENT/null source value is refused (nothing to copy) —
-    /// never a silent destructive clear (Q3; use Remove to clear). Throws an <see cref="ExpectedApplyRejectionException"/>
+    /// never a silent destructive clear (use Remove to clear). Throws an <see cref="ExpectedApplyRejectionException"/>
     /// for a clean live-state refusal (absent source), else a plain throw for a genuine engine inconsistency (surfaced,
     /// all-or-nothing at the cleave). The source overlay must stay OPEN through the patch serialize (the cleave holds its
     /// session; an off-order source overlay is held by the service) — reference-shared immutables (strings, formlink
@@ -1768,7 +1768,7 @@ public static class WriteEngine
     /// <paramref name="parent"/>, deep-copying so the patch owns its own instances. Three property shapes cover every
     /// transplantable kind: a SETTABLE property (a value assigned directly; a Loqui getter DeepCopy'd; a modeled/formlink
     /// list rebuilt from copied elements); a GET-ONLY FormLink (SetTo the source FormKey); a GET-ONLY collection (its
-    /// contents replaced with copied elements). A shape it can't place is a loud throw (Q3 — never a silent partial copy;
+    /// contents replaced with copied elements). An unsupported shape throws rather than producing a partial copy;
     /// pre-flight already excluded owned-child records).</summary>
     static void TransplantValue(object parent, PropertyInfo prop, object srcVal)
     {
@@ -1908,24 +1908,27 @@ public static class WriteEngine
         throw new InvalidOperationException($"CopyFrom: no SetTo(FormKey) on formlink {Pretty(link.GetType())}.");
     }
 
+    /// <summary>
+    /// Applies scalar Set/Remove, structured composition, FormLink-or-index
+    /// selection, or flags-bit mutation to one property.
+    /// </summary>
     static void ApplyScalarVerb(object parent, PropertyInfo prop, WriteRequest req)
     {
         if (!prop.CanWrite) throw new InvalidOperationException($"Property '{prop.Name}' is not writable");
         if (req.Verb == "Set" && req.Struct is not null) { prop.SetValue(parent, BuildStruct(req.Struct)); return; }
 
-        // Parent-aware FormLinkOrIndex (condition-data targets, wave 4): the concrete ctor needs the owning ARM
+        // Parent-aware FormLinkOrIndex condition targets need the owning arm
         // (parent) as its discriminator-flag source, so an FLOI cannot go through the parentless Coerce path. The
-        // engine auto-infers form-vs-index from the value and sets the arm's flag to match (Aaron 2026-05-31; scout
-        // §E.1). Recognised by the generic definition (IsFormLinkOrIndex) — no per-record-type wiring.
+        // engine infers form versus index from the value and updates the arm's discriminator.
         if (req.Verb == "Set" && IsFormLinkOrIndex(prop.PropertyType)) { SetFloi(parent, prop, req.Value!); return; }
 
-        // Add / valued-Remove on a [Flags] enum are BIT operations (HCBR-2026-07-15), NOT whole-value Set/clear: Add
+        // Add and valued Remove on a [Flags] enum are bit operations, not whole-value replacement: Add
         // ORs the operand's bit(s) into the current value, Remove ANDs them out — so a single flag flips without the
         // caller re-listing every OTHER bit (the silent-clobber this closes: a literal Set dropped every unlisted bit).
         // Gated to [Flags] enums. A VALUELESS Remove is NOT a bit op — it keeps its pre-bit-verb meaning (the whole-field
         // clear of a nullable scalar, the case below), so it falls through here; that preserves the only path to make a
         // nullable flags field absent (pre-flight admits it only when nullable). Add on a non-flags scalar still hits the
-        // default reject. Pre-flight validated the operand, but we fail LOUD here for a pre-flight-bypassing caller (Q3).
+        // default reject. Pre-flight validates the operand, but direct callers still receive an explicit error.
         if (req.Verb == "Add" || (req.Verb == "Remove" && req.Value is not null))
         {
             var ut = Nullable.GetUnderlyingType(prop.PropertyType) ?? prop.PropertyType;
@@ -1939,14 +1942,14 @@ public static class WriteEngine
                 break;
             case "Remove": // clear a nullable scalar / substruct / formlink / polymorphic
                 // A FormLink field is a struct-backed slot whose setter REJECTS a null reference, so SetValue(null)
-                // threw TargetInvocationException at apply even though pre-flight accepted the Remove (HCBR-2026-07-06;
+                // would otherwise throw TargetInvocationException after pre-flight accepted the Remove;
                 // the Set "000000:…" workaround dodged it by coercing an EMPTY link). Route the clear through
                 // EmptyFormLinkOf: a FormLink-family type → its empty link (FormKey.Null — a TRUE null link, cleaner
                 // than the workaround's 000000:Skyrim.esm), every other nullable scalar / substruct / polymorphic → null,
                 // exactly as before (EmptyFormLinkOf returns null for non-FormLink types). This makes Remove on a
                 // nullable FormLink identical to Set = "0" (a null-synonym clear), which already worked.
                 //
-                // Q3 belt-and-suspenders (PR #150 review): EmptyFormLinkOf also produces a non-null empty link for a
+                // EmptyFormLinkOf also produces a non-null empty link for a
                 // REQUIRED FormLink, which would SILENTLY blank a required target. Pre-flight (CorpusRulebook) already
                 // refuses Remove on a non-nullable link, but ApplyVerb does no validation, so a direct/CLI caller that
                 // bypasses pre-flight must still fail LOUD rather than write an empty required link. Mirrors the
@@ -1962,7 +1965,7 @@ public static class WriteEngine
         }
     }
 
-    /// <summary>Flags-enum bit op (HCBR-2026-07-15): OR (<c>Add</c>) or AND-NOT (<c>Remove</c>) the operand's bit(s)
+    /// <summary>Applies a flags-enum bit operation: OR for <c>Add</c> or AND-NOT for <c>Remove</c>
     /// into the leaf's CURRENT value, so one flag flips while every other bit is preserved — the fix for the
     /// silent-clobber a literal <see cref="Coerce"/> Set caused (an unlisted bit was dropped). The operand is resolved
     /// through the SAME enum coercion a Set uses (<see cref="Coerce"/> → <c>Enum.Parse</c>: a flag NAME, a
@@ -1990,7 +1993,7 @@ public static class WriteEngine
     }
 
     /// <summary>
-    /// Build a modeled struct FROM PARTS — the ONE composition primitive (wave-1 half B), generalizing the prior
+    /// Build a modeled struct from named parts, the shared composition primitive,
     /// BuildArm. Resolve the concrete type, instantiate it (parameterless, or via positional <see cref="StructSpec.CtorArgs"/>
     /// for discriminator-/composition-ctor types), apply the flat <see cref="StructSpec.Fields"/> (a coerced Set-leaf
     /// each), then apply the general nested <see cref="StructSpec.Sets"/> THROUGH <see cref="ApplyVerb"/> itself — so
@@ -2022,7 +2025,7 @@ public static class WriteEngine
     /// <c>Mutagen.Bethesda.Skyrim</c>, but some (e.g. <c>MasterReference</c>, a header sub-element) live in the core
     /// <c>Mutagen.Bethesda.Plugins</c> assembly — so fall back to a by-simple-name search across ALL Mutagen
     /// assemblies (the same cross-assembly resolution <see cref="ConcreteOf"/> uses for generic interfaces). Recognised
-    /// by name, not a hand-listed set of types; fails LOUD if Mutagen models no such concrete class (Q3). The by-name
+    /// by name rather than a hand-listed set of types; throws if Mutagen models no such concrete class. The by-name
     /// fallback intentionally omits an assignability filter (unlike <see cref="ConcreteOf"/>'s interface branch): the
     /// input is a generator-emitted CATALOG name, not a runtime interface, so there is no target type to constrain
     /// against — a wrong/colliding type is caught loud downstream by Instantiate + the per-field ResolveProperty.</summary>
@@ -2076,7 +2079,7 @@ public static class WriteEngine
     /// (<c>GetConstructors().FirstOrDefault(len==N)</c>), and checks each arg with <see cref="TryCoerce"/> — the
     /// non-throwing twin of the very same <c>Coerce</c> Instantiate calls per arg — so the gate and apply cannot drift on
     /// arity OR value-shape. Returns null = legal; else a fail-loud message: the arity mismatch (mirroring Instantiate's
-    /// own throw text, incl. <see cref="CtorList"/>) or the first arg that won't coerce, NAMED (Q3). The corpus models no
+    /// own throw text, including <see cref="CtorList"/>) or the first argument that cannot be coerced. The corpus models no
     /// ctor signatures (it is schema-driven; apply is reflection-driven), so this is the ONE gap whose recognizer is new
     /// — but it composes entirely from existing engine primitives, by construction, no generator change. Called only when
     /// <c>spec.CtorArgs</c> is non-null; an empty array means "the 0-arg ctor" and is checked like any other arity.</summary>
@@ -2102,7 +2105,7 @@ public static class WriteEngine
     /// <list type="bullet">
     /// <item><c>GenderedItem&lt;T&gt;</c> — a male/female pair whose BOTH halves are mutable (corpus: Male/Female
     /// writable). Materialize each part per its kind: a FORMLINK half as a NON-NULL empty link
-    /// (<see cref="EmptyFormLinkOf"/> — a null formlink half is dereferenced by the writer, HCBR-2026-07-04); a
+    /// (<see cref="EmptyFormLinkOf"/> because the writer dereferences a null FormLink half); a
     /// MODEL / ref half as <c>null</c> (the writer tolerates it and it materializes on demand if navigated into); a
     /// value half as <c>default</c> (0). An un-set half then matches what the binary READER produces for an absent
     /// half, so a single-gender item (e.g. a skin ArmorAddon's <c>SkinTexture</c>) serializes to a valid record.
@@ -2110,7 +2113,7 @@ public static class WriteEngine
     /// <item><c>Array2d&lt;T&gt;</c> — a terrain grid (on Cell/Landscape: VertexHeightMap/VertexNormals/VertexColors,
     /// CellMaxHeightData). Its cells are reached through a 2D indexer (<c>grid[x,y]</c>), NOT named members, so they sit
     /// BELOW the reflectable-member granularity houseCARL's surface is built from: an indexer-shaped Mutagen-modeling
-    /// residual (named like the PEX delta — Aaron 2026-06-01), NOT a wave deferral. Materialize-from-absent has no public
+    /// residual rather than a deferred ordinary field. Materializing an absent grid has no public
     /// ctor + needs grid dimensions: a NAMED residual (loud throw), never a wrong 0×0 shell.</item>
     /// </list></summary>
     static object InstantiateComposition(Type t)
@@ -2123,23 +2126,24 @@ public static class WriteEngine
             var ctor = concrete.GetConstructors().Where(c => c.GetParameters().Length > 0)
                 .OrderBy(c => c.GetParameters().Length).First();
             // A FORMLINK half must be a NON-NULL empty link, not null: Mutagen's writer dereferences a null formlink
-            // half (HCBR-2026-07-04, ArmorAddon.SkinTexture), while an empty link serializes to an absent/00000000 slot
+            // half, while an empty link serializes to an absent/00000000 slot
             // — exactly what the binary READER produces for an un-set gender half, so a single-gender skin AA authored
             // fresh now WRITES instead of throwing. A Model / ref half stays null (the writer tolerates it, and it
             // materializes on demand if navigated into — WorldModel); a value half stays default(0).
             var args = ctor.GetParameters().Select(p => EmptyFormLinkOf(p.ParameterType) ?? DefaultOf(p.ParameterType)).ToArray();
             return ctor.Invoke(args);
         }
-        throw new CompositionRequiredException(t.Name, t);   // Array2d<T> (indexer-shaped Mutagen residual, named like PEX) + any unknown composition — named, loud (Q3)
+        throw new CompositionRequiredException(t.Name, t);
     }
 
+    /// <summary>Returns the CLR default value for a constructor parameter type.</summary>
     static object? DefaultOf(Type t) => t.IsValueType ? System.Activator.CreateInstance(t) : null;
 
     /// <summary>If <paramref name="t"/> is a FormLink-family type (nullable or not, mutable/getter interface or the
     /// concrete struct), return a NON-NULL EMPTY link — a Null-FormKey instance of the matching concrete struct; else
     /// null. Recognised by generic definition via <see cref="TryFormLink"/> (a null-synonym value), the same
     /// by-construction predicate the engine already uses to coerce a formlink value — never a per-record-type
-    /// hand-list. Used to materialize a GenderedItem's formlink half (HCBR-2026-07-04): an un-set half must be an
+    /// hand-list. Used to materialize a GenderedItem's FormLink half: an unset half must be an
     /// empty link the writer serializes as an absent/00000000 slot, NOT a null the parallel writer dereferences into
     /// an AggregateException-wrapped NRE.</summary>
     static object? EmptyFormLinkOf(Type t) => TryFormLink("0", t, out var link) ? link : null;
@@ -2149,7 +2153,7 @@ public static class WriteEngine
     /// but NOT the <c>IFormLinkNullable&lt;T&gt;</c> / <c>FormLinkNullable&lt;T&gt;</c> variant. Recognised by generic
     /// definition — the SAME required-arm branch <see cref="TryFormLink"/> keys off, so the two can't drift — never a
     /// per-record-type hand-list. Used by the Remove case to fail LOUD on a required-link clear rather than let
-    /// <see cref="EmptyFormLinkOf"/> silently blank it (Q3; PR #150 review).</summary>
+    /// <see cref="EmptyFormLinkOf"/> blank it.</summary>
     static bool IsRequiredFormLink(Type t)
     {
         if (!t.IsGenericType) return false;
@@ -2212,6 +2216,9 @@ public static class WriteEngine
         return n.StartsWith("AssetLink", StringComparison.Ordinal) || n.StartsWith("IAssetLink", StringComparison.Ordinal);
     }
 
+    /// <summary>
+    /// Applies Set, Add, Remove, ReplaceAll, or Merge to a dictionary-shaped property.
+    /// </summary>
     static void ApplyDictVerb(object parent, PropertyInfo prop, Type dictIface, WriteRequest req)
     {
         // Writable-by-construction: an ABSENT optional dict (null) is materialized so a first entry can be set.
@@ -2274,13 +2281,17 @@ public static class WriteEngine
         }
     }
 
+    /// <summary>
+    /// Applies append, indexed replacement, removal, or full replacement to a
+    /// growable list-shaped property.
+    /// </summary>
     static void ApplyListVerb(object parent, PropertyInfo prop, Type listIface, WriteRequest req)
     {
         // ARRAY-backed collection (a C# T[], e.g. Weather.CloudTextures / Weather.Clouds — fixed-size game
         // structures Mutagen models as a plain array, not a growable ExtendedList). The list verbs assume
         // ExtendedList semantics (Clear / Add / RemoveAt); an array has none, so without this guard Add / ReplaceAll /
         // Remove NRE at apply on the missing method, and even materialize of an absent array throws (arrays need a
-        // length) — an UNNAMED accept-then-throw (the schema-only gate accepts the verb). Refuse LOUD and NAMED (Q3):
+        // length). Refuse explicitly because the schema-only gate accepts the verb:
         // array-collection mutation is a distinct write mechanism not yet built (some, like Weather clouds, are a
         // fixed 29-layer format, so an arbitrary-length write may not even serialize validly — it needs its own
         // investigation). SetAtIndex is refused too: the array may be absent (can't index a null) and a set-only
@@ -2310,9 +2321,9 @@ public static class WriteEngine
         switch (req.Verb)
         {
             case "Add":
-                // struct-element list (modeled-struct elements) → build the new element FROM PARTS (wave-1 half B);
+                // Struct-element lists build the new element from its named parts;
                 // coercible-element list → coerce the plain value as before. ResolveProperty/AddMethod handle the rest.
-                // P8a composes= appends MANY built elements in ONE op (each pre-flighted by ComposesLegality).
+                // composes= appends multiple pre-flighted elements in one operation.
                 if (req.Structs is { } addSpecs)
                 {
                     var addM = AddMethod(lt, elem);
@@ -2334,7 +2345,7 @@ public static class WriteEngine
                     throw new ExpectedApplyRejectionException(IndexRangeMessage(prop.Name, idx, count, append: true));
                 // Build the replacement the SAME way Add does — a composable (struct/arm) element FROM PARTS
                 // (req.Struct → BuildStruct), a coercible element by coercing req.Value — then OVERWRITE in place,
-                // preserving the element's list position. Closes HCBR-2026-07-10: replacing one condition row no longer
+                // preserving the element's list position. Replacing one condition row no longer
                 // needs Remove+Add, which moved the row to the list END (harmless for an AND row, but breaking an
                 // OR-group). The gate (CorpusRulebook's composable block) admits a SetAtIndex compose ONLY for a
                 // Struct/Arm element, through the SAME StructElementLegality Add passes, so req.Struct is pre-validated
@@ -2365,7 +2376,7 @@ public static class WriteEngine
             case "ReplaceAll":
                 lt.GetMethod("Clear")!.Invoke(list, null);
                 var add = AddMethod(lt, elem);
-                // P8a composes= ReplaceAll = clear then append each BUILT element (the modeled-list replace the singular
+                // composes= ReplaceAll clears the list and appends each built element (the modeled-list replace the singular
                 // compose block still defers); a coercible-element list still ReplaceAlls plain req.Values as before.
                 if (req.Structs is { } replSpecs)
                     foreach (var s in replSpecs) add.Invoke(list, new[] { BuildStruct(s) });
@@ -2414,11 +2425,10 @@ public static class WriteEngine
 
     /// <summary>Materialize an absent (null) intermediate optional substruct so a field inside it can be set —
     /// paralleling <see cref="MaterializeCollection"/>. Delegates to <see cref="Instantiate"/>: a parameterless ctor
-    /// for the common case, OR composition build-from-parts (wave-1 half B) for a no-parameterless-ctor type —
+    /// for the common case, or composition from parts for a type with no parameterless constructor —
     /// <c>GenderedItem&lt;T&gt;</c> materializes with default(T) parts (both halves mutable, so navigation then
-    /// populates them). A still-unbuildable composition (<c>Array2d&lt;T&gt;</c> terrain grids — an indexer-shaped Mutagen residual, named like PEX; or any unknown) FAILS
-    /// LOUD (<see cref="CompositionRequiredException"/>, re-stamped with the path segment): a real write into it
-    /// surfaces as an explicit, named deferral, never a silent wrong result (Q3). Composition is recognised BY TYPE,
+    /// populates them). A still-unbuildable composition such as an <c>Array2d&lt;T&gt;</c> terrain grid throws
+    /// <see cref="CompositionRequiredException"/> re-stamped with the path segment. Composition is recognized by type,
     /// derived from Mutagen's model — never a hand-listed set of record types.</summary>
     static object MaterializeSubstruct(object parent, PropertyInfo prop, string segment)
     {
@@ -2432,20 +2442,20 @@ public static class WriteEngine
     }
 
     /// <summary>
-    /// Collection-nav (wave 1): step INTO a list/dict element mid-path so a sub-field can be edited
+    /// Step into a list or dictionary element mid-path so a sub-field can be edited
     /// (e.g. <c>Effects[0].Data.Magnitude</c>). List → index by int (Mutagen's ExtendedList&lt;T&gt; is
     /// IList&lt;T&gt; but not the non-generic IList — enumerate to the index); dict → coerce the key to its key
-    /// type and look it up. The element is a navigable STRUCT (record-elements are the nested-group wave). Fails
-    /// LOUD (Q3) on an absent collection (add an element first — composition, half B), a bad/out-of-bounds index,
+    /// type and look it up. The element is a navigable structure. Throws on an absent collection,
+    /// a bad or out-of-bounds index,
     /// or a missing key — never a silent wrong target.
     /// </summary>
     internal static object StepIntoElement(object parent, PropertyInfo prop, string name, string key, bool materialize = false)
     {
         // Gendered field ([0]=male / [1]=female): a fixed two-slot pair (IGenderedItem<T>), NOT a list/dict, so it
         // never reaches the IList/IDictionary branches below. Its named arms (.Male/.Female) already navigate as
-        // plain hops; [0]/[1] is the render-matching navigable alias (HCBR PR-H). Handled by the same materialize-
-        // and-write-back primitive the named plain hop uses, so a freshly-built arm can't become a silently-dropped
-        // orphan (Q3). Recognised by the runtime IGenderedItem<> — the engine twin of the corpus "GenderedItem<"
+        // plain hops; [0]/[1] is the render-matching navigable alias. The same
+        // materialize-and-write-back primitive used by named paths prevents detached arms.
+        // Recognized by the runtime IGenderedItem<> — the engine twin of the corpus "GenderedItem<"
         // recogniser CorpusRulebook pre-flight keys off (two recognisers that must agree, never one shared classifier).
         if (GenderedInterface(prop.PropertyType) is not null)
             return StepIntoGenderedArm(parent, prop, name, key, materialize);
@@ -2453,7 +2463,7 @@ public static class WriteEngine
         var coll = prop.GetValue(parent)
             ?? throw new ExpectedApplyRejectionException(   // live-state: empty/absent collection — clean, not the inconsistency wrapper
                 $"Cannot navigate into '{name}[{key}]': the collection is absent (null). Add an element first " +
-                "(element composition — wave 1 half B), then navigate into it.");
+                "by composing the element first, then navigate into it.");
 
         // Recognise BOTH the mutable and read-only collection interfaces: the write path navigates the concrete
         // mutable list/dict, but a read (show / before-display) navigates a getter overlay exposing IReadOnly*.
@@ -2497,8 +2507,8 @@ public static class WriteEngine
     /// On a WRITE (<paramref name="materialize"/>=true) an absent pair OR an absent ref arm is materialized AND written
     /// back through the SAME <see cref="MaterializeSubstruct"/> setter the named plain hop uses — so the bracket alias
     /// and the named path produce identical results, and a freshly-built arm is never an orphan a later sub-field write
-    /// silently lands on and loses (the Q3 trap). On a READ (<paramref name="materialize"/>=false) an absent pair/arm
-    /// fails LOUD — a read never mutates a record, exactly as stepping into an absent list element does.</summary>
+    /// lose the new value. On a read (<paramref name="materialize"/>=false), an absent pair or arm throws because
+    /// reads never materialize data.</summary>
     static object StepIntoGenderedArm(object parent, PropertyInfo prop, string name, string key, bool materialize)
     {
         int idx = key switch { "0" => 0, "1" => 1, _ => -1 };
@@ -2523,7 +2533,7 @@ public static class WriteEngine
         {
             if (!materialize)
                 throw new InvalidOperationException($"Gendered arm '{name}[{key}]' ({armName}) is absent (null).");
-            arm = MaterializeSubstruct(gendered, armProp, armName);   // materialize the ref arm + WRITE BACK via the setter (the Q3 orphan trap)
+            arm = MaterializeSubstruct(gendered, armProp, armName);
         }
         return arm;
     }
@@ -2554,17 +2564,20 @@ public static class WriteEngine
         return t.GetInterfaces().FirstOrDefault(IsGen);
     }
 
+    /// <summary>Finds the writable single-argument indexer on a collection type.</summary>
     static PropertyInfo Indexer(Type t) =>
         t.GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .FirstOrDefault(p => p.GetIndexParameters().Length == 1 && p.CanWrite)
         ?? throw new InvalidOperationException($"No writable single-arg indexer on {t.Name}");
 
+    /// <summary>Finds an Add method that accepts the modeled element type.</summary>
     static MethodInfo AddMethod(Type listType, Type elem) =>
         listType.GetMethod("Add", new[] { elem })
         ?? listType.GetMethods(BindingFlags.Public | BindingFlags.Instance).FirstOrDefault(m =>
             m.Name == "Add" && m.GetParameters().Length == 1 && m.GetParameters()[0].ParameterType.IsAssignableFrom(elem))
         ?? throw new InvalidOperationException($"No compatible Add on {listType.Name} for element {elem.Name}");
 
+    /// <summary>Returns the closed implementation of an open generic interface carried by a type.</summary>
     internal static Type? ClosedInterface(Type type, Type openGeneric)
     {
         if (type.IsGenericType && type.GetGenericTypeDefinition() == openGeneric) return type;
@@ -2609,6 +2622,7 @@ public static class WriteEngine
 
     // -- coercion families. text==null => recognise only (result stays null). --
 
+    /// <summary>Recognizes and optionally parses CLR primitive and common scalar types.</summary>
     static bool TryPrimitive(string? text, Type u, out object? result)
     {
         result = null;
@@ -2627,11 +2641,13 @@ public static class WriteEngine
         return false;
     }
 
+    /// <summary>Parses a decimal or <c>0x</c>-prefixed unsigned integer.</summary>
     static uint ParseUInt(string text) =>
         text.StartsWith("0x", StringComparison.OrdinalIgnoreCase)
             ? uint.Parse(text[2..], NumberStyles.HexNumber)
             : uint.Parse(text, CultureInfo.InvariantCulture);
 
+    /// <summary>Recognizes enum types and optionally parses names or numeric values.</summary>
     static bool TryEnum(string? text, Type u, out object? result)
     {
         result = null;
@@ -2640,16 +2656,16 @@ public static class WriteEngine
         return true;
     }
 
-    // ---- FormLink null-clear (HCBR-2026-06-15-01 / PR-F) -------------------------------------------------------
+    // FormLink null-clear values share one recognizer between validation and apply.
     //  A Set that CLEARS a FormLink (points it at no target) is expressed by a null-synonym value. The canonical
-    //  set is fixed (Aaron 2026-06-16): "0", "00000000", "Null", "000000:Null" — trimmed, case-insensitive,
+    //  accepted values are "0", "00000000", "Null", and "000000:Null", trimmed and case-insensitive,
     //  FULL-STRING, so a real FormID ("012345:Skyrim.esm") is never mistaken for a clear. A synonym routes to
     //  FormKey.Null; anything else parses through FormKey.Factory (which throws fail-loud on a malformed id — that
     //  throw is caught at the gate by the pre-flight value-shape check, never reached as an accept-then-throw). This
     //  ONE recognizer is shared by the apply path (ToFormKey, via TryFormLink) and pre-flight (CorpusRulebook ->
     //  IsValidFormLinkValue) so the two can't drift on what counts as a clear — the same shared-predicate shape the
     //  engine already uses for IsFormLinkOrIndex. (Without it, "00000000"/"0" was ACCEPTED by pre-flight then threw
-    //  "Malformed FormKey string" at apply — a Q3 accept-then-throw hole; and a required link had no clear path.)
+    //  "Malformed FormKey string" after validation and a required link had no clear path.)
     static readonly string[] FormKeyNullSynonyms = { "0", "00000000", "Null", "000000:Null" };
 
     /// <summary>True iff <paramref name="text"/> is a canonical FormKey null-clear synonym (trimmed, case-insensitive,
@@ -2682,13 +2698,13 @@ public static class WriteEngine
     //  own default style) so the gate and apply can't drift on what counts as a legal index, plus the non-negative
     //  pre-check the indexer would otherwise enforce by throwing. The UPPER bound (index < the live element count) is
     //  NOT checked here — pre-flight has no live collection; an in-range-shaped but too-large index is left to apply,
-    //  where it fails named (Q3). Same shared-recognizer discipline as IsValidFormLinkValue / IsFormKeyNullSynonym.
+    //  where it fails with a named range error.
     /// <summary>True iff <paramref name="text"/> is a legal list INDEX SHAPE: a non-negative int32 under the same
     /// parse the apply path uses (<see cref="ApplyListVerb"/>). Shape only — the in-range check is apply's.</summary>
     internal static bool IsValidListIndexValue(string? text) =>
         text is not null && int.TryParse(text, NumberStyles.Integer, CultureInfo.InvariantCulture, out var i) && i >= 0;
 
-    // ---- Same-call sibling reference (HCBR-2026-06-15-01 Layer B / unit A) -------------------------------------
+    // Same-call sibling references let later create specifications refer to earlier ones.
     //  A create's field VALUE can forward-reference a record created EARLIER in the SAME create call, by its
     //  editorid, written "@<editorid>". The referenced record's local 0x800+ FormKey is not allocated until the
     //  apply phase, so the caller cannot write a literal FormID — this is how the INFO PNAM order-chain
@@ -2696,7 +2712,7 @@ public static class WriteEngine
     //  ONE housecarl_bulk_create. WritePatchBuilder.CreateRecords substitutes the token with the sibling's real
     //  FormKey AFTER allocation (single-pass: the prior sibling is already allocated, in spec order). CREATE-CONTEXT
     //  ONLY — the override/set_field (Apply) path has no siblings, so pre-flight there (CorpusRulebook called with a
-    //  null sibling set) rejects the token LOUD rather than letting it through to a substitute-nothing apply (Q3, no
+    //  null sibling set) rejects the token rather than allowing a substitute-nothing apply
     //  accept-then-throw). The recognizer is SHARED by pre-flight (CorpusRulebook) and the apply-side substitution
     //  (CreateRecords) so the gate and the engine cannot drift on the token shape — the same shared-predicate
     //  discipline as IsFormKeyNullSynonym / IsFormLinkOrIndex.
@@ -2739,18 +2755,16 @@ public static class WriteEngine
         }
         // IFormLinkOrIndex<T> (condition-data targets) is NOT coercible here: its ctor needs the owning arm as a
         // discriminator-flag source, which the parentless Coerce path lacks. It is handled by the parent-aware
-        // SetFloi branch in ApplyScalarVerb (wave 4), recognised via IsFormLinkOrIndex. (Was a tracked deferral.)
+        // SetFloi branch in ApplyScalarVerb, recognized via IsFormLinkOrIndex.
         return false;
     }
 
-    // ======================================================================
-    //  FORMLINKORINDEX — condition-data targets (wave 4). A FormLinkOrIndex<T> holds EITHER a real FormID (form
+    // FormLinkOrIndex condition targets hold either a real FormID (form
     //  mode) OR a numeric quest-alias / package-data index (index mode); the owning *ConditionData arm's
     //  UseAliases/UsePackageData bools decide which serialises. The concrete ctor takes the arm as that flag source
-    //  (scout Phase A), so this lives OUTSIDE Coerce (which has no parent) — a parent-aware branch in
+    //  so this lives outside Coerce (which has no parent) in a parent-aware branch of
     //  ApplyScalarVerb. IsFormLinkOrIndex is the ONE predicate the engine write, the pre-flight (CorpusRulebook),
     //  and coerce-audit all share, so they cannot drift on which leaves are FLOI.
-    // ======================================================================
 
     /// <summary>True iff <paramref name="t"/> (nullable-unwrapped) is a Mutagen <c>FormLinkOrIndex&lt;T&gt;</c>
     /// family type (the mutable, getter, or concrete form). Recognised by its generic definition — like the engine
@@ -2770,9 +2784,9 @@ public static class WriteEngine
     internal enum FloiMode { Form, IndexAlias, IndexPackData }
 
     /// <summary>Classify a condition-target VALUE into its mode + payload, auto-inferred from the value alone
-    /// (Aaron 2026-05-31; scout §E.1): a <c>FORMID:Plugin.esp</c> is form mode; explicit <c>alias N</c> /
+    /// from the value alone: a <c>FORMID:Plugin.esp</c> is form mode; explicit <c>alias N</c> /
     /// <c>packdata N</c> is the named index mode; a bare integer is index mode defaulting to alias (the common index
-    /// case). Throws fail-loud on anything else (Q3 — never guessed/wrong four bytes).</summary>
+    /// case). Throws on anything else rather than guessing the serialized representation.</summary>
     static (FloiMode mode, FormKey key, uint index) ClassifyFloiValue(string value)
     {
         var v = (value ?? "").Trim();
@@ -2783,6 +2797,7 @@ public static class WriteEngine
         return (FloiMode.IndexAlias, default, ParseUInt(v));                    // bare integer -> index (default alias); throws if not a uint
     }
 
+    /// <summary>Parses a named FormLink-or-index prefix followed by an unsigned index.</summary>
     static bool TryIndexPrefix(string v, string prefix, out uint index)
     {
         index = 0;
@@ -2800,9 +2815,9 @@ public static class WriteEngine
     }
 
     /// <summary>Set a condition-data <c>FormLinkOrIndex&lt;T&gt;</c> target from a value, auto-inferring the mode and
-    /// setting the owning arm's discriminator to match. The concrete ctor (scout Phase A) takes the arm as the flag
-    /// source: <c>(arm, FormKey)</c> [form] or <c>(arm, uint)</c> [index]. Fail-loud if the parent is not a
-    /// flag-bearing arm, the value is unclassifiable, or the ctor is absent (Q3).</summary>
+    /// setting the owning arm's discriminator to match. The concrete constructor takes the arm as the flag
+    /// source: <c>(arm, FormKey)</c> for forms or <c>(arm, uint)</c> for indexes. Throws if the parent is not a
+    /// flag-bearing arm, the value is unclassifiable, or the constructor is absent.</summary>
     static void SetFloi(object arm, PropertyInfo prop, string value)
     {
         if (arm is not IFormLinkOrIndexFlagGetter)
@@ -2835,7 +2850,7 @@ public static class WriteEngine
     }
 
     /// <summary>Set one of the arm's discriminator bools (UseAliases / UsePackageData) through the engine's writable-
-    /// property resolution. Fail-loud if absent or get-only (a real condition arm always carries both; Q3).</summary>
+    /// property resolution. Throws if the flag is absent or read-only.</summary>
     static void SetArmFlag(object arm, string flagName, bool value)
     {
         var p = ResolveProperty(arm.GetType(), flagName)
@@ -2943,7 +2958,10 @@ public static class WriteEngine
         return ctor.Invoke(argv);
     }
 
+    /// <summary>Constructs a value type through a one-string constructor.</summary>
     static object ConstructFromString(Type t, string s) => ConstructFromArg(t, s, typeof(string));
+
+    /// <summary>Constructs a value type through a one-argument constructor.</summary>
     static object ConstructFromValue(Type t, object v) => ConstructFromArg(t, v, v.GetType());
 
     /// <summary>Build <paramref name="t"/> from a single argument via the first matching ctor, static factory, or implicit operator.</summary>
@@ -2962,6 +2980,7 @@ public static class WriteEngine
             $"{t.Name}: no ctor / static factory / implicit op accepting {argType.Name}. Ctors: {CtorList(t)}");
     }
 
+    /// <summary>Renders the public constructor signatures used in coercion errors.</summary>
     static string CtorList(Type t) =>
         string.Join(" | ", t.GetConstructors().Select(c => $"({string.Join(", ", c.GetParameters().Select(p => Pretty(p.ParameterType)))})"));
 
@@ -2992,6 +3011,7 @@ public static class WriteEngine
     // ======================================================================
     //  SHARED REFLECTION HELPERS
     // ======================================================================
+    /// <summary>Resolves a public instance property case-insensitively.</summary>
     internal static PropertyInfo? ResolveProperty(Type type, string name)
     {
         var candidates = new List<PropertyInfo>();
@@ -3023,12 +3043,14 @@ public static class WriteEngine
         return true;
     }
 
+    /// <summary>Chooses the most specific Mutagen major-record getter interface.</summary>
     internal static Type? PrimaryGetter(Type recordRuntimeType) =>
         recordRuntimeType.GetInterfaces()
             .Where(i => typeof(IMajorRecordGetter).IsAssignableFrom(i) && i != typeof(IMajorRecordGetter) && i.Name.EndsWith("Getter"))
             .OrderByDescending(i => i.GetInterfaces().Length)
             .FirstOrDefault();
 
+    /// <summary>Returns the file's SHA-256 digest as uppercase hexadecimal.</summary>
     static string Sha(string path)
     {
         using var sha = SHA256.Create();
@@ -3036,15 +3058,8 @@ public static class WriteEngine
         return Convert.ToHexString(sha.ComputeHash(stream));
     }
 
-    // ======================================================================
-    //  COERCE-AUDIT  (coerce-audit) — completeness guard for the value-type surface.
-    //
-    //  By construction: walks every WRITABLE leaf in corpus.json, resolves the CLR type a
-    //  Set/Add must coerce to (scalar/enum/value/formlink field types; scalar list/dict
-    //  element types), and asserts CanCoerce holds for each. Any uncoercible type is the
-    //  exact, deduplicated gap to add to TryValueType — derived from Mutagen's own model,
-    //  never guessed. Also flags AQ names that fail to resolve. Q3: report, never silent-skip.
-    // ======================================================================
+    // The coercion audit derives its coverage from every writable corpus leaf.
+    // Unresolved or uncoercible CLR types are reported as explicit gaps.
     /// <summary>
     /// Audits every writable corpus leaf and reports CLR value types that the
     /// generic text coercer cannot construct.
@@ -3064,6 +3079,7 @@ public static class WriteEngine
         var substructWhole = new SortedDictionary<string, bool>(StringComparer.Ordinal); // type -> coercible-as-whole
         int hardTargets = 0, navOrBuild = 0, floiHandled = 0;
 
+        // Increment one audit bucket and retain at most three representative sites.
         static void Bump(SortedDictionary<string, (int, List<string>)> bag, string key, string example)
         {
             var e = bag.TryGetValue(key, out var v) ? v : (0, new List<string>());
@@ -3095,7 +3111,7 @@ public static class WriteEngine
                     // carries an ElementTypeRef yet is SET as one coerced value, not built from parts. The bare
                     // `ElementTypeRef is null` test mis-skipped those (SoundDescriptor.SoundFiles,
                     // Weather.CloudTextures) into navOrBuild, hiding them from the audit denominator — the blind spot
-                    // that let the asset-link LIST element ship uncoercible (Heisen 2026-06-26). Route a whole-
+                    // that could otherwise let an asset-link list element escape the audit. Route a whole-
                     // coercible element to the SAME resolve+CanCoerce path the scalar elements take, recognised by the
                     // SAME predicate the rulebook/classifier use (no drift on what a whole-coercible element is); its
                     // getter-interface AQ resolves at runtime (verified — ci-all green on Linux too), so it lands on
@@ -3104,7 +3120,7 @@ public static class WriteEngine
                     // STRICTER than IsWholeCoercibleElement itself — that predicate carries a by-NAME fallback for when
                     // the cross-assembly nested-generic getter AQ does NOT resolve via Type.GetType, which this branch
                     // does not. Today every asset-link element's AQ resolves; if a future Mutagen shape stops resolving,
-                    // it lands in `unresolved` → audit RED (loud, Q3-fine — never a silent skip), which is the cue to
+                    // it lands in `unresolved`, which is the cue to
                     // mirror the name-fallback here.
                     if (f.ElementTypeRef is null && f.ElementTypeAssemblyQualified is { } eaq) aq = eaq;
                     else if (IsWholeCoercibleElement(f.ElementTypeRef, f.ElementTypeAssemblyQualified)
@@ -3128,8 +3144,8 @@ public static class WriteEngine
             hardTargets++;
             var rt = ResolveType(aq);
             if (rt is null) { Bump(unresolved, aq, site); continue; }
-            // FormLinkOrIndex condition targets are now WRITABLE via the parent-aware SetFloi branch (wave 4) — they
-            // pass the gate like any coercible leaf, counted positively below (was the 156-site deferred bucket).
+            // FormLinkOrIndex condition targets use the parent-aware SetFloi branch
+            // and count as supported even though ordinary scalar Coerce does not construct them.
             if (IsFormLinkOrIndex(rt)) { floiHandled++; continue; }
             if (!CanCoerce(rt))
             {
@@ -3175,7 +3191,7 @@ public static class WriteEngine
         Dump("DEFERRED — type-erased `object` condition params. WIRE-WHEN: a typed-value wire format exists (the value " +
              "carries its own type), i.e. the step-8 MCP API", typeErased);
         Console.WriteLine();
-        Console.WriteLine($"HANDLED (wave 4) — FormLinkOrIndex condition targets, via the parent-aware SetFloi branch " +
+        Console.WriteLine($"HANDLED — FormLinkOrIndex condition targets, via the parent-aware SetFloi branch " +
                           $"(auto-infers form-vs-index from the value): {floiHandled} site(s) — was the deferred bucket.");
         Console.WriteLine();
         Dump("DEFERRED — owned-child records (whole-record assignment, not a string). WIRE-WHEN: record creation/composition lands", ownedRecord);
@@ -3433,16 +3449,19 @@ public static class WriteEngine
         return SafeTypes(asm).FirstOrDefault(x => x.IsClass && !x.IsAbstract && x.Name == catalogName) ?? t ?? direct;
     }
 
+    /// <summary>Counts top-level Mutagen record groups on <see cref="SkyrimMod"/>.</summary>
     static int CountGroupProps() =>
         typeof(SkyrimMod).GetProperties(BindingFlags.Public | BindingFlags.Instance)
             .Count(p => Pretty(p.PropertyType).Contains("Group"));
 
+    /// <summary>Enumerates loadable assembly types while tolerating partial type-load failures.</summary>
     static IEnumerable<Type> SafeTypes(Assembly a)
     {
         try { return a.GetTypes(); }
         catch (ReflectionTypeLoadException ex) { return ex.Types.Where(t => t is not null)!; }
     }
 
+    /// <summary>Renders a compact method signature for diagnostic output.</summary>
     static string Sig(MethodInfo m)
     {
         var gen = m.IsGenericMethodDefinition
@@ -3452,6 +3471,7 @@ public static class WriteEngine
         return $"{m.Name}{gen}({ps}) -> {Pretty(m.ReturnType)}";
     }
 
+    /// <summary>Renders a CLR type using readable generic syntax.</summary>
     static string Pretty(Type t)
     {
         if (t.IsByRef) return Pretty(t.GetElementType()!) + "&";
@@ -3481,26 +3501,26 @@ public sealed class CompositionRequiredException : InvalidOperationException
     /// <summary>Creates an exception for an unsupported composition boundary.</summary>
     public CompositionRequiredException(string segment, Type substructType)
         : base($"Absent substruct '{segment}' of type {substructType.Name} has no parameterless constructor — it is a " +
-               "COMPOSITION type (e.g. GenderedItem<T> / Array2d<T>) buildable only from its parts. Deferred to the " +
-               "composition wave (wave 1); surfaced as a named deferral, never synthesized to a wrong value.")
+               "COMPOSITION type (for example, GenderedItem<T> or Array2d<T>) buildable only from its parts. " +
+               "Supply an explicit composition; houseCARL will not synthesize an uncertain value.")
     {
         Segment = segment;
         SubstructType = substructType;
     }
 }
 
-/// <summary>A serialize-boundary <see cref="NullReferenceException"/> re-stamped as a loud, NAMED refusal
-/// (HCBR-2026-06-15-01 PR-C, PART B). Mutagen's binary writer throws a bare NRE — no field name — when it dereferences
+/// <summary>Wraps a serialize-boundary <see cref="NullReferenceException"/> as an actionable refusal.
+/// Mutagen's binary writer throws a bare NRE with no field name when it dereferences
 /// a record's REQUIRED modeled sub-field that was left null; the dominant cause is a COMPOSED record missing a required
-/// polymorphic sub-arm (a Condition without its Data arm, an element missing a required part) — and, per HCBR-2026-07-04,
-/// the null may surface bare OR wrapped in the parallel writer's AggregateException (see <see cref="WriteEngine.RootNullArm"/>).
-/// The corpus now carries
-/// faithful polymorphic nullability (S4 Track D), but that flag is NOT a "required arm at serialize" signal —
+/// polymorphic sub-arm, such as a Condition without its Data arm or an element missing a required part.
+/// The null may surface bare or wrapped in the parallel writer's AggregateException
+/// (see <see cref="WriteEngine.RootNullArm"/>).
+/// Corpus nullability is not a "required arm at serialize" signal:
 /// NpcConfiguration.Level reads <c>Nullable=false</c> yet serializes fine when null, while Condition.Data (also
 /// <c>Nullable=false</c>) throws — so a pre-flight gate on the flag would over-reject or need a hand-curated list
-/// (cornerstone §3), and this stays caught at the serialize boundary instead. The staged temp is already discarded by the time this throws (nothing on disk; the
-/// target is untouched), and the caller's serialize catch renders it as an all-or-nothing <c>Fail</c>. The original
-/// NRE is preserved as <see cref="Exception.InnerException"/>. Q3 — no silent failure, no opaque message.</summary>
+/// and this stays caught at the serialize boundary instead. The staged temp is discarded before this is returned, so
+/// the target is untouched and the caller can report an all-or-nothing failure. The original
+/// NRE is preserved as <see cref="Exception.InnerException"/>.</summary>
 public sealed class NullArmSerializeException : InvalidOperationException
 {
     /// <summary>
@@ -3526,14 +3546,14 @@ public sealed class NullArmSerializeException : InvalidOperationException
 ///         index shape but leaves the in-range bound to apply, having no live collection);</item>
 ///   <item>a <c>Remove</c> that removes NOTHING — a dict <c>Remove</c> of a key not present, a list
 ///         <c>Remove</c>-by-value of a value not present, or a <c>Remove</c> on an absent (null) collection
-///         (occupancy — Gap 3 / PR #83 follow-up; the symmetric twin of the duplicate-key <c>Add</c> refusal, so a
+///         (the symmetric twin of the duplicate-key <c>Add</c> refusal, so a
 ///         Remove that thought it removed something but didn't surfaces instead of silently succeeding);</item>
 ///   <item>a mid-path navigation into an ABSENT collection, an ABSENT dict key, or an OUT-OF-BOUNDS list index
 ///         (<see cref="WriteEngine.StepIntoElement"/>).</item>
 /// </list>
 /// Each is correctly caught at the boundary it manifests, with a clear, actionable message. The all-or-nothing catch in
 /// <see cref="WritePatchBuilder"/> renders this kind's message VERBATIM — still refusing the whole call with no file
-/// written (Q3 all-or-nothing holds) — WITHOUT the generic "pre-flight ACCEPTED it but the apply threw — a real
+/// written, without the generic "pre-flight ACCEPTED it but the apply threw — a real
 /// inconsistency" wrapper, which would mislabel an expected, fixable user error as an internal bug. Genuinely-unexpected
 /// throws (a real gate/apply drift) keep that wrapper. <see cref="WriteEngine.StepIntoElement"/> is shared with the READ
 /// path; a read has no inconsistency wrapper, so it simply renders this message exactly as it did when these were plain
@@ -3558,7 +3578,7 @@ public sealed class ExpectedApplyRejectionException : InvalidOperationException
 /// engine bug). The honest middle: surfaced LOUD and accurately as malformed SOURCE data — houseCARL reads it but never
 /// wrote it, so the present-but-null state arises only from pre-existing malformed plugins, never from houseCARL's own
 /// write path (the null gates forbid writing one). The all-or-nothing catch in <see cref="WritePatchBuilder"/> renders
-/// this kind's message cleanly (no inconsistency wrapper), still refusing the whole call with no file written (Q3).
+/// this kind's message cleanly, still refusing the whole call with no file written.
 /// <see cref="WriteEngine.StepIntoElement"/> is shared with the READ path, which has no wrapper, so a read renders this
 /// message exactly as it did when these were plain <see cref="InvalidOperationException"/>s — no read behavior change. It
 /// is an <see cref="InvalidOperationException"/> so any plain fail-loud handler still catches it.</summary>
