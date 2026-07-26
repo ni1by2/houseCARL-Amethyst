@@ -931,28 +931,31 @@ public sealed class LoadOrderService : IDisposable
             view.BsaFailures, view.ReadIncomplete, warnings, profileName);
     }
 
-    /// <summary>The MOD a physical archive path belongs to — the pairing identity behind a BSA provider name:
-    /// mods\&lt;mod&gt;\X.bsa → that mod folder; the overwrite layer → "overwrite"; the game Data folder → "Data";
+    /// <summary>The mod a physical archive path belongs to — the pairing identity behind a BSA provider name:
+    /// <c>mods/mod-name/X.bsa</c> maps to that mod folder; overwrite maps to "overwrite"; vanilla Data maps to "Data";
     /// anywhere else → null (no translation — the archive name stands). internal for the guard.</summary>
     internal static string? ShipperOfArchivePath(string archivePath, string modsDir, string overwriteDir, string dataDir)
     {
-        // Full-path-normalize both sides (the IsUnderModsDir precedent) so forward slashes / '..' segments / a
-        // trailing-separator root from config can't make the under-root test disagree with the rest of the plumbing.
-        static string Norm(string p) { try { return Path.GetFullPath(p); } catch { return p; } }
-        archivePath = Norm(archivePath);
+        // Path.GetRelativePath supplies native separator and case semantics. A string-prefix test would also
+        // misclassify sibling roots such as "mods-old", and a hard-coded backslash cannot classify Linux paths.
         static bool Under(string path, string root, out string remainder)
         {
             remainder = "";
             if (root.Length == 0) return false;
-            var r = Norm(root).TrimEnd('\\', '/') + "\\";
-            if (!path.StartsWith(r, StringComparison.OrdinalIgnoreCase)) return false;
-            remainder = path.Substring(r.Length);
-            return true;
+            try
+            {
+                remainder = Path.GetRelativePath(Path.GetFullPath(root), Path.GetFullPath(path));
+                return remainder != "."
+                    && !Path.IsPathRooted(remainder)
+                    && remainder != ".."
+                    && !remainder.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal);
+            }
+            catch { remainder = ""; return false; }
         }
         if (Under(archivePath, overwriteDir, out _)) return "overwrite";
         if (Under(archivePath, modsDir, out var rest))
         {
-            int slash = rest.IndexOfAny(new[] { '\\', '/' });
+            int slash = rest.IndexOf(Path.DirectorySeparatorChar);
             return slash > 0 ? rest[..slash] : null;   // a .bsa directly in mods\ belongs to no mod — no translation
         }
         if (Under(archivePath, dataDir, out _)) return "Data";
