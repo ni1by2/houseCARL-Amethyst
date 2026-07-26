@@ -18,8 +18,7 @@ Proton, USVFS, or an Amethyst-side houseCARL plugin.
 > This fork is under active development and does not yet have a supported
 > binary release. Native Amethyst integration and the self-contained Linux
 > installer/package are implemented and covered by the Linux test suite.
-> Removal of inherited MO2 runtime seams and disposable real-profile hardlink
-> validation remain in progress. See the
+> Disposable real-profile hardlink validation remains in progress. See the
 > [roadmap](docs/HOUSECARL_AMETHYST_ROADMAP.md).
 
 ## Why this fork exists
@@ -58,7 +57,7 @@ The source tree currently provides:
 - pending-redeploy tracking and post-deployment content/hardlink verification;
 - native BSA listing and extraction, NIF inspection, SKSE inspection,
   SkyPatcher analysis, FaceGen/voice handling, and SEQ generation;
-- Codex and Claude Code MCP surfaces and bundled skills.
+- Codex and Claude Code MCP surfaces and bundled skills;
 - a self-contained Linux x86_64 release builder and XDG installer;
 - checksum-before-install, atomic server updates, rollback, and conservative
   uninstall that preserves user configuration.
@@ -268,7 +267,9 @@ Run the complete CI-safe probe suite with:
 dotnet run --project src/housecarl-generator -- ci-all
 ```
 
-The current Linux baseline is 111/111 probes passing. CI fixtures are
+The current Linux baseline is 108/108 probes passing. Two obsolete probes for
+direct Windows executable execution were removed when that runtime was
+deferred to the post-v1 structured Proton runner. CI fixtures are
 synthetic and contain no copyrighted Skyrim data. A disposable real
 Skyrim/Amethyst hardlink profile remains a manual v1 release gate.
 
@@ -281,7 +282,6 @@ plain English. The review standard is
 
 The following remain explicitly unfinished:
 
-- removal of every inherited MO2/Windows message and test-fixture label;
 - real-game hardlink validation;
 - Proton command specifications for PapyrusCompiler and BSArch execution.
 
@@ -292,6 +292,9 @@ other local features do not require Proton.
 ## Project documentation
 
 - [Implementation roadmap](docs/HOUSECARL_AMETHYST_ROADMAP.md)
+- [Installation and update guide](docs/INSTALLATION.md)
+- [Troubleshooting](docs/TROUBLESHOOTING.md)
+- [v1 release and rollback checklist](docs/RELEASE_CHECKLIST.md)
 - [Code documentation standard](standards/HOUSECARL_CODE_DOCUMENTATION.md)
 - [GPL-3.0 license](LICENSE)
 - [Third-party notices](THIRD-PARTY-NOTICES.txt)
