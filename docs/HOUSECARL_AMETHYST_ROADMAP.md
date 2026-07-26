@@ -255,22 +255,20 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: full-codebase documentation pass; Session 6 follows it, with
-  setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: completed `WriteEngine`. Path parsing and
-  navigation, field copying, scalar/dictionary/list verbs, structured
-  composition, polymorphic and gendered arms, FormLink clearing and same-call
-  references, FormLink-or-index targets, coercion, reflection utilities, and
-  write-specific exception categories now have concise local contracts.
-  Private helpers that previously depended on distant block prose are now
-  explained at their declarations.
+- Active milestone: Session 6, Linux installer, packaging, host integration,
+  and removal of the obsolete MO2 product surface.
+- Last completed checkpoint: completed `SkyPatcherCatalog` and the active-core
+  declaration-by-declaration documentation pass. Catalog ownership, closed-set
+  unknown handling, loading, lookup, parsing, helper behavior, and every public
+  filter-kind, operation-shape, tractability, and key-role enum member now have
+  concise contracts. The only remaining CS1591 warnings are in obsolete MO2
+  compatibility classes queued for removal rather than publication.
 - Verification performed: the .NET 9 Linux solution and forced strict
-  XML-documentation core build succeed with no warning from `WriteEngine`.
-  Fourteen focused condition, bulk-write, nested, polymorphic, same-shape,
-  corpus-hygiene, null-arm, FormLink, flags, gendered, asset-link, and coercion
-  guards pass. Full `ci-all` is 111/111 on Linux after the final edit, and
-  `git diff --check` passes.
-- Files/components changed: `WriteEngine`, the tracked roadmap, and the
+  XML-documentation core build succeeds with no warning from any retained
+  reviewed component. All six SkyPatcher parser, catalog, discovery, overlay,
+  field-map, and conflict guards pass. Full `ci-all` is 111/111 on Linux after
+  the final edit, and `git diff --check` passes.
+- Files/components changed: `SkyPatcherCatalog`, the tracked roadmap, and the
   user-facing roadmap copy.
 - Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
   boundary. Patch operations validate every request before one serialization
@@ -301,9 +299,9 @@ manual release gate.
   `DialogueSubtype`, `DialogueCkParity`, `CellShellCheck`,
   `ScriptPropertyCheck`, `NativePairing`, `SksePeek`, `PapyrusCompile`,
   `ToolBridge`, `PapyrusDecompiler`, `WritePatchBuilder`, `CorpusRulebook`,
-  `RemapEngine`, and `WriteEngine` are complete; the
-  remaining inherited core components have not yet received the same
-  declaration-by-declaration review. External BSArch execution is not a
+  `RemapEngine`, `WriteEngine`, and `SkyPatcherCatalog` are complete. The only
+  undocumented inherited core classes are obsolete MO2 compatibility code
+  queued for Session 6 removal. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
   BSArch path is supplied; self-contained native archive fixtures cover v1
   behavior. Some untouched service and probe messages still say MO2 and remain
@@ -312,11 +310,11 @@ manual release gate.
   The current setup implementation is still transitional; Session 6 must
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
-- Exact next action: document `SkyPatcherCatalog`, including each filter,
-  operation-shape, tractability, and key-role enum member plus catalog loading,
-  validation, lookup, and semantic classification helpers. Then run the
-  SkyPatcher catalog, field-map, parser, apply, conflict, strict XML, and full
-  CI guards.
+- Exact next action: inventory the setup, build, workflow, skills, and runtime
+  references to MO2, Windows, `.exe`, registry, PowerShell, and `win-x64`.
+  Remove obsolete MO2 core classes only after identifying and replacing every
+  live consumer. Then implement and guard the versioned self-contained
+  `linux-x64` installer/update/rollback path.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -350,8 +348,9 @@ manual release gate.
   `5a1fbb2` completes the header-only creation, compaction, and merge-build
   slice; `465436b` completes `WritePatchBuilder`; `d16d990` completes
   `CorpusRulebook`; `e61882b` completes `RemapEngine`; `52b66cf` completes the
-  public `WriteEngine` slice; `2cf70a4` completes the lifecycle slice. The
-  final `WriteEngine` slice is pending commit.
+  public `WriteEngine` slice; `2cf70a4` completes the lifecycle slice;
+  `06207b1` completes `WriteEngine`. The `SkyPatcherCatalog` checkpoint is
+  pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

@@ -4,22 +4,21 @@ using System.Text.Json;
 namespace HousecarlCore;
 
 /// <summary>
-/// The SkyPatcher grammar CATALOG — the semantic layer over <see cref="SkyPatcherParse"/> (Wave 0b of
-/// the SkyPatcher distributor subsystem; plan dev/plans/SKYPATCHER_DISTRIBUTOR_TOOL_PLAN_2026-07-08.md).
-/// Where the tokenizer says "here is a <c>key=value</c> segment", the catalog answers "that key is a
-/// FILTER of this kind / an OPERATION of this shape and CLEAN/COLLECTION/HARD tractability — or it is
-/// NOT in the SkyPatcher reference at all."
+/// Provides the documented SkyPatcher grammar used to interpret parsed
+/// <c>key=value</c> segments.
 ///
-/// <para><b>Closed set, warn-on-unknown (Aaron's Wave-0b call).</b> The catalog is the FULL enumeration
-/// of every documented filter and operation per record type, transcribed faithfully from the bundled
-/// <c>skypatcher-authoring</c> reference (its provenance — never invented). A key that resolves to no
-/// entry is reported as <see cref="SkyPatcherKeyRole.Unknown"/>, never silently assumed — the same
-/// bundled-or-warn discipline mutagen-reference / papyrus-reference / the skill itself use (Q3).</para>
+/// <para>
+/// The catalog is a closed enumeration of filters and operations transcribed
+/// from the bundled <c>skypatcher-authoring</c> reference. Unknown keys remain
+/// <see cref="SkyPatcherKeyRole.Unknown"/> instead of inheriting guessed semantics.
+/// </para>
 ///
-/// <para>Loaded once from the embedded <c>skypatcher-catalog.json</c> (built from the reference; the
-/// record dimension — subfolder / sig / primaryFilter — is cross-checked against the reference
-/// <c>index.jsonl</c> by the catalog guard). Field-path mapping onto Mutagen records is NOT here — that
-/// is the Wave-1 overlay engine; the catalog classifies, it does not resolve values.</para>
+/// <para>
+/// The embedded JSON is loaded once. Catalog guards cross-check each record's
+/// subfolder, signature, and primary filter against the reference index. This
+/// class classifies grammar only; Mutagen field mapping and value resolution
+/// belong to the overlay layer.
+/// </para>
 /// </summary>
 public sealed class SkyPatcherCatalog
 {
@@ -46,9 +45,9 @@ public sealed class SkyPatcherCatalog
         _lookup = new(StringComparer.OrdinalIgnoreCase);
         foreach (var r in records)
         {
-            // Deliberate case asymmetry: subfolders match case-INSENSITIVELY (Windows paths), but filter/op
+            // Deliberate case asymmetry: subfolders match case-insensitively as host paths, but filter/op
             // key names match case-SENSITIVELY as the reference documents them. Whether the real SkyPatcher
-            // DLL accepts e.g. 'attackdamage' is a Wave-1 empirical item; until verified, a wrong-cased key
+            // DLL acceptance of e.g. 'attackdamage' is not established; until verified, a wrong-cased key
             // classifies as Unknown (a loud warn, never a silent guess).
             _bySubfolder[r.Subfolder] = r;
             _lookup[r.Subfolder] = new RecordLookup(
@@ -99,7 +98,7 @@ public sealed class SkyPatcherCatalog
     static SkyPatcherCatalog? _cached;
 
     /// <summary>Load the embedded catalog (memoized). Throws loudly on a missing/malformed resource — a
-    /// catalog that silently loaded empty would make every op read as Unknown (a Q3 silent-degrade).</summary>
+    /// catalog that silently loaded empty would make every operation appear unknown.</summary>
     public static SkyPatcherCatalog Load() => _cached ??= LoadFrom(EmbeddedJson.Read("skypatcher-catalog.json", "SkyPatcher catalog"));
 
     /// <summary>Parse a catalog from JSON text (also the guard's entry point for a fixture).</summary>
@@ -112,6 +111,7 @@ public sealed class SkyPatcherCatalog
         return new SkyPatcherCatalog(records);
     }
 
+    /// <summary>Parses one record-type entry and all of its filters and operations.</summary>
     static SkyPatcherRecordCatalog ParseRecord(JsonElement el)
     {
         var recordType = Str(el, "recordType");
@@ -119,8 +119,8 @@ public sealed class SkyPatcherCatalog
         var ops = new List<SkyPatcherOpDef>();
 
         // A PRESENT-but-wrong-kind node throws loudly like every other malformed field — a mistyped
-        // 'filters'/'operations'/'connectives' silently parsed as empty is the exact Q3 silent-empty
-        // degrade the Load() contract forbids (every key would then read Unknown with no load error).
+        // Parsing a present filters/operations/connectives node as empty on a type
+        // error would silently make every key appear unknown.
         if (el.TryGetProperty("filters", out var fs) && RequireArray(fs, "filters", recordType))
             foreach (var f in fs.EnumerateArray())
                 filters.Add(new SkyPatcherFilterDef(
@@ -150,14 +150,17 @@ public sealed class SkyPatcherCatalog
         => el.ValueKind == JsonValueKind.Array ? true
             : throw new InvalidOperationException($"SkyPatcher catalog [{ctx}]: '{prop}' is present but not an array.");
 
+    /// <summary>Reads a required JSON string property.</summary>
     static string Str(JsonElement el, string prop)
         => el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String
             ? v.GetString()!
             : throw new InvalidOperationException($"SkyPatcher catalog entry missing required string '{prop}'.");
 
+    /// <summary>Reads an optional JSON string property.</summary>
     static string? OptStr(JsonElement el, string prop)
         => el.TryGetProperty(prop, out var v) && v.ValueKind == JsonValueKind.String ? v.GetString() : null;
 
+    /// <summary>Parses a filter-kind token or reports its record context.</summary>
     static SkyPatcherFilterKind ParseFilterKind(string s, string ctx) => s switch
     {
         "primary" => SkyPatcherFilterKind.Primary,
@@ -170,6 +173,7 @@ public sealed class SkyPatcherCatalog
         _ => throw new InvalidOperationException($"SkyPatcher catalog [{ctx}]: unknown filter kind '{s}'."),
     };
 
+    /// <summary>Parses an operation-shape token or reports its record context.</summary>
     static SkyPatcherOpShape ParseShape(string s, string ctx) => s switch
     {
         "set" => SkyPatcherOpShape.Set,
@@ -184,6 +188,7 @@ public sealed class SkyPatcherCatalog
         _ => throw new InvalidOperationException($"SkyPatcher catalog [{ctx}]: unknown op shape '{s}'."),
     };
 
+    /// <summary>Parses a tractability token or reports its record context.</summary>
     static SkyPatcherTractability ParseTractability(string s, string ctx) => s.ToUpperInvariant() switch
     {
         "CLEAN" => SkyPatcherTractability.Clean,
@@ -194,16 +199,68 @@ public sealed class SkyPatcherCatalog
 }
 
 /// <summary>How a filter combines its values (by suffix): Primary is the record's own filterBy&lt;Type&gt;.</summary>
-public enum SkyPatcherFilterKind { Primary, CrossCutting, RecordSpecific, Restrict, HasPlugins, OverrideAware, NoFilter }
+public enum SkyPatcherFilterKind
+{
+    /// <summary>Selects records by the current record type's primary identity.</summary>
+    Primary,
+    /// <summary>Uses a filter shared across several record types.</summary>
+    CrossCutting,
+    /// <summary>Uses a filter defined only for this record type.</summary>
+    RecordSpecific,
+    /// <summary>Restricts records already selected by another filter.</summary>
+    Restrict,
+    /// <summary>Tests whether named plugins are present.</summary>
+    HasPlugins,
+    /// <summary>Uses winning or originating override context.</summary>
+    OverrideAware,
+    /// <summary>Applies without selecting records through a filter.</summary>
+    NoFilter,
+}
 
 /// <summary>The value-grammar shape of an operation (inventory categories a–i).</summary>
-public enum SkyPatcherOpShape { Set, Mult, AddNumeric, Collection, Mirror, Flags, Rename, NullClear, Compound }
+public enum SkyPatcherOpShape
+{
+    /// <summary>Replaces a value.</summary>
+    Set,
+    /// <summary>Multiplies an existing numeric value.</summary>
+    Mult,
+    /// <summary>Adds to an existing numeric value.</summary>
+    AddNumeric,
+    /// <summary>Adds, removes, or replaces collection members.</summary>
+    Collection,
+    /// <summary>Copies or mirrors a related value.</summary>
+    Mirror,
+    /// <summary>Mutates individual flag bits.</summary>
+    Flags,
+    /// <summary>Changes a record's display or editor name.</summary>
+    Rename,
+    /// <summary>Clears a nullable value.</summary>
+    NullClear,
+    /// <summary>Encodes several coordinated changes in one operation.</summary>
+    Compound,
+}
 
-/// <summary>How faithfully the overlay can resolve this op's post-state (Wave-1 tiered honesty).</summary>
-public enum SkyPatcherTractability { Clean, Collection, Hard }
+/// <summary>How faithfully the overlay can resolve an operation's post-state.</summary>
+public enum SkyPatcherTractability
+{
+    /// <summary>The resulting scalar state can be resolved directly.</summary>
+    Clean,
+    /// <summary>The result depends on ordered collection state.</summary>
+    Collection,
+    /// <summary>The runtime result cannot be reproduced safely by the static overlay.</summary>
+    Hard,
+}
 
 /// <summary>What a classified segment key is.</summary>
-public enum SkyPatcherKeyRole { Filter, Operation, Unknown }
+public enum SkyPatcherKeyRole
+{
+    /// <summary>The key selects or restricts target records.</summary>
+    Filter,
+    /// <summary>The key changes selected records.</summary>
+    Operation,
+    /// <summary>The key is absent from the bundled reference catalog.</summary>
+    Unknown,
+}
 
 /// <summary>One documented filter token (base name; connective variants are in <see cref="Connectives"/>).</summary>
 public sealed record SkyPatcherFilterDef(string Name, SkyPatcherFilterKind Kind, IReadOnlyList<string> Connectives, string? Selects);
