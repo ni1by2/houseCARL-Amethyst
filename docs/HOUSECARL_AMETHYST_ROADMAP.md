@@ -257,19 +257,20 @@ manual release gate.
 
 - Active milestone: full-codebase documentation pass; Session 6 follows it, with
   setup documentation to be completed alongside the Linux setup rewrite.
-- Last completed checkpoint: completed the header-only creation, compaction,
-  and merge-build `WritePatchBuilder` slice. The documentation now explains
-  source and overlay lifetimes, renumber ownership, donor-reference rejection,
-  NextObjectID handling, explicit master resolution, atomic serialization, and
-  written-header readback without milestone or incident-history prose.
+- Last completed checkpoint: completed the final `WritePatchBuilder` slice,
+  covering flat, nested, interior-cell, exterior-cell, and in-place record
+  creation; same-call reference resolution; Creation Kit parity defaults;
+  full-record readback; and compact result descriptions. The entire file now
+  contains local contracts rather than dated milestone or incident markers,
+  and contains no MO2 terminology.
 - Verification performed: the .NET 9 Linux solution and forced strict
   XML-documentation core build succeed with no warning from
-  `WritePatchBuilder`. Header-only creation, compact-service,
-  compact-readback, merge-service, and remap guards pass. Full `ci-all` is
-  111/111 on Linux after the final edit, and `git diff --check` passes.
-- Files/components changed: `WritePatchBuilder` header-only creation,
-  compaction, and merge documentation, the tracked roadmap, and the
-  user-facing roadmap copy.
+  `WritePatchBuilder`. Bulk-create, nested-create, abstract-group creation,
+  coordinate-cell creation, dialogue subtype, Creation Kit parity, binding,
+  in-place, and write-lock guards pass. Full `ci-all` is 111/111 on Linux after
+  the final edit, and `git diff --check` passes.
+- Files/components changed: `WritePatchBuilder` record-creation and readback
+  documentation, the tracked roadmap, and the user-facing roadmap copy.
 - Decisions made: `WritePatchBuilder` remains the shared all-or-nothing write
   boundary. Patch operations validate every request before one serialization
   and reopen the result. In-place operations read records from the target
@@ -298,7 +299,7 @@ manual release gate.
   `NifService`, `VoiceCheck`, `DialogueScriptCheck`, `DialogueValidate`,
   `DialogueSubtype`, `DialogueCkParity`, `CellShellCheck`,
   `ScriptPropertyCheck`, `NativePairing`, `SksePeek`, `PapyrusCompile`,
-  `ToolBridge`, and `PapyrusDecompiler` are complete; the
+  `ToolBridge`, `PapyrusDecompiler`, and `WritePatchBuilder` are complete; the
   remaining inherited core components have not yet received the same
   declaration-by-declaration review. External BSArch execution is not a
   native-v1 feature, so the optional live repack arm remains skipped when no
@@ -310,11 +311,11 @@ manual release gate.
   replace it with versioned Linux installation, atomic activation, rollback,
   and self-contained bundle tests.
 - Exact next action: continue the inherited `housecarl-core` documentation pass
-  through the remaining internal implementation of `WritePatchBuilder`,
-  covering record creation, nested creation, in-place creation, readback, and
-  sibling-reference helpers. Replace dated incident and milestone prose with
-  concise local phase and failure-boundary comments, then re-run the focused
-  create family, strict XML build, and full CI.
+  through `CorpusRulebook`. Document request and structure properties, schema
+  gates, verb validation, value coercion boundaries, same-call reference
+  handling, and refusal semantics. Replace dated incident and milestone prose
+  with concise local contracts, then run the rulebook-focused guards, strict
+  XML build, and full CI.
   Rewrite setup documentation with the Session 6 Linux installer rather than
   preserving transitional contracts.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
@@ -345,8 +346,8 @@ manual release gate.
   documentation checkpoint; `5274457` completes the `WritePatchBuilder`
   public-contract checkpoint; `ed72cd5` completes the first internal
   implementation slice; `ac3b1be` completes the removal-and-forwarding slice.
-  The header-only creation, compaction, and merge-build slice is pending
-  commit.
+  `5a1fbb2` completes the header-only creation, compaction, and merge-build
+  slice. The final record-creation and readback slice is pending commit.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.

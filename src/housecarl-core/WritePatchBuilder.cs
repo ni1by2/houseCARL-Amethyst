@@ -194,11 +194,8 @@ public static class WritePatchBuilder
         /// <see cref="ParentRef"/> is null.</summary>
         public string? IntoCollection { get; init; }
 
-        /// <summary>Optional — the exterior-cell GRID as "X,Y" (the coordinate-keyed §4-(b) create path). Set on a
-        /// <c>Cell</c> create, it places the new cell into a Worldspace's block tree by block=floor(grid/32),
-        /// subblock=floor(grid/8) (STEP-0 proven vs 4000 vanilla cells); <see cref="ParentRef"/> must then resolve to a
-        /// Worldspace. A <c>Cell</c> create with NO <see cref="Grid"/> and NO <see cref="ParentRef"/> ⇒ an INTERIOR cell
-        /// (self-files into the top-level Cells group by its own FormID). Ignored for non-Cell types.</summary>
+        /// <summary>Gets optional <c>X,Y</c> coordinates for a Cell nested under a Worldspace.</summary>
+        /// <remarks>A parentless Cell without a grid is created as an interior cell.</remarks>
         public string? Grid { get; init; }
     }
 
@@ -253,10 +250,8 @@ public static class WritePatchBuilder
         /// pure record-write. See <see cref="DialogueScriptCheck"/>.</summary>
         public ScriptBindingReport? ScriptBinding { get; init; }
 
-        /// <summary>The structural-shell report for the cells this call created (the coordinate-keyed §4-(b) teeth —
-        /// what world content the author must still provide; Aaron 2026-06-20: no CK work) — null unless the call created
-        /// ≥1 Cell. Filled by the SERVICE post-write the SAME way as <see cref="Voice"/>, so <see cref="CreateRecords"/>
-        /// stays a pure record-write. See <see cref="CellShellCheck"/>.</summary>
+        /// <summary>Gets the service-supplied structural report for newly created cells.</summary>
+        /// <remarks>Null when the call created no Cell records.</remarks>
         public CellShellReport? CellShell { get; init; }
 
         /// <summary>Creates an unsuccessful record-creation outcome.</summary>
@@ -1621,29 +1616,12 @@ public static class WritePatchBuilder
         return new MergeBuildResult(true, null, writtenMasters, mr.RecordsCopied, mr.RecordsRenumbered, mr.Conflicts, bytes);
     }
 
-    /// <summary>
-    /// Create BRAND-NEW records (new FormIDs) in a patch — the net-new authoring capability, the sibling of
-    /// <see cref="Apply"/> (which overrides an EXISTING record). A FLAT top-level <see cref="CreateSpec"/> (no
-    /// <see cref="CreateSpec.ParentRef"/>) allocates a fresh record of its (caller-declared) type via
-    /// <see cref="WriteEngine.GenericUpsertNew"/>; a NESTED spec (a ParentRef — a dialogue line under a topic, a placed
-    /// ref into a cell) resolves its parent (an existing load-order winner, a same-call sibling by editorid, OR a record
-    /// the patch being extended already carries from a prior into= call) and allocates the child into the parent's modeled
-    /// child-collection via <see cref="WriteEngine.NestedAddNew"/> — the add-target found by construction, named via
-    /// <see cref="CreateSpec.IntoCollection"/> when more than one fits. Either way the new record gets a local 0x800+
-    /// ESP-range FormID and the SAME <see cref="WriteEngine.ApplyVerb"/> path sets its fields; RecordType is DECLARED
-    /// (no existing winner to derive it from). Still failed loud (Q3): an abstract-group subtype, and a coordinate-keyed
-    /// EXTERIOR cell (FormKey-less worldspace block parents) — via <see cref="WriteEngine.CanCreateType"/> /
-    /// <see cref="WriteEngine.CanCreateNested"/>. <paramref name="extend"/>=false writes a fresh patch (ModKey = filename);
-    /// =true adds to an existing one (the into= path). ALL-OR-NOTHING (Q3): any pre-flight problem — missing editorid, an
-    /// un-createable type, an unresolvable parent, a rejected edit — refuses the WHOLE call with no file written.
-    ///
-    /// <paramref name="inPlaceTarget"/> (non-null) switches to the IN-PLACE lane (Wave 1b): <paramref name="outPath"/> IS
-    /// the target plugin's real on-disk path and the records are allocated INTO it + the whole plugin re-serialized over
-    /// itself (model C, <see cref="WriteEngine.WriteInPlace"/>) instead of a new patch — full create parity, incl. nesting
-    /// under a parent the target doesn't itself own (the parent is overridden IN, exactly as the patch lane does into a new
-    /// patch; a parent the target DOES own is sourced from the target so its content is preserved). Every in-place fork is
-    /// additive + gated on this param: the patch lane (inPlaceTarget null) is behaviourally unchanged.
-    /// </summary>
+    /// <summary>Creates flat, nested, interior-cell, or exterior-cell records in a patch or staging plugin.</summary>
+    /// <remarks>
+    /// The method validates every specification before mutation, allocates FormKeys in specification order, resolves
+    /// same-call references, applies Creation Kit parity defaults, serializes once, and reopens the artifact. A non-null
+    /// <paramref name="inPlaceTarget"/> selects the consent-gated in-place lane owned by the service.
+    /// </remarks>
     public static CreateOutcome CreateRecords(
         LoadOrderResolver resolver, CorpusRulebook rulebook,
         IReadOnlyList<CreateSpec> specs, string outPath, bool extend, bool fullReadback = false, string? inPlaceTarget = null)
@@ -1651,23 +1629,16 @@ public static class WritePatchBuilder
         if (specs.Count == 0) return CreateOutcome.Fail("no records to create supplied.");
         bool inPlace = inPlaceTarget is not null;
 
-        // Per-call overlay session (Option B): the known-master set for the serialize is opened through it and disposed
-        // when the method returns — no handle held at rest. The view is captured up front (the in-place Phase-0 guard needs
-        // it; the patch lane uses it identically in Phase 1).
+        // Scope all overlays and link caches to this call and use one captured load-order view.
         using var session = resolver.OpenSession();
         var view = resolver.Capture();
 
-        // --- Phase 0: open the destination FIRST — moved AHEAD of pre-flight so a FormKey parent can resolve from it (a
-        //     parent created in a PRIOR into= call, or — in place — a parent the target itself owns). CreateFromBinary reads
-        //     the file fully into memory and holds NO handle at rest (the active-patch self-lock invariant is untouched —
-        //     Phase 4's ReleaseOverlay + AllMastersExcept still guard the serialize); nothing is mutated until Phase 3 and
-        //     nothing serialized until Phase 4, so all-or-nothing holds. IN-PLACE: the destination IS the target plugin. ---
+        // Open the destination before validation so parent records already owned by it can participate in nesting.
         var fileName = Path.GetFileName(outPath);
         SkyrimMod patchMod;
         if (inPlace)
         {
-            // The target must be an active, fully-parseable plugin (the excluded-plugin guard, same as ApplyInPlace):
-            // houseCARL won't re-serialize a plugin it can't fully parse — that would risk DROPPING a record it couldn't read (Q3).
+            // Refuse inactive, excluded, missing, or unreadable in-place targets before mutation.
             if (!view.ContainsPlugin(inPlaceTarget!))
                 return CreateOutcome.Fail($"in-place target '{inPlaceTarget}' is not an active plugin in the load order.{view.AbsenceClause(inPlaceTarget!)}");
             if (view.ExcludedPlugins.TryGetValue(inPlaceTarget!, out var excluded))
@@ -1694,26 +1665,14 @@ public static class WritePatchBuilder
         if (!string.Equals(patchMod.ModKey.FileName.String, fileName, StringComparison.OrdinalIgnoreCase))
             return CreateOutcome.Fail($"{(inPlace ? "in-place" : "patch")} ModKey '{patchMod.ModKey.FileName}' must match {(inPlace ? "the target filename" : "output filename")} '{fileName}'.");
 
-        // --- Phase 1: pre-flight EVERY spec before any mutation (Q3, all-or-nothing). editorid required + unique; the
-        //     type must be createable — a FLAT top-level type (CanCreateType), OR a NESTED child given a valid parent
-        //     (CanCreateNested): the parent is resolved to its TYPE (an existing parent FormKey's load-order winner, a
-        //     record created EARLIER in this same call — the one-shot order rule — or a record the PATCH being extended
-        //     already carries, from a prior into= call), and the child must nest under it by construction (§1.4 Q2). Every
-        //     edit is validated by the rulebook rooted at the create type. The new FormID isn't known until allocation
-        //     (Phase 3), so creatability is STRUCTURAL; a FormKey parent is resolved here only to learn its TYPE + stash
-        //     the route to make it settable in Phase 3. ONE captured build answers every parent resolve (hunt-F5). ---
+        // Validate all Editor IDs, types, parent routes, cell coordinates, and field edits before creating anything.
         var problems = new List<string>();
         var seenEdid = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        var declaredEdidType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);   // editorid -> RecordType (same-call sibling parents)
-        // editorids declared in EARLIER specs PLUS the current one — the legal targets of a "@editorid" same-call
-        // field ref (HCBR Layer B unit A). Grown as each spec DECLARES its editorid (before its edits validate), so
-        // during spec i's edit validation it holds {0..i}: an earlier sibling AND the record itself (self-reference —
-        // HCBR-2026-07-10-01: a quest's VMAD fragment points at its own quest; apply registers the record in
-        // createdByEditorId before applying its edits, so the substitution timing already holds). A forward-ref to a
-        // LATER sibling still rejects loud.
+        var declaredEdidType = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        // A record may reference itself or an earlier specification, but never a later specification.
         var priorEditorIds = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         var parentPlans = new List<(IMajorRecordGetter? body, string? winnerPlugin, string? sibling, IMajorRecord? patchParent)?>(specs.Count);
-        var cellKinds = new CellCreate[specs.Count];   // coordinate-keyed §4-(b) routing per spec (None / Exterior / Interior)
+        var cellKinds = new CellCreate[specs.Count];
         for (int i = 0; i < specs.Count; i++)
         {
             var s = specs[i];
@@ -1727,8 +1686,7 @@ public static class WritePatchBuilder
             {
                 if (IsCellType(s.RecordType))
                 {
-                    // A parentless Cell (coordinate-keyed §4-(b)): NO grid ⇒ an INTERIOR cell (self-files by FormID —
-                    // CanCreateType would refuse a bare Cell, so bypass it). A grid here is malformed (exterior needs a Worldspace).
+                    // A parentless Cell without a grid is an interior cell.
                     if (s.Grid is not null) { problems.Add($"Cell '{s.EditorId}': an exterior cell (grid=) needs parent= a Worldspace; an interior cell takes no parent and no grid."); continue; }
                     cellKinds[i] = CellCreate.Interior;
                 }
@@ -1739,11 +1697,7 @@ public static class WritePatchBuilder
                 Type? parentType = null;
                 if (FormKey.TryFactory(s.ParentRef, out var parentFk))
                 {
-                    // IN-PLACE target-owned parent (the create-side of the edit lane's content-source guard): if the TARGET
-                    // itself carries the parent (defines or overrides it), use ITS OWN copy directly — preserve the user's
-                    // parent content + just add the child. The winner-source path below would instead override the load-order
-                    // WINNER in, clobbering the user's content for a parent they own but don't win. (Patch lane: inPlace false
-                    // => skips this; the prior-into= patchMod-carries branch still serves it, unchanged.)
+                    // Preserve an in-place target's own parent body rather than replacing it with the current winner.
                     if (inPlace && patchMod.EnumerateMajorRecords().FirstOrDefault(r => r.FormKey == parentFk) is { } ownParent)
                     {
                         parentType = WriteEngine.ResolveConcreteRecordType(RecordNaming.StripOverlay(ownParent.GetType().Name));
@@ -1751,10 +1705,7 @@ public static class WritePatchBuilder
                     }
                     else if (view.ResolveWinner(parentFk) is { } w)
                     {
-                        // An EXISTING load-order parent (a topic/cell from a master or mod): override it INTO the destination
-                        // in Phase 3. In place, this is the FOREIGN-parent case — the parent the target doesn't own — and
-                        // overriding it in to host the child is exactly what the patch lane does into a new patch (correct,
-                        // necessary nesting, NOT injection: the user explicitly named the parent; the override is reported).
+                        // A foreign existing parent is overridden into the destination so it can own the new child.
                         var parentBody = view.GetRecord(session, w.WinnerPlugin, parentFk);
                         if (parentBody is null) { problems.Add($"{s.RecordType} '{s.EditorId}': parent {parentFk} winner '{w.WinnerPlugin}' did not yield it on fetch (a load-order inconsistency)."); continue; }
                         parentType = WriteEngine.ResolveConcreteRecordType(RecordNaming.StripOverlay(parentBody.GetType().Name));
@@ -1762,16 +1713,13 @@ public static class WritePatchBuilder
                     }
                     else if (patchMod.EnumerateMajorRecords().FirstOrDefault(r => r.FormKey == parentFk) is { } patchParent)
                     {
-                        // A parent created in a PRIOR into= call — it lives in the patch being extended, not the load order
-                        // (the former N9 gap, now resolvable because Phase 0 opens the patch BEFORE this loop). It's already
-                        // a settable patch-local record, so Phase 3 uses it directly (no override needed).
+                        // A parent defined by the destination is already mutable and needs no new override.
                         parentType = WriteEngine.ResolveConcreteRecordType(RecordNaming.StripOverlay(patchParent.GetType().Name));
                         parentPlans[i] = (null, null, null, patchParent);
                     }
                     else
                     {
-                        // Genuinely absent from the load order AND the destination — the surviving loud refusal (Q3, never a
-                        // misleading "wrong FormID"). Name the one-call workaround for the common new-topic case.
+                        // Name both accepted parent sources and the same-call workaround when no parent exists.
                         problems.Add($"{s.RecordType} '{s.EditorId}': parent {parentFk} is not present in the load order"
                             + (extend ? " or this patch" : "") + (inPlace ? " or the target plugin" : "") + " — name an existing parent, or create the parent and this "
                             + "child in ONE call (a same-call sibling parent, by the parent's editorid).");
@@ -1788,9 +1736,7 @@ public static class WritePatchBuilder
                 if (parentType is null) { problems.Add($"{s.RecordType} '{s.EditorId}': could not resolve the parent's record type."); continue; }
                 if (IsCellType(s.RecordType))
                 {
-                    // A Cell WITH a parent (coordinate-keyed §4-(b)): a grid ⇒ an EXTERIOR cell placed into the
-                    // Worldspace's block tree (NOT a child-collection nest). No grid ⇒ ambiguous — refuse loud (Q3).
-                    // (Parent resolution above already populated parentPlans[i] so Phase 3 can make the Worldspace settable.)
+                    // A cell with a Worldspace parent requires a grid and is placed in the exterior block tree.
                     if (s.Grid is null) { problems.Add($"Cell '{s.EditorId}': a Cell with parent= but no grid= is ambiguous — an exterior cell needs grid=<X,Y> under a Worldspace; an interior cell takes no parent."); continue; }
                     if (parentType != typeof(Worldspace)) { problems.Add($"Cell '{s.EditorId}': an exterior cell nests under a Worldspace, but parent '{s.ParentRef}' resolved to a {parentType.Name}."); continue; }
                     if (!TryParseGrid(s.Grid, out _, out _)) { problems.Add($"Cell '{s.EditorId}': grid '{s.Grid}' must be two integers \"X,Y\" (e.g. \"5,-12\")."); continue; }
@@ -1800,45 +1746,24 @@ public static class WritePatchBuilder
             }
 
             foreach (var req in s.Edits)
-                // siblingEditorIds = priorEditorIds: a "@editorid" FormLink value is accepted iff that editorid was
-                // declared in an EARLIER spec of THIS call OR is the record itself (resolved to its real FormKey in
-                // Phase 3); else rejected loud.
+                // Validate @editorid references against this record and earlier specifications.
                 if (rulebook.Validate(req, priorEditorIds) is { } reject) problems.Add($"{s.RecordType} '{s.EditorId}' [{Label(req)}]: {reject}");
         }
         if (problems.Count > 0)
             return CreateOutcome.Fail(
                 $"refused — {problems.Count} problem(s) creating {specs.Count} record(s); NOTHING created:\n  - " + string.Join("\n  - ", problems));
 
-        // --- Phase 3: UPSERT each record, then apply its edits. A throw here AFTER pre-flight passed is a real engine
-        //     inconsistency — fail the WHOLE call (the in-memory patch is discarded; nothing serialized), surfaced not
-        //     swallowed (Q3). All upserts are in-memory until the single WritePatch, so all-or-nothing holds even mid-loop.
-        //     UPSERT (idempotency): on the into=/extend path, a re-run of the same create used to APPEND a duplicate of
-        //     every record (nothing checked whether the EditorID already existed in the opened patch). GenericUpsertNew
-        //     replaces a same-EditorID record THE PATCH ITSELF DEFINES fresh at its same FormKey instead — re-runs are
-        //     idempotent, list fields can't accumulate, and stable FormKeys keep cross-record links + external references
-        //     valid. Collisions it will NOT absorb (carried overrides, duplicate residue, cross-type) refuse loud there;
-        //     every replace that DOES happen is carried on CreatedRecord.ReplacedExisting and rendered to the user. ---
-        //     NESTED create (a spec with a ParentRef): the parent is made settable IN the patch first — an existing
-        //     load-order parent is overridden in (a flat parent needs no link cache; a nested parent — a Cell — gets the
-        //     winner overlay's cache, the SAME session.LinkCacheFor path Apply uses + guards), a same-call sibling parent
-        //     is the record created earlier in this loop, and a parent the patch ALREADY carries (created in a prior
-        //     into= call — Phase 0) is used directly — then WriteEngine.NestedAddNew allocates the child into the
-        //     parent's modeled collection (named, or the unique one). Idempotency: nested create APPENDS (no
-        //     upsert-replace) — Aaron-accepted for Layer A (2026-06-14): nested children carry no stable EditorID
-        //     handle to de-dup on (unlike flat GenericUpsertNew), so a re-run into= re-adds. Watch in real use;
-        //     revisit only if it bites. ---
+        // Create every record in memory, then apply its validated edits. Flat records upsert by Editor ID; nested
+        // records append because they lack a stable Editor ID that can identify a prior child.
         var created = new List<CreatedRecord>(specs.Count);
         var createdByEditorId = new Dictionary<string, IMajorRecord>(StringComparer.OrdinalIgnoreCase);
         var linkCacheByPlugin = new Dictionary<string, Mutagen.Bethesda.Plugins.Cache.ILinkCache>(StringComparer.OrdinalIgnoreCase);
 
-        // Resolve a spec's parent to a SETTABLE record IN the patch — shared by nested-create AND exterior-cell create
-        // (both make the parent settable identically: a prior-into= patch record used directly; an existing load-order
-        // parent overridden in, with its source link cache only when the override needs one; or a same-call sibling
-        // created earlier in this loop). Returns (parent, null) on success, (null, error) to fail the WHOLE call (Q3).
+        // Obtain a mutable parent from the destination, a source override, or an earlier same-call record.
         (IMajorRecord? parent, string? error) MakeSettableParent(int idx)
         {
             var plan = parentPlans[idx]!.Value;
-            if (plan.patchParent is not null) return (plan.patchParent, null);   // a prior-into= patch-local record
+            if (plan.patchParent is not null) return (plan.patchParent, null);
             if (plan.body is not null)
             {
                 Mutagen.Bethesda.Plugins.Cache.ILinkCache? cache = null;
@@ -1862,13 +1787,12 @@ public static class WritePatchBuilder
             {
                 if (cellKinds[i] == CellCreate.Interior)
                 {
-                    // INTERIOR cell (coordinate-keyed §4-(b)): self-files into the patch's Cells group by FormID digits.
+                    // Interior cells file themselves into the destination's top-level Cells group.
                     rec = WriteEngine.AddInteriorCell(patchMod, s.EditorId);
                 }
                 else if (cellKinds[i] == CellCreate.Exterior)
                 {
-                    // EXTERIOR cell (coordinate-keyed §4-(b)): make the Worldspace settable (thin override), then place
-                    // the cell into its block tree by grid. Pre-flight (Phase 1) guaranteed a Worldspace parent + a grid that parses.
+                    // Exterior cells are placed into a mutable Worldspace's block tree by validated grid coordinates.
                     var (wsParent, perr) = MakeSettableParent(i);
                     if (perr is not null) return CreateOutcome.Fail(perr);
                     TryParseGrid(s.Grid!, out var gx, out var gy);
@@ -1891,30 +1815,19 @@ public static class WritePatchBuilder
             var ops = new List<OpResult>(s.Edits.Count);
             foreach (var rawReq in s.Edits)
             {
-                // Resolve every same-call reference (@editorid) to its now-allocated FormKey (HCBR Layer B unit A —
-                // the INFO PNAM chain + Topic back-link in one bulk_create; HCBR-2026-07-10-01 — self-reference +
-                // compose-struct refs, e.g. a quest's VMAD fragment pointing at its own quest). Pre-flight (Phase 1)
-                // already guaranteed any surviving @-token is on a FormLink target AND names a record declared no
-                // later than this spec — the current record was registered in createdByEditorId just above, so SELF
-                // resolves too; a miss here is a real engine inconsistency, surfaced not swallowed (Q3). The
-                // substituted value is a normal intra-patch FormKey that ApplyVerb coerces exactly as a literal
-                // FormID would (no apply-path change). Slots that carry a ref: the SINGULAR req.Value, req.Values
-                // (ReplaceAll on a link list), and — recursively — a compose Struct's formlink Fields values and
-                // nested Sets (ResolveSiblingRefs walks all of them).
+                // Replace validated @editorid tokens with the FormKeys allocated earlier in this loop.
                 var (req, refErr) = ResolveSiblingRefs(rawReq, createdByEditorId, $"new {s.RecordType} '{s.EditorId}'");
                 if (refErr is not null) return CreateOutcome.Fail(refErr);
                 try { WriteEngine.ApplyVerb(rec, req); ops.Add(new OpResult(rec.FormKey, s.RecordType, Label(req), true, null, TryReadAfter(rec, req))); }
                 catch (ExpectedApplyRejectionException ex)
                 {
-                    // EXPECTED apply-time refusal (live state pre-flight can't see — e.g. a duplicate dict key): clean
-                    // guidance, NOT the inconsistency wrapper. Whole call still refused, nothing serialized (gap-audit Finding 3).
+                    // Report live-state conflicts, such as duplicate keys, as expected refusals.
                     return CreateOutcome.Fail(
                         $"refused applying [{Label(req)}] to new {s.RecordType} '{s.EditorId}' ({rec.FormKey}) — {ex.Message} (nothing created)");
                 }
                 catch (MalformedTargetDataException ex)
                 {
-                    // THIRD category: the target record's own data is malformed (present-but-null element/entry) — render it
-                    // accurately, NOT under the inconsistency wrapper. Whole call refused, nothing serialized (PR #83 Gap 2).
+                    // Distinguish malformed target data from both invalid input and an engine inconsistency.
                     return CreateOutcome.Fail(
                         $"refused applying [{Label(req)}] to new {s.RecordType} '{s.EditorId}' ({rec.FormKey}) — {ex.Message} (nothing created)");
                 }
@@ -1925,11 +1838,7 @@ public static class WritePatchBuilder
                         $"pre-flight ACCEPTED it but the apply threw — a real inconsistency, surfaced not swallowed (Q3): {ex.GetType().Name}: {ex.Message}");
                 }
             }
-            // #131 — auto-fill the DialogTopic SNAM subtype marker. A new topic with a Subtype but a blank SNAM marker
-            // (the default when only Subtype is set — or nothing, which defaults to Custom) is a load CTD: the engine
-            // buckets topics by the 4-char marker, and a new topic with a blank one walks an invalid list. This
-            // COMPLETES the write the author under-specified (never overriding an explicit marker) and surfaces it as
-            // an op — auto-filled, not silent (Q3). The authority + why-not-derivable live in DialogueSubtype.
+            // Fill a missing DialogTopic SNAM marker from its modeled subtype; never overwrite an explicit marker.
             if (rec is IDialogTopic dtopic)
             {
                 switch (DialogueSubtype.NormalizeMarker(dtopic, out var marker))
@@ -1940,12 +1849,7 @@ public static class WritePatchBuilder
                             $"{marker} — derived from Subtype={dtopic.Subtype}; a new topic with a blank marker is a load CTD (#131)"));
                         break;
                     case MarkerFill.Unmodeled:
-                        // Fail loud, never ship a silent blank (Q3 + the cornerstone's "fail loud on a Mutagen/xEdit
-                        // delta"): the ONLY way here is a Subtype outside the modeled 0..N (an out-of-range enum value
-                        // that coerced past pre-flight, or a future Mutagen addition the table doesn't cover yet). We
-                        // can't derive its marker and a blank SNAM is malformed — refuse with actionable guidance
-                        // rather than write a crash-prone record (nothing serialized; the guard pins that every real
-                        // enum value IS modeled, so this only bites genuinely-out-of-range input).
+                        // Reject an unmodeled subtype because a blank marker produces a malformed topic.
                         return CreateOutcome.Fail(
                             $"cannot create DialogTopic '{s.EditorId}': no SNAM subtype marker is modeled for Subtype={dtopic.Subtype} " +
                             $"((int){(int)dtopic.Subtype}, outside the known 0..{DialogueSubtype.Count - 1}). A blank marker is malformed " +
@@ -1953,23 +1857,13 @@ public static class WritePatchBuilder
                     // AlreadySet: an explicit marker the author set — never overridden, nothing to report.
                 }
 
-                // CK-parity seed (S2 — the byte-only tier): DIAL Priority (PNAM). Priority is a NON-NULLABLE float
-                // (defaults to 0), so "the author left it unset" is NOT is-null — it's "no edit touched the Priority
-                // path." Compute that from this record's op list and let DialogueCkParity seed the CK's 50 only when
-                // Priority was never mentioned; an explicit value (including 0) always wins. Surfaced as an op (Q3).
+                // Apply the Creation Kit topic-priority default only when the request never mentioned Priority.
                 bool authorSetPriority = s.Edits.Any(e => e.Path.Length >= 1 &&
                     string.Equals(e.Path[0], "Priority", StringComparison.OrdinalIgnoreCase));
                 if (DialogueCkParity.ApplyTopicPriorityDefault(dtopic, authorSetPriority) is { } pfill)
                     ops.Add(new OpResult(rec.FormKey, s.RecordType, pfill.Label, true, null, pfill.Reason));
             }
-            // CK-parity default-populate (S1 confirmed-CK-crash tier + S2 byte-only tier; same #131 asymmetry across
-            // the whole DIAL/INFO/DLVW/DLBR/QUST family: Mutagen omits null optionals, the CK writes them
-            // unconditionally). An INFO created without CNAM (FavorLevel) / ENAM (Flags) crashes the CK when its topic
-            // is opened; a bare DLVW crashes the CK Dialogue Views editor; the S2 fields (DLBR Category, QUST
-            // NextAliasID + objective Flags) are byte-parity only (no crash) but complete the write the same way.
-            // These COMPLETE the write the author under-specified (never overriding an explicit value) and surface each
-            // fill as an op — auto-filled, not silent (Q3). The authority + by-construction values live in
-            // DialogueCkParity (else-if: a record is exactly one of these types).
+            // Fill Creation Kit-required dialogue and quest defaults while preserving every explicit value.
             else if (rec is IDialogResponses infoRec)
             {
                 foreach (var fill in DialogueCkParity.ApplyInfoDefaults(infoRec))
@@ -1980,12 +1874,12 @@ public static class WritePatchBuilder
                 foreach (var fill in DialogueCkParity.ApplyViewDefaults(viewRec))
                     ops.Add(new OpResult(rec.FormKey, s.RecordType, fill.Label, true, null, fill.Reason));
             }
-            else if (rec is IDialogBranch branchRec)   // S2 — DLBR Category (TNAM); S3 — DLBR Flags (DNAM), #212
+            else if (rec is IDialogBranch branchRec)
             {
                 foreach (var fill in DialogueCkParity.ApplyBranchDefaults(branchRec))
                     ops.Add(new OpResult(rec.FormKey, s.RecordType, fill.Label, true, null, fill.Reason));
             }
-            else if (rec is IQuest questRec)           // S2 — QUST NextAliasID (ANAM) + objective Flags (FNAM)
+            else if (rec is IQuest questRec)
             {
                 foreach (var fill in DialogueCkParity.ApplyQuestDefaults(questRec))
                     ops.Add(new OpResult(rec.FormKey, s.RecordType, fill.Label, true, null, fill.Reason));
@@ -1993,30 +1887,19 @@ public static class WritePatchBuilder
             created.Add(new CreatedRecord(rec.FormKey, s.RecordType, s.EditorId, ops, replaced));
         }
 
-        // --- Phase 4: serialize ONCE with the full known-master set. A created record referencing existing content pulls
-        //     its master into the (lean, derived) header; a self-contained one yields a masterless plugin. A referenced
-        //     master genuinely absent still fails loud (Q3). ---
-        // Two-part active-patch self-lock guard (Heisen 2026-06-08 + PR #24 review): no mapped handle on the file we're
-        // about to write may survive to the serialize, from ANY source. ReleaseOverlay closes one we already hold (Apply's
-        // Phase-1 winner fetch, when re-editing the patch's OWN override — there the winner IS the target); AllMastersExcept
-        // keeps the target out of the master set. (writelock-probe / writelock-apply-probe; both halves guarded.)
+        // Release destination mappings and serialize once; referenced active plugins become lean derived masters.
         session.ReleaseOverlay(patchMod.ModKey.FileName.String);
         try
         {
             if (inPlace)
-                // Model C (the Wave 0 probe's incantation): re-emit the WHOLE target over itself — the author's counter
-                // preserved (NoNextFormIDProcessing, no re-floor; the allocation already floored+advanced it), no baseline
-                // force-include. Handed the SAME whole-master set as WritePatch, so a new record's cross-mod reference (incl.
-                // an overridden-in foreign parent) resolves + pulls its master into the lean derived header — xEdit-parity.
+                // Reemit the whole target while preserving its counter and deriving masters from new references.
                 WriteEngine.WriteInPlace(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath);
             else
                 WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath);
         }
         catch (Exception ex) { return CreateOutcome.Fail($"writing {(inPlace ? $"'{fileName}' in place" : "the patch")} after create failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}"); }
 
-        // --- Phase 5: re-open + report the (derived) master header + bytes — and, on request, each created record's
-        //     FULL read-back off that same re-opened file (see Apply's Phase 5). Dispose the overlay so the file isn't
-        //     left mmap'd (a later into= re-opens it). ---
+        // Reopen the output to report derived masters and optional full-record verification.
         IReadOnlyList<string> masters = Array.Empty<string>();
         IReadOnlyList<FullReadback>? readBack = null;
         long bytes = 0;
@@ -2034,30 +1917,21 @@ public static class WritePatchBuilder
         return new CreateOutcome(true, null, outPath, extend, created, masters, bytes) { ReadBack = readBack, InPlace = inPlace };
     }
 
-    /// <summary>Create BRAND-NEW records IN PLACE inside an EXISTING plugin the user owns (in-place write lane, Wave 1b) —
-    /// the create sibling of <see cref="ApplyInPlace"/>, and the in-place ENTRY POINT into the shared
-    /// <see cref="CreateRecords"/> core: it forwards with <paramref name="targetName"/> as the in-place target, so the FULL
-    /// create capability — flat, nested (incl. under a parent the target doesn't own, overridden in to host the child), and
-    /// cells — runs the SAME proven path as the patch lane, pointed at <paramref name="targetPath"/> and serialized model-C
-    /// over the file itself (<see cref="WriteEngine.WriteInPlace"/>). The created-record verify
-    /// (<paramref name="fullReadback"/>) defaults ON. CONSENT + the persistent acknowledge handshake are enforced by the
-    /// SERVICE before this is reached.</summary>
+    /// <summary>Creates records in an existing staging plugin through the shared creation pipeline.</summary>
+    /// <remarks>The service enforces consent and Amethyst redeployment confirmation before calling this entry point.</remarks>
     public static CreateOutcome CreateRecordsInPlace(
         LoadOrderResolver resolver, CorpusRulebook rulebook,
         IReadOnlyList<CreateSpec> specs, string targetPath, string targetName, bool fullReadback = true)
         => CreateRecords(resolver, rulebook, specs, targetPath, extend: false, fullReadback, inPlaceTarget: targetName);
 
-    /// <summary>Read each just-written record IN FULL off the re-opened written file — the overlay Phase 5 already
-    /// opens to confirm masters, so no new handle class (opened AFTER the serialize, disposed with Phase 5; the
-    /// active-patch self-lock invariant is untouched). ONE enumeration pass serves every target (flat + nested
-    /// groups — the same walk <see cref="RemoveRecords"/>' present-check relies on); tokens are materialised while
-    /// the overlay is open. NEVER throws (PR #40 review #1): the write itself already SUCCEEDED by the time this
-    /// runs (serialize done, masters confirmed), so a read-back failure must not convert the outcome to Fail —
-    /// that would read as "my write was lost" and invite re-issuing the ops (the duplicate-Add trap this read-back
-    /// exists to close). Every degraded path is named per-record on <see cref="FullReadback.Error"/> (Q3).</summary>
+    /// <summary>Reads each requested record in full from a written artifact or dry-run model.</summary>
+    /// <remarks>
+    /// Readback never throws into an already successful write. Each missing record receives a named verification error
+    /// so callers do not mistake a readback problem for a lost write and repeat non-idempotent operations.
+    /// </remarks>
     static IReadOnlyList<FullReadback> ReadBackInFull(ISkyrimModGetter back, IEnumerable<FormKey> targets, bool inMemory = false)
     {
-        var order = new List<FormKey>();                                   // caller order, de-duped (several ops may hit one record)
+        var order = new List<FormKey>();
         var want = new HashSet<FormKey>();
         foreach (var fk in targets) if (want.Add(fk)) order.Add(fk);
 
@@ -2085,17 +1959,12 @@ public static class WritePatchBuilder
         return result;
     }
 
-    /// <summary>The xEdit-style edit label: <c>Verb path[key] = value</c> (matches <see cref="WriteEngine.RunPatch"/>).</summary>
+    /// <summary>Formats an edit as <c>Verb path[key] = value</c>.</summary>
     static string Label(WriteRequest r) =>
         $"{r.Verb} {string.Join('.', r.Path)}{(r.Key is not null ? "[" + r.Key + "]" : "")}{(r.Value is not null ? " = " + r.Value : "")}";
 
-    /// <summary>Resolve every same-call <c>@editorid</c> reference in a request to the referenced record's allocated
-    /// FormKey — the singular <see cref="WriteRequest.Value"/>, each <see cref="WriteRequest.Values"/> entry, and
-    /// (HCBR-2026-07-10-01) a compose <see cref="WriteRequest.Struct"/>'s formlink Fields values + nested Sets,
-    /// recursively. WriteRequest/StructSpec are init-only, so substitution clones; the ORIGINAL instance is returned
-    /// untouched when nothing needed resolving (the common no-token path allocates nothing). A token naming a record
-    /// not in <paramref name="created"/> is a real engine inconsistency (pre-flight gates the declared-earlier-or-self
-    /// rule) — returned as <c>error</c>, surfaced not swallowed (Q3).</summary>
+    /// <summary>Replaces same-call <c>@editorid</c> tokens with allocated FormKeys throughout a write request.</summary>
+    /// <remarks>The original immutable request is returned when no substitution is needed.</remarks>
     static (WriteRequest req, string? error) ResolveSiblingRefs(
         WriteRequest r, IReadOnlyDictionary<string, IMajorRecord> created, string onWhat)
     {
@@ -2119,8 +1988,7 @@ public static class WritePatchBuilder
             err ??= sErr;
             strct = rs;
         }
-        // P8a: a composes= op carries a LIST of specs; in create context each may @editorid-reference a same-call
-        // sibling, so resolve every element the same clone-only-on-change way, fail loud on a miss (Q3).
+        // Resolve every structure in a batch while cloning only requests that actually change.
         var structs = r.Structs;
         if (structs is not null)
         {
@@ -2145,9 +2013,7 @@ public static class WritePatchBuilder
         }, null);
     }
 
-    /// <summary>The <see cref="StructSpec"/> half of <see cref="ResolveSiblingRefs"/>: substitute <c>@editorid</c>
-    /// tokens in the spec's flat Fields values and recurse through its nested Sets (a struct element whose own field
-    /// is a struct element resolves for free). Same clone-only-on-change + fail-loud-on-miss contract.</summary>
+    /// <summary>Resolves same-call references in structure fields and recursively nested writes.</summary>
     static (StructSpec spec, string? error) ResolveStructSiblingRefs(
         StructSpec sp, IReadOnlyDictionary<string, IMajorRecord> created, string onWhat)
     {
@@ -2185,41 +2051,31 @@ public static class WritePatchBuilder
         return (new StructSpec { Type = sp.Type, Fields = fields, CtorArgs = sp.CtorArgs, Sets = sets }, null);
     }
 
-    /// <summary>Best-effort read-back of the edited leaf off the override (so the caller sees the value landed without a
-    /// follow-up read). Reads the leaf PATH (not the keyed element — that's xEdit's job); null on any difficulty — never
-    /// load-bearing, never throws into the write result.</summary>
+    /// <summary>Returns a best-effort post-edit leaf value without affecting write success.</summary>
     static string? TryReadAfter(IMajorRecord ov, WriteRequest req)
     {
         try
         {
             var leaf = string.Join('.', req.Path);
-            var read = ReadEngine.ReadFields(ov, new[] { leaf }, containerHint: null);   // a write confirmation has no depth= knob — the count IS the read-back
+            var read = ReadEngine.ReadFields(ov, new[] { leaf }, containerHint: null);
             var f = read.Fields.FirstOrDefault(x => x.Path == leaf) ?? read.Fields.FirstOrDefault();
             return f is null ? null : (f.HasValue ? f.Token : f.Note);
         }
         catch { return null; }
     }
 
-    /// <summary>Read the edited leaf ONCE and derive BOTH best-effort descriptors an edit-lane <see cref="OpResult"/>
-    /// carries (PR #127 review #1 — previously two identical reflective reads of the same leaf per op, doubling the very
-    /// readback cost on the large-list records the report was about). <c>After</c> = the leaf read-back (xEdit remains
-    /// the authority). <c>Landed</c> = the compact "what landed" line the in-place verify renders by default
-    /// (HCBR-2026-06-28-01): a SCALAR leaf reuses the value just read (names exactly what was set); a LIST/DICT leaf names
-    /// the touched element + new count via <see cref="ReadEngine.TouchedElement"/> (the element you Added/Set, NOT the
-    /// whole list), falling back to the container summary. Read-only; NEVER throws into the write result (both null on any
-    /// difficulty). The create lane keeps <see cref="TryReadAfter"/> (it needs only <c>After</c>, never <c>Landed</c>).</summary>
+    /// <summary>Reads an edited leaf once and derives detailed and compact verification descriptions.</summary>
+    /// <remarks>Failures return null descriptions and never change write success.</remarks>
     static (string? After, string? Landed) DescribeApplied(IMajorRecord ov, WriteRequest req)
     {
         try
         {
             var leaf = string.Join('.', req.Path);
-            var read = ReadEngine.ReadFields(ov, new[] { leaf }, containerHint: null);   // same: no depth= on the write surface, don't hint it
+            var read = ReadEngine.ReadFields(ov, new[] { leaf }, containerHint: null);
             var f = read.Fields.FirstOrDefault(x => x.Path == leaf) ?? read.Fields.FirstOrDefault();
             if (f is null) return (null, null);
             var after = f.HasValue ? f.Token : f.Note;
-            // Scalar: Landed reuses the token just read. List/dict: name the touched element (+ new count); else the
-            // summary. An Add carries how many elements it appended (composes= → Structs.Count, else 1) so a batch
-            // compose reports the whole appended run, never "(+1)" for N (#259).
+            // Scalars reuse their value. Containers identify the touched element and appended count when available.
             int added = req.Verb == "Add" ? (req.Structs?.Count ?? 1) : 1;
             var landed = f.HasValue ? f.Token : (ReadEngine.TouchedElement(ov, req.Path, req.Verb, req.Key, added) ?? f.Note);
             return (after, landed);
