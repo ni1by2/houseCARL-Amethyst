@@ -257,42 +257,43 @@ manual release gate.
 ## Current status
 
 - Active milestone: Session 6, removing inherited MO2 runtime seams.
-- Last completed checkpoint: `Mo2LoadOrder` is removed. Native profile parsing
-  and explicit-root characterization now use the documented
-  `AmethystLoadOrder`; raw synthetic-fixture discovery is isolated in
-  `StagingPluginLocator`, while product resolution remains authoritative
-  `ManagerSnapshot`/filemap state. The manual order harness and command are
-  Amethyst-named and require native paths.
-- Verification performed: Amethyst load-order, overwrite-priority,
-  raw-plugin, and archive-discovery behavior was checked with focused probes.
-  The full Linux `ci-all` suite passes 111/111. The serial solution build and
-  `git diff --check` pass. Strict core XML documentation now reports only the
-  two public declarations in the obsolete `Mo2Instance` class queued next.
-- Files/components changed: `AmethystLoadOrder`, the new
-  `StagingPluginLocator`, archive discovery, load-order service, all direct
-  load-order probe consumers, and the renamed manual order harness. The
-  previous checkpoint also removed `Mo2ModMeta`, `Mo2ModMetaProbe`, and
-  `UpdateStatusTools`.
+- Last completed checkpoint: live `Mo2Instance` mode is removed. Core and MCP
+  contain no `Mo2Instance`, `Mo2LoadOrder`, `WithInstance`, `SetInstance`,
+  `ModOrganizer.ini`, or MO2 terminology. The server has one product mode:
+  manifest-backed Amethyst; manager-neutral direct roots remain internal test
+  seams only. The obsolete instance parser and its dedicated probe no longer
+  ship in core or MCP.
+- Verification performed: focused load-order status, compiler null-safety,
+  profile freshness/switch, asset-cache switch, overwrite, raw-plugin, and
+  Amethyst order checks pass. Full Linux `ci-all` passes 110/110; the count
+  intentionally dropped by one with the removed legacy-instance parser probe.
+  The strict core XML-documentation build now passes with zero warnings.
+  Strict MCP documentation exposes 117 inherited undocumented public members,
+  which is the next documentation tranche rather than a hidden clean claim.
+- Files/components changed: load-order service construction, refresh,
+  switching, status model/rendering, all service fixtures, core runtime
+  comments, removal of core `Mo2Instance`, and an unshipped generator-only
+  adapter for inherited directory fixtures.
 - Decisions made: test-only explicit paths remain available to synthetic
   probes, but are no longer a shipped server configuration. The obsolete
   update cache is removed instead of adapting MO2-specific `meta.ini` fields
   that Amethyst does not own. Historical changelog entries remain historical.
-- Known failures or residual risks: `LoadOrderService` still contains legacy
-  constructors and helper paths backed by `Mo2Instance` and `Mo2LoadOrder`;
-  inherited probes still use them as fixtures. A parallel MSBuild invocation
-  can fail silently while evaluating shared project references, whereas
+- Known failures or residual risks: inherited generator probes still create
+  legacy-shaped directories and use a generator-only parser to derive their
+  native roots; this does not enter release artifacts but should be simplified.
+  Strict MCP documentation has 117 missing-member errors. A parallel MSBuild
+  invocation can fail silently while evaluating shared project references, whereas
   `-m:1` succeeds; this needs a focused build-graph diagnosis before CI is
   changed. The Ubuntu workflow definition has not yet been observed green on
   GitHub. A disposable real
   Skyrim/Amethyst hardlink profile remains the Session 7 manual release gate.
   External PapyrusCompiler and BSArch execution remains post-v1. NuGet
   vulnerability metadata remains unreachable in the restricted environment.
-- Exact next action: remove the live `Mo2Instance` path from
-  `LoadOrderService`. Convert inherited service probes to an internal
-  manager-neutral fixture constructor or full synthetic Amethyst layouts,
-  preserving the few freshness probes that must exercise profile switching.
-  Diagnose the parallel build failure separately so runtime migration and
-  build-graph changes remain reviewable.
+- Exact next action: document the MCP public surface declaration by
+  declaration until its strict CS1591 build is clean, starting with tool entry
+  methods and the public result/request models. Then simplify the remaining
+  generator-only legacy fixture parser and diagnose the parallel build failure
+  as separate focused changes.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -331,6 +332,8 @@ manual release gate.
   Amethyst discovery and atomic manifest creation; `3bee8fc` records that
   checkpoint; `40c867f` removes the first obsolete MO2 product surfaces;
   `4270be4` records that runtime slice; `a194650` removes `Mo2LoadOrder`.
+  `feefe53` records that helper migration; `a25aac4` removes live
+  `Mo2Instance` mode and isolates inherited fixture parsing outside runtime.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
