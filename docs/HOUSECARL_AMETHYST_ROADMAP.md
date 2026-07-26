@@ -163,7 +163,7 @@ strip-prefix mods, facegen, voice, NIF, SKSE and SkyPatcher fixtures pass.
 Exit gate: new and guarded in-place writes never target deployed `Data/`, report
 old hardlinks honestly, and clear pending state only after verification.
 
-### Documentation pass — active core complete; product edges remain
+### Documentation pass — complete
 
 Baseline scope on 2026-07-22: 217 C# files, about 76,874 lines and roughly 722
 function declarations. Existing upstream documentation is extensive but uneven;
@@ -176,11 +176,11 @@ non-obvious invariant has been reviewed.
 - [x] Review the fork-authored Amethyst MCP connection, status and refresh seams.
 - [x] Review the inherited asset resolution and archive-discovery boundary.
 - [x] Review all inherited `housecarl-core` declarations and reasoning seams.
-- [ ] Review all inherited and fork-authored `housecarl-mcp` declarations.
+- [x] Review all inherited and fork-authored `housecarl-mcp` declarations.
 - [x] Review all `housecarl-setup` declarations during the Linux rewrite.
-- [ ] Review all generator, proof-harness and probe declarations.
-- [ ] Run a final stale MO2/Windows terminology and XML-reference audit.
-- [ ] Record per-component build/probe evidence and unresolved ambiguities.
+- [x] Review all generator, proof-harness and probe declarations.
+- [x] Run a final stale MO2/Windows terminology and XML-reference audit.
+- [x] Record per-component build/probe evidence and unresolved ambiguities.
 
 Exit gate: every declaration under `src/` has been inspected against
 `standards/HOUSECARL_CODE_DOCUMENTATION.md`, every non-obvious invariant has a
@@ -194,7 +194,7 @@ contains evidence for every component. This gate covers unchanged upstream code.
 - [x] Publish self-contained `linux-x64` with server trimming disabled.
 - [x] Install under XDG data paths and register Codex/Claude MCP stdio.
 - [x] Add config backups, atomic activation, uninstall, rollback and checksums.
-- [ ] Remove Windows runtime, `.exe`, registry, MO2 and PowerShell-only surface.
+- [x] Remove Windows runtime, `.exe`, registry, MO2 and PowerShell-only surface.
 - [x] Update bundled skills and release-facing documentation for Amethyst.
 
 Exit gate: clean Linux installs start from both hosts without system .NET, and
@@ -206,9 +206,9 @@ upgrade/uninstall preserve user configuration.
 - [x] Confirm the new Ubuntu workflow on GitHub and run all CI-safe probes.
 - [x] Add installer-lifecycle and end-to-end synthetic Amethyst tests.
 - [x] Add reproducible package validation and leak scanning.
-- [ ] Complete installation, workflow, safety and troubleshooting docs.
+- [x] Complete installation, workflow, safety and troubleshooting docs.
 - [ ] Perform disposable real-profile hardlink validation.
-- [ ] Produce the v1 checklist and rollback procedure.
+- [x] Produce the v1 checklist and rollback procedure.
 
 Exit gate: Ubuntu CI is green and real hardlink validation proves read, new
 patch, redeploy and guarded in-place workflows.
@@ -228,15 +228,15 @@ patch, redeploy and guarded in-place workflows.
 | Asset host paths | `AssetResolver.cs` combines canonical `\` paths with host roots | Session 1 |
 | Appearance host paths | `NpcAppearanceAssets.cs` combines Bethesda-relative paths directly | Session 1 |
 | Write output paths | `LoadOrderService.cs` uses canonical relative paths in host combines | Sessions 1/5 |
-| Game discovery | `LoadOrderService.CompilerGameDirHints` uses Mutagen GameFinder/registry | Post-v1 |
-| External tools | `ToolBridge` requires `.exe`; process riders launch it directly | Post-v1 |
-| Installer destinations | setup uses `%LOCALAPPDATA%`, `.exe`, Windows lock semantics | Session 6 |
-| Runtime detection | setup scans Windows Program Files and recommends winget | Session 6 |
-| Packaging | `build-plugin.ps1` publishes `win-x64` and setup EXE | Session 6 |
-| CI | workflow runs only `windows-latest` | Sessions 0/7 |
-| Skills/docs | README and skills name Windows/MO2 throughout | Sessions 6/7 |
-| Generated mod messaging | output says refresh/enable in MO2 | Session 5 |
-| Tool log discovery | `ToolBridge.MyGames` assumes Windows Documents layout | Post-v1 |
+| Game discovery | Removed; runtime trusts the game path selected by Amethyst | Complete |
+| External tools | Direct Windows executable execution removed; structured Proton runner deferred | Post-v1 |
+| Installer destinations | Replaced with XDG data/config paths and native lock semantics | Complete |
+| Runtime detection | Removed; the release is self-contained | Complete |
+| Packaging | Replaced with reproducible `linux-x64` archive builder | Complete |
+| CI | Required workflow runs on Ubuntu | Complete |
+| Skills/docs | Public product surface uses native Amethyst terminology | Complete |
+| Generated mod messaging | Reports Amethyst refresh/enable/filemap/deploy steps | Complete |
+| Tool log discovery | Uses explicit native `papyrus_logs` and `crash_logs` directories | Complete |
 
 ## Required test matrix
 
@@ -256,34 +256,33 @@ manual release gate.
 
 ## Current status
 
-- Active milestone: Session 7 documentation and real-profile release gates.
-- Last completed checkpoint: the Ubuntu workflow is enabled and green on
-  GitHub. Its first runs exposed two deterministic case-collision failures in
-  the loose-asset resolver. Linux may contain both `meshes` and `Meshes`; the
-  resolver now searches every case-equivalent branch instead of trusting host
-  enumeration order.
+- Active milestone: Session 7 disposable real-profile hardlink release gate.
+- Last completed checkpoint: the Windows executable/runtime seams were removed,
+  the final source-documentation and terminology audit completed, and the Linux
+  installation, troubleshooting, release, and rollback guides were added.
 - Verification performed: .NET SDK 9.0.316 builds the four-project solution
-  with zero warnings and zero errors. Local `ci-all` passes 110/110, both
-  formerly failing probes pass in the matching SDK container, and the separate
-  cold freshness guard passes all five arms. Hosted run
+  with zero warnings and zero errors. Local `ci-all` passes 108/108; the count
+  intentionally fell by two when obsolete direct-Windows-execution probes were
+  deleted. The separate cold freshness guard passes all five arms. Hosted run
   [30219985950](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/30219985950)
-  passes build, 110/110 probes, cold freshness, self-contained release
+  passes the preceding 110-probe checkpoint, cold freshness, self-contained
   packaging, checksum creation, architecture inspection, and `.exe` exclusion.
-- Files/components changed: `BethesdaPath` case-equivalent host resolution,
-  explicit workflow dispatch support, hosted-failure diagnostics, and the
-  generator portability boundary recorded in the preceding checkpoint.
-- Decisions made: Linux case-colliding directories represent one Bethesda
-  namespace, so resolution must backtrack across equivalent branches. The
-  earlier parallel MSBuild worker exit occurs only inside the restricted Codex
-  filesystem sandbox; the untouched graph builds in parallel outside it and
-  on GitHub, so no project-graph workaround is warranted.
+  Two current-source release builds produced the identical SHA-256
+  `3f08425ea79b58cfe319b275d5334db07d71d41a9898ec41cb7767e13dfc67fa`.
+- Files/components changed: native archive-owner classification, contributor
+  guidance, tool-path configuration and deferred-tool responses, obsolete
+  Windows execution probes, README, installation guide, troubleshooting guide,
+  and release/rollback checklist.
+- Decisions made: v1 accepts only explicit native diagnostic-log directories;
+  the reserved Papyrus compile and BSA repack calls fail with an actionable
+  post-v1 Proton deferral. No executable path or implicit Wine/registry
+  discovery remains in the live product.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
-  profile remains the Session 7 manual release gate. Installation/workflow,
-  troubleshooting, v1 checklist, and rollback documentation still require
-  final review. External PapyrusCompiler and BSArch execution remains post-v1.
-- Exact next action: finish the stale Windows/MO2 product-surface audit, then
-  complete the user documentation and v1 release/rollback checklist before
-  requesting the real-profile hardlink validation.
+  profile remains the Session 7 manual release gate. External
+  PapyrusCompiler and BSArch execution remains post-v1. The latest source still
+  requires a fresh hosted Ubuntu run after it is pushed.
+- Exact next action: push the current checkpoint, dispatch and verify hosted
+  Ubuntu CI, then request the disposable real-profile hardlink validation.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
@@ -333,7 +332,11 @@ manual release gate.
   `916dab4` removes stale generator terminology and machine-specific defaults.
   `bd2ad7` enables explicit hosted workflow dispatch; `3face07` adds
   failure-only hosted asset diagnostics; `5468aa9` fixes Linux
-  case-colliding path resolution and is green in hosted run `30219985950`.
+  case-colliding path resolution and is green in hosted run `30219985950`;
+  `737a474` records that hosted evidence; `6834f8d` makes archive-owner
+  classification use native paths; `1a62bde` updates contributor guidance;
+  `6db9a58` removes the live Windows external-tool runtime and its obsolete
+  probes; `d9404d5` adds the Linux user and release documentation.
 - Draft pull requests: #2 upstream integration; #3 layout foundation; #4
   runtime connection; #5 native Amethyst load order; #6 authoritative filemap
   and asset resolution; #7 connector retirement; #8 hardlink-safe writes.
