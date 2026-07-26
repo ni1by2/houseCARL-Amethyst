@@ -432,7 +432,18 @@ public sealed class LoadOrderService : IDisposable
             foreach (var raw in relPaths)
             {
                 var p = (raw ?? "").Trim();
-                try { results.Add(new AssetPathResult(p, view.Resolve(p), null)); }
+                try
+                {
+                    var hit = view.Resolve(p);
+                    // ABSENT only: a path taken off a record is stored relative to its ROOT folder (a model path to
+                    // meshes\, a texture path to textures\), so the flat ABSENT was a dead end for the normal way
+                    // one arrives at an asset (#273). Both roots are tried because this lane, unlike nif_inspect,
+                    // doesn't know the path's kind. VERIFIED only here — no speculative note: asset_status legitimately
+                    // answers for sound\, scripts\, interface\ and the rest, where a meshes\ lecture would be noise.
+                    var suggest = hit.Exists ? Array.Empty<string>()
+                                             : AssetPathHint.VerifiedPrefixes(view, p, AssetPathHint.AssetRoots);
+                    results.Add(new AssetPathResult(p, hit, null, suggest));
+                }
                 catch (ArgumentException ex) { results.Add(new AssetPathResult(p, null, ex.Message)); }   // bad path → per-path Q3 note
             }
             return new AssetStatusData(results, view.BsaFailures, view.ReadIncomplete, _assetWarnings, _profileName);
@@ -1364,10 +1375,17 @@ public sealed class LoadOrderService : IDisposable
         var providers = place.Sources.Select(s => new NifProvider(s.ProviderName, KindLabel(s.Kind))).ToList();
 
         if (place.Sources.Count == 0)
+        {
+            // A model path taken straight off a record is stored relative to meshes\, so the flat ABSENT was a dead
+            // end for the NORMAL way one arrives at a mesh (#273). The hint is RE-RESOLVED, never guessed — see
+            // AssetPathHint: a "did you mean" always names a file that exists, and the weaker fallback names only
+            // the convention, never a file.
+            var hint = AssetPathHint.MeshHint(view, rel);
             // Absent=true lets the renderer hedge this at POINT OF USE on the batch-level caveats (read failures /
             // discovery warnings) — asset_status parity; the top-of-output alarm alone scrolls away in a long batch.
             return new NifInspectData(rel, null, providers, place.Ambiguous, Absent: true, null,
-                "ABSENT — no active mod or BSA provides this mesh path.");
+                "ABSENT — no active mod or BSA provides this mesh path." + (hint is null ? "" : " " + hint));
+        }
 
         // Pick the copy to read: the VFS winner by default, or a specific provider when mod= names one.
         PlacementSource chosen;
@@ -1434,7 +1452,12 @@ public sealed class LoadOrderService : IDisposable
 
             var providers = place.Sources.Select(s => new NifProvider(s.ProviderName, KindLabel(s.Kind))).ToList();
             if (place.Sources.Count == 0)
-                return NifSetResult.Fail($"ABSENT — no active mod or BSA provides '{rel}', so there is no copy to edit.", providers, profileName);
+            {
+                var hint = AssetPathHint.MeshHint(view, rel);   // #273 — same verified re-resolve as nif_inspect's ABSENT
+                return NifSetResult.Fail(
+                    $"ABSENT — no active mod or BSA provides '{rel}', so there is no copy to edit." + (hint is null ? "" : " " + hint),
+                    providers, profileName);
+            }
 
             // pick the copy to read/edit: the VFS winner, or a specific provider when mod= names one.
             PlacementSource chosen;
@@ -1569,8 +1592,11 @@ public sealed class LoadOrderService : IDisposable
             catch (InvalidOperationException ex) { return PlaceOutcome.Fail(ex.Message); }
 
             // ONE asset build for the whole batch (auto-resolve sources + the post-write winner report), reentrant on _gate.
-            AssetResolver resolver; IReadOnlyList<string> warnings;
-            try { lock (_gate) { resolver = Assets; warnings = _assetWarnings; } }
+            // CAPTURED, not the live resolver: every request in the batch — and the #283 missing-root suggestion's
+            // re-resolve — answers from the SAME snapshot, so a refresh landing mid-batch can't make two placements
+            // describe two builds (the AssetView discipline the other asset lanes already ride).
+            AssetResolver.AssetView view; IReadOnlyList<string> warnings;
+            try { lock (_gate) { view = Assets.Capture(); warnings = _assetWarnings; } }
             catch (Exception ex)
             {
                 var residue = RemoveOrNameRiderResidue(rf);              // nothing placed yet → a fresh folder is an orphan
@@ -1582,7 +1608,7 @@ public sealed class LoadOrderService : IDisposable
             int placed = 0;
             foreach (var req in requests)
             {
-                var r = PlaceOne(req, resolver, rf.OutputDir);
+                var r = PlaceOne(req, view, rf.OutputDir);
                 results.Add(r);
                 if (r.Placed) placed++;
             }
@@ -1605,13 +1631,13 @@ public sealed class LoadOrderService : IDisposable
     /// <paramref name="outDir"/>. Reports the CURRENT VFS winner so the caller knows what to sort the fresh mod above —
     /// the placed file does NOT win until the mod is enabled + sorted (the fresh folder isn't in the active profile yet).
     /// A per-asset failure is a recoverable named error, never a thrown batch abort.</summary>
-    PlaceResult PlaceOne(PlaceRequest req, AssetResolver resolver, string outDir)
+    PlaceResult PlaceOne(PlaceRequest req, AssetResolver.AssetView view, string outDir)
     {
         string rel;
         try { rel = AssetResolver.ValidateRelPath(req.AssetPath); }
         catch (ArgumentException ex) { return PlaceResult.Fail(req.AssetPath, ex.Message); }
 
-        var res = resolver.ResolveForPlacement(rel);                     // rel already validated — won't throw
+        var res = view.ResolveForPlacement(rel);                         // rel already validated — won't throw
         var winner = res.Sources.Count > 0 ? DescribeSource(res.Sources[0]) : null;
 
         // ---- source bytes: explicit source= wins; else auto-resolve the sole provider ----
@@ -1626,11 +1652,29 @@ public sealed class LoadOrderService : IDisposable
         else
         {
             if (res.Sources.Count == 0)
+            {
+                // #283 — the auto-resolve dead end is the same input mistake #273 fixed in the three sibling lanes: a
+                // path taken off a record is stored relative to its ROOT folder, so passing it verbatim is the normal
+                // way one arrives here. Both roots (this lane can't know the path's kind), VERIFIED by re-resolving —
+                // a suggestion always names a copy that really is provided, and silence is the honest default.
+                // NOT on the explicit-source= arm above: placing a NEW file at a path nothing provides is legitimate
+                // there, so an absent destination is not a mistake to correct.
+                var hint = AssetPathHint.AssetRootHint(view, rel);
+                // ORDER IS LOAD-BEARING — the hint sits directly after the sentence about the PATH, before the
+                // "Pass source=" fallback (review of this PR). It names a destination, not a source; trailing the
+                // one imperative in the message — an imperative that names source= AND lists "a loose file path"
+                // as a legal form — invited the caller to retry as source=`meshes\...`, which routes through
+                // ReadExplicitSource -> Path.GetFullPath against the process CWD -> "source file not found" for the
+                // very copy this hint just verified as provided. Adjacency to the ABSENT clause is also the shape
+                // the three sibling lanes already have (NifInspect / NifSet append MeshHint to a purely descriptive
+                // sentence; asset_status renders it on its own line), so all four read the same way.
                 return PlaceResult.Fail(rel,
-                    $"nothing in the active load order provides '{rel}', so there is no copy to auto-place. Pass source= the correct copy "
-                    + "(a loose file path, or '<archive.bsa>|<entry>', or a '.bsa' path)."
+                    $"nothing in the active load order provides '{rel}', so there is no copy to auto-place."
+                    + (hint is null ? "" : " " + hint)
+                    + " Pass source= the correct copy (a loose file path, or '<archive.bsa>|<entry>', or a '.bsa' path)."
                     + (res.ReadIncomplete ? " NOTE: a BSA failed to read this build, so a source may merely be unscanned (see the warnings)." : ""),
                     winner);
+            }
             if (res.Ambiguous)
                 return PlaceResult.Fail(rel,
                     $"{res.Sources.Count} sources provide '{rel}' — ambiguous, so place_asset will not guess which copy is correct (the skill decides). "
@@ -2487,7 +2531,8 @@ public sealed class LoadOrderService : IDisposable
     /// disk not in the load order — the report's case diffs a DISABLED old patch against the mod that supersedes it, via
     /// the shared <see cref="LocatePluginFileOnDisk"/>). Both sides are deep-read (<see cref="ConflictDiffDepth"/>) with
     /// the SAME fields= so line sets correspond, then compared by <see cref="FieldsDiff.Compare"/> — the SAME
-    /// order-insensitive, truncation-honest engine the conflict tree uses, with plugin_b as the reference label. A bad
+    /// content-keyed (list reorders flagged), truncation-honest engine the conflict tree uses, with plugin_b as the
+    /// reference label. A bad
     /// FormID, an unresolvable pole, or a plugin that doesn't define the record is a NAMED refusal (Q3).</summary>
     public DiffRecordOutcome DiffRecord(string formid, string pluginA, string pluginB, IReadOnlyList<string>? fields,
                                         string? modA = null, string? modB = null)
@@ -2798,6 +2843,15 @@ public sealed class LoadOrderService : IDisposable
                             }
                             filterBody = wb;
                         }
+                        // DELETED records carry no body to scan (#276; the rule + its full rationale now live in
+                        // DeletedRecordRule, shared with check_errors and the compact/merge scan — #279): the
+                        // CONTENT filters cannot match one, so exclude it as a clean non-match here, before the
+                        // scan touches its body — which, on the references= arm, is also what stops the reported
+                        // crash on an engine-authored deleted record's residual body (the where= arm's leaf read
+                        // isolates its own faults, so it is excluded on the semantic ground alone — see
+                        // DeletedRecordRule). editorid_contains= stays live: EditorID reads from the
+                        // record's early EDID subrecord, before the deep body parse that can throw.
+                        if (DeletedRecordRule.HasNoLiveBody(filterBody) && (refSet is not null || predicate is not null)) continue;
                         if (!string.IsNullOrEmpty(editoridContains)
                             && (filterBody.EditorID is null || filterBody.EditorID.IndexOf(editoridContains, StringComparison.OrdinalIgnoreCase) < 0))
                             continue;
@@ -2944,9 +2998,20 @@ public sealed class LoadOrderService : IDisposable
     /// (<see cref="LocatePluginFileOnDisk"/> — enabled, disabled, AND unlisted mod folders) and swept OFF-ORDER: its
     /// own overlay, links resolved against the active order + the file's own records. This is the pre-enable verify
     /// lane (HCBR-2026-07-14-02 gap 3) — the pre-ship dangling-ref sweep of a patch houseCARL just wrote, BEFORE the
-    /// Amethyst refresh puts it in plugins.txt. A name found nowhere, or in several folders, still fails loud.</para></summary>
-    public ErrorCheckResult CheckErrors(IReadOnlyList<string>? plugins, int limit)
+    /// Amethyst refresh puts it in plugins.txt. A name found nowhere, or in several folders, still fails loud (Q3).</para>
+    /// <para>#282 — the record-scope / class-filter / counts-only knobs are parsed here (a bad FormID, an unknown record
+    /// type, or an unrecognized finding class refuses the call BEFORE any sweep runs) and handed to the core as typed
+    /// values, so the self-contained guard drives the same narrowing the tool does.</para></summary>
+    public ErrorCheckResult CheckErrors(IReadOnlyList<string>? plugins, int limit,
+                                        IReadOnlyList<string>? formids = null, string? editoridContains = null,
+                                        string? type = null, IReadOnlyList<string>? findings = null,
+                                        bool countsOnly = false)
     {
+        var (recordScope, scopeErr) = BuildSweepScope(formids, editoridContains, type);
+        if (scopeErr is not null) return ErrorCheckResult.Fail(scopeErr);
+        if (!SweepFindings.TryParseErrorClasses(findings, out var classes, out var classErr))
+            return ErrorCheckResult.Fail(classErr!);
+
         if (plugins is { Count: > 0 })
         {
             var view = Resolver.Capture();
@@ -2971,9 +3036,41 @@ public sealed class LoadOrderService : IDisposable
                         "Enable the one you mean in Amethyst, or remove the duplicates.");
                 offOrder.Add((n, loc.Path!));
             }
-            return ErrorCheck.Run(Resolver, active, limit, offOrder.Count > 0 ? offOrder : null);
+            return ErrorCheck.Run(Resolver, active, limit, offOrder.Count > 0 ? offOrder : null,
+                                  recordScope, classes, countsOnly);
         }
-        return ErrorCheck.Run(Resolver, plugins, limit);
+        return ErrorCheck.Run(Resolver, plugins, limit, null, recordScope, classes, countsOnly);
+    }
+
+    /// <summary>Parse the two sweep tools' shared record-scope params (#282) into a <see cref="SweepScope"/>: FormID
+    /// tokens, an EditorID substring, and a record type resolved through the SAME TypeLookup cross_plugin_query uses.
+    /// Every malformed input is a NAMED refusal returned BEFORE the sweep starts (Q3 — never a scope that silently
+    /// matched nothing). Returns (null, null) when nothing was narrowed, so the unscoped path stays untouched.</summary>
+    (SweepScope? Scope, string? Error) BuildSweepScope(IReadOnlyList<string>? formids, string? editoridContains, string? type)
+    {
+        HashSet<FormKey>? keys = null;
+        if (formids is { Count: > 0 })
+        {
+            keys = new HashSet<FormKey>();
+            foreach (var raw in formids)
+            {
+                var t = raw?.Trim() ?? "";
+                if (t.Length == 0) return (null, "a blank entry in formids= — pass FormID tokens (e.g. '0BCC84:Skyrim.esm').");
+                try { keys.Add(FormKey.Factory(t)); }
+                catch (Exception ex) { return (null, $"bad FormID '{raw}' in formids=: {ex.Message}. Expected 'XXXXXX:Plugin.esp', e.g. '0BCC84:Skyrim.esm'."); }
+            }
+        }
+
+        IReadOnlyList<Type>? types = null;
+        var typeLabel = type?.Trim();
+        if (!string.IsNullOrEmpty(typeLabel))
+        {
+            try { types = ResolveTypeFilter(typeLabel); }
+            catch (ArgumentException ex) { return (null, ex.Message); }
+        }
+
+        var scope = new SweepScope(keys, editoridContains, types, typeLabel);
+        return (scope.IsEmpty ? null : scope, null);
     }
 
     // ---- script-property sweep (housecarl_validate_scripts) --------------------------------------------
@@ -2983,9 +3080,20 @@ public sealed class LoadOrderService : IDisposable
     /// <c>None</c> (housecarl_validate_scripts). Thin wiring over the core <see cref="ScriptPropertyCheck.Run"/>, which
     /// holds all the cross-check logic + Q3 teeth so the self-contained guard drives this same path over synthetic
     /// records + a planted .pex. Passes the live <see cref="Assets"/> resolver (the same one the dialogue validator and
-    /// facegen use) so a script's .pex is found loose OR BSA-packed. Read-only; composes existing primitives.</summary>
-    public ScriptCheckResult ValidateScripts(IReadOnlyList<string>? plugins, int limit)
-        => ScriptPropertyCheck.Run(Resolver, Assets, plugins, limit);
+    /// facegen use) so a script's .pex is found loose OR BSA-packed. Read-only; composes existing primitives.
+    /// <para>#282 — the record-scope / property-name / class-filter / counts-only knobs are parsed here (a bad FormID,
+    /// unknown record type, or unrecognized finding class refuses the call before any sweep runs).</para></summary>
+    public ScriptCheckResult ValidateScripts(IReadOnlyList<string>? plugins, int limit,
+                                             IReadOnlyList<string>? formids = null, string? editoridContains = null,
+                                             string? type = null, string? propertyContains = null,
+                                             IReadOnlyList<string>? findings = null, bool countsOnly = false)
+    {
+        var (recordScope, scopeErr) = BuildSweepScope(formids, editoridContains, type);
+        if (scopeErr is not null) return ScriptCheckResult.Fail(scopeErr);
+        if (!SweepFindings.TryParseScriptClasses(findings, out var classes, out var classErr))
+            return ScriptCheckResult.Fail(classErr!);
+        return ScriptPropertyCheck.Run(Resolver, Assets, plugins, limit, recordScope, propertyContains, classes, countsOnly);
+    }
 
     // ---- writes (§8.4 Beat C: housecarl_set_field / housecarl_bulk_apply) -------------------------------
 
@@ -6175,8 +6283,12 @@ public sealed record NamedProfileResult(
 /// <summary>One queried asset path's resolution behind housecarl_asset_status: the resolver's <see cref="AssetHit"/>
 /// (which sources have it + which wins + an ambiguity flag), or an <see cref="Error"/> when the path was rejected (a
 /// drive-rooted or '..'-escaping path — per-path Q3, never fails the batch). <see cref="Hit"/> is null iff
-/// <see cref="Error"/> is set.</summary>
-public sealed record AssetPathResult(string RelPath, AssetHit? Hit, string? Error);
+/// <see cref="Error"/> is set.
+/// <para><see cref="PrefixSuggestions"/> (#273) — on an ABSENT answer only, the root-prefixed forms of this path that
+/// a real active mod or BSA DOES provide (<see cref="AssetPathHint"/>), for the common case of a path taken straight
+/// off a record and therefore missing its <c>meshes\</c> / <c>textures\</c> root. Verified by re-resolution, so a
+/// suggestion always names a file that exists; empty when there is nothing honest to offer.</para></summary>
+public sealed record AssetPathResult(string RelPath, AssetHit? Hit, string? Error, IReadOnlyList<string>? PrefixSuggestions = null);
 
 /// <summary>The data behind housecarl_asset_status: one <see cref="AssetPathResult"/> per queried path, plus the
 /// build-level Q3 caveats — <see cref="BsaFailures"/> (archives that couldn't be read) and <see cref="ReadIncomplete"/>

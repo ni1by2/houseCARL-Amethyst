@@ -24,6 +24,114 @@ when it changes.
 
 *Accumulating notes for the next cut — not yet released; `plugin.json` still reads the last shipped version.*
 
+**The two sweep tools can now be scoped, filtered, counted, and returned as JSON (#282).**
+`check_errors` and `validate_scripts` had exactly one scope knob between them — `plugins=` — and on a script-heavy
+plugin that was not enough to get an answer at all: ~183 scripted records render past the tool-result size cap, and
+`limit=` does not help because it caps *findings*, not the record roster, so even `limit=1` still printed a header line
+for all 183. Both tools now take a record scope — `type=` (applied at the record stream, so skipped records cost
+nothing), `formids=`, `editorid_contains=` — plus a `findings=` class filter, `counts_only=true`, and
+`format="json"`. `validate_scripts` additionally takes `property_contains=` for chasing one property across a plugin.
+On `validate_scripts`, `findings=["unbound_object"]` narrows to the HIGH silent-`None` class; on `check_errors`,
+`findings=["missing_masters"]` **skips the per-record link walk entirely**, turning "is any master missing anywhere in
+my order" from a full sweep into a master-table read.
+`counts_only=true` returns the exact totals plus a histogram and builds no per-record listing at all — unbound
+properties by NAME for `validate_scripts`, dangling refs by TARGET plugin for `check_errors` (which plugin the broken
+refs point *into*, i.e. the one absent dependency behind a wall of findings). It is the pass-to-pass comparison for a
+multi-pass edit: did this property's count drop, and did anything new appear.
+**Every number states its own scope.** A **record** scope narrows all of a sweep's counts, exactly as `plugins=` always
+did, and the response says so on its own line. Nothing else carries that blanket claim, because nothing else narrows
+*every* number: a `findings=` class filter self-labels instead (an excluded class reads `NOT CHECKED`), and
+`property_contains=` labels the two counts it does narrow — `4 unbound matching 'MySpell'` — while records-with-scripts
+and unverifiable stay plugin-wide and unlabelled, because it does not narrow them. `check_errors`' missing-master count
+comes off the plugin's master *table*, so even a record scope cannot narrow it; there the response marks that one number
+plugin-level explicitly rather than sweeping it into the claim.
+Two things are deliberately *not* filterable: unscannable records and unverifiable script attachments always report,
+under every filter — a suppressed "could not check" would read as a clean result, and an unreadable `.pex` may be the
+very one declaring the property you filtered for. A finding class you excluded renders as `NOT CHECKED` (and `null` in
+JSON) on **both** tools, never as a `0`; `validate_scripts` also reports `unbound_object` / `unbound_scalar`
+separately, so a partial filter's count can't be mistaken for the whole unbound population.
+Also fixed: the truncation notice on both tools advised *"scope `plugins=`"* — the one scope the caller had already
+applied. It now names the knobs that exist.
+
+**`nif_inspect` can read a shape's SHADER — `sections=shader`, plus named texture slots (#272).**
+The one question every visual diagnosis actually asks — *how is this shape shaded, and does it emit or scatter light?*
+— was unanswerable. `nif_inspect` reached the shader block only to hop to its texture set, then threw it away, so you
+got slot paths and nothing about the shader itself. The new section reports, per shape: the shader block type
+(`BSLightingShaderProperty` / `BSEffectShaderProperty`), the shader **type** enum (`SkinTint`, `FaceTint`, `HairTint`,
+`EnvironmentMap`, `Parallax`, `MultiLayerParallax`, …), and the **SLSF1 / SLSF2 flags decoded to their names** —
+`Soft_Lighting`, `Glow_Map`, `Model_Space_Normals`, `Double_Sided` and the rest. The flag names come from the mesh
+library's own enums, so they are the library's coverage rather than a hand-kept bit table, and any bit no member names
+is stated as an explicit `(+unknown bits 0x…)` mask instead of vanishing.
+Texture slots now also carry their **semantic name** wherever the shader determines it — `tex[2] (SoftLighting)`,
+`tex[6] (TintMask)`, `tex[7] (Specular)` — in `sections=paths` and `sections=shapes` too, not just the new section.
+Slot 2 is glow *or* skin-subsurface *or* soft-lighting and slot 7 backlight *or* specular depending on type and flags,
+so the name is derived from those, never from the index; a slot the shader doesn't determine stays a bare `tex[N]`
+rather than getting a plausible wrong label, and the index is always kept (it is what `nif_set`'s `texture_slot=`
+takes). Slot naming is a **Skyrim** convention, so it declines entirely on a mesh read as another game's layout —
+an unconverted Fallout 4 mesh shipped inside a Skyrim mod gets bare indices, and the output says so rather than
+leaving "unnamed" to read as "undetermined".
+**Known limit, stated rather than papered over:** the underlying mesh library answers *glossiness, specular strength,
+specular colour, emissive multiple* and *alpha* from a stub that returns a constant, no matter what the mesh holds.
+houseCARL will not print a number it cannot vouch for, so the section names them as not read — and, where the block
+carries them (a lighting shader does; an effect shader has no such fields at all), points you at NifSkope. Emissive
+**colour** is read for real. Reported externally.
+
+**`check_errors` and the compact/merge dependency scan now treat a deleted record the same way (#279).**
+The #276 fix taught `cross_plugin_query` that a deleted record links to nothing; the two sibling walkers that ride the
+same form-link enumeration — `check_errors`' dangling-reference sweep and the external-dependency scan behind
+`compact_plugin` / `merge_plugins` — still walked them. Two consequences, both now fixed. A deleted record's links
+were reported as findings: `check_errors` flagged one as a *dangling reference*, and the compact scan counted one as
+an external *referencer*, which could refuse a compaction over a dependency that isn't live. And a deleted record with
+an engine-authored malformed body threw on the walk and landed in the "could not be scanned" bucket with a raw
+exception cause — the same untyped skip #276 removed, in two more places. The rule now lives in one place shared by
+all three walkers, so they cannot drift apart on it again. Deliberately unchanged: the compact scan still warns about
+a deleted record that *overrides* something being renumbered — that test reads the record's own identity, not its
+body, and such an override is still a dependent worth naming. Surfaced by the independent review of the #276 fix.
+**An asset path that's missing its `meshes\` / `textures\` root now says so, instead of a bare ABSENT (#273).**
+A model path read straight off a record — `Model.File` on an NPC, ARMA, STAT — is stored relative to `meshes\`, but
+every asset tool wants it Data-relative. So the *normal* way one arrives at a mesh produced a flat, hint-free
+`ABSENT — no active mod or BSA provides this mesh path`: a true answer for the string as given, but a dead end unless
+you already knew the convention. `nif_inspect`, `nif_set` and `asset_status` now retry the root-prefixed form and,
+when it hits, name it — ``did you mean `meshes\Actors\…\wolf.nif`?``. The suggestion is **verified, not guessed**: it
+comes from actually re-resolving the candidate through the same VFS, so a path it names is always one a mod or BSA
+really provides, and when nothing resolves nothing is suggested. `asset_status` tries both roots (it can't know a
+path's kind) and stays silent otherwise — `sound\`, `scripts\` and the rest get no lecture. The mesh tools, which
+only ever deal in meshes, add one weaker note when the prefixed form misses too: it names the convention and the
+form the path would take, and says plainly that form isn't provided either. Reported externally.
+
+**`place_asset` / `bulk_place_asset` carry that same missing-root suggestion (#283).**
+The fourth lane with the same dead end: asked to auto-place a path taken straight off a record, the refusal
+(`nothing in the active load order provides '…'`) named no way forward. It now retries both roots and, when a real
+mod or BSA provides the prefixed form, names it — the same **verified, never guessed** suggestion, so it always
+points at a copy that exists and stays silent when there is nothing honest to offer. It fires only on the
+auto-resolve arm: with `source=` named, a destination nothing currently provides is the normal case (you are placing
+a brand-new file), not a mistake to correct. A placement batch now also answers from one pinned asset build, so two
+assets in the same call can never describe two different states of the VFS. Surfaced by the independent review of
+the #273 fix.
+
+**`cross_plugin_query` no longer trips over deleted records and reports them as an unexplained skip (#276).**
+A `references=` (or `where=`) scan over a load order holding *deleted* records — the wild case was deleted `Package`
+records in a follower mod — ended with a raw `NullReferenceException … could not be scanned and were skipped` note.
+A deleted record carries no body by engine rule, but the scan still tried to read its form links, and an
+engine-authored deleted body can leave just enough behind to NullRef on that read. The skip was accounted (not
+silent), but its *cause* read as a parser hole — which means a genuine match hiding in a "skipped" record looks
+possible when it isn't (Q3). A deleted record is now excluded from the content filters up front: it links to nothing
+live and has no field to test, so it is a clean non-match, not an unscannable skip. This also means a deleted record
+that *does* parse and carries a link to the target is no longer returned by `references=` — treating a deleted record
+as referencing nothing, the resolution the report itself proposed. `editorid_contains=` is unaffected (EditorID reads
+from the early EDID subrecord, before the body parse that throws). Reported by DrHeisen.
+
+**A pure list reorder no longer reads as "identical to winner" in a conflict diff (#275, partial).**
+The `conflict_tree` / `diff_record` content compare is order-insensitive by design — the same relations stored in a
+different order (the USSEP case that motivated it) shouldn't over-report. But for a list where order IS the
+semantics — a DIAL's INFO children decide which line the game plays — folding a reorder into "no delta" is a silent
+wrong answer: the record reads "identical to winner" when the very thing that changed is invisible. Now, when two
+lists hold the same contents in a different order, the diff emits an explicit `Field: same N item(s), ORDER DIFFERS
+from winner` note instead of silence — type-agnostic, so it fires for any reordered list (over-reporting a noise
+reorder is the safe direction; silently equating a semantic one is not). No-delta renders no longer claim "list
+order ignored," since order is now compared. Reported by DrHeisen. *(This closes the diff-honesty half of #275; the
+larger ask — an effective, merged INFO-order view for a topic, xEdit INOM/INOA parity — remains open.)*
+
 **A plugin addressed by its file path is no longer mislabeled off-order and disabled (#269).**
 `diff_record` stamped `OUT-OF-LOAD-ORDER (direct path, disabled)` on a plugin that is enabled and winning whenever it
 was passed as an absolute path instead of a filename — the diff values were right, but the provenance line said the

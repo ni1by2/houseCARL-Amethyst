@@ -486,6 +486,286 @@ static class JsonWire
         w.WriteEndArray();
     }
 
+    // ---- housecarl_check_errors (#282) --------------------------------------------------------------
+    /// <summary>The integrity sweep as JSON: <c>{scanned_plugins, dangling, missing_masters, unscannable, classes,
+    /// filter_note, off_order_scanned, excluded_plugins, plugins:[…], capped, rendered, truncated, boundary}</c>, or the
+    /// <c>counts_only</c> shape with <c>histogram</c> in place of <c>plugins</c>. An error CLASS the caller excluded is
+    /// emitted as <c>null</c>, NOT as 0 — the json counterpart of the text render's "NOT CHECKED", so a skipped check
+    /// cannot be parsed as a clean one (Q3). Budget-aware: drops trailing rows and flags <c>truncated</c>, always
+    /// leaving valid JSON.</summary>
+    public static string RenderCheckErrors(ErrorCheckResult r, int maxChars, int histogramLimit = 1000)
+    {
+        int cap = Cap(maxChars);
+        bool didDangling = r.Classes.HasFlag(ErrorFindingClass.Dangling);
+        bool didMasters = r.Classes.HasFlag(ErrorFindingClass.MissingMasters);
+        using var ms = new MemoryStream();
+        using (var w = new Utf8JsonWriter(ms, Opts))
+        {
+            w.WriteStartObject();
+            if (r.Error is not null) { w.WriteString("error", r.Error); w.WriteEndObject(); return Finish(ms); }
+
+            w.WriteNumber("scanned_plugins", r.PluginsScanned);
+            // null (not 0) for a class nobody looked for — see the summary.
+            if (didDangling) { w.WriteNumber("dangling", r.TotalDangling); w.WriteNumber("unscannable_records", r.TotalUnscannableRecords); }
+            else { w.WriteNull("dangling"); w.WriteNull("unscannable_records"); }
+            if (didMasters) w.WriteNumber("missing_masters", r.TotalMissingMasters); else w.WriteNull("missing_masters");
+            WriteStringArray(w, "classes_checked", ClassNames(r.Classes));
+            WriteNullable(w, "filter_note", r.FilterNote);
+            WriteStringArray(w, "off_order_scanned", r.OffOrderScanned ?? Array.Empty<string>());
+            WriteExcluded(w, r.ExcludedPlugins);
+            w.WriteBoolean("counts_only", r.CountsOnly);
+
+            if (r.CountsOnly)
+            {
+                WriteHistogram(w, "dangling_by_target_plugin", r.Histogram, histogramLimit);
+                WriteUnreadPlugins(w, r.Reports, ms, cap);
+            }
+            else
+            {
+                w.WriteBoolean("capped", r.Capped);
+                w.WriteStartArray("plugins");
+                int rendered = 0; bool truncated = false;
+                foreach (var p in r.Reports)
+                {
+                    w.Flush();
+                    if (ms.Length >= cap) { truncated = true; break; }
+                    w.WriteStartObject();
+                    w.WriteString("plugin", p.Plugin);
+                    WriteNullable(w, "scan_error", p.ScanError);
+                    WriteStringArray(w, "missing_masters", p.MissingMasters);
+                    w.WriteStartArray("dangling");
+                    foreach (var d in p.Dangling)
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("source", d.Source.ToString());
+                        w.WriteString("source_type", d.SourceType);
+                        WriteNullable(w, "source_editorid", d.SourceEditorId);
+                        w.WriteString("target", d.Target.ToString());
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                    w.WriteNumber("unscannable_records", p.UnscannableRecords);
+                    WriteStringArray(w, "unscannable_samples", p.UnscannableSamples);
+                    w.WriteEndObject();
+                    rendered++;
+                }
+                w.WriteEndArray();
+                w.WriteNumber("rendered", rendered);
+                w.WriteBoolean("truncated", truncated);
+            }
+
+            w.WriteString("boundary",
+                "checks FormLink resolution, missing masters, and parse failures. Does NOT verify navmesh/terrain spatial " +
+                "integrity (CRC/grid), flag required-but-null fields, list unused-master cleanup, or link-check an owned " +
+                "item's ownership 'variable' word; a null FormLink is a legal optional.");
+            w.WriteEndObject();
+        }
+        return Finish(ms);
+    }
+
+    // ---- housecarl_validate_scripts (#282) ---------------------------------------------------------
+    /// <summary>The script-property sweep as JSON: <c>{scanned_plugins, records_with_scripts, unbound, unbound_object,
+    /// unbound_scalar, bound_but_null, unverifiable, classes_checked, filter_note, read_incomplete, excluded_plugins,
+    /// records:[…], capped, rendered, truncated, boundary}</c>, or the <c>counts_only</c> shape with
+    /// <c>unbound_by_property</c> in place of <c>records</c>. A finding CLASS the caller excluded is emitted as
+    /// <c>null</c>, NOT as 0 — the json counterpart of the text render's "NOT CHECKED", so a class nobody looked for
+    /// cannot be parsed as one that came back clean (PR #288 review, finding 1). <c>unverifiable</c> is never null: it
+    /// cannot be filtered out. Same data as the text render off the same result object (D2 — the two can differ only in
+    /// formatting).</summary>
+    public static string RenderScriptCheck(ScriptCheckResult r, int maxChars, int histogramLimit = 1000)
+    {
+        int cap = Cap(maxChars);
+        using var ms = new MemoryStream();
+        using (var w = new Utf8JsonWriter(ms, Opts))
+        {
+            w.WriteStartObject();
+            if (r.Error is not null) { w.WriteString("error", r.Error); w.WriteEndObject(); return Finish(ms); }
+
+            bool didObject = r.Classes.HasFlag(ScriptFindingClass.UnboundObject);
+            bool didScalar = r.Classes.HasFlag(ScriptFindingClass.UnboundScalar);
+            bool didNull = r.Classes.HasFlag(ScriptFindingClass.BoundNull);
+
+            w.WriteNumber("scanned_plugins", r.PluginsScanned);
+            w.WriteNumber("records_with_scripts", r.RecordsWithScripts);
+            // null, NOT 0, for a class the caller excluded — a 0 here is parsed as "looked, found none" about a class
+            // nobody looked for (PR #288 review, finding 1). The per-class keys make each number's scope self-evident
+            // rather than something the consumer has to cross-reference against classes_checked.
+            if (didObject || didScalar) w.WriteNumber("unbound", r.TotalUnbound); else w.WriteNull("unbound");
+            if (didObject) w.WriteNumber("unbound_object", r.TotalUnboundObject); else w.WriteNull("unbound_object");
+            if (didScalar) w.WriteNumber("unbound_scalar", r.TotalUnboundScalar); else w.WriteNull("unbound_scalar");
+            if (didNull) w.WriteNumber("bound_but_null", r.TotalNullObject); else w.WriteNull("bound_but_null");
+            w.WriteNumber("unverifiable", r.TotalUnverifiable);   // never filterable — always a real count
+            WriteStringArray(w, "classes_checked", ScriptClassNames(r.Classes));
+            // The property filter rides as DATA, not just prose in filter_note: `unbound` / `bound_but_null` count only
+            // matching findings, while `records_with_scripts` and `unverifiable` are plugin-wide regardless of it — a
+            // consumer needs to be able to read that asymmetry off the document (round-3 review).
+            WriteNullable(w, "property_contains", r.PropertyContains);
+            WriteNullable(w, "filter_note", r.FilterNote);
+            w.WriteBoolean("read_incomplete", r.ReadIncomplete);
+            WriteExcluded(w, r.ExcludedPlugins);
+            w.WriteBoolean("counts_only", r.CountsOnly);
+
+            if (r.CountsOnly)
+            {
+                WriteHistogram(w, "unbound_by_property", r.Histogram, histogramLimit);
+                // Wrapped + budget-flagged for the same reason check_errors' `unread` is (#288 review finding 4): a
+                // silently short honesty list reads as a complete one.
+                var scanErrors = r.Reports.Where(x => x.ScanError is not null).ToList();
+                w.WriteStartObject("scan_errors");
+                w.WriteNumber("total", scanErrors.Count);
+                w.WriteStartArray("rows");
+                int seRendered = 0; bool seTruncated = false;
+                foreach (var rec in scanErrors)
+                {
+                    w.Flush();
+                    if (ms.Length >= cap) { seTruncated = true; break; }
+                    w.WriteStartObject(); w.WriteString("plugin", rec.Plugin); w.WriteString("scan_error", rec.ScanError!); w.WriteEndObject();
+                    seRendered++;
+                }
+                w.WriteEndArray();
+                w.WriteNumber("rendered", seRendered);
+                w.WriteBoolean("truncated", seTruncated);
+                w.WriteEndObject();
+            }
+            else
+            {
+                w.WriteBoolean("capped", r.Capped);
+                w.WriteStartArray("records");
+                int rendered = 0; bool truncated = false;
+                foreach (var rec in r.Reports)
+                {
+                    w.Flush();
+                    if (ms.Length >= cap) { truncated = true; break; }
+                    w.WriteStartObject();
+                    if (rec.ScanError is not null)
+                    {
+                        w.WriteString("plugin", rec.Plugin);
+                        w.WriteString("scan_error", rec.ScanError);
+                        w.WriteEndObject();
+                        rendered++;
+                        continue;
+                    }
+                    w.WriteString("formid", rec.Record.ToString());
+                    w.WriteString("type", rec.RecordType);
+                    WriteNullable(w, "editorid", rec.EditorId);
+                    w.WriteString("plugin", rec.Plugin);
+                    w.WriteStartArray("unbound");
+                    // Object/form types first — the same severity ordering the text render applies (D2).
+                    foreach (var u in rec.Unbound.OrderByDescending(u => u.IsObjectType))
+                    {
+                        w.WriteStartObject();
+                        w.WriteString("property", u.PropertyName);
+                        w.WriteString("pex_type", u.PexTypeName);
+                        w.WriteString("script", u.Script);
+                        w.WriteString("declared_in", u.DeclaringScript);
+                        w.WriteString("class", u.IsObjectType ? "unbound_object" : "unbound_scalar");
+                        w.WriteString("severity", u.IsObjectType ? "high" : "medium");
+                        w.WriteEndObject();
+                    }
+                    w.WriteEndArray();
+                    w.WriteStartArray("bound_but_null");
+                    foreach (var n in rec.NullObjects)
+                    { w.WriteStartObject(); w.WriteString("property", n.PropertyName); w.WriteString("script", n.Script); w.WriteEndObject(); }
+                    w.WriteEndArray();
+                    w.WriteStartArray("unverifiable");
+                    foreach (var uv in rec.Unverifiable)
+                    { w.WriteStartObject(); w.WriteString("script", uv.Script); w.WriteString("reason", uv.Reason); w.WriteEndObject(); }
+                    w.WriteEndArray();
+                    w.WriteEndObject();
+                    rendered++;
+                }
+                w.WriteEndArray();
+                w.WriteNumber("rendered", rendered);
+                w.WriteBoolean("truncated", truncated);
+            }
+
+            w.WriteString("boundary",
+                "checks Auto (CK-editable) properties across the extends chain — not code-driven full properties. An " +
+                "unbound object property is the silent-None footgun but CAN be intentional (filled at runtime) — a finding " +
+                "is a flag to VERIFY. A script whose .pex is not on disk is reported unverifiable, never passed clean.");
+            w.WriteEndObject();
+        }
+        return Finish(ms);
+    }
+
+    // ---- shared sweep writers (#282) ---------------------------------------------------------------
+    /// <summary>A counts_only histogram: <c>{distinct, rows:[{key,count}], rendered}</c>. Absent when the mode was not
+    /// requested; PRESENT with an empty <c>rows</c> when the sweep genuinely found nothing — the two must not look alike.</summary>
+    static void WriteHistogram(Utf8JsonWriter w, string name, IReadOnlyList<SweepCount>? rows, int rowLimit)
+    {
+        if (rows is null) return;
+        w.WriteStartObject(name);
+        w.WriteNumber("distinct", rows.Count);
+        w.WriteStartArray("rows");
+        int shown = 0;
+        foreach (var row in rows)
+        {
+            if (shown >= rowLimit) break;
+            w.WriteStartObject(); w.WriteString("key", row.Key); w.WriteNumber("count", row.Count); w.WriteEndObject();
+            shown++;
+        }
+        w.WriteEndArray();
+        w.WriteNumber("rendered", shown);
+        w.WriteEndObject();
+    }
+
+    /// <summary>Under counts_only, check_errors' reports carry the honesty layer only — plugins whose records could not
+    /// be read. Emitted so a counts-only answer still names what it could not check (Q3).
+    /// <para>Wrapped in <c>{total, rows, rendered, truncated}</c> rather than a bare array: a budget cut used to drop
+    /// trailing rows with NO flag, so a consumer iterating the array believed it had the complete set of what went
+    /// unchecked — and the text render said "truncated" for the same result (PR #288 review, finding 4).</para></summary>
+    static void WriteUnreadPlugins(Utf8JsonWriter w, IReadOnlyList<PluginErrors> reports, MemoryStream ms, int cap)
+    {
+        w.WriteStartObject("unread");
+        w.WriteNumber("total", reports.Count);
+        w.WriteStartArray("rows");
+        int rendered = 0; bool truncated = false;
+        foreach (var p in reports)
+        {
+            w.Flush();
+            if (ms.Length >= cap) { truncated = true; break; }
+            w.WriteStartObject();
+            w.WriteString("plugin", p.Plugin);
+            WriteNullable(w, "scan_error", p.ScanError);
+            w.WriteNumber("unscannable_records", p.UnscannableRecords);
+            WriteStringArray(w, "unscannable_samples", p.UnscannableSamples);
+            w.WriteEndObject();
+            rendered++;
+        }
+        w.WriteEndArray();
+        w.WriteNumber("rendered", rendered);
+        w.WriteBoolean("truncated", truncated);
+        w.WriteEndObject();
+    }
+
+    /// <summary>Writes excluded plugin names and reasons as a stable JSON array.</summary>
+    static void WriteExcluded(Utf8JsonWriter w, IReadOnlyDictionary<string, string> excluded)
+    {
+        w.WriteStartArray("excluded_plugins");
+        foreach (var kv in excluded)
+        { w.WriteStartObject(); w.WriteString("plugin", kv.Key); w.WriteString("reason", kv.Value); w.WriteEndObject(); }
+        w.WriteEndArray();
+    }
+
+    /// <summary>Converts selected integrity flags to their stable wire names.</summary>
+    static List<string> ClassNames(ErrorFindingClass c)
+    {
+        var names = new List<string>(2);
+        if (c.HasFlag(ErrorFindingClass.Dangling)) names.Add("dangling");
+        if (c.HasFlag(ErrorFindingClass.MissingMasters)) names.Add("missing_masters");
+        return names;
+    }
+
+    /// <summary>Converts selected script-property flags to their stable wire names.</summary>
+    static List<string> ScriptClassNames(ScriptFindingClass c)
+    {
+        var names = new List<string>(3);
+        if (c.HasFlag(ScriptFindingClass.UnboundObject)) names.Add("unbound_object");
+        if (c.HasFlag(ScriptFindingClass.UnboundScalar)) names.Add("unbound_scalar");
+        if (c.HasFlag(ScriptFindingClass.BoundNull)) names.Add("bound_null");
+        return names;
+    }
+
     // ---- housecarl_read_plugin_file (P6) ------------------------------------------------------------
     /// <summary>read_plugin_file as JSON — always stamped <c>out_of_load_order:true</c> (the load-bearing raw-file
     /// caveat), then the file/masters context and the mode payload: <c>record</c> (the FILE's own record — no winner,

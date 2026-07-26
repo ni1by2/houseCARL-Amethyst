@@ -19,7 +19,7 @@ namespace HousecarlMcp;
 [McpServerToolType]
 public static class NifTools
 {
-    static readonly string[] KnownSections = { "shapes", "partitions", "alpha", "paths", "strings", "nodes", "bones" };
+    static readonly string[] KnownSections = { "shapes", "partitions", "alpha", "paths", "shader", "strings", "nodes", "bones" };
 
     /// <summary>The "(known: …)" hint shared by the unrecognized-section warning and the all-unrecognized loud error
     /// (#247): the legal tokens PLUS the pointer that there is NO 'textures' section — a mesh's embedded texture-set
@@ -38,16 +38,20 @@ public static class NifTools
          "stream; the block census (every block type and count); any UNKNOWN blocks (named + preserved, never silently " +
          "dropped); and per shape — the shape name, the NiAVObject flags (hex, decoded by deviation from the type's " +
          "documented default plus the 0x80000 bit) and scale, the BSDismember body-part " +
-         "partitions (decoded to their SBP_* names), the alpha property (decoded blend / test / threshold), the embedded " +
-         "texture-set paths, and the bone list; plus the node tree and the header string table. Use it to answer 'what " +
-         "shapes / bones / textures / partitions / alpha does this mesh have', to read a facegen mesh's baked shape names " +
+         "partitions (decoded to their SBP_* names), the alpha property (decoded blend / test / threshold), the SHADER " +
+         "property (block type, the shader TYPE enum — SkinTint / FaceTint / HairTint / EnvironmentMap / Parallax / … — " +
+         "the SLSF1+SLSF2 flags decoded to their names, and the emissive colour; any lighting value the underlying mesh " +
+         "library only stubs is NAMED as unread rather than reported as a wrong constant), the embedded " +
+         "texture-set paths with their semantic slot names where the shader determines them, and the bone list; plus the node tree and the header string table. Use it to answer 'what " +
+         "shapes / bones / textures / partitions / alpha does this mesh have', 'does this mesh glow / use soft lighting / " +
+         "subsurface skin / env-mapping', to read a facegen mesh's baked shape names " +
          "and tint path, to check a skeleton's bone names, or to see a dark-face mesh's flags/alpha/partitions — the " +
          "asset-INTERNAL companion to housecarl_asset_status (which mod wins) once you know the winning file. Pass " +
          "mesh_paths = one or more paths (asset_status parity — a whole facegen sweep's flagged subset is ONE call, one " +
          "load-order resolution for the batch); results return in input order, and a failing path is reported LOUD on THAT " +
          "path without aborting the rest. Output is a " +
          "SUMMARY per mesh by default (header + census + shape names); pass sections to expand ('shapes','partitions','alpha'," +
-         "'paths','strings','nodes','bones', or 'all'). Pass mod= to inspect a specific provider instead of the winner; " +
+         "'paths','shader','strings','nodes','bones', or 'all'). Pass mod= to inspect a specific provider instead of the winner; " +
          "sections, mod and max_chars apply to the whole batch. An " +
          "unreadable archive, an absent path, or a mesh NiflySharp refuses (e.g. its strict non-0/1 boolean class) is " +
          "reported LOUD by name — never a silent 'absent' or a half-answer. Read-only: resolves nothing to disk, writes " +
@@ -60,9 +64,11 @@ public static class NifTools
                      "order. Relative to the game's Data folder (forward or back slashes both fine).")]
             string[] mesh_paths,
         [Description("Optional. Which detail sections to show beyond the summary — any of 'shapes', 'partitions', 'alpha', " +
-                     "'paths', 'strings', 'nodes', 'bones', or 'all'. Comma-, space-, or JSON-array-separated (e.g. " +
-                     "[\"shapes\",\"paths\"]). There is NO 'textures' section — a mesh's embedded texture-set slot paths " +
-                     "appear under 'shapes' (per-shape detail) and 'paths'. Applies to every mesh in the batch; " +
+                     "'paths', 'shader', 'strings', 'nodes', 'bones', or 'all'. Comma-, space-, or JSON-array-separated (e.g. " +
+                     "[\"shapes\",\"shader\"]). There is NO 'textures' section — a mesh's embedded texture-set slot paths " +
+                     "appear under 'shapes' (per-shape detail) and 'paths'. 'shader' is the per-shape shader property: " +
+                     "block type, shader TYPE enum, decoded SLSF1/SLSF2 flag names, and the lighting values that are readable. " +
+                     "Applies to every mesh in the batch; " +
                      "unrecognized tokens are reported loud, and an all-unrecognized sections= is an error (never a " +
                      "silent fallback to the summary). Empty = summary only (header + block census + shape names).")]
             string sections = "",
@@ -329,6 +335,7 @@ static class NifWire
         if (want.Contains("alpha")) RenderPerShape(sb, nif, cap, "alpha", s => s.Alpha is not null,
             s => AlphaLine(s.Alpha!));
         if (want.Contains("paths")) RenderPaths(sb, nif, cap);
+        if (want.Contains("shader")) RenderShader(sb, nif, cap);
         if (want.Contains("bones")) RenderPerShape(sb, nif, cap, "bones", s => s.Bones.Count > 0,
             s => string.Join(", ", s.Bones));
         if (want.Contains("nodes")) RenderNodes(sb, nif, cap);
@@ -349,6 +356,7 @@ static class NifWire
     static void RenderShapesDetail(StringBuilder sb, NifInspect nif, int cap)
     {
         sb.Append("\n--- shapes (").Append(nif.Shapes.Count).Append(") ---\n");
+        if (SlotNamingCaveat(nif) is { } shapesCaveat) sb.Append(shapesCaveat);
         int shown = 0;   // the cut notice counts the REMAINDER, not the total (PR #243 review — the RenderPerShape rule)
         foreach (var s in nif.Shapes)
         {
@@ -359,8 +367,7 @@ static class NifWire
                 sb.Append("    partitions: ").Append(string.Join(", ", s.Partitions.Select(p => $"{p.BodyPartId} ({p.BodyPartName}, flags {p.PartFlags})"))).Append('\n');
             if (s.Alpha is not null)
                 sb.Append("    alpha: ").Append(AlphaLine(s.Alpha)).Append('\n');
-            foreach (var t in s.Textures)
-                sb.Append("    tex[").Append(t.Slot).Append("]: ").Append(t.Path).Append('\n');
+            foreach (var t in s.Textures) AppendTexture(sb, t);
             if (s.Bones.Count > 0)
                 sb.Append("    bones: ").Append(string.Join(", ", s.Bones)).Append('\n');
             shown++;
@@ -384,16 +391,136 @@ static class NifWire
     static void RenderPaths(StringBuilder sb, NifInspect nif, int cap)
     {
         sb.Append("\n--- paths (embedded texture-set slots; material/.tri/physics-xml refs appear under sections=strings) ---\n");
+        if (SlotNamingCaveat(nif) is { } pathsCaveat) sb.Append(pathsCaveat);
         var textured = nif.Shapes.Where(s => s.Textures.Count > 0).ToList();   // omitted remainder counts the FILTERED subset, not total shapes
         int shown = 0;
         foreach (var s in textured)
         {
             if (Cut(sb, cap, textured.Count - shown)) return;
             sb.Append("  '").Append(s.Name).Append("':\n");
-            foreach (var t in s.Textures) sb.Append("    tex[").Append(t.Slot).Append("]: ").Append(t.Path).Append('\n');
+            foreach (var t in s.Textures) AppendTexture(sb, t);
             shown++;
         }
         if (shown == 0) sb.Append("  (no embedded texture paths)\n");
+    }
+
+    /// <summary>One texture slot line, shared by the shapes and paths sections. The INDEX is always printed — the
+    /// semantic name (#272) rides ALONGSIDE it, never replaces it, because the index is what nif_set's texture_slot=
+    /// takes. A slot whose meaning the shape's shader doesn't determine (slot 2 with no glow/soft-light/skin-tint
+    /// signal, say) prints bare, so "unnamed" reads as "this shader doesn't say" rather than a confident wrong label.</summary>
+    static void AppendTexture(StringBuilder sb, NifTexture t)
+    {
+        sb.Append("    tex[").Append(t.Slot).Append(']');
+        if (t.SlotName is not null) sb.Append(" (").Append(t.SlotName).Append(')');
+        sb.Append(": ").Append(t.Path).Append('\n');
+    }
+
+    /// <summary>The shader section (#272): per shape, the block type + shader TYPE enum, the decoded flag words, and
+    /// the lighting values. Multi-line per shape rather than one long line — this is the section a visual diagnosis
+    /// reads top to bottom (does it glow, does it scatter, is it env-mapped).</summary>
+    static void RenderShader(StringBuilder sb, NifInspect nif, int cap)
+    {
+        sb.Append("\n--- shader (per shape; slot names above come from these type+flags) ---\n");
+        var shaded = nif.Shapes.Where(s => s.Shader is not null).ToList();   // omitted remainder counts the FILTERED subset
+        int shown = 0;
+        foreach (var s in shaded)
+        {
+            if (Cut(sb, cap, shaded.Count - shown)) return;
+            var sh = s.Shader!;
+            sb.Append("  '").Append(s.Name).Append("': ").Append(sh.BlockType);
+            // A block that doesn't serialize a shader type says so, rather than reporting a default-valued one (Q3).
+            sb.Append(sh.ShaderType is null ? "  (no shader type on this block)" : "  type " + sh.ShaderType);
+            sb.Append("  [").Append(sh.GameType).Append(" layout]\n");
+            // The DECLINE is stated, not just performed. Slot naming models a Skyrim convention, so on any other
+            // layout every slot prints bare — which is byte-identical to "this Skyrim shader doesn't determine that
+            // slot" and means something entirely different. Left unsaid, the caller reads "no glow map here" off a
+            // mesh houseCARL simply didn't interpret (review of PR #286).
+            if (!IsSkyrimLayout(sh))
+                sb.Append("    slot names: NOT DERIVED for this block — the slot semantics houseCARL models are a "
+                          + "Skyrim convention, and this reads as the ").Append(sh.GameType)
+                  .Append(" layout, so its slots print bare (unnamed here means unmodelled, not undetermined)\n");
+            AppendFlagWord(sb, sh.Flags1);
+            AppendFlagWord(sb, sh.Flags2);
+            if (sh.Flags1 is null && sh.Flags2 is null)
+                sb.Append("    flags: none decoded — this library models no named flag word for the ")
+                  .Append(sh.GameType).Append(" layout (the raw block is intact; nothing is being hidden)\n");
+            AppendShaderValues(sb, sh);
+            shown++;
+        }
+        if (shown == 0) sb.Append("  (no shape carries a shader property)\n");
+    }
+
+    /// <summary>One decoded flag word. Unnamed bits are stated as an explicit hex mask — the #255 posture, carried
+    /// here: a bit the library's enum doesn't name is a real thing the mesh carries, so it is surfaced, never dropped
+    /// and never rolled silently into the named list.</summary>
+    static void AppendFlagWord(StringBuilder sb, NifShaderFlagWord? w)
+    {
+        if (w is null) return;
+        sb.Append("    ").Append(w.Label).Append(" 0x").Append(w.Raw.ToString("X8")).Append(": ")
+          .Append(w.Names.Count > 0 ? string.Join(", ", w.Names) : "(no named bit set)");
+        if (w.UnknownBits != 0) sb.Append("  (+unknown bits 0x").Append(w.UnknownBits.ToString("X")).Append(')');
+        sb.Append('\n');
+    }
+
+    /// <summary>The shader's lighting values — only the ones this NiflySharp version genuinely reads off the block.
+    /// The rest are NAMED as unread on their own line rather than printed as the constant the library's interface stub
+    /// would hand back (Q3: a caller must be able to tell "the mesh says 0" from "we can't see it").
+    ///
+    /// EVERY value has both a read form and an unread form, with no shared condition between them, so a value can
+    /// never fall through both and vanish. The emissive multiple is the one that could: it reads most naturally as a
+    /// suffix of the emissive colour, but if upstream ever implements it WITHOUT the colour (it maps onto
+    /// BSEffectShaderProperty's <c>_baseColorScale</c>) a suffix-only form would print it nowhere and name it nowhere
+    /// — the one hole in the "implemented upstream ⇒ reported here, no code change" promise. It gets its own entry
+    /// when the colour is unread (review of PR #286).</summary>
+    static void AppendShaderValues(StringBuilder sb, NifShader sh)
+    {
+        var have = new List<string>(5);
+        if (sh.EmissiveColor is { } ec) have.Add("emissive " + ColorText(ec) + (sh.EmissiveMultiple is { } m ? " x" + Fmt(m) : ""));
+        else if (sh.EmissiveMultiple is { } m2) have.Add("emissive multiple x" + Fmt(m2));   // read, but no colour to hang it off
+        if (sh.Glossiness is { } g) have.Add("glossiness " + Fmt(g));
+        if (sh.SpecularStrength is { } ss) have.Add("specular " + Fmt(ss) + (sh.SpecularColor is { } sc ? " " + ColorText(sc) : ""));
+        else if (sh.SpecularColor is { } sc2) have.Add("specular " + ColorText(sc2));
+        if (sh.Alpha is { } a) have.Add("alpha " + Fmt(a));
+        if (have.Count > 0) sb.Append("    ").Append(string.Join("  ", have)).Append('\n');
+
+        var missing = new List<string>(5);
+        if (sh.EmissiveColor is null) missing.Add("emissive colour");
+        if (sh.EmissiveMultiple is null) missing.Add("emissive multiple");
+        if (sh.Glossiness is null) missing.Add("glossiness");
+        if (sh.SpecularStrength is null) missing.Add("specular strength");
+        if (sh.SpecularColor is null) missing.Add("specular colour");
+        if (sh.Alpha is null) missing.Add("alpha");
+        if (missing.Count > 0)
+            // "WHERE THIS BLOCK CARRIES THEM" is doing real work: for a lighting shader the values genuinely are on
+            // disk and NifSkope shows them, but a BSEffectShaderProperty has no glossiness / specular-strength /
+            // specular-colour field AT ALL, so an unconditional "the values ARE in the file" would send the reader
+            // hunting in NifSkope for fields that don't exist (review of PR #286).
+            sb.Append("    NOT READ by this NiflySharp version — its accessor returns a constant for these, so ")
+              .Append("houseCARL reports nothing rather than a wrong number: ")
+              .Append(string.Join(", ", missing))
+              .Append(". Where this block carries them, NifSkope shows the real values.\n");
+    }
+
+    /// <summary>Formats a shader RGB value without introducing locale-dependent separators.</summary>
+    static string ColorText(NifColor c) => $"rgb({Fmt(c.R)},{Fmt(c.G)},{Fmt(c.B)})";
+
+    /// <summary>Whether this shader was read as the SKYRIM layout — the only one whose texture-slot semantics
+    /// houseCARL models, so the only one where a slot name can be derived at all.</summary>
+    static bool IsSkyrimLayout(NifShader sh) => sh.GameType == "SK";
+
+    /// <summary>The one-line caveat for a section that shows slot paths on a mesh whose shader(s) houseCARL does not
+    /// interpret — or null when every shader here is the Skyrim layout (the overwhelmingly common case, which stays
+    /// unannotated). Without it a bare <c>tex[2]:</c> is ambiguous between "this Skyrim shader doesn't determine slot
+    /// 2" and "we don't model this layout at all". The header's <c>[NOT an SE stream]</c> marker does NOT disambiguate
+    /// it: an LE mesh trips that marker but still parses as the SK layout and DOES get named slots (review of #286).</summary>
+    static string? SlotNamingCaveat(NifInspect nif)
+    {
+        var layouts = nif.Shapes.Select(s => s.Shader).OfType<NifShader>().Where(sh => !IsSkyrimLayout(sh))
+                         .Select(sh => sh.GameType).Distinct().OrderBy(g => g, StringComparer.Ordinal).ToList();
+        if (layouts.Count == 0) return null;
+        return "  [!] slot names are NOT DERIVED for shader(s) read as the " + string.Join(" / ", layouts)
+             + " layout — houseCARL models Skyrim's slot semantics only, so those slots print bare. Unnamed there "
+             + "means UNMODELLED, not undetermined; pass sections=shader for each shape's layout.\n";
     }
 
     static void RenderNodes(StringBuilder sb, NifInspect nif, int cap)
@@ -486,6 +613,7 @@ static class NifWire
         return true;
     }
 
+    /// <summary>Formats a NIF float compactly and invariantly for stable diagnostics.</summary>
     static string Fmt(float f) => f.ToString("0.#######", System.Globalization.CultureInfo.InvariantCulture);
 
     /// <summary>The archive-read-failure alarm (Q3): BSAs that couldn't be read this build. A mesh present ONLY in one of

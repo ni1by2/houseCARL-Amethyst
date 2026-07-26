@@ -99,7 +99,7 @@ public static class ReadTools
          "Field-level diff between TWO plugins' versions of ONE record — plugin_a vs plugin_b. Each plugin may be an " +
          "ACTIVE plugin OR a plugin FILE on disk that isn't in the load order (e.g. a DISABLED old patch): the classic " +
          "use is diffing a disabled OLD patch against the mod that supersedes it, to see exactly what changed. Both " +
-         "sides are deep-read and compared by the SAME order-insensitive, truncation-honest engine the conflict tree " +
+         "sides are deep-read and compared by the SAME content-keyed (list reorders flagged), truncation-honest engine the conflict tree " +
          "uses; each delta line shows plugin_a's value with plugin_b's (the reference) value labeled by plugin_b's " +
          "filename. A FormID is 'XXXXXX:Plugin.esp'. Read-only. Unlike housecarl_read_record conflict_tree (which diffs " +
          "every toucher against the load-order WINNER), this compares TWO explicit plugins with no winner pole — use it " +
@@ -304,19 +304,38 @@ public static class ReadTools
          "NOT verify navmesh or terrain spatial integrity (CRC/grid — a Mutagen-delta residual), does NOT flag a required " +
          "field left null (a null FormLink is a legal optional, not an error), does NOT list unused-master cleanup " +
          "(a FormLink scan cannot prove a master is unused), and does NOT link-check an owned item's ownership 'variable' " +
-         "word (a rank/global Mutagen cannot type on an override without a link cache). Results cap at limit= and max_chars (both overruns explicit).")]
+         "word (a rank/global Mutagen cannot type on an override without a link cache). NARROWING: beyond plugins= it takes " +
+         "a record scope (type= / formids= / editorid_contains=), a findings= class filter, counts_only=true for just the " +
+         "totals plus a dangling-by-TARGET-plugin histogram, and format='json'. Narrowing narrows the COUNTS too — they are " +
+         "always the counts for the scope actually swept, and the response says so. Results cap at limit= and max_chars (both overruns explicit).")]
     public static string CheckErrorsTool(
         LoadOrderService svc,
         [Description("Optional. Plugin filenames to check (e.g. 'MyMod.esp'). A name not in the active order is resolved on disk (a fresh houseCARL patch, a disabled mod) and swept OFF-ORDER; found nowhere (or in several folders) it is an error. Omit to sweep the WHOLE active order (every non-excluded plugin) — thorough but heavier; scope to one plugin for a fast, focused check like the CK's per-plugin 'Check For Errors'.")]
             string[]? plugins = null,
-        [Description("Optional. Max dangling references to list across the whole sweep (default 1000). The TRUE total is always reported; over the cap it says so. Master-table findings are always listed in full (they are few).")]
+        [Description("Optional. Record type to sweep — a 4-char signature ('WEAP') or catalog name ('Weapon'). Applied at the record STREAM, so it is the CHEAPEST scope: skipped records cost nothing. An unknown type is refused, naming what is expected.")]
+            string? type = null,
+        [Description("Optional. Sweep ONLY these records ('0BCC84:Skyrim.esm', …) — the re-check-these-few pass after a fix. A malformed token refuses the call before the sweep runs.")]
+            string[]? formids = null,
+        [Description("Optional. Sweep only records whose EditorID contains this substring (case-insensitive). A record with no EditorID never matches.")]
+            string? editorid_contains = null,
+        [Description("Optional. Which error classes to look for: 'dangling' and/or 'missing_masters' (default both). Excluding 'dangling' SKIPS the per-record link walk entirely — that is how you ask 'is any master missing anywhere in my order' without paying for a full sweep. An excluded class renders as 'not checked', never as 0. Unscannable records and scan errors are ALWAYS reported and cannot be filtered out (a suppressed 'could not read' would read as clean).")]
+            string[]? findings = null,
+        [Description("Optional. true = return ONLY the header totals plus a dangling-by-TARGET-plugin histogram (which plugin the broken refs point INTO — the one absent dependency behind a wall of findings), with no per-plugin listing. The cheap before/after-a-fix comparison; totals stay exact (never limit-capped) and limit= caps the histogram ROWS instead.")]
+            bool counts_only = false,
+        [Description("Optional. 'text' (default) or 'json' — the machine-readable twin carrying the same data, with the totals/capped/truncated accounting in-band.")]
+            string? format = null,
+        [Description("Optional. Max dangling references to list across the whole sweep (default 1000). The TRUE total is always reported; over the cap it says so. Master-table findings are always listed in full (they are few). Under counts_only=true this caps the histogram ROWS instead.")]
             int limit = 1000,
         [Description("Optional. Max characters before the response stops with an explicit notice. 0 = the server default (~80k).")]
             int max_chars = 0) => Guard.Tool("housecarl_check_errors", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        var result = svc.CheckErrors(plugins, limit <= 0 ? 1000 : limit);
-        return Wire.RenderCheckErrors(result, max_chars);
+        bool json = Wire.WantsJson(format, out var fmtErr);
+        if (fmtErr is not null) return fmtErr;
+        int lim = limit <= 0 ? 1000 : limit;
+        var result = svc.CheckErrors(plugins, lim, formids, editorid_contains, type, findings, counts_only);
+        return json ? JsonWire.RenderCheckErrors(result, max_chars, lim)
+                    : Wire.RenderCheckErrors(result, max_chars, lim);
     });
 
     /// <summary>Checks scripted records for missing scripts and unbound properties.</summary>
@@ -333,20 +352,42 @@ public static class ReadTools
          "runtime). Read-only. BOUNDARY (never a silent claim of more — Q3): it checks Auto (CK-editable) properties " +
          "only, not code-driven full properties; 'unbound may be intentional' (a runtime-filled link), so a finding is " +
          "a flag to VERIFY; and if a script's .pex is not on disk (uncompiled / not in the order) the attachment is " +
-         "reported UNVERIFIABLE, never passed clean. Scope to one plugin for a fast focused check, or omit to sweep the " +
-         "whole active order. Results cap at limit= and max_chars (both overruns explicit).")]
+         "reported UNVERIFIABLE, never passed clean. NARROWING: beyond plugins= it takes a record scope (type= / formids= / " +
+         "editorid_contains=), property_contains=, a findings= class filter, counts_only=true for just the totals plus an " +
+         "unbound-by-PROPERTY-NAME histogram, and format='json' — a script-heavy plugin (~180 scripted records) does not " +
+         "fit a tool result unnarrowed, and limit= alone will not help because it caps FINDINGS, not the record roster. " +
+         "Narrowing narrows the COUNTS too — they are always the counts for the scope actually swept, and the response " +
+         "says so. Results cap at limit= and max_chars (both overruns explicit).")]
     public static string ValidateScriptsTool(
         LoadOrderService svc,
         [Description("Optional. Plugin filenames to check (e.g. 'MyMod.esp'). A name not in the load order is an error. Omit to sweep the WHOLE active order (every scripted record in every non-excluded plugin) — thorough but heavier; scope to one plugin for a fast, focused check.")]
             string[]? plugins = null,
-        [Description("Optional. Max property findings (unbound + bound-but-null) to list across the whole sweep (default 1000). The TRUE totals are always reported; over the cap it says so. Unverifiable notes are always listed in full (they are few).")]
+        [Description("Optional. Record type to sweep — a 4-char signature ('QUST') or catalog name ('Quest'). Applied at the record STREAM, so it is the CHEAPEST scope: skipped records never have their .pex chain read. An unknown type is refused, naming what is expected.")]
+            string? type = null,
+        [Description("Optional. Sweep ONLY these records ('0BCC84:Skyrim.esm', …) — the re-check-these-few pass after editing a script's properties, which is what limit= cannot do. A malformed token refuses the call before the sweep runs.")]
+            string[]? formids = null,
+        [Description("Optional. Sweep only records whose EditorID contains this substring (case-insensitive). A record with no EditorID never matches.")]
+            string? editorid_contains = null,
+        [Description("Optional. Report only findings whose PROPERTY NAME contains this substring (case-insensitive) — chasing one property across a plugin. A record left with no matching finding drops out of the listing entirely.")]
+            string? property_contains = null,
+        [Description("Optional. Which finding classes to report, in severity order: 'unbound_object' (HIGH — the silent-None footgun), 'unbound_scalar' (MEDIUM), 'unbound' (both), 'bound_null' (advisory). Default all. Filtering to 'unbound_object' is the way to cut the record roster down to the records that actually matter. UNVERIFIABLE attachments are ALWAYS reported and cannot be filtered out — a script whose .pex could not be read might be the one declaring the property you are filtering for, so suppressing it would manufacture a clean answer.")]
+            string[]? findings = null,
+        [Description("Optional. true = return ONLY the header totals plus an unbound-by-PROPERTY-NAME histogram, with no per-record listing — the cheap before/after comparison for a multi-pass script edit ('did the unbound count for this property drop, and did anything new appear'). Totals stay exact (never limit-capped) and limit= caps the histogram ROWS instead.")]
+            bool counts_only = false,
+        [Description("Optional. 'text' (default) or 'json' — the machine-readable twin carrying the same data, with the totals/capped/truncated accounting in-band.")]
+            string? format = null,
+        [Description("Optional. Max property findings (unbound + bound-but-null) to list across the whole sweep (default 1000). The TRUE totals are always reported; over the cap it says so. Unverifiable notes are always listed in full (they are few). Under counts_only=true this caps the histogram ROWS instead.")]
             int limit = 1000,
         [Description("Optional. Max characters before the response stops with an explicit notice. 0 = the server default (~80k).")]
             int max_chars = 0) => Guard.Tool("housecarl_validate_scripts", () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        var result = svc.ValidateScripts(plugins, limit <= 0 ? 1000 : limit);
-        return Wire.RenderScriptCheck(result, max_chars);
+        bool json = Wire.WantsJson(format, out var fmtErr);
+        if (fmtErr is not null) return fmtErr;
+        int lim = limit <= 0 ? 1000 : limit;
+        var result = svc.ValidateScripts(plugins, lim, formids, editorid_contains, type, property_contains, findings, counts_only);
+        return json ? JsonWire.RenderScriptCheck(result, max_chars, lim)
+                    : Wire.RenderScriptCheck(result, max_chars, lim);
     });
 
     /// <summary>Reads or enumerates one plugin file directly, independent of active load order.</summary>
@@ -722,23 +763,40 @@ static class Wire
     }
 
     // ---- housecarl_check_errors ---------------------------------------------------------------------
-    public static string RenderCheckErrors(ErrorCheckResult r, int maxChars)
+    /// <summary>Render the integrity sweep. <paramref name="histogramLimit"/> (#282) caps the <c>counts_only=</c>
+    /// histogram rows — the one thing <c>limit=</c> means in that mode, since nothing else is listed. An error class the
+    /// caller EXCLUDED renders as "NOT CHECKED", never as a 0, so a skipped check can never be read as a clean one (Q3).</summary>
+    public static string RenderCheckErrors(ErrorCheckResult r, int maxChars, int histogramLimit = 1000)
     {
         if (r.Error is not null) return "error: " + r.Error;
         int cap = Cap(maxChars);
+        bool didDangling = r.Classes.HasFlag(ErrorFindingClass.Dangling);
+        bool didMasters = r.Classes.HasFlag(ErrorFindingClass.MissingMasters);
         var sb = new StringBuilder();
 
         sb.Append("check_errors — load-order integrity sweep\n");
         sb.Append("scanned ").Append(r.PluginsScanned).Append(r.PluginsScanned == 1 ? " plugin · " : " plugins · ")
-          .Append(r.TotalDangling).Append(" dangling ref(s) · ")
-          .Append(r.TotalMissingMasters).Append(" missing master(s) · ")
-          .Append(r.TotalUnscannableRecords).Append(" unscannable record(s)");
+          .Append(didDangling ? $"{r.TotalDangling} dangling ref(s)" : "dangling refs NOT CHECKED (findings= excluded 'dangling')").Append(" · ")
+          .Append(didMasters ? $"{r.TotalMissingMasters} missing master(s)" : "missing masters NOT CHECKED (findings= excluded 'missing_masters')").Append(" · ")
+          .Append(didDangling ? $"{r.TotalUnscannableRecords} unscannable record(s)" : "unscannable records NOT COUNTED (the record walk was skipped)");
         if (r.ExcludedPlugins.Count > 0)
             sb.Append(" · ").Append(r.ExcludedPlugins.Count).Append(" plugin(s) excluded (unparseable)");
         sb.Append('\n');
+        if (r.FilterNote is not null) sb.Append(r.FilterNote).Append('\n');
         if (r.OffOrderScanned is { Count: > 0 } off)
             sb.Append("swept OFF-ORDER (on disk, not in the active load order): ").Append(string.Join(", ", off))
               .Append("   [the file's own records; links resolved against the active order + the file's own definitions]\n");
+
+        if (r.CountsOnly)
+        {
+            AppendHistogram(sb, r.Histogram, histogramLimit, "dangling ref(s) by TARGET plugin (the plugin the broken refs point INTO)",
+                            "counts_only=true — totals above are exact; no per-plugin listing was built.",
+                            notComputed: "no dangling histogram — the link walk was not run (findings= excluded 'dangling').");
+            AppendScanErrorTail(sb, r.Reports, cap);
+            AppendExcludedPlugins(sb, r.ExcludedPlugins, cap);   // #288 review finding 5: the NAMES, not just the header count
+            AppendCheckErrorsBoundary(sb);
+            return sb.ToString().TrimEnd('\n');
+        }
 
         if (r.Reports.Count == 0 && r.ExcludedPlugins.Count == 0)
             sb.Append("\nNo errors found in the scanned scope.\n");
@@ -748,7 +806,7 @@ static class Wire
         {
             if (sb.Length >= cap)
             {
-                sb.Append("\n... [truncated at max_chars=").Append(cap).Append("; scope plugins= or raise max_chars to see the rest]\n");
+                sb.Append("\n... [truncated at max_chars=").Append(cap).Append("; ").Append(SweepNarrowHint).Append("]\n");
                 truncated = true;
                 break;
             }
@@ -780,40 +838,121 @@ static class Wire
         if (r.Capped)
             sb.Append("\n[dangling list capped at limit; true total = ").Append(r.TotalDangling).Append(" — raise limit= to see all]\n");
 
-        if (!truncated && r.ExcludedPlugins.Count > 0)
-        {
-            sb.Append("\nexcluded plugins (could not be parsed — NOT checked):\n");
-            foreach (var kv in r.ExcludedPlugins)
-            {
-                if (sb.Length >= cap) break;
-                sb.Append("  ").Append(kv.Key).Append(": ").Append(kv.Value).Append('\n');
-            }
-        }
+        if (!truncated) AppendExcludedPlugins(sb, r.ExcludedPlugins, cap);
 
-        sb.Append("\nboundary: checks FormLink resolution, missing masters, and parse failures. Does NOT verify navmesh/terrain ")
-          .Append("spatial integrity (CRC/grid), flag required-but-null fields, list unused-master cleanup, or link-check an owned ")
-          .Append("item's ownership 'variable' word (a rank/global Mutagen can't type on an override); a null FormLink is a legal optional.\n");
+        AppendCheckErrorsBoundary(sb);
         return sb.ToString().TrimEnd('\n');
     }
 
+    static void AppendCheckErrorsBoundary(StringBuilder sb)
+        => sb.Append("\nboundary: checks FormLink resolution, missing masters, and parse failures. Does NOT verify navmesh/terrain ")
+             .Append("spatial integrity (CRC/grid), flag required-but-null fields, list unused-master cleanup, or link-check an owned ")
+             .Append("item's ownership 'variable' word (a rank/global Mutagen can't type on an override); a null FormLink is a legal optional.\n");
+
+    // ---- shared sweep-render pieces (#282) ----------------------------------------------------------
+    /// <summary>The truncation/overflow hint the two sweep tools share. The old wording told the caller to "scope
+    /// plugins=" when plugins= was already the narrowest scope either tool had — advice that could not be taken. It now
+    /// names the knobs that actually exist.</summary>
+    const string SweepNarrowHint =
+        "narrow with type= / formids= / editorid_contains= / findings=, ask counts_only=true for just the totals, or raise max_chars";
+
+    /// <summary>Render a <c>counts_only=</c> histogram, capped at <paramref name="rowLimit"/> with the true distinct-key
+    /// count always stated. A null histogram means the mode was not requested; an EMPTY one means the sweep genuinely
+    /// found nothing, and the two read differently (Q3).</summary>
+    static void AppendHistogram(StringBuilder sb, IReadOnlyList<SweepCount>? rows, int rowLimit, string title, string note,
+                                string? notComputed = null)
+    {
+        sb.Append('\n').Append(note).Append('\n');
+        if (rows is null) { if (notComputed is not null) sb.Append(notComputed).Append('\n'); return; }
+        if (rows.Count == 0) { sb.Append("\nnothing to tally — no findings in the swept scope.\n"); return; }
+        sb.Append('\n').Append(title).Append(" (").Append(rows.Count).Append(" distinct):\n");
+        int shown = 0;
+        foreach (var row in rows)
+        {
+            if (shown >= rowLimit) break;
+            sb.Append("  ").Append(row.Count.ToString().PadLeft(6)).Append("  ").Append(row.Key).Append('\n');
+            shown++;
+        }
+        if (shown < rows.Count)
+            sb.Append("  ... [").Append(rows.Count - shown).Append(" more row(s) — raise limit= to see them]\n");
+    }
+
+    /// <summary>The named, reasoned list of plugins the index build could not parse. Shared by the listing and
+    /// <c>counts_only=</c> paths — counts_only used to return before it, leaving the header's bare count with no way to
+    /// learn WHICH plugin went unchecked without re-running (PR #288 review, finding 5).</summary>
+    static void AppendExcludedPlugins(StringBuilder sb, IReadOnlyDictionary<string, string> excluded, int cap)
+    {
+        if (excluded.Count == 0) return;
+        sb.Append("\nexcluded plugins (could not be parsed — NOT checked):\n");
+        foreach (var kv in excluded)
+        {
+            if (sb.Length >= cap) { sb.Append("  ... [truncated at max_chars]\n"); break; }
+            sb.Append("  ").Append(kv.Key).Append(": ").Append(kv.Value).Append('\n');
+        }
+    }
+
+    /// <summary>Under <c>counts_only=</c> the reports list carries the honesty layer only (records/plugins houseCARL
+    /// could not read). Emit it verbatim so a counts-only answer still names what it could not check (Q3).</summary>
+    static void AppendScanErrorTail(StringBuilder sb, IReadOnlyList<PluginErrors> reports, int cap)
+    {
+        foreach (var p in reports)
+        {
+            if (sb.Length >= cap) { sb.Append("\n... [truncated at max_chars]\n"); break; }
+            sb.Append("\n[UNREAD] ").Append(p.Plugin).Append(": ");
+            if (p.ScanError is not null) sb.Append(p.ScanError).Append(' ');
+            if (p.UnscannableRecords > 0)
+            {
+                sb.Append(p.UnscannableRecords).Append(" record(s) could not be scanned");
+                if (p.UnscannableSamples.Count > 0) sb.Append(": ").Append(string.Join("; ", p.UnscannableSamples));
+            }
+            sb.Append('\n');
+        }
+    }
+
     // ---- housecarl_validate_scripts -----------------------------------------------------------------
-    public static string RenderScriptCheck(ScriptCheckResult r, int maxChars)
+    /// <summary>Render the script-property sweep. <paramref name="histogramLimit"/> (#282) caps the
+    /// <c>counts_only=</c> histogram rows.</summary>
+    public static string RenderScriptCheck(ScriptCheckResult r, int maxChars, int histogramLimit = 1000)
     {
         if (r.Error is not null) return "error: " + r.Error;
         int cap = Cap(maxChars);
         var sb = new StringBuilder();
 
+        bool didObject = r.Classes.HasFlag(ScriptFindingClass.UnboundObject);
+        bool didScalar = r.Classes.HasFlag(ScriptFindingClass.UnboundScalar);
+        bool didNull = r.Classes.HasFlag(ScriptFindingClass.BoundNull);
+
         sb.Append("validate_scripts — VMAD script-property binding sweep\n");
         sb.Append("scanned ").Append(r.PluginsScanned).Append(r.PluginsScanned == 1 ? " plugin · " : " plugins · ")
           .Append(r.RecordsWithScripts).Append(" record(s) with scripts · ")
-          .Append(r.TotalUnbound).Append(" unbound · ")
-          .Append(r.TotalNullObject).Append(" bound-but-null · ")
+          // A class the caller excluded reads as NOT CHECKED, never as a 0 — a 0 would say "looked, found none" about
+          // the HIGH silent-None class nobody looked for (PR #288 review, finding 1).
+          .Append(UnboundTotalText(r, didObject, didScalar))
+          .Append(" · ")
+          .Append(NullTotalText(r, didNull))
+          .Append(" · ")
           .Append(r.TotalUnverifiable).Append(" unverifiable");
         if (r.ExcludedPlugins.Count > 0)
             sb.Append(" · ").Append(r.ExcludedPlugins.Count).Append(" plugin(s) excluded (unparseable)");
         sb.Append('\n');
+        if (r.FilterNote is not null) sb.Append(r.FilterNote).Append('\n');
         if (r.ReadIncomplete)
             sb.Append("note: a BSA failed to read this build — a '.pex not on disk' below may merely be unscanned, not truly absent (Q3).\n");
+
+        if (r.CountsOnly)
+        {
+            AppendHistogram(sb, r.Histogram, histogramLimit, "unbound properties by NAME",
+                            "counts_only=true — totals above are exact; no per-record listing was built.",
+                            notComputed: "no unbound histogram — findings= excluded both unbound classes, so nothing was tallied.");
+            foreach (var rec in r.Reports)   // the honesty layer: plugins whose record enumeration faulted
+            {
+                if (sb.Length >= cap) { sb.Append("\n... [truncated at max_chars]\n"); break; }
+                if (rec.ScanError is not null) sb.Append("\n[SCAN ERROR] ").Append(rec.Plugin).Append(": ").Append(rec.ScanError).Append('\n');
+            }
+            AppendExcludedPlugins(sb, r.ExcludedPlugins, cap);   // #288 review finding 5
+            AppendScriptCheckBoundary(sb);
+            return sb.ToString().TrimEnd('\n');
+        }
 
         if (r.Reports.Count == 0 && r.ExcludedPlugins.Count == 0)
             sb.Append("\nNo unbound script properties found in the scanned scope.\n");
@@ -823,7 +962,8 @@ static class Wire
         {
             if (sb.Length >= cap)
             {
-                sb.Append("\n... [truncated at max_chars=").Append(cap).Append("; scope plugins= or raise max_chars to see the rest]\n");
+                sb.Append("\n... [truncated at max_chars=").Append(cap).Append("; ").Append(SweepNarrowHint)
+                  .Append(", or property_contains= to chase one property]\n");
                 truncated = true;
                 break;
             }
@@ -857,25 +997,44 @@ static class Wire
             }
         }
 
+        // The capped tail restates the totals, so it needs the SAME class-awareness as the header — otherwise a small
+        // limit= reintroduces the literal "0 unbound" that the header no longer prints (re-review finding 2).
         if (r.Capped)
-            sb.Append("\n[finding list capped at limit; true totals = ").Append(r.TotalUnbound).Append(" unbound + ")
-              .Append(r.TotalNullObject).Append(" bound-but-null — raise limit= to see all]\n");
+            sb.Append("\n[finding list capped at limit; true totals = ").Append(UnboundTotalText(r, didObject, didScalar))
+              .Append(" + ").Append(NullTotalText(r, didNull)).Append(" — raise limit= to see all]\n");
 
-        if (!truncated && r.ExcludedPlugins.Count > 0)
-        {
-            sb.Append("\nexcluded plugins (could not be parsed — NOT checked):\n");
-            foreach (var kv in r.ExcludedPlugins)
-            {
-                if (sb.Length >= cap) break;
-                sb.Append("  ").Append(kv.Key).Append(": ").Append(kv.Value).Append('\n');
-            }
-        }
+        if (!truncated) AppendExcludedPlugins(sb, r.ExcludedPlugins, cap);
 
-        sb.Append("\nboundary: checks Auto (CK-editable) properties across the extends chain — not code-driven full ")
-          .Append("properties. An unbound object property is the silent-None footgun, but CAN be intentional (filled at runtime) — a ")
-          .Append("finding is a flag to VERIFY. A script whose .pex is not on disk is reported unverifiable, never passed clean.\n");
+        AppendScriptCheckBoundary(sb);
         return sb.ToString().TrimEnd('\n');
     }
+
+    /// <summary>The unbound total, spelled so it can never claim a class nobody checked. ONE definition, used by both
+    /// the header and the capped tail — the tail restating the numbers in its own words is how "0 unbound" survived the
+    /// header fix (re-review finding 2).
+    /// <para>It also carries the <c>property_contains=</c> label when one is in force, so this number states its own
+    /// scope rather than leaning on a blanket claim the sweep's other counts would not satisfy (round-3 review).</para></summary>
+    static string UnboundTotalText(ScriptCheckResult r, bool didObject, bool didScalar)
+        => !didObject && !didScalar ? "unbound NOT CHECKED (findings= excluded both unbound classes)"
+         : didObject && didScalar   ? $"{r.TotalUnbound} unbound{PropLabel(r)}"
+         : didObject                ? $"{r.TotalUnboundObject} unbound{PropLabel(r)} (object only — unbound_scalar NOT CHECKED)"
+                                    : $"{r.TotalUnboundScalar} unbound{PropLabel(r)} (scalar only — unbound_object NOT CHECKED)";
+
+    /// <summary>The bound-but-null total, same contract as <see cref="UnboundTotalText"/>.</summary>
+    static string NullTotalText(ScriptCheckResult r, bool didNull)
+        => didNull ? $"{r.TotalNullObject} bound-but-null{PropLabel(r)}"
+                   : "bound-but-null NOT CHECKED (findings= excluded 'bound_null')";
+
+    /// <summary>The per-number <c>property_contains=</c> label, on exactly the two counts that filter narrows. Absent
+    /// from records-with-scripts and unverifiable, which it does not narrow — that asymmetry is the whole point.</summary>
+    static string PropLabel(ScriptCheckResult r)
+        => r.PropertyContains is null ? "" : $" matching '{r.PropertyContains}'";
+
+    /// <summary>Appends the fixed honesty boundary shared by every script-property text response.</summary>
+    static void AppendScriptCheckBoundary(StringBuilder sb)
+        => sb.Append("\nboundary: checks Auto (CK-editable) properties across the extends chain — not code-driven full ")
+             .Append("properties. An unbound object property is the silent-None footgun, but CAN be intentional (filled at runtime) — a ")
+             .Append("finding is a flag to VERIFY. A script whose .pex is not on disk is reported unverifiable, never passed clean.\n");
 
     // ---- shared building blocks ---------------------------------------------------------------------
 
@@ -942,12 +1101,13 @@ static class Wire
         var winnerNode = tree.Winner;                                       // Nodes[^1] = highest priority = the winner
 
         // CONTENT diff (HCBR-2026-06-09-01): each node's DEEP read vs the winner's, compared by FieldsDiff —
-        // scalar leaves exact-path, list contents order-insensitively by whole element. The old depth-1 token
+        // scalar leaves exact-path, list contents order-insensitively by whole element (a reorder of equal
+        // contents surfaces as an explicit ORDER-DIFFERS note, #275). The old depth-1 token
         // comparison called equal-count lists with different contents "identical to winner" — an affirmative
         // false ITM that masked a real override regression. "Identical" is now only claimed when the FULL
         // modeled content compared clean; a truncated comparison says so instead (Q3).
         sb.Append("diff (field deltas vs winner ").Append(winnerNode.Plugin)
-          .Append("; identical fields omitted; list contents compared order-insensitively):\n");
+          .Append("; identical fields omitted; list contents compared by content, element reorders flagged):\n");
         for (int n = 0; n < tree.Nodes.Count - 1; n++)                      // every node except the winner
         {
             if (sb.Length >= cap)
@@ -990,15 +1150,15 @@ static class Wire
     /// non-nullable subrecord bit the read can't prove).</summary>
     static string IdenticalWholeRecord(FieldsDiff.Result diff) =>
         diff.AgreedCount > 0
-            ? $"(no field deltas; {diff.AgreedCount} modeled field(s) read identical to the winner ({SampleOf(diff)}) — list order ignored)"
-            : "(identical to winner — full modeled content compared, list order ignored)";
+            ? $"(no field deltas; {diff.AgreedCount} modeled field(s) read identical to the winner ({SampleOf(diff)}))"
+            : "(identical to winner — full modeled content compared)";
 
     /// <summary>No-delta render for a fields=-narrowed compare — node-neutral, and the identity claim must not
     /// outrun the compared paths (PR #28 review #2).</summary>
     static string IdenticalAcrossFields(FieldsDiff.Result diff) =>
         diff.AgreedCount > 0
-            ? $"(no deltas across the requested fields; {diff.AgreedCount} of them read identical to the winner ({SampleOf(diff)}) — other fields NOT compared, list order ignored)"
-            : "(identical to winner across the requested fields, list order ignored — other fields NOT compared)";
+            ? $"(no deltas across the requested fields; {diff.AgreedCount} of them read identical to the winner ({SampleOf(diff)}) — other fields NOT compared)"
+            : "(identical to winner across the requested fields — other fields NOT compared)";
 
     static string SampleOf(FieldsDiff.Result diff)
     {
