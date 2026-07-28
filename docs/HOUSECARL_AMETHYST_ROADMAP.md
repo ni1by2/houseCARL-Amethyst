@@ -257,10 +257,10 @@ manual release gate.
 ## Current status
 
 - Active milestone: Session 7 disposable real-profile hardlink release gate.
-- Last completed checkpoint: upstream houseCARL through `7904854` was merged,
-  retaining native Amethyst fixture and manifest boundaries. Amethyst through
-  `f28550c` was reviewed; its new changes are Meson/Flatpak packaging work and
-  do not change the profile, deployment-state, filemap, or mod-index contracts.
+- Last completed checkpoint: the isolated profile-specific Amethyst profile
+  `houseCARL hardlink test` was created without selecting or deploying it.
+  Upstream houseCARL through `7904854` remains merged, and Amethyst through
+  `f28550c` remains reviewed.
 - Verification performed: .NET SDK 9.0.316 builds the four-project solution
   with zero warnings and zero errors, including the strict XML-documentation
   gate. Local `ci-all` passes 111/111; the count is the prior 108-probe native
@@ -272,18 +272,26 @@ manual release gate.
   exclusion.
   Two merged-source release builds produced the identical SHA-256
   `fda599f07913dec3ff8401560badb4b4351355ddf59d4d30c7cb42d2ef801056`.
-- Files/components changed: upstream sweep scopes and JSON output, deleted-body
-  link rules, NIF shader/slot inspection, verified asset-root suggestions,
-  native fixture adaptation, and documentation for every new declaration.
-- Decisions made: upstream behavior was retained, but its new synthetic MO2
-  fixture was replaced with the manager-neutral native fixture seam and raw
-  Bethesda paths are converted before Linux filesystem access.
+  Before/after hashes prove that `paths.json`, `deploy_state.json`, every
+  top-level file in `build 1`, and the shared deployment files were unchanged
+  by disposable-profile creation. `build 1` remains active and hardlink
+  deployed.
+- Files/components changed: the new profile contains only empty `plugins.txt`
+  and `modlist.txt`, profile-specific `mods`, `overwrite`, and `Root_Folder`
+  directories, and `profile_state.json`. This tracked roadmap was updated.
+- Decisions made: use profile-specific staging for the disposable validation
+  so no test mod or overwrite file can enter the shared `build 1` staging
+  area. Treat profile selection and deployment as a later game-visible
+  approval boundary.
 - Known failures or residual risks: a disposable real Skyrim/Amethyst hardlink
-  profile remains the Session 7 manual release gate. External
-  PapyrusCompiler and BSArch execution remains post-v1.
-- Exact next action: obtain the user's disposable real Amethyst profile and
-  manifest path, then perform the hardlink validation checklist with explicit
-  approval before any game-visible deployment.
+  deployment remains the Session 7 manual release gate. The isolated
+  profile-specific profile `houseCARL hardlink test` now exists, but it has
+  not been selected, refreshed, or deployed. External PapyrusCompiler and
+  BSArch execution remains post-v1.
+- Exact next action: after explicit approval for the game-visible boundary,
+  select `houseCARL hardlink test` in Amethyst, verify the fork's connection
+  snapshot, and follow the hardlink validation checklist. Do not modify or
+  deploy over `build 1` without preserving its recorded rollback state.
 - Commits: `82923a2` (upstream v1.8.1 merge), `ae4fb18` (layout foundation),
   `6ec4ea7` (runtime connection), `45a498c` (runtime roadmap), `d00115c`
   (native Amethyst load order), `4560247` (authoritative filemap and asset
