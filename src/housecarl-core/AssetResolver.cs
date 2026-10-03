@@ -92,8 +92,8 @@ public sealed class AssetResolver : IDisposable
     /// <see cref="Snapshot.DirWatch"/>, so two subtrees answered by the same directory are read once.</summary>
     internal sealed class LooseSubtree
     {
-        public readonly (int RootIndex, HashSet<string> Files)[] Present;   // roots that have the dir + ≥1 file, precedence order
-        public LooseSubtree((int, HashSet<string>)[] present) { Present = present; }
+        public readonly (int RootIndex, string Dir, HashSet<string> Files)[] Present;
+        public LooseSubtree((int, string, HashSet<string>)[] present) { Present = present; }
     }
 
     volatile Snapshot _snap;
@@ -303,15 +303,14 @@ public sealed class AssetResolver : IDisposable
     List<PlacementSource> ResolveProviders(string rel, Snapshot snap, int pass)
     {
         // ---- loose, in MO2 precedence order — via the per-subtree cache (warmed on first touch) ----
-        var opened = AsWindowsOpens(rel);                          // the loose lookup only: an archive entry is matched as asked
-        var subtreeDir = Normalize(Path.GetDirectoryName(opened) ?? "");
-        var fname = Path.GetFileName(opened);
+        var subtreeDir = BethesdaPath.DirectoryName(rel);
+        var fname = BethesdaPath.FileName(rel);
         var st = snap.LooseCache.GetOrAdd(subtreeDir, d => WarmSubtree(d, snap, pass));
         var loose = new List<PlacementSource>();
-        foreach (var (rootIndex, files) in st.Present)               // Present is already in precedence order
-            if (files.Contains(fname))
+        foreach (var (rootIndex, dir, files) in st.Present)           // Present is already in precedence order
+            if (files.TryGetValue(fname, out var actualName))
                 loose.Add(new PlacementSource(_looseRoots[rootIndex].Name, AssetKind.Loose,
-                    LooseFilePath: Path.Combine(_looseRoots[rootIndex].Dir, opened), ArchivePath: null, EntryPath: rel));
+                    LooseFilePath: Path.Combine(dir, actualName), ArchivePath: null, EntryPath: rel));
 
         // ---- BSA, highest plugin rank first ----
         var bsa = new List<(PlacementSource source, int rank)>();
@@ -412,7 +411,8 @@ public sealed class AssetResolver : IDisposable
         // loose: recurse each root's copy of the prefix dir (set-UNION across roots — the per-path winner is decided later).
         foreach (var (rootName, rootDir) in _looseRoots)
         {
-            var baseDir = Path.Combine(rootDir, pre);
+            var baseDir = pre.Length == 0 ? rootDir
+                : BethesdaPath.TryResolveExisting(rootDir, pre, out var actualDir) ? actualDir : BethesdaPath.Under(rootDir, pre);
             // A "not there" is only an absence when it can be proved one; unreadable is named inside.
             if (!Directory.Exists(baseDir)) { AbsenceIsReal(rootName, rootDir, pre, baseDir, snap); continue; }
             try
@@ -420,7 +420,7 @@ public sealed class AssetResolver : IDisposable
                 foreach (var f in Directory.EnumerateFiles(baseDir, "*", SearchOption.AllDirectories))
                 {
                     // Re-rooted on the NORMALIZED prefix, not sliced off rootDir, which would carry the caller's casing.
-                    Take(withSep + Normalize(f.Substring(baseDir.Length)));
+                    Take(withSep + BethesdaPath.FromHostRelative(Path.GetRelativePath(baseDir, f)));
                     if (Full()) { stopped = true; return found; }
                 }
             }
@@ -565,31 +565,35 @@ public sealed class AssetResolver : IDisposable
     LooseSubtree WarmSubtree(string subtreeDir, Snapshot snap, int pass)
     {
         var roots = _looseRoots;
-        var segments = subtreeDir.Length == 0 ? Array.Empty<string>() : subtreeDir.Split('\\');
-        var present = new List<(int, HashSet<string>)>();
+        var present = new List<(int, string, HashSet<string>)>();
         for (int i = 0; i < roots.Count; i++)
         {
-            // Most roots are answered off listings this read pass already took, top folder down, with no stat of their own.
-            if (TryDescend(roots[i].Dir, segments, snap, pass, out var listed))
+            var dir = subtreeDir.Length == 0 ? roots[i].Dir
+                : BethesdaPath.TryResolveExisting(roots[i].Dir, subtreeDir, out var actualDir) ? actualDir : BethesdaPath.Under(roots[i].Dir, subtreeDir);
+            // Reuse the current pass's listings while keeping the real host spelling on Linux.
+            var segments = subtreeDir.Length == 0 ? Array.Empty<string>()
+                : Path.GetRelativePath(roots[i].Dir, dir).Split(Path.DirectorySeparatorChar);
+            if (TryDescend(roots[i].Dir, segments, snap, pass, out var listedDir, out var listed))
             {
-                if (listed is { Count: > 0 }) present.Add((i, listed));
+                if (listed is { Count: > 0 }) present.Add((i, listedDir, listed));
                 continue;
             }
-            var dir = subtreeDir.Length == 0 ? roots[i].Dir : Path.Combine(roots[i].Dir, subtreeDir);
             // ONE read of this root's copy: the whole listing is the watch baseline, the filenames in it are what the
             // subtree resolves from. Two reads of one directory would only differ by the split second between them.
             var (names, files, absent) = SafeListing(dir, roots[i].Name, roots[i].Dir, subtreeDir, snap);
             Watch(dir, roots[i].Dir, snap, names, absent);           // the baseline for an appear/disappear, on the build's shared watch set
-            if (files is { Count: > 0 }) present.Add((i, files));
+            if (files is { Count: > 0 }) present.Add((i, dir, files));
         }
         return new LooseSubtree(present.ToArray());
     }
 
     /// <summary>One root's copy of a subtree off listings no older than the pass, top down; false sends it to <see cref="SafeListing"/>.</summary>
-    static bool TryDescend(string rootDir, string[] segments, Snapshot snap, int pass, out HashSet<string>? files)
+    static bool TryDescend(string rootDir, string[] segments, Snapshot snap, int pass,
+                           out string resolvedDir, out HashSet<string>? files)
     {
         files = null;
         var dir = rootDir;
+        resolvedDir = rootDir;
         for (int i = 0; ; i++)
         {
             bool leaf = i == segments.Length;
@@ -598,6 +602,7 @@ public sealed class AssetResolver : IDisposable
             {
                 snap.DirWatch.GetOrAdd(dir, _ => new WatchedDir()).Entries = listing.Names;
                 files = listing.Files;
+                resolvedDir = dir;
                 return true;
             }
             var name = segments[i];
@@ -612,7 +617,8 @@ public sealed class AssetResolver : IDisposable
                 snap.DirWatch.GetOrAdd(dir, _ => new WatchedDir()).FileHeld[name] = 0;
                 return true;
             }
-            dir = Path.Combine(dir, name);                              // a file under a dropped Files set fails to list and takes the fallback
+            listing.Names.TryGetValue(name, out var actualName);
+            dir = Path.Combine(dir, actualName);                       // preserve host casing after the case-insensitive lookup
         }
     }
 
@@ -804,9 +810,11 @@ public sealed class AssetResolver : IDisposable
     /// naming the input, and no-op segments are collapsed so the loose walk and the BSA-table match answer alike.</summary>
     static string NormalizeQueryPath(string relPath)
     {
+        if (relPath is null || relPath.StartsWith('/') || relPath.StartsWith(@"\\")
+            || (relPath.Length >= 2 && char.IsAsciiLetter(relPath[0]) && relPath[1] == ':')
+            || relPath.Contains('\0'))
+            throw new ArgumentException($"expected a Data-relative asset path: '{relPath}'");
         var rel = Normalize(relPath);
-        if (Path.IsPathRooted(rel))
-            throw new ArgumentException($"expected a Data-relative asset path, got a drive-rooted path: '{relPath}'");
         var kept = new List<string>();
         foreach (var seg in rel.Split('\\'))
         {

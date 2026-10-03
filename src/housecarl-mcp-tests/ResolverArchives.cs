@@ -38,7 +38,7 @@ static class ResolverArchives
 
     public static void Loose(string baseDir, string rel, string body = "x")
     {
-        var p = Path.Combine(baseDir, rel);
+        var p = BethesdaPath.Under(baseDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllText(p, body);
     }

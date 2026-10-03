@@ -90,7 +90,13 @@ public static class BsaArchive
                 if (f.Size > MaxEntryBytes)   // corrupt/hostile header — refuse loud rather than OOM the server
                     return new BsaResult(false,
                         $"archive entry '{f.Path}' declares {f.Size:N0} bytes, over the {MaxEntryBytes:N0}-byte safety ceiling — refusing to read it in-process (the archive header may be corrupt).", null);
-                string outPath = Path.GetFullPath(Path.Combine(destFull, f.Path));
+                string outPath;
+                try { outPath = Path.GetFullPath(BethesdaPath.Under(destFull, f.Path)); }
+                catch (ArgumentException)
+                {
+                    return new BsaResult(false,
+                        $"archive entry '{f.Path}' has an invalid Data-relative path (path traversal) — refusing after {written} file(s).", null);
+                }
                 if (!IsUnder(destFull, outPath))
                     return new BsaResult(false,
                         $"archive entry '{f.Path}' resolves outside the destination folder (path traversal) — refusing after {written} file(s).", null);
@@ -285,6 +291,8 @@ public static class BsaArchive
 
     static (bool ran, int exit, string stdout, string stderr, string? runError) Run(string exe, IReadOnlyList<string> args, int timeoutMs)
     {
+        if (WindowsProgramGuard.Refusal(exe, "BSArch.exe") is { } refusal)
+            return (false, -1, "", "", refusal);
         var psi = new ProcessStartInfo
         {
             FileName = exe,

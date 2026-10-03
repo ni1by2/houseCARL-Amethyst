@@ -52,7 +52,7 @@ public static class OffOrderAssetSource
 
         // ---- loose FIRST, exactly as the VFS would layer it if this mod were ticked ----
         string loose;
-        try { loose = Path.Combine(dir, relPath); }
+        try { loose = BethesdaPath.TryResolveExisting(dir, relPath, out var actual) ? actual : BethesdaPath.Under(dir, relPath); }
         catch (Exception ex) { return new OffOrderLookup(null, OffOrderReason.FolderUnreadable, name, Because(ex)); }
 
         switch (ProbeFile(loose, out var looseCause))

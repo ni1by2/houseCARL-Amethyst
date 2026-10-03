@@ -163,6 +163,34 @@ public sealed class AssetResolverTests : IDisposable
         Assert.Equal("HighMod", r.Resolve(asked).Winner?.Source);
     }
 
+    [Fact]
+    public void LooseSourceKeepsActualHostCasingForPlacementAndEnumeration()
+    {
+        const string actual = @"Meshes\Actors\Character\Face.NIF";
+        var source = BethesdaPath.Under(_high, actual);
+        Directory.CreateDirectory(Path.GetDirectoryName(source)!);
+        File.WriteAllText(source, "face");
+        using var r = Build();
+
+        var placement = r.ResolveForPlacement(@"meshes\actors\character\face.nif");
+        Assert.Equal(source, Assert.Single(placement.Sources).LooseFilePath);
+        Assert.Contains(@"meshes\actors\character\Face.NIF", r.EnumerateUnder(@"meshes\actors"), StringComparer.OrdinalIgnoreCase);
+    }
+
+    [Fact]
+    public void OffOrderLooseSourceResolvesCaseInsensitiveBethesdaPathOnLinux()
+    {
+        var disabled = Path.Combine(_mods, "DisabledMod");
+        var actual = BethesdaPath.Under(disabled, @"Meshes\Face.NIF");
+        Directory.CreateDirectory(Path.GetDirectoryName(actual)!);
+        File.WriteAllText(actual, "face");
+
+        var found = OffOrderAssetSource.Resolve(_mods, _ => false, "DisabledMod", @"meshes\face.nif");
+
+        Assert.Equal(OffOrderReason.Found, found.Reason);
+        Assert.Equal(actual, found.Source?.LooseFilePath);
+    }
+
     // Probe: "a drive-rooted query path is rejected loud" and "a parent-escaping ('..') query path is rejected loud".
     [Theory]
     [InlineData(@"C:\Windows\evil.nif")]

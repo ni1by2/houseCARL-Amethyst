@@ -24,8 +24,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         // The newcomer has a mod folder and nothing else: its copy of the subtree is the absent case, the one whose
         // freshness now rides an ancestor's stamp instead of the subtree dir's own.
         Directory.CreateDirectory(Path.Combine(_mods, Newcomer));
-        Directory.CreateDirectory(Path.Combine(_mods, Provider, Subtree));
-        File.WriteAllText(Path.Combine(_mods, Provider, Provided), "first");
+        Directory.CreateDirectory(BethesdaPath.Under(Path.Combine(_mods, Provider), Subtree));
+        File.WriteAllText(BethesdaPath.Under(Path.Combine(_mods, Provider), Provided), "first");
     }
 
     public void Dispose() { try { Directory.Delete(_root, true); } catch { /* temp cleanup best-effort */ } }
@@ -47,8 +47,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         using var r = Build();
         Assert.Equal(Provider, Winner(r, Provided));          // warms the subtree across both roots
 
-        Directory.CreateDirectory(Path.Combine(_mods, Newcomer, Subtree));
-        File.WriteAllText(Path.Combine(_mods, Newcomer, Provided), "newcomer");
+        Directory.CreateDirectory(BethesdaPath.Under(Path.Combine(_mods, Newcomer), Subtree));
+        File.WriteAllText(BethesdaPath.Under(Path.Combine(_mods, Newcomer), Provided), "newcomer");
 
         Assert.True(r.RefreshIfStale(), "the appearing file left the build stale and it was not noticed");
         Assert.Equal(Newcomer, Winner(r, Provided));          // the newcomer now wins the same path
@@ -60,7 +60,7 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         using var r = Build();
         Assert.Equal(Provider, Winner(r, Provided));
 
-        File.Delete(Path.Combine(_mods, Provider, Provided));
+        File.Delete(BethesdaPath.Under(Path.Combine(_mods, Provider), Provided));
 
         Assert.True(r.RefreshIfStale(), "the vanished file left the build stale and it was not noticed");
         Assert.Null(Winner(r, Provided));
@@ -72,8 +72,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
     [Fact]
     public void AppearAndVanishAreSeenEvenInsideOneTimestampTick()
     {
-        var newcomerDir = Path.Combine(_mods, Newcomer, Subtree);
-        var newcomerFile = Path.Combine(_mods, Newcomer, Provided);
+        var newcomerDir = BethesdaPath.Under(Path.Combine(_mods, Newcomer), Subtree);
+        var newcomerFile = BethesdaPath.Under(Path.Combine(_mods, Newcomer), Provided);
         for (int round = 0; round < 50; round++)
         {
             using var r = Build();
@@ -131,7 +131,7 @@ public sealed class AssetLooseFreshnessTests : IDisposable
     [Fact]
     public void AFileDeletedAndPutBackBetweenCallsIsSeen()
     {
-        var file = Path.Combine(_mods, Provider, Provided);
+        var file = BethesdaPath.Under(Path.Combine(_mods, Provider), Provided);
 
         using var r = Build();
         Assert.Null(Winner(r, Subtree + @"\deep\y.nif"));      // memoizes the provider's listing of the subtree dir
@@ -153,7 +153,7 @@ public sealed class AssetLooseFreshnessTests : IDisposable
     [Fact]
     public void ASubtreeDeletedAfterASweepMemoizedItsParentIsSeenComingBack()
     {
-        var subtreeDir = Path.Combine(_mods, Provider, Subtree);
+        var subtreeDir = BethesdaPath.Under(Path.Combine(_mods, Provider), Subtree);
 
         using var r = Build();
         r.EnumerateUnder(@"meshes\hcnothing");                 // memoizes the provider's meshes\ listing, watching nothing
@@ -162,7 +162,7 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         Assert.Null(Winner(r, Provided));                      // the warm here must still put something under watch
 
         Directory.CreateDirectory(subtreeDir);
-        File.WriteAllText(Path.Combine(_mods, Provider, Provided), "back");
+        File.WriteAllText(BethesdaPath.Under(Path.Combine(_mods, Provider), Provided), "back");
 
         Assert.True(r.RefreshIfStale(), "the subtree that came back was answered from a memoized parent listing");
         Assert.Equal(Provider, Winner(r, Provided));
@@ -174,8 +174,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
     [Fact]
     public void ADirectoryInsideAWarmedSubtreeIsNotReportedAsAnAsset()
     {
-        Directory.CreateDirectory(Path.Combine(_mods, Provider, Subtree, "subdir"));
-        File.WriteAllText(Path.Combine(_mods, Provider, Subtree, "subdir", "inner.nif"), "x");
+        Directory.CreateDirectory(BethesdaPath.Under(Path.Combine(_mods, Provider), Subtree + @"\subdir"));
+        File.WriteAllText(BethesdaPath.Under(Path.Combine(_mods, Provider), Subtree + @"\subdir\inner.nif"), "x");
 
         using var r = Build();
         Assert.Equal(Provider, Winner(r, Provided));           // the file beside it resolves
@@ -189,7 +189,7 @@ public sealed class AssetLooseFreshnessTests : IDisposable
     [Fact]
     public void AHiddenSystemFileInAWarmedSubtreeDoesNotMakeEveryCallStale()
     {
-        var hidden = Path.Combine(_mods, Provider, Subtree, "desktop.ini");
+        var hidden = BethesdaPath.Under(Path.Combine(_mods, Provider), Subtree + @"\desktop.ini");
         File.WriteAllText(hidden, "[.ShellClassInfo]\r\n");
         File.SetAttributes(hidden, FileAttributes.Hidden | FileAttributes.System);
 
@@ -208,7 +208,7 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         using var r = Build();
         Assert.Equal(Provider, Winner(r, Provided));
 
-        File.WriteAllText(Path.Combine(_mods, Provider, Provided), "second and longer");
+        File.WriteAllText(BethesdaPath.Under(Path.Combine(_mods, Provider), Provided), "second and longer");
 
         r.RefreshIfStale();
         var source = Assert.Single(r.ResolveForPlacement(Provided).Sources);
@@ -298,8 +298,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         Assert.Equal(Provider, Winner(r, Provided));           // the newcomer cannot provide anything under a file
 
         File.Delete(held);
-        Directory.CreateDirectory(Path.Combine(_mods, Newcomer, Subtree));
-        File.WriteAllText(Path.Combine(_mods, Newcomer, Provided), "newcomer");
+        Directory.CreateDirectory(BethesdaPath.Under(Path.Combine(_mods, Newcomer), Subtree));
+        File.WriteAllText(BethesdaPath.Under(Path.Combine(_mods, Newcomer), Provided), "newcomer");
 
         Assert.True(r.RefreshIfStale(), "the directory that replaced the file was not noticed");
         Assert.Equal(Newcomer, Winner(r, Provided));
@@ -459,8 +459,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
     public void AModFolderThatWillNotListDoesNotMakeEveryCallStale()
     {
         var blocked = Path.Combine(_mods, "BlockedMod");
-        Directory.CreateDirectory(Path.Combine(blocked, Subtree));
-        File.WriteAllText(Path.Combine(blocked, Provided), "x");
+        Directory.CreateDirectory(BethesdaPath.Under(blocked, Subtree));
+        File.WriteAllText(BethesdaPath.Under(blocked, Provided), "x");
         Assert.True(DenyAce.TryDeny(blocked), UnreadableRootWorld.NotStaged);
         try
         {
