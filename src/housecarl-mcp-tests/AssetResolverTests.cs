@@ -191,6 +191,17 @@ public sealed class AssetResolverTests : IDisposable
         Assert.Equal(actual, found.Source?.LooseFilePath);
     }
 
+    [Fact]
+    public void CaseEquivalentLinuxPathsRefuseInsteadOfChoosingOne()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        Loose(_high, @"meshes\same.nif");
+        Loose(_high, @"Meshes\same.nif");
+        using var r = Build();
+
+        Assert.Contains("ambiguous", Assert.Throws<IOException>(() => r.Resolve(@"meshes\same.nif")).Message);
+    }
+
     // Probe: "a drive-rooted query path is rejected loud" and "a parent-escaping ('..') query path is rejected loud".
     [Theory]
     [InlineData(@"C:\Windows\evil.nif")]

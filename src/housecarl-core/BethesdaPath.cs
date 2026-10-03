@@ -105,14 +105,18 @@ public static class BethesdaPath
     /// <paramref name="path"/> violates the Data-relative path contract.
     /// </exception>
     /// <remarks>
-    /// Enumeration errors fail closed. The method never substitutes a differently cased guessed path as
-    /// proof that the source exists on Linux.
+    /// Enumeration errors fail closed. Multiple case-equivalent complete paths throw rather than
+    /// arbitrarily selecting one. The method never substitutes a guessed path as proof of existence.
     /// </remarks>
     public static bool TryResolveExisting(string root, string path, out string resolved)
     {
         var canonical = Normalize(path);
         var segments = canonical.Split('\\');
-        if (TryResolve(root, segments, 0, out resolved)) return true;
+        var found = new List<string>(2);
+        CollectMatches(root, segments, 0, found);
+        if (found.Count > 1)
+            throw new IOException($"ambiguous case-insensitive Bethesda path '{canonical}' under '{root}'");
+        if (found.Count == 1) { resolved = found[0]; return true; }
         resolved = Under(root, canonical);
         return false;
     }
@@ -125,10 +129,9 @@ public static class BethesdaPath
     /// <returns>True when this branch resolves every remaining segment.</returns>
     /// <remarks>
     /// Linux permits sibling names such as <c>meshes</c> and <c>Meshes</c>, although Skyrim treats them as
-    /// one logical directory. Trying every case-equivalent branch avoids accepting whichever entry the host
-    /// filesystem happens to enumerate first.
+    /// one logical directory. Every case-equivalent branch is searched so ambiguity is reported.
     /// </remarks>
-    static bool TryResolve(string current, string[] segments, int index, out string resolved)
+    static void CollectMatches(string current, string[] segments, int index, List<string> found)
     {
         string[] matches;
         try
@@ -144,20 +147,18 @@ public static class BethesdaPath
                     StringComparison.Ordinal))
                 .ToArray();
         }
-        catch { resolved = ""; return false; }
+        catch (DirectoryNotFoundException) { return; }
+        catch (Exception ex) { throw new IOException($"could not inspect Bethesda path beneath '{current}'", ex); }
 
         foreach (var match in matches)
         {
             if (index == segments.Length - 1)
             {
-                resolved = match;
-                return true;
+                found.Add(match);
             }
-            if (Directory.Exists(match) && TryResolve(match, segments, index + 1, out resolved))
-                return true;
+            else if (Directory.Exists(match)) CollectMatches(match, segments, index + 1, found);
+            if (found.Count > 1) return;
         }
-        resolved = "";
-        return false;
     }
 
     /// <summary>Creates the consistent caller-facing error used by every Bethesda-path guard.</summary>
