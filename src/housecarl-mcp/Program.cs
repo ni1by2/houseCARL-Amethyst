@@ -101,9 +101,18 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
     bool explicitMode = !fromUser
         && !string.IsNullOrWhiteSpace(dataDir) && !string.IsNullOrWhiteSpace(modsDir) && !string.IsNullOrWhiteSpace(profileDir);
 
+    string LinuxManagerReason()
+    {
+        var connection = saved.AmethystConnectionManifest ?? cfg["ConnectionManifest"];
+        if (string.IsNullOrWhiteSpace(connection))
+            return "error: no Amethyst connection manifest is selected. Load-order reads and managed writes are unavailable in this integration build.";
+        try { AmethystConnection.Open(connection); }
+        catch (AmethystConfigurationException ex) { return "error: " + ex.Message; }
+        return "error: the Amethyst connection is valid, but load-order reads and managed writes are unavailable in this integration build because filegraph currentness validation is unfinished. Native archive and file tools that use explicit paths remain available.";
+    }
+
     LoadOrderService svc = OperatingSystem.IsLinux()
-        ? LoadOrderService.WithUnavailableManager(store,
-            "error: Amethyst load-order reads and managed writes are unavailable in this integration build because the filegraph currentness check is unfinished. Native archive and file tools that use explicit paths remain available.")
+        ? LoadOrderService.WithUnavailableManager(store, LinuxManagerReason())
         : explicitMode
             ? LoadOrderService.WithExplicitPaths(dataDir!, modsDir!, profileDir!, maxPlugins, store)
             : LoadOrderService.WithInstance(instanceDir, maxPlugins, store);
