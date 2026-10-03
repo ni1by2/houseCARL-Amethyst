@@ -79,6 +79,19 @@ public sealed class UserConfigStoreClobberTests : IDisposable
         Assert.Equal(@"D:\Other", cfg.Mo2InstanceDir);
     }
 
+    [Fact]
+    public void AnUpstreamConfigUpdateKeepsAmethystConnectionAndPendingEvidence()
+    {
+        File.WriteAllText(_path, """{"AmethystConnectionManifest":"/config/connection.json","PendingAmethystWrites":[{"profile":"default","proof":"keep"}]}""");
+        var store = new UserConfigStore(_path);
+
+        Assert.True(store.Update(c => (c.ToolPaths ??= new())["papyrus_logs"] = "/logs").ok);
+
+        var saved = store.Load();
+        Assert.Equal("/config/connection.json", saved.AmethystConnectionManifest);
+        Assert.Equal("keep", saved.OtherState!["PendingAmethystWrites"][0].GetProperty("proof").GetString());
+    }
+
     // Probe 1: "atomic write leaves no .tmp residue".
     [Fact]
     public void AWriteLeavesNoTmpResidue()

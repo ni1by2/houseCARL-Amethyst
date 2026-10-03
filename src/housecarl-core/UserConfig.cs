@@ -7,6 +7,9 @@ namespace HousecarlCore;
 /// <summary>The on-disk user config shape (houseCARL.user.json) — four independent concerns in one file; they coexist because the only writer is <see cref="UserConfigStore.Update"/>, as docs/architecture/mo2-instance.md sets out.</summary>
 public sealed class UserConfig
 {
+    /// <summary>Selected schema-v1 Amethyst connection manifest; retained across updates before the manager port is wired.</summary>
+    public string? AmethystConnectionManifest { get; set; }
+
     /// <summary>The MO2 instance folder housecarl_set_mo2_instance saved; it beats appsettings' Mo2InstanceDir, and absent means fall through to explicit paths.</summary>
     public string? Mo2InstanceDir { get; set; }
 
@@ -18,6 +21,10 @@ public sealed class UserConfig
 
     /// <summary>Named Papyrus import-directory sets: a project's dependency source folders supplied once and referenced by name thereafter.</summary>
     public Dictionary<string, List<string>>? ImportSets { get; set; }
+
+    /// <summary>Keep fork state such as pending redeployment evidence intact while its typed migration is unfinished.</summary>
+    [System.Text.Json.Serialization.JsonExtensionData]
+    public Dictionary<string, JsonElement>? OtherState { get; set; }
 }
 
 /// <summary>The single OWNER of houseCARL.user.json — atomic, cross-process, and loud about a corrupt file; a write failure is RETURNED rather than thrown, so a tool can say the choice will not survive a restart.</summary>
