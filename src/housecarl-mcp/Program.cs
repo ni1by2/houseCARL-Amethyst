@@ -32,8 +32,7 @@ if (useHttp)
     if (configNote is not null)
         app.Logger.LogWarning("houseCARL user config recovered: {Note}", configNote);   // corrupt file — backed up, never silent
     if (!svc.IsConfigured)
-        app.Logger.LogWarning(
-            "houseCARL listening on {Url} — NOT configured yet. The first tool call will ask for your MO2 instance folder (or call " + ToolNames.SetMo2Instance + " with it).", url);
+        app.Logger.LogWarning("houseCARL listening on {Url} — {Reason}", url, svc.ConfigPromptOrNull());
     else
         app.Logger.LogInformation(
             "houseCARL listening on {Url} — reading {Source} STANDALONE (MO2 need not be running); load order resolves lazily on the first tool call.",
@@ -55,8 +54,7 @@ else
     if (configNote is not null)
         logger.LogWarning("houseCARL user config recovered: {Note}", configNote);   // corrupt file — backed up, never silent
     if (!svc.IsConfigured)
-        logger.LogWarning(
-            "houseCARL stdio server — NOT configured yet. The first tool call will ask for your MO2 instance folder (or call " + ToolNames.SetMo2Instance + " with it).");
+        logger.LogWarning("houseCARL stdio server — {Reason}", svc.ConfigPromptOrNull());
     else
         logger.LogInformation(
             "houseCARL stdio server — reading {Source} STANDALONE (MO2 need not be running); load order resolves lazily on the first tool call.",
@@ -79,15 +77,19 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
         corpusPath = Path.Combine(AppContext.BaseDirectory, "corpus.json");
     CorpusRulebook.CorpusPath = Path.GetFullPath(corpusPath);
 
-    // user.json lives in HOUSECARL_DATA_DIR when set, else beside the exe; never under the plugin root, which the
-    // client wipes on every plugin update.
+    // Keep installed user state in the same XDG configuration directory as the Amethyst fork.
     var pluginDataDir = Environment.GetEnvironmentVariable("HOUSECARL_DATA_DIR");
-    var userConfigDir = string.IsNullOrWhiteSpace(pluginDataDir) ? AppContext.BaseDirectory : pluginDataDir;
+    var xdgConfigHome = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+    var configRoot = !string.IsNullOrWhiteSpace(xdgConfigHome) && Path.IsPathFullyQualified(xdgConfigHome)
+        ? xdgConfigHome : Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config");
+    var userConfigDir = !string.IsNullOrWhiteSpace(pluginDataDir) ? pluginDataDir
+        : OperatingSystem.IsLinux() ? Path.Combine(configRoot, "housecarl-amethyst") : AppContext.BaseDirectory;
     var userConfigPath = Path.Combine(userConfigDir, "houseCARL.user.json");
     // One owner of houseCARL.user.json, so the instance dir and the tool paths do not clobber each other.
     var store = new UserConfigStore(userConfigPath);
     services.AddSingleton(store);
-    string? userInstanceDir = store.Load(out var configNote).Mo2InstanceDir;
+    var saved = store.Load(out var configNote);
+    string? userInstanceDir = saved.Mo2InstanceDir;
 
     // The saved user config wins over Mo2InstanceDir: the runtime switch beats the install default.
     bool fromUser = !string.IsNullOrWhiteSpace(userInstanceDir);
@@ -99,9 +101,12 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
     bool explicitMode = !fromUser
         && !string.IsNullOrWhiteSpace(dataDir) && !string.IsNullOrWhiteSpace(modsDir) && !string.IsNullOrWhiteSpace(profileDir);
 
-    LoadOrderService svc = explicitMode
-        ? LoadOrderService.WithExplicitPaths(dataDir!, modsDir!, profileDir!, maxPlugins, store)
-        : LoadOrderService.WithInstance(instanceDir, maxPlugins, store);
+    LoadOrderService svc = OperatingSystem.IsLinux()
+        ? LoadOrderService.WithUnavailableManager(store,
+            "error: Amethyst load-order reads and managed writes are unavailable in this integration build because the filegraph currentness check is unfinished. Native archive and file tools that use explicit paths remain available.")
+        : explicitMode
+            ? LoadOrderService.WithExplicitPaths(dataDir!, modsDir!, profileDir!, maxPlugins, store)
+            : LoadOrderService.WithInstance(instanceDir, maxPlugins, store);
     services.AddSingleton(svc);
 
     // The external-tool bridge (compile / BSA / log access): one resolver over the shared user config.

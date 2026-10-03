@@ -15,6 +15,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     string _profileName;                           // the active profile (instance mode: from selected_profile)
     string _overwriteDir = "";                     // MO2's overwrite layer (instance mode: derived; explicit mode: none)
     bool _configured;                              // false ⇒ tools return the trained prompt instead of resolving
+    string? _unavailableManagerReason;              // Linux integration builds refuse unverified Amethyst reads
     readonly UserConfigStore _store;               // the sole owner of houseCARL.user.json (MO2 instance dir + tool paths)
     readonly InPlaceConsent _inPlaceConsent;       // the in-place consent over _store; writes and assets take it through the door
     InPlaceConsent ILoadOrderHost.InPlaceConsent => _inPlaceConsent;
@@ -77,6 +78,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>EXPLICIT mode (dev override): the three roots are configured directly; no ModOrganizer.ini is read.</summary>
     public static LoadOrderService WithExplicitPaths(string dataDir, string modsDir, string profileDir, int maxPlugins, UserConfigStore store)
         => new(null, dataDir, modsDir, profileDir, configured: true, maxPlugins, store);
+
+    /// <summary>Keep manager-independent tools available while refusing unverified Linux load-order reads.</summary>
+    public static LoadOrderService WithUnavailableManager(UserConfigStore store, string reason)
+        => new LoadOrderService(null, "", "", "", configured: false, maxPlugins: 0, store)
+        { _unavailableManagerReason = reason };
 
     /// <summary>Test seam: drive the service-layer query logic on a prebuilt resolver with no MO2 profile on disk. Never used by the product.</summary>
     internal static LoadOrderService ForGuard(LoadOrderResolver resolver, UserConfigStore store)
@@ -1023,6 +1029,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>Point houseCARL at an MO2 instance folder: validate it, re-point the live service, and persist the choice. Nothing changes or persists on failure.</summary>
     public (Mo2InstancePaths paths, bool persisted, string? persistError, string? persistNote) SetInstance(string instanceDir)
     {
+        if (_unavailableManagerReason is not null) throw new InvalidOperationException(_unavailableManagerReason);
         // The ini baseline is statted BEFORE Resolve reads the instance, the same discipline as every other baseline here.
         var iniStamp = FileStamp.Of(Mo2Instance.IniPath(instanceDir.Trim()));
         var paths = Mo2Instance.Resolve(instanceDir);            // throws if not a usable MO2 instance — the tool renders the reason
@@ -1058,8 +1065,8 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         "found and let the user choose. State which folder you're using, then call " + ToolNames.SetMo2Instance + " with that path.";
 
     /// <summary>Tools call this FIRST: the unconfigured prompt as a normal result string, else null — the MCP framework rewrites a thrown exception to a generic message.</summary>
-    public string? ConfigPromptOrNull() { lock (_gate) { return _configured ? null : NotConfiguredText; } }
+    public string? ConfigPromptOrNull() { lock (_gate) { return _configured ? null : _unavailableManagerReason ?? NotConfiguredText; } }
 
-    static InvalidOperationException NotConfigured() => new(NotConfiguredText);
+    InvalidOperationException NotConfigured() => new(_unavailableManagerReason ?? NotConfiguredText);
 
 }
