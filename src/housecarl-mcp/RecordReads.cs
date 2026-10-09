@@ -546,6 +546,16 @@ internal sealed partial class RecordReads
         if (!namesMod && activeFilename)
             return (new PoleInfo(plugin, "active in the load order", InOrder: true, EpochCoversPole: true), null);
 
+        if (AmethystSnapshotContext.Current is { } saved && !PluginPaths.LooksLikePath(plugin))
+        {
+            var path = saved.LocatePlugin(plugin, mod);
+            if (path is not null && PluginPaths.ActiveNameForPath(view, path) is { } savedActive)
+                return (new PoleInfo(savedActive, "active in the saved load order", InOrder: true, EpochCoversPole: true), null);
+            return path is null
+                ? (null, $"source '{plugin}' is absent from Amethyst's saved inventory; refresh the selected profile")
+                : (new PoleInfo(plugin, "OUT-OF-LOAD-ORDER (Amethyst saved inventory)", InOrder: false, EpochCoversPole: false)
+                    { Path = path, DataDir = roots.DataDir, NameActive = activeFilename, Layer = mod }, null);
+        }
         var comp = Mo2LoadOrder.ReadComposition(roots.ProfileDir);
         var loc = OutputLocations.LocatePluginFileOnDisk(comp, roots, plugin, mod);
         if (loc.Error is not null)

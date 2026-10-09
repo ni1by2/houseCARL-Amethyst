@@ -2,13 +2,33 @@
 
 houseCARL is an MCP server that exposes a Skyrim Special Edition load order at the data layer. It reads a Mod Organizer 2 instance's profile and presents every plugin record, every Data-relative asset, the compiled Papyrus, the SKSE plugin layer and the SkyPatcher INI layer to an AI assistant as a set of tools. It is built on [Mutagen](https://github.com/Mutagen-Modding/Mutagen). The host is [Claude Code](https://claude.com/claude-code) or OpenAI Codex.
 
+## Amethyst Linux preview
+
+This fork adds explicitly selected **read-only saved-snapshot mode** for Amethyst.
+Select a schema-v1 connection using `housecarl_set_amethyst_connection` with
+`manifest_path` and `filegraph_mode="saved-snapshot"`. The selection survives restart.
+Every dependent response and JSONL export names the saved profile/generation and
+warns that changes since Amethyst's last refresh may be missing. These results do
+not verify deployment or what wins in-game.
+
+The preview reads recorded staging winners, including BSA members, plus distinct
+vanilla loose files. Vanilla BSA discovery remains pending: when those archives are
+present, results explicitly report incomplete asset coverage. Managed writes,
+previews, in-place editing and MO2 update-cache operations are unavailable.
+
+Verified producer: Amethyst Testing `2f54fdd` (2.5.4-beta.5; schema 9, engine 1,
+rules 13). Installed older versions are not implied compatible. See the
+[snapshot contract](docs/architecture/amethyst-saved-snapshot.md) for configuration,
+checks and limitations. The remaining sections describe the upstream tool surface;
+their Windows write workflows are not enabled by this Linux preview.
+
 A write produces a new plugin in a new MO2 mod folder. Editing an existing plugin in place is an opt-in that names the file. MO2 does not need to be running. No plugin file handle is held between calls.
 
 | | |
 |---|---|
 | Process | One C#/.NET 9 executable, MCP over stdio |
 | Substrate | Mutagen.Bethesda.Skyrim 0.54.4 |
-| Tools | 31 |
+| Tools | 32 registered; Linux availability described above |
 | Skills | 7 |
 | Record coverage | 133 record types, 242 sub-structures, 497 polymorphic arms, 280 enums, generated at build time |
 | Licence | GPL-3.0-only |
@@ -24,7 +44,7 @@ Four rules. The surface follows from them.
 
 ## The tool surface
 
-All 31 tools carry the `housecarl_` prefix.
+All tools carry the `housecarl_` prefix.
 
 | Substrate | Tools |
 |---|---|
@@ -36,7 +56,7 @@ All 31 tools carry the `housecarl_` prefix.
 | SkyPatcher | `skypatcher_layer` |
 | SKSE | `skse` |
 | Nexus | `nexus_search` `nexus_mod` `nexus_graphql` `nexus_check_updates` `nexus_identify` |
-| Session | `set_mo2_instance` `set_tool_path` `load_order_status` `update_status` |
+| Session | `set_amethyst_connection` `set_mo2_instance` `set_tool_path` `load_order_status` `update_status` |
 
 `records` is the read surface for the record plane. A read is composed from four axes:
 

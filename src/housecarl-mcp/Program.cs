@@ -23,7 +23,7 @@ if (useHttp)
 {
     var builder = WebApplication.CreateBuilder(hostArgs);
     var (svc, explicitMode, instanceDir, instanceSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
-    AddMcp(builder.Services, stdio: false, maxSchemaDepth);
+    AddMcp(builder.Services, stdio: false, maxSchemaDepth, svc);
 
     var app = builder.Build();
     app.MapMcp();
@@ -35,8 +35,8 @@ if (useHttp)
         app.Logger.LogWarning("houseCARL listening on {Url} — {Reason}", url, svc.ConfigPromptOrNull());
     else
         app.Logger.LogInformation(
-            "houseCARL listening on {Url} — reading {Source} STANDALONE (MO2 need not be running); load order resolves lazily on the first tool call.",
-            url, explicitMode ? "explicit configured paths" : $"MO2 instance '{instanceDir}' [{instanceSource}]");
+            "houseCARL listening on {Url} — reading {Source}; load order resolves lazily on the first tool call.",
+            url, svc.UsesSavedSnapshot ? "Amethyst saved snapshot (freshness unverified)" : explicitMode ? "explicit configured paths" : $"MO2 instance '{instanceDir}' [{instanceSource}]");
     app.Run(url);
 }
 else
@@ -46,7 +46,7 @@ else
     builder.Logging.AddConsole(o => o.LogToStandardErrorThreshold = LogLevel.Trace);
 
     var (svc, explicitMode, instanceDir, instanceSource, configNote) = SetupHouseCarl(builder.Configuration, builder.Services);
-    AddMcp(builder.Services, stdio: true, maxSchemaDepth);
+    AddMcp(builder.Services, stdio: true, maxSchemaDepth, svc);
 
     var app = builder.Build();
 
@@ -57,8 +57,8 @@ else
         logger.LogWarning("houseCARL stdio server — {Reason}", svc.ConfigPromptOrNull());
     else
         logger.LogInformation(
-            "houseCARL stdio server — reading {Source} STANDALONE (MO2 need not be running); load order resolves lazily on the first tool call.",
-            explicitMode ? "explicit configured paths" : $"MO2 instance '{instanceDir}' [{instanceSource}]");
+            "houseCARL stdio server — reading {Source}; load order resolves lazily on the first tool call.",
+            svc.UsesSavedSnapshot ? "Amethyst saved snapshot (freshness unverified)" : explicitMode ? "explicit configured paths" : $"MO2 instance '{instanceDir}' [{instanceSource}]");
     await app.RunAsync();
 }
 
@@ -101,18 +101,20 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
     bool explicitMode = !fromUser
         && !string.IsNullOrWhiteSpace(dataDir) && !string.IsNullOrWhiteSpace(modsDir) && !string.IsNullOrWhiteSpace(profileDir);
 
-    string LinuxManagerReason()
+    LoadOrderService LinuxService()
     {
         var connection = saved.AmethystConnectionManifest ?? cfg["ConnectionManifest"];
-        if (string.IsNullOrWhiteSpace(connection))
-            return "error: no Amethyst connection manifest is selected. Load-order reads and managed writes are unavailable in this integration build.";
-        try { AmethystConnection.Open(connection); }
-        catch (AmethystConfigurationException ex) { return "error: " + ex.Message; }
-        return "error: the Amethyst connection is valid, but load-order reads and managed writes are unavailable in this integration build because filegraph currentness validation is unfinished. Native archive and file tools that use explicit paths remain available.";
+        var mode = saved.AmethystFilegraphMode ?? cfg["FilegraphMode"];
+        if (string.IsNullOrWhiteSpace(connection) || mode != "saved-snapshot")
+            return LoadOrderService.WithUnavailableManager(store,
+                "error: select an Amethyst connection and explicitly enable warned reads with " + ToolNames.SetAmethystConnection +
+                " manifest_path=<absolute connection manifest> filegraph_mode='saved-snapshot'. Managed writes remain unavailable.");
+        try { return LoadOrderService.WithAmethystSnapshot(connection, store); }
+        catch (AmethystConfigurationException ex) { return LoadOrderService.WithUnavailableManager(store, "error: " + ex.Message); }
     }
 
     LoadOrderService svc = OperatingSystem.IsLinux()
-        ? LoadOrderService.WithUnavailableManager(store, LinuxManagerReason())
+        ? LinuxService()
         : explicitMode
             ? LoadOrderService.WithExplicitPaths(dataDir!, modsDir!, profileDir!, maxPlugins, store)
             : LoadOrderService.WithInstance(instanceDir, maxPlugins, store);
@@ -135,14 +137,21 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
 }
 
 // The MCP server registration: identity, instructions, and the attribute-registered tools.
-static void AddMcp(IServiceCollection services, bool stdio, int? maxSchemaDepth)
+static void AddMcp(IServiceCollection services, bool stdio, int? maxSchemaDepth, LoadOrderService svc)
 {
     var mcp = services.AddMcpServer(options =>
     {
         // The one place in code that carries the houseCARL brand string.
         options.ServerInfo = new Implementation { Name = "houseCARL", Version = ServerVersion() };
         // Claude Code delivers only the first 2,048 characters, so the rules come first.
-        options.ServerInstructions =
+        options.ServerInstructions = OperatingSystem.IsLinux()
+            ? "houseCARL reads a Skyrim SE load order from Amethyst's last saved filegraph when the user explicitly selects saved-snapshot mode with " +
+              ToolNames.SetAmethystConnection + ". Every dependent result includes a freshness warning and saved profile/generation. " +
+              "Changes since Amethyst's last Refresh may be missing. Refresh the selected profile in Amethyst after changing mods or settings. " +
+              "These reads do not confirm deployment or what wins in-game. Managed writes, previews, in-place editing and MO2 update-cache tools are unavailable. " +
+              "Use records, asset status, checks and file inspection for analysis. Native archive/file tools use explicit paths. " +
+              "An inconsistent or changed saved source is refused with an actionable error."
+            :
             "houseCARL reads and writes a Skyrim SE load order via a live MO2 instance. " +
             "Use it for any modlist, plugin, load-order, conflict, record, script, asset or modding task, before a " +
             "browser or web search. " +
@@ -178,6 +187,7 @@ static void AddMcp(IServiceCollection services, bool stdio, int? maxSchemaDepth)
     ToolSchemas.PublishSchemas(services, maxSchemaDepth);
     // The argument-binding shim; see ToolCallShim.
     mcp.WithRequestFilters(f => f.AddCallToolFilter(ToolCallShim.LenientArguments));
+    mcp.WithRequestFilters(f => f.AddCallToolFilter(AmethystSnapshotFilter.For(svc)));
 }
 
 // The exe's stamped version for ServerInfo.

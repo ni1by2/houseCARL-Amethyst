@@ -1,0 +1,1 @@
+- **Amethyst can explicitly select warned saved-filegraph reads on Linux.** Responses and exports retain profile/generation and freshness warnings; managed writes remain unavailable, and unindexed vanilla archives are reported as incomplete coverage.

@@ -158,6 +158,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         {
             lock (_gate)
             {
+                if (UsesSavedSnapshot) return SavedResolverLocked();
                 if (!_configured) throw NotConfigured();          // fresh install / empty config → every tool prompts for the MO2 path
                 if (_resolver is null)
                 {
@@ -209,6 +210,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         {
             lock (_gate)
             {
+                if (UsesSavedSnapshot) { CurrentSavedSnapshot(); return AssetsNoProfileRefreshLocked(); }
                 if (!_configured) throw NotConfigured();           // fresh install → the tool returns the prompt for the MO2 path instead
                 EnsurePathsDerived();                              // derive the roots on first use (instance mode)
                 // Profile freshness, shared with the record path and deferred behind an in-flight write the same way.
@@ -538,6 +540,15 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>Build the asset resolver from the current roots: the active BSAs and the enabled-mod priority list, off one static profile read. Caller holds <see cref="_gate"/>.</summary>
     AssetResolver BuildAssetResolverLocked()
     {
+        if (_savedSnapshot is { } saved)
+        {
+            _assetWarnings = saved.Provenance.VanillaArchivesOmitted
+                ? [AmethystSnapshotProvenance.Warning, AmethystSnapshotProvenance.VanillaArchiveWarning]
+                : [AmethystSnapshotProvenance.Warning];
+            _activeArchives = saved.SavedArchives();
+            _enabledModsAtBuild = saved.Composition.EnabledMods;
+            return AssetResolver.BuildSavedSnapshot(saved);
+        }
         var comp = Mo2LoadOrder.ReadComposition(_profileDir);                       // EnabledMods (priority) — cheap text parse
         var gamePath = _dataDir.Length > 0 ? Path.GetDirectoryName(_dataDir.TrimEnd('\\', '/')) ?? "" : "";
         var discovery = ArchiveDiscovery.Discover(_profileDir, _modsDir, _dataDir, _overwriteDir, gamePath);
@@ -679,6 +690,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>Diagnostic snapshot for housecarl_load_order_status: the fresh profile composition plus the resolver's count, warnings and staleness flag. Forces the lazy build.</summary>
     public LoadOrderStatusData StatusData()
     {
+        if (UsesSavedSnapshot) return SavedStatusData();
         // The view and the per-build fields beside it are snapshotted under ONE gate hold, so no status line mixes two builds.
         LoadOrderResolver.IndexView view; IReadOnlyList<string> warnings; bool profileChanged; string profileDir, modsDir, dataDir, overwriteDir; string profileName; string? instanceDir;
         lock (_gate)
@@ -711,6 +723,15 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         // A plugin by the same test the ACTIVE line uses: a mod folder and a typo both have no header to read.
         if (OutputLocations.JudgeTick(comp, pluginName) == OutputLocations.TickStanding.Unregistered) return null;
 
+        if (AmethystSnapshotContext.Current is { } saved)
+        {
+            var activePath = saved.OrderedPluginPaths.FirstOrDefault(p => Path.GetFileName(p).Equals(pluginName, StringComparison.OrdinalIgnoreCase));
+            var savedCopies = saved.PluginCopies(pluginName).Select(h => new PluginCopy(h.Path, h.Where,
+                h.Path == activePath ? OutputLocations.ServedStanding.Serves : h.Enabled ? OutputLocations.ServedStanding.Shadowed : OutputLocations.ServedStanding.ModDisabled,
+                SizeOf(h.Path))).ToList();
+            var served = savedCopies.FirstOrDefault(c => c.Served == OutputLocations.ServedStanding.Serves) ?? (savedCopies.Count == 1 ? savedCopies[0] : null);
+            return new(savedCopies, served, served is null ? null : PluginFile.ReadHeader(served.Path));
+        }
         var hits = Mo2LoadOrder.LocatePlugin(comp, d.ModsDir, d.DataDir, d.OverwriteDir, pluginName);
         var copies = hits.Select(h => new PluginCopy(h.Path, h.Where, OutputLocations.JudgeServed(comp, hits, h.Path).Served, SizeOf(h.Path))).ToList();
         // No copy serves the name: a lone copy still has a header to read, and several leave none established.
@@ -770,6 +791,18 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>Inspect a named profile's composition without switching to it, off the cheap text-only <see cref="Mo2LoadOrder.ReadComposition"/>. Instance mode only; an unmatched name is reported with the available ones.</summary>
     public NamedProfileResult NamedProfileComposition(string? requested)
     {
+        if (UsesSavedSnapshot)
+        {
+            lock (_gate)
+            {
+                var saved = CurrentSavedSnapshot();
+                var savedName = string.IsNullOrWhiteSpace(requested) ? null : requested.Trim();
+                if (savedName is not null && savedName != _profileName)
+                    throw new InvalidOperationException("Saved-snapshot mode reads only Amethyst's selected profile; switch and Refresh the desired profile in Amethyst");
+                return new(true, [_profileName], savedName, savedName is null ? null : saved.ProfileDir,
+                    savedName is null ? null : saved.Composition, [AmethystSnapshotProvenance.Warning]);
+            }
+        }
         string? instanceDir; string profilesRoot;
         lock (_gate)
         {
@@ -905,6 +938,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>Instance mode: on the first build, derive the roots and active profile from ModOrganizer.ini, throwing a message naming what is missing. Caller holds the gate.</summary>
     void EnsurePathsDerived()
     {
+        if (UsesSavedSnapshot) { if (_savedSnapshot is null) CurrentSavedSnapshot(); return; }
         if (_instanceDir is null) return;                        // explicit mode — roots configured directly
         if (_profileDir.Length > 0) return;                      // already derived (a prior build / SetInstance); RederiveIfIniChanged owns later updates
         var iniStamp = FileStamp.Of(Mo2Instance.IniPath(_instanceDir)); // stat BEFORE the read: an ini write during/after Resolve is caught next call
@@ -924,6 +958,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     {
         lock (_gate)
         {
+            if (UsesSavedSnapshot) throw new InvalidOperationException(SnapshotWriteRefusal);
             if (!_configured) throw NotConfigured();
             EnsurePathsDerived();
             return new OutputRoots(RootsLocked(), _resolver?.PluginNames);
@@ -1030,6 +1065,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     public (Mo2InstancePaths paths, bool persisted, string? persistError, string? persistNote) SetInstance(string instanceDir)
     {
         if (_unavailableManagerReason is not null) throw new InvalidOperationException(_unavailableManagerReason);
+        if (OperatingSystem.IsLinux()) throw new InvalidOperationException("Linux uses Amethyst; select a connection with housecarl_set_amethyst_connection");
         // The ini baseline is statted BEFORE Resolve reads the instance, the same discipline as every other baseline here.
         var iniStamp = FileStamp.Of(Mo2Instance.IniPath(instanceDir.Trim()));
         var paths = Mo2Instance.Resolve(instanceDir);            // throws if not a usable MO2 instance — the tool renders the reason

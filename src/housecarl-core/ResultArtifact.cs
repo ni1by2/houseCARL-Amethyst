@@ -52,10 +52,13 @@ public static class ResultArtifact
                                         notes is { Count: > 0 } ? notes : null,
                                         // Empty included: null is "no coverage claim", empty is "the stamp covers everything".
                                         epochUncovered,
-                                        excludedPlugins is { Count: > 0 } ? excludedPlugins : null);
+                                        excludedPlugins is { Count: > 0 } ? excludedPlugins : null,
+                                        AmethystSnapshotContext.Current?.Provenance);
             target.EnsureUnwritten();   // a target is single-use; writing one twice is a bug, not an IO failure
             try
             {
+                var snapshot = AmethystSnapshotContext.Current;
+                var previous = snapshot is not null && !target.IsReserved && File.Exists(target.Path) ? File.ReadAllBytes(target.Path) : null;
                 // The target decides where the bytes land, and cleans up after itself if this throws.
                 target.Write(fs =>
                 {
@@ -64,6 +67,7 @@ public static class ResultArtifact
                     _rows.Position = 0;
                     _rows.CopyTo(fs);
                 });
+                snapshot?.RegisterArtifact(target.Path, previous);
                 return (manifest, null);
             }
             catch (Exception ex)
@@ -89,7 +93,8 @@ public static class ResultArtifact
         string Created,
         IReadOnlyList<string>? Notes = null,
         IReadOnlyList<string>? EpochUncovered = null,
-        IReadOnlyList<string>? ExcludedPlugins = null)
+        IReadOnlyList<string>? ExcludedPlugins = null,
+        AmethystSnapshotProvenance? AmethystSnapshot = null)
     {
         /// <summary>Does <see cref="Epoch"/> describe everything these rows were read off? Null when the producing lane made no coverage claim.</summary>
         public bool? EpochCoversAllInputs => EpochUncovered is null ? null : EpochUncovered.Count == 0;
@@ -139,6 +144,7 @@ public static class ResultArtifact
                 w.WriteEndArray();
             }
             w.WriteString("created", Created);
+            AmethystSnapshot?.WriteTo(w);
             if (Notes is { Count: > 0 })   // response-level statements the rows' own annotations rely on
             {
                 w.WriteStartArray("notes");
@@ -257,7 +263,7 @@ public static class ResultArtifact
                         typeCounts,
                         r.TryGetProperty("epoch", out var e) ? e.GetString() ?? "?" : "?",
                         r.TryGetProperty("created", out var cr) ? cr.GetString() ?? "?" : "?",
-                        notes, uncovered, excluded),
+                        notes, uncovered, excluded, AmethystSnapshotProvenance.Read(r)),
                     null);
         }
         catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
@@ -295,6 +301,9 @@ public sealed class ArtifactTarget : IDisposable
 
     /// <summary>The file this artifact is written to — what the response names.</summary>
     public string Path { get; }
+
+    /// <summary>A reserved target is a new, exclusively held spill file; it has no caller-owned predecessor to back up.</summary>
+    internal bool IsReserved => _reserved is not null;
 
     /// <summary>A caller-named target: no reservation, written through a temp moved into place.</summary>
     public static ArtifactTarget Named(string path) => new(path, null);

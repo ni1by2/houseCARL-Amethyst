@@ -31,6 +31,7 @@ public static class ToolNames
     public const string Records = "housecarl_records";
     public const string Remove = "housecarl_remove";
     public const string SetMo2Instance = "housecarl_set_mo2_instance";
+    public const string SetAmethystConnection = "housecarl_set_amethyst_connection";
     public const string SetToolPath = "housecarl_set_tool_path";
     public const string Skse = "housecarl_skse";
     public const string SkypatcherLayer = "housecarl_skypatcher_layer";

@@ -97,6 +97,8 @@ public sealed class AssetResolver : IDisposable
     }
 
     volatile Snapshot _snap;
+    /// <summary>Saved Amethyst selection, or null for the upstream root-discovery adapter.</summary>
+    AmethystSavedSnapshot? _savedSnapshot;
 
     /// <summary>The loose roots this resolver was built over, in precedence order. Fixed for its lifetime, so unlike
     /// the archive tables it needs no snapshot; exposed for consumers that need the VFS ORDER itself.</summary>
@@ -109,7 +111,7 @@ public sealed class AssetResolver : IDisposable
     /// kept for the life of the build: a root that would not read stays named until the next rebuild proves otherwise.</summary>
     public IReadOnlyList<string> RootFailures => SortedRootFailures(_snap);
 
-    public bool ReadIncomplete => _snap.Failures.Count > 0 || !_snap.RootFailures.IsEmpty;
+    public bool ReadIncomplete => _snap.Failures.Count > 0 || !_snap.RootFailures.IsEmpty || _savedSnapshot?.Provenance.VanillaArchivesOmitted == true;
 
     /// <summary>How many directories this build's loose freshness check re-lists — the cost <see cref="RefreshIfStale"/>
     /// pays per call, exposed so a test can assert what that cost grows WITH: one entry per root per directory that
@@ -177,6 +179,11 @@ public sealed class AssetResolver : IDisposable
     public static AssetResolver Build(string overwriteDir, string modsDir, string dataDir,
                                       IReadOnlyList<string> enabledModsByPriority, IReadOnlyList<ActiveArchive> activeArchives)
         => new(overwriteDir, modsDir, dataDir, enabledModsByPriority, activeArchives);
+
+    /// <summary>Consume Amethyst's recorded providers; staging discovery and winner selection remain with the producer.</summary>
+    public static AssetResolver BuildSavedSnapshot(AmethystSavedSnapshot snapshot)
+        => new(snapshot.OverwriteDir, snapshot.ModsDir, snapshot.VanillaDataDir,
+               snapshot.Composition.EnabledMods, []) { _savedSnapshot = snapshot };
 
     Snapshot BuildTables()
     {
@@ -302,6 +309,7 @@ public sealed class AssetResolver : IDisposable
     /// so the two cannot drift. Each provider comes back with its concrete on-disk descriptor, winner first.</summary>
     List<PlacementSource> ResolveProviders(string rel, Snapshot snap, int pass)
     {
+        if (_savedSnapshot is { } saved) return saved.ResolveAssets(rel).ToList();
         // ---- loose, in MO2 precedence order — via the per-subtree cache (warmed on first touch) ----
         var opened = AsWindowsOpens(rel);
         var subtreeDir = BethesdaPath.DirectoryName(opened);
@@ -336,7 +344,7 @@ public sealed class AssetResolver : IDisposable
     {
         var rel = NormalizeQueryPath(relPath);
         var sources = ResolveProviders(rel, snap, pass);
-        return new PlacementResolution(rel, sources, sources.Count > 1, snap.Failures.Count > 0 || !snap.RootFailures.IsEmpty);
+        return new PlacementResolution(rel, sources, sources.Count > 1, snap.Failures.Count > 0 || !snap.RootFailures.IsEmpty || _savedSnapshot?.Provenance.VanillaArchivesOmitted == true);
     }
 
     public const string OverwriteLayerName = "overwrite";
@@ -352,6 +360,7 @@ public sealed class AssetResolver : IDisposable
     /// filename? An enabled mod folder name is deliberately not reserved (docs/architecture/assets.md).</summary>
     public bool IsReservedProviderName(string name)
     {
+        if (_savedSnapshot is { } saved && saved.SavedArchives().Any(a => Path.GetFileName(a.Path).Equals(name, StringComparison.OrdinalIgnoreCase))) return true;
         if (_overwriteDir.Length > 0 && string.Equals(OverwriteLayerName, name, StringComparison.OrdinalIgnoreCase)) return true;
         if (_dataDir.Length > 0 && string.Equals(DataLayerName, name, StringComparison.OrdinalIgnoreCase)) return true;
         foreach (var a in _archives)
@@ -371,6 +380,8 @@ public sealed class AssetResolver : IDisposable
     /// lane; the <see cref="PlacementSource.OwnerEnabled"/> qualifier for a BSA in an enabled mod is set here.</summary>
     public OffOrderLookup TryResolveOffOrderProvider(string? providerName, string relPath)
     {
+        if (_savedSnapshot is not null)
+            throw new InvalidOperationException("Off-order asset discovery is unavailable in Amethyst saved-snapshot mode; use an explicit file tool or refresh the selected profile in Amethyst");
         var look = OffOrderAssetSource.Resolve(_modsDir, IsReservedProviderName, providerName, relPath);
         return look.Source is { } s && s.Kind == AssetKind.Bsa && IsEnabledMod(s.ProviderName)
             ? look with { Source = s with { OwnerEnabled = true } }
@@ -409,9 +420,18 @@ public sealed class AssetResolver : IDisposable
         bool Full() => max > 0 && found.Count >= max;
         void Take(string rel) { if (keep is null || keep(rel)) found.Add(rel); }
 
+        if (_savedSnapshot is { } saved)
+            foreach (var entry in saved.AssetPaths)
+                if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))
+                {
+                    Take(entry);
+                    if (Full()) { stopped = true; return found; }
+                }
+
         // loose: recurse each root's copy of the prefix dir (set-UNION across roots — the per-path winner is decided later).
         foreach (var (rootName, rootDir) in _looseRoots)
         {
+            if (_savedSnapshot is not null && rootDir != _dataDir) continue;
             var baseDir = pre.Length == 0 ? rootDir
                 : BethesdaPath.TryResolveExisting(rootDir, pre, out var actualDir) ? actualDir : BethesdaPath.Under(rootDir, pre);
             // A "not there" is only an absence when it can be proved one; unreadable is named inside.
@@ -473,7 +493,7 @@ public sealed class AssetResolver : IDisposable
         /// <summary>This view's unread roots as one short clause — see <see cref="AssetResolver.RootFailureBrief"/>.</summary>
         public string RootFailureBrief => AssetResolver.RootFailureBrief(RootFailures);
 
-        public bool ReadIncomplete => _s.Failures.Count > 0 || !_s.RootFailures.IsEmpty;
+        public bool ReadIncomplete => _s.Failures.Count > 0 || !_s.RootFailures.IsEmpty || _r._savedSnapshot?.Provenance.VanillaArchivesOmitted == true;
 
         public AssetHit Resolve(string relPath) => _r.Resolve(relPath, _s, _pass);
 
@@ -697,6 +717,8 @@ public sealed class AssetResolver : IDisposable
     /// <summary>One loose root's top-level files, not a warm listing; empty when absent or no root, null (and named) when it would not list.</summary>
     IReadOnlyCollection<string>? LooseRootFiles(string rootName, Snapshot snap)
     {
+        if (_savedSnapshot is { } saved && !rootName.Equals(DataLayerName, StringComparison.OrdinalIgnoreCase))
+            return saved.LooseRootFiles(rootName);
         var at = RootIndex(rootName);
         if (at < 0) return Array.Empty<string>();                     // no loose root by that name, so nothing ships there
         var (name, dir) = _looseRoots[at];

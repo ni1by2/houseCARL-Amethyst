@@ -65,7 +65,7 @@ static class StatusWire
         sb.Append("load order status — profile '").Append(d.ProfileName).Append("'\n");
         sb.Append(ServerLine);
         // The resolved MO2 instance; null means explicit-paths mode, which has no MO2 instance folder.
-        sb.Append("instance: ").Append(d.InstanceDir ?? "explicit-paths mode (no MO2 instance configured)").Append('\n');
+        sb.Append("instance: ").Append(AmethystSnapshotContext.Current is not null ? "Amethyst saved-snapshot mode" : d.InstanceDir ?? "explicit-paths mode (no MO2 instance configured)").Append('\n');
         sb.Append("mods:    ").Append(c.EnabledMods.Count).Append(" enabled · ").Append(c.DisabledMods.Count).Append(" disabled\n");
         sb.Append("plugins in load order: ").Append(c.OrderedPluginNames.Count).Append('\n');
         sb.Append("  active:   ").Append(gameLoaded).Append("  (").Append(checkedActive).Append(" checked + ").Append(impl).Append(" implicit masters/CC)\n");

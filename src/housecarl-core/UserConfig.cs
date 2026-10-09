@@ -10,6 +10,9 @@ public sealed class UserConfig
     /// <summary>Selected schema-v1 Amethyst connection manifest; retained across updates before the manager port is wired.</summary>
     public string? AmethystConnectionManifest { get; set; }
 
+    /// <summary>Explicit read-mode consent; only saved-snapshot enables the warned Amethyst read lane.</summary>
+    public string? AmethystFilegraphMode { get; set; }
+
     /// <summary>The MO2 instance folder housecarl_set_mo2_instance saved; it beats appsettings' Mo2InstanceDir, and absent means fall through to explicit paths.</summary>
     public string? Mo2InstanceDir { get; set; }
 
