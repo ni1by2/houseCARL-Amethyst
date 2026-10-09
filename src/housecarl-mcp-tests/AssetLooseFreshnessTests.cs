@@ -117,8 +117,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         using var r = Build();
         Assert.Null(Winner(r, @"textures\hcfresh\t.dds"));     // lists the newcomer's mod folder, watching only `textures`
 
-        Directory.CreateDirectory(Path.Combine(_mods, Newcomer, Subtree));
-        File.WriteAllText(Path.Combine(_mods, Newcomer, Provided), "newcomer");
+        Directory.CreateDirectory(BethesdaPath.Under(Path.Combine(_mods, Newcomer), Subtree));
+        File.WriteAllText(BethesdaPath.Under(Path.Combine(_mods, Newcomer), Provided), "newcomer");
 
         Assert.False(r.RefreshIfStale(), "nothing the build answered changed");
         Assert.Equal(Newcomer, Winner(r, Provided));
@@ -357,7 +357,7 @@ public sealed class AssetLooseFreshnessTests : IDisposable
         using var r = Build();
         Assert.Null(Winner(r, Subtree + @"\deeper\x.nif"));    // lists the provider's `hcfresh` on the way down
 
-        File.Delete(Path.Combine(_mods, Provider, Provided));
+        File.Delete(BethesdaPath.Under(Path.Combine(_mods, Provider), Provided));
 
         Assert.Null(Winner(r, Provided));
     }
@@ -372,7 +372,8 @@ public sealed class AssetLooseFreshnessTests : IDisposable
     public void ATrailingDotOrSpaceResolvesAsAFileOpenDoes(string query, bool opens)
     {
         using var r = Build();
-        Assert.Equal(opens, File.Exists(Path.Combine(_mods, Provider, query)));
+        if (OperatingSystem.IsWindows())
+            Assert.Equal(opens, File.Exists(Path.Combine(_mods, Provider, query)));
         Assert.Equal(opens ? Provider : null, Winner(r, query));
     }
 

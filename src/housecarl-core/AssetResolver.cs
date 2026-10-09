@@ -303,8 +303,9 @@ public sealed class AssetResolver : IDisposable
     List<PlacementSource> ResolveProviders(string rel, Snapshot snap, int pass)
     {
         // ---- loose, in MO2 precedence order — via the per-subtree cache (warmed on first touch) ----
-        var subtreeDir = BethesdaPath.DirectoryName(rel);
-        var fname = BethesdaPath.FileName(rel);
+        var opened = AsWindowsOpens(rel);
+        var subtreeDir = BethesdaPath.DirectoryName(opened);
+        var fname = BethesdaPath.FileName(opened);
         var st = snap.LooseCache.GetOrAdd(subtreeDir, d => WarmSubtree(d, snap, pass));
         var loose = new List<PlacementSource>();
         foreach (var (rootIndex, dir, files) in st.Present)           // Present is already in precedence order
@@ -617,7 +618,7 @@ public sealed class AssetResolver : IDisposable
                 snap.DirWatch.GetOrAdd(dir, _ => new WatchedDir()).FileHeld[name] = 0;
                 return true;
             }
-            listing.Names.TryGetValue(name, out var actualName);
+            if (!listing.Names.TryGetValue(name, out var actualName)) return false;
             dir = Path.Combine(dir, actualName);                       // preserve host casing after the case-insensitive lookup
         }
     }
