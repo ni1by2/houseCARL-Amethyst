@@ -11,13 +11,16 @@ Every dependent response and JSONL export names the saved profile/generation and
 warns that changes since Amethyst's last refresh may be missing. These results do
 not verify deployment or what wins in-game.
 
-The preview reads recorded staging winners, including BSA members, plus distinct
+The preview reads Amethyst's own saved-snapshot winners, including BSA members, plus distinct
 vanilla loose files. Vanilla BSA discovery remains pending: when those archives are
 present, results explicitly report incomplete asset coverage. Managed writes,
 previews, in-place editing and MO2 update-cache operations are unavailable.
 
-Verified producer: Amethyst Testing `97499673` (2.5.4-beta.6; schema 9, engine 1,
-rules 13). Installed older versions are not implied compatible. See the
+Verified sources: houseCARL main `b77ba4b2` and Amethyst Testing `e98cf70f` / stable
+2.5.4 (native API 13; schema 9, engine 1, rules 13). A real installed 2.5.4 profile
+has been read successfully. The complete Linux package bundles the .NET runtime
+and Amethyst native component; **Python 3.12+ must be installed**. The native
+reader opens a private catalog copy and does not write manager files. See the
 [snapshot contract](docs/architecture/amethyst-saved-snapshot.md) for configuration,
 checks and limitations. The remaining sections describe the upstream tool surface;
 their Windows write workflows are not enabled by this Linux preview.
@@ -26,7 +29,7 @@ A write produces a new plugin in a new MO2 mod folder. Editing an existing plugi
 
 | | |
 |---|---|
-| Process | One C#/.NET 9 executable, MCP over stdio |
+| Process | C#/.NET 9 MCP over stdio; Linux snapshot reads use a short-lived Python helper |
 | Substrate | Mutagen.Bethesda.Skyrim 0.54.4 |
 | Tools | 32 registered; Linux availability described above |
 | Skills | 7 |

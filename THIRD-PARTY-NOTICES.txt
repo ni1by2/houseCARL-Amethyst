@@ -1,6 +1,19 @@
 houseCARL — THIRD-PARTY NOTICES
 ===============================================================================
 
+AMETHYST FILEGRAPH (Linux saved-snapshot preview)
+------------------------------------------------
+The package includes Amethyst's API-13 native filegraph component from its 2.5.4
+AppImage. Copyright ChrisDKN and contributors. GPL-3.0-or-later; this combined
+preview is distributed under GPL version 3. Source and build files are included
+under amethyst-filegraph-source in the preview archive. The same native and Python
+filegraph source trees occur at Amethyst Testing e98cf70f and stable edde06e5:
+    https://github.com/ChrisDKN/Amethyst-Mod-Manager/tree/e98cf70fe63f6b4a64b39e780ee3ffe02e553c6e/native/amethyst_filegraph
+The native module SHA256 is:
+    12f7bbd4046d16a398d798a3503e759d009bceca4be84ebcbe7db8ebf562ac95
+Cargo.toml and Cargo.lock identify its open-source dependencies and exact versions.
+The stdlib-only Python transport is part of this fork; Python itself is not bundled.
+
 houseCARL is licensed under the GNU General Public License, version 3.0 only
 (GPL-3.0-only). The full text of that license is in the file LICENSE alongside
 this notice.

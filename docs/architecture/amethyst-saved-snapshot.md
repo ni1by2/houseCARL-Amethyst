@@ -7,12 +7,12 @@ producer's native snapshot and exact source paths. It never refreshes,
 migrates, deploys or writes the manager catalog. All Mutagen record coverage stays
 generated; the record index has no plugin-count cap in this mode.
 
-The tested pins are houseCARL main `be6b67e1c7469bc91eabaad088d3347cb148e0bc`
-and Amethyst Testing `97499673a39c8dadd603737363d5c74a4f272efb`
-(2.5.4-beta.6), also exercised against installed stable 2.5.4. The catalog contract
+The tested pins are houseCARL main `b77ba4b202456affe30dd51111972529e469c278`
+and Amethyst Testing `e98cf70fe63f6b4a64b39e780ee3ffe02e553c6e`
+(2.5.4), also exercised against installed stable 2.5.4. The catalog contract
 is schema 9, engine 1, rules 13; the native API is 13. Amethyst's
-Python and native filegraph source trees are unchanged from the previous
-`de1f827` test pin; its Skyrim case-alias list changed outside those trees.
+Python and native filegraph source trees match stable main `edde06e5` and are
+unchanged from the previous Testing `97499673` pin.
 The revision check describes the reader's tested range. A changed rules stamp
 alone does not establish a breaking stored-data format change: tags 2.5.1 and
 2.5.3 have the same schema, Python models and filegraph service as this Testing
@@ -123,8 +123,8 @@ BSAs, asset results set `read_incomplete` and provenance adds
 does not establish absence from those vanilla archives. Use explicit archive tools
 to inspect them until the vanilla archive activation boundary is implemented.
 
-The broader Step 5 consumer acceptance, real installed-profile acceptance,
-staging writes and redeployment verification remain separate roadmap gates.
+The broader Step 5 consumer acceptance, staging writes and redeployment
+verification remain separate roadmap gates.
 
 ## Evidence
 
@@ -134,10 +134,19 @@ actual Python service and native extension with isolated synthetic files/config.
 It retains SQL, intent payload, source bytes and producer winner/provider
 expectations. The C# test world relocates it and writes real Mutagen records.
 
-At these pins, 348 focused checks passed, including 33 saved-mode tests and the
-affected upstream asset, artifact, configuration and current scan/pole/refusal tests. The
+At these pins, 433 focused checks passed, including 34 saved-mode tests and the
+affected upstream asset, artifact, configuration, scan/pole/refusal, parent-gather,
+link-removal, dialogue-order and check-artifact tests. The
 separately observed Windows sharing-lock case below is explicitly excluded from
 that passing selection; this is not a claim that the full upstream suite is green.
+
+Read-only acceptance against an installed 2.5.4 profile passed stdio startup and
+32-tool discovery, explicit connection selection, 94-plugin resolution, three
+real weapon summaries, a staged loose-mesh winner, and process restart. Profile
+and manager configuration hashes, graph generations/readiness and winner counts
+were unchanged. The native snapshot returned all 84 staged mod plugins where
+the SQL projection held 80; the remaining ten plugins came from the distinct
+vanilla root. No real manager inputs, mod files or deployed files were edited.
 
 `AmethystSavedSnapshotTests` checks producer parity, full record reads, inactive
 sources, archive keys, traversal, symlinks, stale intent/sources, producer races,

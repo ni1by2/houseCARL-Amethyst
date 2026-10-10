@@ -10,7 +10,7 @@ namespace HousecarlCore;
 /// <summary>A complete saved schema-9 filegraph. Amethyst's own native reader restores its winners from saved inputs.</summary>
 public sealed class AmethystSavedSnapshot
 {
-    /// <summary>The currently tested producer contract, Amethyst Testing 97499673 (native/Python filegraph trees unchanged from 2f54fdd).</summary>
+    /// <summary>The tested producer contract, Amethyst Testing e98cf70f / stable 2.5.4; native API 13, schema 9 and engine 1.</summary>
     public const ulong RulesRevision = 13;
     /// <summary>The selected profile and catalog generation, with an unverified-freshness warning.</summary>
     public AmethystSnapshotProvenance Provenance { get; private set; } = null!;
