@@ -7,7 +7,7 @@ using Org.BouncyCastle.Crypto.Digests;
 
 namespace HousecarlCore;
 
-/// <summary>A complete saved schema-9 filegraph. Manager rules are consumed as saved data, never recomputed here.</summary>
+/// <summary>A complete saved schema-9 filegraph. Amethyst's own native reader restores its winners from saved inputs.</summary>
 public sealed class AmethystSavedSnapshot
 {
     /// <summary>The currently tested producer contract, Amethyst Testing 97499673 (native/Python filegraph trees unchanged from 2f54fdd).</summary>
@@ -42,11 +42,11 @@ public sealed class AmethystSavedSnapshot
     readonly Dictionary<string, string> _roots = new(StringComparer.Ordinal);
     /// <summary>All candidate rows of the profile's selected variants, including disabled-mod source lookup.</summary>
     readonly Dictionary<long, Candidate> _candidates = [];
-    /// <summary>Saved winners, indexed by their persisted namespace and destination key.</summary>
+    /// <summary>Producer-restored winners, indexed by their saved namespace and destination key.</summary>
     readonly Dictionary<(int Namespace, string Destination), long> _winners = [];
     /// <summary>Active providers per destination; only the saved winner determines which provider wins.</summary>
     readonly Dictionary<string, List<Candidate>> _providers = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Saved rank inputs order diagnostic copies only; winner IDs always come from persisted winner rows.</summary>
+    /// <summary>Saved rank inputs order diagnostic copies only; winner IDs always come from the producer's native snapshot.</summary>
     readonly Dictionary<string, long> _modRanks = [], _archiveRanks = [], _pluginRanks = [];
     /// <summary>The database path identity at capture, independent of WAL or main-file content stamps.</summary>
     LinuxFileIdentity _databaseIdentity;
@@ -251,28 +251,26 @@ public sealed class AmethystSavedSnapshot
                 candidate.Identities.Add(Convert.ToHexString(identitiesReader.GetFieldValue<byte[]>(1)));
     }
 
-    /// <summary>Trust the producer's saved winners; validate their references and expose eligible saved provider copies.</summary>
+    /// <summary>Use the same native snapshot restoration as Amethyst; its SQL winner projection can omit valid entries.</summary>
     void ReadWinners(SqliteConnection database)
     {
-        using (var query = Command(database, "SELECT w.namespace,w.candidate_id,d.path_key,t.target_key,w.generation FROM winners w JOIN destinations d USING(destination_id) JOIN targets t USING(target_id) WHERE w.profile_id=$profile"))
-        using (var rows = query.ExecuteReader())
-            while (rows.Read())
-            {
-                var ns = checked((int)rows.GetInt64(0));
-                var id = rows.GetInt64(1);
-                var destination = Relative(rows.GetFieldValue<byte[]>(2));
-                if (!_candidates.TryGetValue(id, out var candidate) || candidate.Namespace != ns ||
-                    candidate.Destination != destination || candidate.Target != rows.GetString(3) || !candidate.Enabled || rows.GetInt64(4) != Provenance.Generation)
-                    throw new InvalidOperationException("Amethyst filegraph winner joins are incomplete or inconsistent");
-                if (candidate.Target != "game") throw new InvalidOperationException($"unsupported Skyrim filegraph target '{candidate.Target}'");
-                _winners.Add((ns, destination), id);
-            }
-        var savedCount = Convert.ToInt64(Scalar(database, "SELECT COUNT(*) FROM winners WHERE profile_id=$profile"));
-        if (_winners.Count != savedCount) throw new InvalidOperationException("Amethyst filegraph winner projection is incomplete");
         // Testing 2f54fdd derives exclusive identities only for BG3 .pak files, never Skyrim.
         // Refuse an unexpected identity contract rather than emulate another game's suppression rules.
         if (_candidates.Values.Any(c => c.Identities.Count > 0))
             throw new InvalidOperationException("unsupported exclusive-identity candidates in a Skyrim saved filegraph");
+        AmethystNativeSnapshot.Read(database, ProfileDir, Provenance.Generation, Provenance.InventoryGeneration, row =>
+        {
+            var ns = row.GetProperty("namespace").GetString() switch
+            { "normal" => 0, "root" => 1, "archive" => 2, _ => throw new InvalidOperationException("unsupported Amethyst winner namespace") };
+            var id = row.GetProperty("candidate_id").GetInt64();
+            var destination = Relative(PayloadBytes(row.GetProperty("destination_key")));
+            if (!_candidates.TryGetValue(id, out var candidate) || candidate.Namespace != ns || candidate.Destination != destination ||
+                candidate.Target != row.GetProperty("target").GetString() || candidate.ModKey != row.GetProperty("mod_key").GetString() ||
+                candidate.Source != Relative(PayloadBytes(row.GetProperty("source_rel"))) || !candidate.Enabled)
+                throw new InvalidOperationException("Amethyst native snapshot winner joins are incomplete or inconsistent");
+            if (candidate.Target != "game") throw new InvalidOperationException($"unsupported Skyrim filegraph target '{candidate.Target}'");
+            if (!_winners.TryAdd((ns, destination), id)) throw new InvalidOperationException("Amethyst native snapshot contains duplicate winners");
+        });
         foreach (var candidate in _candidates.Values)
         {
             if (!candidate.Enabled || candidate.Target != "game" || (candidate.Kind != 3 && !candidate.Deployable)) continue;

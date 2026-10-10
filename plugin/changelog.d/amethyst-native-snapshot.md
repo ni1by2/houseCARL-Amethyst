@@ -1,0 +1,1 @@
+Saved-profile reads now use Amethyst's own native snapshot, including plugins omitted from its SQL winner table. Install the complete Linux preview with Python 3.12+, select saved-snapshot mode, and read the selected profile. Manager files remain untouched.

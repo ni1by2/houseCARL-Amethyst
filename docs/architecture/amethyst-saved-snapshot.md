@@ -3,13 +3,14 @@
 ## Contract
 
 This Linux mode reads Amethyst's last complete saved filegraph. It consumes the
-producer's recorded winner rows and exact source paths. It never refreshes,
+producer's native snapshot and exact source paths. It never refreshes,
 migrates, deploys or writes the manager catalog. All Mutagen record coverage stays
 generated; the record index has no plugin-count cap in this mode.
 
 The tested pins are houseCARL main `be6b67e1c7469bc91eabaad088d3347cb148e0bc`
 and Amethyst Testing `97499673a39c8dadd603737363d5c74a4f272efb`
-(2.5.4-beta.6). The catalog contract is schema 9, engine 1, rules 13. Amethyst's
+(2.5.4-beta.6), also exercised against installed stable 2.5.4. The catalog contract
+is schema 9, engine 1, rules 13; the native API is 13. Amethyst's
 Python and native filegraph source trees are unchanged from the previous
 `de1f827` test pin; its Skyrim case-alias list changed outside those trees.
 The revision check describes the reader's tested range. A changed rules stamp
@@ -44,15 +45,34 @@ deployment without `Data_Core` refuses.
 The reader opens an existing SQLite database read-only with ordinary WAL support,
 query-only enforcement and a two-second busy timeout. One transaction validates
 versions, readiness, unfinished operations, foreign-key joins, selected variants,
-inventory generation, profile generation, winner generation and payload identities.
+inventory generation, profile generation and payload identities.
 It checks the producer's BLAKE2b-192 profile-input hash against captured inputs.
 MessagePack is decoded through a JSON writer, preserving binary values and embedded
 NUL archive keys; its diagnostic JSON converter is not used.
 
+The same transaction supplies a SQLite backup to a private temporary directory.
+A short-lived Python 3.12+ helper loads the packaged Amethyst API-13 native module,
+opens only that backup, and calls `open_profile(...).snapshot().iter_winners(...)`.
+It uses the same restoration path as Amethyst itself and streams every winner page;
+houseCARL does not implement the manager's winner algorithm. Native initialization,
+locking and cache writes affect only the copy, which is removed after the helper
+exits. No Python packages are required, and the .NET runtime remains bundled.
+Developer builds set `AMETHYST_FILEGRAPH_EXTENSION` to the tested native module;
+packaged builds load it beside the server. `AMETHYST_FILEGRAPH_PYTHON` optionally
+selects the Python interpreter; the default is `python3`.
+
+The database's `winners` table is a persisted projection, not the snapshot reader
+Amethyst uses. Real-profile acceptance found four valid active plugins absent from
+that table while Amethyst's native snapshot returned all 84 mod plugins at the
+same profile/inventory generation. Their recorded staging sources exist. Therefore
+that projection neither selects winners nor supplies a per-row freshness gate.
+Native winner IDs, namespaces, destinations, mod identities and exact sources must
+agree with the separately captured candidates and pinned generations.
+
 Provider kind, target, destination and exact source are consumed as saved data.
 Only Skyrim's game target is supported; unexpected exclusive-identity candidates
 refuse instead of borrowing another game's identity-suppression rules. Winners are
-never rebuilt from staging priority or merged game files. Root Data winners overlay
+never rebuilt by houseCARL from staging priority or merged game files. Root Data winners overlay
 normal Data winners, and loose providers precede archives. Raw provider copies
 are projected from selected saved variants for diagnostics. Inactive source lookup
 also uses the saved inventory and requires a mod when a filename is ambiguous.

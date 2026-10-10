@@ -46,12 +46,29 @@ public sealed class AmethystSavedSnapshotTests
     [InlineData("UPDATE destinations SET path_key=X'2E2E2F657363617065' WHERE destination_id=(SELECT MIN(destination_id) FROM destinations)", "unsafe")]
     [InlineData("UPDATE raw_files SET source_rel=X'2F746D702F657363617065' WHERE file_id=(SELECT MIN(file_id) FROM raw_files)", "unsafe")]
     [InlineData("UPDATE raw_files SET source_rel=X'FF' WHERE file_id=(SELECT MIN(file_id) FROM raw_files)", "cannot read")]
-    [InlineData("UPDATE winners SET generation=generation+1", "inconsistent")]
     public void InconsistentCatalogsRefuse(string mutation, string error)
     {
         using var world = new AmethystSnapshotWorld();
         world.Execute(mutation);
         Assert.Contains(error, Assert.Throws<InvalidOperationException>(() => AmethystSavedSnapshot.Capture(world.Manifest)).Message);
+    }
+
+    [Theory]
+    [InlineData("DELETE FROM winners WHERE destination_id IN (SELECT destination_id FROM destinations WHERE lower(path_display) LIKE '%.esp')")]
+    [InlineData("UPDATE winners SET generation=0")]
+    public void SqlWinnerProjectionDoesNotReplaceAmethystsOwnSnapshot(string projectionMutation)
+    {
+        using var world = new AmethystSnapshotWorld();
+        world.Execute(projectionMutation);
+        var before = SHA256.HashData(File.ReadAllBytes(world.Database));
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Single(snapshot.OrderedPluginPaths);
+        Assert.Contains("/Beta/Fixture.esp", snapshot.OrderedPluginPaths[0]);
+        Assert.Equal("Beta", snapshot.ResolveAssets("Meshes/example.nif")[0].ProviderName);
+        snapshot.CheckUnchanged();
+        Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(world.Database)));
+        Assert.False(File.Exists(Path.Combine(world.Library, "filegraph.cache")));
+        Assert.False(File.Exists(Path.Combine(world.Library, "filegraph.lock")));
     }
 
     [Fact]
