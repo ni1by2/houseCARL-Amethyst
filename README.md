@@ -16,7 +16,7 @@ vanilla loose files. Vanilla BSA discovery remains pending: when those archives 
 present, results explicitly report incomplete asset coverage. Managed writes,
 previews, in-place editing and MO2 update-cache operations are unavailable.
 
-Verified producer: Amethyst Testing `2f54fdd` (2.5.4-beta.5; schema 9, engine 1,
+Verified producer: Amethyst Testing `97499673` (2.5.4-beta.6; schema 9, engine 1,
 rules 13). Installed older versions are not implied compatible. See the
 [snapshot contract](docs/architecture/amethyst-saved-snapshot.md) for configuration,
 checks and limitations. The remaining sections describe the upstream tool surface;

@@ -10,7 +10,7 @@ namespace HousecarlCore;
 /// <summary>A complete saved schema-9 filegraph. Manager rules are consumed as saved data, never recomputed here.</summary>
 public sealed class AmethystSavedSnapshot
 {
-    /// <summary>The currently tested producer contract, Amethyst Testing 2f54fdd (native/Python filegraph trees unchanged from de1f827).</summary>
+    /// <summary>The currently tested producer contract, Amethyst Testing 97499673 (native/Python filegraph trees unchanged from 2f54fdd).</summary>
     public const ulong RulesRevision = 13;
     /// <summary>The selected profile and catalog generation, with an unverified-freshness warning.</summary>
     public AmethystSnapshotProvenance Provenance { get; private set; } = null!;

@@ -7,12 +7,17 @@ producer's recorded winner rows and exact source paths. It never refreshes,
 migrates, deploys or writes the manager catalog. All Mutagen record coverage stays
 generated; the record index has no plugin-count cap in this mode.
 
-The tested pins are houseCARL main `dd7a23f79ddad33af11c92683c43bcb16fee8e2e`
-and Amethyst Testing `2f54fddfa2015c3aa072ca2e56e2d0a4ca6173dd`
-(2.5.4-beta.5). The catalog contract is schema 9, engine 1, rules 13. Amethyst's
+The tested pins are houseCARL main `be6b67e1c7469bc91eabaad088d3347cb148e0bc`
+and Amethyst Testing `97499673a39c8dadd603737363d5c74a4f272efb`
+(2.5.4-beta.6). The catalog contract is schema 9, engine 1, rules 13. Amethyst's
 Python and native filegraph source trees are unchanged from the previous
 `de1f827` test pin; its Skyrim case-alias list changed outside those trees.
-Older installed releases and future catalog revisions require their own evidence.
+The revision check describes the reader's tested range. A changed rules stamp
+alone does not establish a breaking stored-data format change: tags 2.5.1 and
+2.5.3 have the same schema, Python models and filegraph service as this Testing
+pin; the native model changes only its rules constant. Routing/producer behavior
+changed elsewhere, and complete parity with older releases remains untested.
+The target is current Testing. Future contracts require their own evidence.
 
 ## Selection
 
@@ -109,8 +114,8 @@ actual Python service and native extension with isolated synthetic files/config.
 It retains SQL, intent payload, source bytes and producer winner/provider
 expectations. The C# test world relocates it and writes real Mutagen records.
 
-At these pins, 243 focused checks passed, including 33 saved-mode tests and the
-affected upstream asset, artifact, configuration and latest-change tests. The
+At these pins, 348 focused checks passed, including 33 saved-mode tests and the
+affected upstream asset, artifact, configuration and current scan/pole/refusal tests. The
 separately observed Windows sharing-lock case below is explicitly excluded from
 that passing selection; this is not a claim that the full upstream suite is green.
 

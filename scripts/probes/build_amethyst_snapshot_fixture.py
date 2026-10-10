@@ -16,7 +16,7 @@ import subprocess
 import sys
 import tempfile
 
-PIN = "2f54fddfa2015c3aa072ca2e56e2d0a4ca6173dd"
+PIN = "97499673a39c8dadd603737363d5c74a4f272efb"
 
 
 class FixtureGame:
