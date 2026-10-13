@@ -1,4 +1,4 @@
-# Amethyst saved-snapshot preview
+# Amethyst saved-snapshot preview and staging writes
 
 ## Contract
 
@@ -111,8 +111,28 @@ is optional future work, not a prerequisite for this mode.
 
 ## Availability and remaining work
 
-Managed mutations and previews are refused before their bodies run, including
-in-place consent side effects. Output-root access has a second service guard.
+New record patches through `apply`, `create`, `forward` and `copy` use the same
+reflection-driven write engine as upstream. The request filter captures and
+serializes their saved inputs. Only a guarded new-patch call can allocate staging
+output; direct read callers still fail the service's output-root guard. `into=`
+and `in_place=` remain refused before tool bodies or consent side effects run.
+
+Allocation registers the new plugin and metadata for rollback before writing
+either file. If profile/configuration, catalog generation or an observed source
+changes before the response, both artifacts are removed and the empty new folder
+is removed. An unrelated file added to that folder is preserved. Failed writes
+also roll back registered artifacts. A successful patch retains its profile,
+source generation, `pendingDeployment=true` and SHA-256 in `meta.ini`; inline JSON
+and structured MCP content report `amethyst_staging.state=pending_deployment`.
+Text replies state the same limitation. Dry runs create no folder or metadata.
+
+No call changes Amethyst's profile ordering, plugin activation, graph or deployed
+game files. Refresh, placement, enablement and deployment are user-managed. These
+pending markers do not clear automatically yet: deployment verification is still
+a release gate. This is an implementation checkpoint toward full original
+houseCARL writing support, not a reduction of that release target.
+
+Other managed mutations are refused before their bodies run.
 MO2 connection/update-cache operations remain unavailable on Linux. Explicit-path
 archive and other manager-independent tools keep their existing behavior.
 
@@ -123,8 +143,10 @@ BSAs, asset results set `read_incomplete` and provenance adds
 does not establish absence from those vanilla archives. Use explicit archive tools
 to inspect them until the vanilla archive activation boundary is implemented.
 
-The broader Step 5 consumer acceptance, staging writes and redeployment
-verification remain separate roadmap gates.
+The remaining release gates are vanilla archive activation/coverage, extending
+owned patches, guarded existing-plugin edits with consent and redeployment
+confirmation, other managed write consumers, deployment verification, a complete
+Linux test pass, clean installation/update/rollback, and independent review.
 
 ## Evidence
 
@@ -158,3 +180,17 @@ The upstream Windows sharing-lock artifact test expects rename to fail while a
 file is open without share-delete. Linux permits that atomic rename; it is a
 platform-specific baseline failure, not proof that the snapshot rollback failed.
 The new rollback test checks restoration after an actual rejected snapshot read.
+
+The staging regression fails with the previous blanket write guard and passes
+with the new transaction. It verifies a real stdio dry run and patch write,
+Mutagen readback, pending-deployment metadata and unchanged source/profile/graph
+bytes. A separate generation-race test removes the new plugin and metadata while
+preserving the source. Current tests load installed Amethyst 2.5.5-beta.1's API-13
+native module; this does not claim real deployment or rollback acceptance.
+
+On 2026-10-13, the focused writing/Amethyst selection passed 270 checks. The
+123-check placement selection improved from 64 failures with the original
+fixtures to 11, with no new failing cases. It still exposes Linux acceptance gaps (Windows ACL/creation-time
+expectations, native source/destination paths, and MO2-only instance switching).
+Those failures are not hidden or counted as a full Linux suite pass. The native
+placement fixture repair is separate from the staging transaction change.

@@ -23,7 +23,7 @@ sealed class AmethystSnapshotWorld : IDisposable
     public JsonElement ExpectedWinners { get; }
 
     /// <summary>Restore producer data without rebuilding its routing or winners; only fixture locations, plugin bytes and stamps change.</summary>
-    public AmethystSnapshotWorld(bool profileSpecific = false, string profileName = "default", bool gameOverride = false)
+    public AmethystSnapshotWorld(bool profileSpecific = false, string profileName = "default", bool gameOverride = false, bool linkedKeyword = false)
     {
         _profileName = profileName; _profileSpecific = profileSpecific;
         _ = TestCorpus.Path;
@@ -40,6 +40,11 @@ sealed class AmethystSnapshotWorld : IDisposable
             {
                 var plugin = new SkyrimMod(ModKey.FromFileName(Path.GetFileName(path)), SkyrimRelease.SkyrimSE);
                 for (var i = 0; i < 10; i++) plugin.Weapons.AddNew().EditorID = "Snapshot" + Path.GetFileName(Path.GetDirectoryName(path)) + i;
+                if (linkedKeyword)
+                {
+                    var keyword = plugin.Keywords.AddNew(); keyword.EditorID = "SnapshotKeyword";
+                    plugin.Weapons.First().Keywords = new Noggog.ExtendedList<IFormLinkGetter<IKeywordGetter>> { new FormLink<IKeywordGetter>(keyword.FormKey) };
+                }
                 plugin.BeginWrite.ToPath(path).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
             }
         }

@@ -1,5 +1,7 @@
 using System.Text.Json;
 using HousecarlMcp;
+using System.Security.Cryptography;
+using Mutagen.Bethesda.Skyrim;
 using Xunit;
 
 namespace HousecarlMcpTests;
@@ -79,19 +81,86 @@ public sealed class AmethystSnapshotWireTests
     }
 
     [Fact]
-    public void ManagedWriteAndPreviewAreRefusedBeforeConsentOrStaging()
+    public void ExistingPluginWritesAreRefusedBeforeConsentOrStaging()
     {
         using var world = new AmethystSnapshotWorld();
         using var server = new ServerFixture(EnvironmentFor(world, true));
         var files = Directory.GetFiles(Path.Combine(world.Root, "mods"), "*", SearchOption.AllDirectories).Order().ToArray();
-        foreach (var args in new[] { "{}", "{\"dry_run\":true}", "{\"in_place\":\"Fixture.esp\",\"acknowledge\":true}" })
+        foreach (var args in new[] { "{\"into\":\"Fixture.esp\"}", "{\"into\":\"Fixture.esp\",\"dry_run\":true}", "{\"in_place\":\"Fixture.esp\",\"acknowledge\":true}" })
         {
             var result = server.Call(ToolNames.Apply, args);
             Assert.True(result.IsError, result.Text);
-            Assert.Contains("supports reads and analysis only", result.Text);
+            Assert.Contains("remain unavailable", result.Text);
         }
         Assert.False(File.Exists(world.Store.FilePath));
         Assert.Equal(files, Directory.GetFiles(Path.Combine(world.Root, "mods"), "*", SearchOption.AllDirectories).Order());
+    }
+
+    [Fact]
+    public void NewPatchWritesOnlyStagingAndReportsPendingDeployment()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var originals = Directory.GetFiles(world.Root, "*", SearchOption.AllDirectories)
+            .ToDictionary(p => p, p => SHA256.HashData(File.ReadAllBytes(p)));
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var ops = new[] { new { formid, field_path = "EditorID", value = "PatchedWeapon" } };
+        var preview = server.Call(ToolNames.Apply, JsonSerializer.Serialize(new { ops, patch = "VerifiedPatch", dry_run = true, format = "json" }));
+        Assert.False(preview.IsError, preview.Text);
+        Assert.False(Directory.Exists(Path.Combine(world.Root, "mods", "houseCARL - VerifiedPatch")));
+        var result = server.Call(ToolNames.Apply, JsonSerializer.Serialize(new { ops, patch = "VerifiedPatch", format = "json" }));
+        Assert.False(result.IsError, result.Text);
+        using var json = JsonDocument.Parse(result.Text);
+        var staging = json.RootElement.GetProperty("amethyst_staging");
+        Assert.Equal("pending_deployment", staging.GetProperty("state").GetString());
+        var output = Assert.Single(staging.GetProperty("outputs").EnumerateArray());
+        var path = output.GetProperty("path").GetString()!;
+        Assert.Equal(Path.Combine(world.Root, "mods", "houseCARL - VerifiedPatch", "VerifiedPatch.esp"), path);
+        Assert.Equal("PatchedWeapon", Assert.Single(SkyrimMod.CreateFromBinary(path, SkyrimRelease.SkyrimSE).Weapons).EditorID);
+        Assert.Equal(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant(), output.GetProperty("sha256").GetString());
+        var meta = File.ReadAllText(Path.Combine(Path.GetDirectoryName(path)!, "meta.ini"));
+        Assert.Contains("pendingDeployment=true", meta);
+        Assert.Contains("patchSha256=", meta);
+        Assert.True(result.Raw.GetProperty("structuredContent").TryGetProperty("amethyst_staging", out _));
+        foreach (var (file, hash) in originals) Assert.Equal(hash, SHA256.HashData(File.ReadAllBytes(file)));
+        Assert.False(File.Exists(world.Store.FilePath));
+        Assert.Empty(Directory.GetFiles(Path.Combine(world.Root, "game", "Data")));
+    }
+
+    [Theory]
+    [InlineData(ToolNames.Create)]
+    [InlineData(ToolNames.Forward)]
+    [InlineData(ToolNames.Copy)]
+    public void OtherRecordWritersUseTheSameStagingTransaction(string tool)
+    {
+        using var world = new AmethystSnapshotWorld(linkedKeyword: tool == ToolNames.Copy);
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var original = File.ReadAllBytes(source);
+        var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var args = tool switch
+        {
+            ToolNames.Create => JsonSerializer.Serialize(new { records = new[] { new { record_type = "Keyword", editorid = "NewKeyword" } }, patch = "OtherPatch" }),
+            ToolNames.Forward => JsonSerializer.Serialize(new { formids = new[] { formid }, source = "Fixture.esp", patch = "OtherPatch" }),
+            _ => JsonSerializer.Serialize(new { from = formid, seed_paths = new[] { "Keywords" }, new_editorid = "ClonedWeapon", patch = "OtherPatch" })
+        };
+        var result = server.Call(tool, args);
+        Assert.False(result.IsError, result.Text);
+        Assert.Contains("pending deployment", result.Text);
+        var metadata = result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging");
+        Assert.Equal("pending_deployment", metadata.GetProperty("state").GetString());
+        var path = Assert.Single(metadata.GetProperty("outputs").EnumerateArray()).GetProperty("path").GetString()!;
+        var patch = SkyrimMod.CreateFromBinary(path, SkyrimRelease.SkyrimSE);
+        if (tool == ToolNames.Create) Assert.Equal("NewKeyword", Assert.Single(patch.Keywords).EditorID);
+        else Assert.Equal(tool == ToolNames.Copy ? "ClonedWeapon" : "SnapshotBeta0", Assert.Single(patch.Weapons).EditorID);
+        if (tool == ToolNames.Copy)
+        {
+            var keyword = Assert.Single(patch.Keywords);
+            Assert.Equal("SnapshotKeyword", keyword.EditorID);
+            Assert.Equal(keyword.FormKey, Assert.Single(Assert.Single(patch.Weapons).Keywords!).FormKey);
+        }
+        Assert.Equal(original, File.ReadAllBytes(source));
     }
 
     [Fact]

@@ -958,7 +958,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     {
         lock (_gate)
         {
-            if (UsesSavedSnapshot) throw new InvalidOperationException(SnapshotWriteRefusal);
+            if (UsesSavedSnapshot && !AmethystStagingWrite.IsActive) throw new InvalidOperationException(SnapshotWriteRefusal);
             if (!_configured) throw NotConfigured();
             EnsurePathsDerived();
             return new OutputRoots(RootsLocked(), _resolver?.PluginNames);

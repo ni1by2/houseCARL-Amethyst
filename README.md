@@ -4,7 +4,8 @@ houseCARL is an MCP server that exposes a Skyrim Special Edition load order at t
 
 ## Amethyst Linux preview
 
-This fork adds explicitly selected **read-only saved-snapshot mode** for Amethyst.
+This fork adds explicitly selected **saved-snapshot mode** for Amethyst, with new
+record patches written only to staging.
 Select a schema-v1 connection using `housecarl_set_amethyst_connection` with
 `manifest_path` and `filegraph_mode="saved-snapshot"`. The selection survives restart.
 Every dependent response and JSONL export names the saved profile/generation and
@@ -13,8 +14,11 @@ not verify deployment or what wins in-game.
 
 The preview reads Amethyst's own saved-snapshot winners, including BSA members, plus distinct
 vanilla loose files. Vanilla BSA discovery remains pending: when those archives are
-present, results explicitly report incomplete asset coverage. Managed writes,
-previews, in-place editing and MO2 update-cache operations are unavailable.
+present, results explicitly report incomplete asset coverage. `apply`, `create`,
+`forward` and `copy` can write a new record patch; `apply`/`forward` previews write
+nothing. Each output remains pending deployment: Refresh Amethyst, place and
+enable the patch, rebuild and deploy. Existing patches, in-place edits, other
+managed writes and MO2 update-cache operations remain unavailable.
 
 Verified sources: houseCARL main `b77ba4b2` and Amethyst Testing `e98cf70f` / stable
 2.5.4 (native API 13; schema 9, engine 1, rules 13). A real installed 2.5.4 profile

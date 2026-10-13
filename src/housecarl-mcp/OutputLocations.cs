@@ -705,6 +705,7 @@ internal sealed class OutputLocations
     /// <summary>Write the new mod folder's <c>meta.ini</c>: the <c>[houseCARL]</c> ownership marker plus a minimal <c>[General]</c> for MO2's display.</summary>
     internal static void WriteOwnerMeta(string folder, string plugin)
     {
+        var amethyst = AmethystStagingWrite.Register(folder, plugin);
         var content =
             "[General]\r\n" +
             "gameName=skyrimse\r\n" +
@@ -715,6 +716,7 @@ internal sealed class OutputLocations
             "\r\n" +
             HousecarlOwnerMeta.Section + "\r\n" +
             "generated=true\r\n" +
+            amethyst +
             $"plugin={plugin}\r\n" +
             $"created={DateTime.UtcNow:o}\r\n" +
             "\r\n" +

@@ -12,7 +12,7 @@ public sealed partial class LoadOrderService
     /// <summary>Whether the user explicitly enabled the warned saved-snapshot lane.</summary>
     public bool UsesSavedSnapshot => _snapshotManifest is not null;
     /// <summary>Named refusal shared by managed output paths and the MCP write guard.</summary>
-    public const string SnapshotWriteRefusal = "Amethyst saved-snapshot mode supports reads and analysis only. Managed writes, previews and in-place editing are unavailable until Amethyst staging and redeployment verification are implemented.";
+    public const string SnapshotWriteRefusal = "Amethyst currently supports new record patches through apply, create, forward and copy. Extending patches, in-place editing and other managed writes remain unavailable until their staging and redeployment verification are implemented.";
 
     /// <summary>Select a valid connection at startup; its graph is captured lazily for each tool call.</summary>
     public static LoadOrderService WithAmethystSnapshot(string manifest, UserConfigStore store)

@@ -14,18 +14,26 @@ internal static class AmethystSnapshotFilter
     static readonly HashSet<string> Writes = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward,
         ToolNames.Remove, ToolNames.Copy, ToolNames.CompactPlugin, ToolNames.MergePlugins, ToolNames.NifSet,
         ToolNames.Place, ToolNames.WriteSeq, ToolNames.CompileScript];
+    /// <summary>Record-writing tools with a verified new-plugin path shared by all record types.</summary>
+    static readonly HashSet<string> NewPatches = [ToolNames.Apply, ToolNames.Create, ToolNames.Forward, ToolNames.Copy];
 
     /// <summary>Create the filter over the server's single service. Calls and connection changes run serially.</summary>
     internal static McpRequestFilter<CallToolRequestParams, CallToolResult> For(LoadOrderService service) => next => async (request, cancellationToken) =>
     {
         var name = request.Params?.Name;
         if (!OperatingSystem.IsLinux() || name is null) return await next(request, cancellationToken);
-        if (Writes.Contains(name)) return Error(LoadOrderService.SnapshotWriteRefusal);
+        var write = Writes.Contains(name);
+        if (write && (!service.UsesSavedSnapshot || !NewPatches.Contains(name) ||
+            request.Params?.Arguments is { } arguments && new[] { "into", "in_place" }.Any(key =>
+                arguments.TryGetValue(key, out var value) && value.ValueKind != JsonValueKind.Null &&
+                (value.ValueKind != JsonValueKind.String || !string.IsNullOrWhiteSpace(value.GetString())))))
+            return Error(LoadOrderService.SnapshotWriteRefusal);
         if (name is ToolNames.UpdateStatus or ToolNames.NexusCheckUpdates)
             return Error("Amethyst update-cache integration is unavailable; the upstream update tools require MO2's metadata. Nexus tools with explicit mod IDs remain available.");
-        if (!Reads.Contains(name) && name != ToolNames.SetAmethystConnection) return await next(request, cancellationToken);
+        if (!Reads.Contains(name) && !write && name != ToolNames.SetAmethystConnection) return await next(request, cancellationToken);
         await service.SnapshotCalls.WaitAsync(cancellationToken);
         AmethystSavedSnapshot? snapshot = null;
+        AmethystStagingWrite? staging = null;
         try
         {
             if (name == ToolNames.SetAmethystConnection || !service.UsesSavedSnapshot)
@@ -36,21 +44,26 @@ internal static class AmethystSnapshotFilter
             }
             snapshot = service.CaptureSavedSnapshot();
             using var scope = AmethystSnapshotContext.Use(snapshot);
+            if (write) staging = new AmethystStagingWrite(snapshot);
             var result = await next(request, cancellationToken);
+            MarkErrors(result);
+            if (result.IsError == true && staging is not null)
+            { snapshot.RemoveFailedArtifacts(); staging.RemoveEmptyFolders(); }
             snapshot.CheckUnchanged();
             Decorate(result, snapshot.Provenance);
+            if (result.IsError != true) staging?.Complete(result);
             return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        { snapshot?.RemoveFailedArtifacts(); throw; }
+        { snapshot?.RemoveFailedArtifacts(); staging?.RemoveEmptyFolders(); throw; }
         catch (Exception ex)
         {
-            var message = $"Amethyst saved-snapshot read refused: {ex.Message}";
-            try { snapshot?.RemoveFailedArtifacts(); }
+            var message = $"Amethyst saved-snapshot {(write ? "write" : "read")} refused: {ex.Message}";
+            try { snapshot?.RemoveFailedArtifacts(); staging?.RemoveEmptyFolders(); }
             catch (Exception cleanup) { message += $"; could not remove a result artifact from the failed call: {cleanup.Message}"; }
             return Error(message);
         }
-        finally { service.SnapshotCalls.Release(); }
+        finally { staging?.Dispose(); service.SnapshotCalls.Release(); }
     };
 
     /// <summary>Attach provenance to each text/JSON result and MCP structured content without changing the result rows.</summary>

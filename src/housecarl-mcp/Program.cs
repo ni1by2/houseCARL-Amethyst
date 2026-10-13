@@ -108,7 +108,7 @@ static (LoadOrderService svc, bool explicitMode, string? instanceDir, string ins
         if (string.IsNullOrWhiteSpace(connection) || mode != "saved-snapshot")
             return LoadOrderService.WithUnavailableManager(store,
                 "error: select an Amethyst connection and explicitly enable warned reads with " + ToolNames.SetAmethystConnection +
-                " manifest_path=<absolute connection manifest> filegraph_mode='saved-snapshot'. Managed writes remain unavailable.");
+                " manifest_path=<absolute connection manifest> filegraph_mode='saved-snapshot'. New record patches are written to staging and require Amethyst deployment.");
         try { return LoadOrderService.WithAmethystSnapshot(connection, store); }
         catch (AmethystConfigurationException ex) { return LoadOrderService.WithUnavailableManager(store, "error: " + ex.Message); }
     }
@@ -148,7 +148,8 @@ static void AddMcp(IServiceCollection services, bool stdio, int? maxSchemaDepth,
             ? "houseCARL reads a Skyrim SE load order from Amethyst's last saved filegraph when the user explicitly selects saved-snapshot mode with " +
               ToolNames.SetAmethystConnection + ". Every dependent result includes a freshness warning and saved profile/generation. " +
               "Changes since Amethyst's last Refresh may be missing. Refresh the selected profile in Amethyst after changing mods or settings. " +
-              "These reads do not confirm deployment or what wins in-game. Managed writes, previews, in-place editing and MO2 update-cache tools are unavailable. " +
+              "These reads do not confirm deployment or what wins in-game. Apply, create, forward and copy can write new record patches to Amethyst staging; apply/forward previews write nothing. " +
+              "Written patches remain pending until you Refresh, place and enable them, then rebuild and deploy in Amethyst. Existing-plugin edits and other managed writes are not available yet. MO2 update-cache tools are unavailable. " +
               "Use records, asset status, checks and file inspection for analysis. Native archive/file tools use explicit paths. " +
               "An inconsistent or changed saved source is refused with an actionable error."
             :

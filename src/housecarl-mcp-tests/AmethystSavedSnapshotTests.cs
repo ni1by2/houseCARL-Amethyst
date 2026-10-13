@@ -2,6 +2,7 @@ using System.Security.Cryptography;
 using System.Text.Json;
 using HousecarlMcp;
 using ModelContextProtocol.Protocol;
+using Mutagen.Bethesda.Skyrim;
 using Xunit;
 
 namespace HousecarlMcpTests;
@@ -10,6 +11,47 @@ namespace HousecarlMcpTests;
 [Trait("tier", "integration")]
 public sealed class AmethystSavedSnapshotTests
 {
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void AProfileRaceRollsBackTheNewStagedPluginAndMetadata(bool unrelatedFile)
+    {
+        using var world = new AmethystSnapshotWorld();
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var original = File.ReadAllBytes(source);
+        var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
+        using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
+        var snapshot = service.CaptureSavedSnapshot();
+        using var scope = AmethystSnapshotContext.Use(snapshot);
+        using var staging = new AmethystStagingWrite(snapshot);
+        var ops = JsonSerializer.SerializeToElement(new[] { new { formid, field_path = "EditorID", value = "RacedPatch" } });
+        var reply = ApplyTools.Apply(service, ops: ops, patch: "RacedPatch", format: "json");
+        using var json = JsonDocument.Parse(reply);
+        Assert.False(json.RootElement.TryGetProperty("error", out _), reply);
+        var folder = Path.Combine(world.Root, "mods", "houseCARL - RacedPatch");
+        Assert.True(File.Exists(Path.Combine(folder, "RacedPatch.esp")), reply);
+        if (unrelatedFile) File.WriteAllText(Path.Combine(folder, "External.txt"), "preserve this file");
+        world.Execute("UPDATE profiles SET generation=generation+1");
+        Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+        snapshot.RemoveFailedArtifacts();
+        staging.RemoveEmptyFolders();
+        Assert.False(File.Exists(Path.Combine(folder, "RacedPatch.esp")));
+        Assert.False(File.Exists(Path.Combine(folder, "meta.ini")));
+        Assert.Equal(unrelatedFile, Directory.Exists(folder));
+        if (unrelatedFile) Assert.Equal("preserve this file", File.ReadAllText(Path.Combine(folder, "External.txt")));
+        Assert.Equal(original, File.ReadAllBytes(source));
+        Assert.Empty(Directory.GetFiles(Path.Combine(world.Root, "game", "Data")));
+    }
+
+    [Fact]
+    public void ReadCallersCannotAllocateAmethystOutputFolders()
+    {
+        using var world = new AmethystSnapshotWorld();
+        using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
+        using var scope = AmethystSnapshotContext.Use(service.CaptureSavedSnapshot());
+        Assert.Contains("remain unavailable", Assert.Throws<InvalidOperationException>(() => service.ConfiguredRoots()).Message);
+    }
+
     [Fact]
     public void SavedWinnersAndProvidersMatchTheActualProducer()
     {
