@@ -25,7 +25,7 @@ public sealed class PlaceNamedProviderEdgeTests
         var svc = p.Open();
         var providers = svc.AssetStatus(new[] { FacegenRel }).Results[0].Hit?.Providers ?? Array.Empty<AssetProvider>();
         Assert.Contains(providers, pr => pr.Kind == AssetKind.Bsa && pr.Source == "Dummy.bsa");
-        Assert.True(File.Exists(Path.Combine(collide, folderOnly)));
+        Assert.True(File.Exists(BethesdaPath.Under(collide, folderOnly)));
 
         var r = svc.PlaceAssets(new[] { new PlaceRequest(folderOnly, folderOnly, "Dummy.bsa") }, null, null).Results[0];
 

@@ -13,6 +13,8 @@ public sealed class PlaceSpecWorld : IDisposable
     public LoadOrderService Svc { get; }
     /// <summary>A full '.bsa' path holding both FaceGen files, outside the mods tree.</summary>
     public string Archive { get; }
+    /// <summary>A missing absolute file in this fixture's native filesystem.</summary>
+    public string MissingSource => Path.Combine(P.Root, "nope", "fan.nif");
 
     public PlaceSpecWorld()
     {
@@ -86,7 +88,7 @@ public sealed class PlaceSpecRefusalTests : IClassFixture<PlaceSpecWorld>
     public void ASetLevelPoleIsWithheldFromAnOnDiskSourceAndTheRowSaysSo()
     {
         var fan = PlaceTools.Place(_w.Svc,
-            new[] { new PlaceTarget { Path = @"meshes\hcprobe\fan.nif", Source = @"C:\nope\fan.nif" } }, source_provider: "SomeMod");
+            new[] { new PlaceTarget { Path = @"meshes\hcprobe\fan.nif", Source = _w.MissingSource } }, source_provider: "SomeMod");
 
         Assert.DoesNotContain(WriteSentences.PlaceSourceProviderNeedsRelPath, fan);
         Assert.Contains("set-level source_provider not applied", fan);
@@ -97,7 +99,7 @@ public sealed class PlaceSpecRefusalTests : IClassFixture<PlaceSpecWorld>
     public void AMembersOwnPoleOnAnOnDiskSourceIsRefused()
     {
         var own = PlaceTools.Place(_w.Svc, new[]
-            { new PlaceTarget { Path = @"meshes\hcprobe\fan.nif", Source = @"C:\nope\fan.nif", SourceProvider = "SomeMod" } });
+            { new PlaceTarget { Path = @"meshes\hcprobe\fan.nif", Source = _w.MissingSource, SourceProvider = "SomeMod" } });
 
         Assert.Contains(WriteSentences.PlaceSourceProviderNeedsRelPath, own);
     }
@@ -107,7 +109,7 @@ public sealed class PlaceSpecRefusalTests : IClassFixture<PlaceSpecWorld>
     public void AForwardSlashDestinationStillSaysThePoleWasWithheld()
     {
         var slash = PlaceTools.Place(_w.Svc,
-            new[] { new PlaceTarget { Path = "meshes/hcprobe/fan.nif", Source = @"C:\nope\fan.nif" } }, source_provider: "SomeMod");
+            new[] { new PlaceTarget { Path = "meshes/hcprobe/fan.nif", Source = _w.MissingSource } }, source_provider: "SomeMod");
 
         Assert.Contains("set-level source_provider not applied", slash);
     }
