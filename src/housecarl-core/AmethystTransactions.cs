@@ -596,6 +596,20 @@ public sealed class AmethystTransactionCoordinator
         return updated;
     }
 
+    internal AmethystTransactionOutcome RecoverWithLocks(string transactionId, AmethystTransactionLockSet locks)
+    {
+        var journal = ReadJournal(transactionId);
+        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath);
+        return Recover(journal, locks);
+    }
+
+    internal AmethystTransactionOutcome AbortWithLocks(string transactionId, AmethystTransactionLockSet locks)
+    {
+        var journal = ReadJournal(transactionId);
+        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath);
+        return journal.Artifacts.Any(a => a.State == "committed") ? Rollback(journal, locks) : Recover(journal, locks);
+    }
+
     /// <summary>Recover interrupted commits only when destination bytes exactly match the recorded old or new hash.</summary>
     AmethystTransactionOutcome Recover(AmethystTransactionJournal journal, AmethystTransactionLockSet locks)
     {

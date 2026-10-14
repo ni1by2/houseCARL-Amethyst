@@ -50,7 +50,11 @@ public static class ForwardTools
         [Description("'text' (default) or 'json' (the same data). Either way the reply states, per record, what was copied and the winner it will out-rank once enabled; a forward whose version already wins is flagged redundant. " + LaneSentences.Epoch)]
             string? format = null,
         [Description("Character limit on the reply: the forwarded-record rows, then the read-back. " + LaneSentences.MaxCharsCut + ".")]
-            int max_chars = 0) => Guard.Tool(ToolNames.Forward, () =>
+            int max_chars = 0,
+        [Description("Required for into= or in_place=: acknowledge that the transaction may require Amethyst redeployment.")]
+            bool confirm_amethyst_redeploy = false,
+        [Description("Required for into= or in_place=: acknowledge that an enabled deployed target may be visible to the game immediately.")]
+            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.Forward, () =>
     {
         // format first, ahead of the unconfigured-MO2 prompt; contract in docs/architecture/write-path.md.
         bool json = Wire.WantsJson(format, out var ferr);

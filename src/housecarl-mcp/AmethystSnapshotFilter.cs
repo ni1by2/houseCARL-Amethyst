@@ -15,7 +15,7 @@ internal static class AmethystSnapshotFilter
         ToolNames.Remove, ToolNames.Copy, ToolNames.CompactPlugin, ToolNames.MergePlugins, ToolNames.NifSet,
         ToolNames.Place, ToolNames.WriteSeq, ToolNames.CompileScript];
     /// <summary>Record-writing tools with a verified new-plugin path shared by all record types.</summary>
-    static readonly HashSet<string> NewPatches = [ToolNames.Apply, ToolNames.Create, ToolNames.Forward, ToolNames.Copy];
+    static readonly HashSet<string> TransactionRoutedRecordWrites = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward, ToolNames.Remove, ToolNames.Copy];
 
     /// <summary>Create the filter over the server's single service. Calls and connection changes run serially.</summary>
     internal static McpRequestFilter<CallToolRequestParams, CallToolResult> For(LoadOrderService service) => next => async (request, cancellationToken) =>
@@ -23,11 +23,17 @@ internal static class AmethystSnapshotFilter
         var name = request.Params?.Name;
         if (!OperatingSystem.IsLinux() || name is null) return await next(request, cancellationToken);
         var write = Writes.Contains(name);
-        if (write && (!service.UsesSavedSnapshot || !NewPatches.Contains(name) ||
-            request.Params?.Arguments is { } arguments && new[] { "into", "in_place" }.Any(key =>
-                arguments.TryGetValue(key, out var value) && value.ValueKind != JsonValueKind.Null &&
-                (value.ValueKind != JsonValueKind.String || !string.IsNullOrWhiteSpace(value.GetString())))))
+        var arguments = request.Params?.Arguments;
+        bool Names(string key) => arguments is not null && arguments.TryGetValue(key, out var value) &&
+            (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()));
+        bool existingDestination = Names("into") || Names("in_place");
+        if (write && existingDestination && (!Confirmed("confirm_amethyst_redeploy") || !Confirmed("confirm_live_deployment_change")))
+            return Error("Updating an existing staged plugin requires both confirm_amethyst_redeploy=true and confirm_live_deployment_change=true on this call; an enabled target may be visible to the game immediately.");
+        if (write && (!service.UsesSavedSnapshot || !TransactionRoutedRecordWrites.Contains(name) ||
+            arguments is not null && new[] { "into", "in_place" }.Any(key => Names(key) && !existingDestination)))
             return Error(LoadOrderService.SnapshotWriteRefusal);
+
+        bool Confirmed(string key) => arguments is not null && arguments.TryGetValue(key, out var value) && value.ValueKind == JsonValueKind.True;
         if (name is ToolNames.UpdateStatus or ToolNames.NexusCheckUpdates)
             return Error("Amethyst update-cache integration is unavailable; the upstream update tools require MO2's metadata. Nexus tools with explicit mod IDs remain available.");
         if (!Reads.Contains(name) && !write && name != ToolNames.SetAmethystConnection) return await next(request, cancellationToken);
@@ -44,22 +50,21 @@ internal static class AmethystSnapshotFilter
             }
             snapshot = service.CaptureSavedSnapshot();
             using var scope = AmethystSnapshotContext.Use(snapshot);
-            if (write) staging = new AmethystStagingWrite(snapshot);
+            if (write) staging = new AmethystStagingWrite(snapshot, name!, JsonSerializer.Serialize(arguments), existingDestination);
             var result = await next(request, cancellationToken);
             MarkErrors(result);
-            if (result.IsError == true && staging is not null)
-            { snapshot.RemoveFailedArtifacts(); staging.RemoveEmptyFolders(); }
-            snapshot.CheckUnchanged();
+            if (result.IsError == true && staging is not null) staging.Abort();
+            if (staging is null) snapshot.CheckUnchanged(); else staging.ValidateSnapshotInputs();
             Decorate(result, snapshot.Provenance);
             if (result.IsError != true) staging?.Complete(result);
             return result;
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
-        { snapshot?.RemoveFailedArtifacts(); staging?.RemoveEmptyFolders(); throw; }
+        { if (staging is not null) staging.Abort(); else snapshot?.RemoveFailedArtifacts(); throw; }
         catch (Exception ex)
         {
             var message = $"Amethyst saved-snapshot {(write ? "write" : "read")} refused: {ex.Message}";
-            try { snapshot?.RemoveFailedArtifacts(); staging?.RemoveEmptyFolders(); }
+            try { if (staging is not null) staging.Abort(); else snapshot?.RemoveFailedArtifacts(); }
             catch (Exception cleanup) { message += $"; could not remove a result artifact from the failed call: {cleanup.Message}"; }
             return Error(message);
         }

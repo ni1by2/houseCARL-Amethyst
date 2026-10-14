@@ -23,7 +23,8 @@ public sealed class AmethystSavedSnapshotTests
         using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
         var snapshot = service.CaptureSavedSnapshot();
         using var scope = AmethystSnapshotContext.Use(snapshot);
-        using var staging = new AmethystStagingWrite(snapshot);
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        using var staging = new AmethystStagingWrite(snapshot, ToolNames.Apply, "fixture request");
         var ops = JsonSerializer.SerializeToElement(new[] { new { formid, field_path = "EditorID", value = "RacedPatch" } });
         var reply = ApplyTools.Apply(service, ops: ops, patch: "RacedPatch", format: "json");
         using var json = JsonDocument.Parse(reply);
@@ -33,8 +34,7 @@ public sealed class AmethystSavedSnapshotTests
         if (unrelatedFile) File.WriteAllText(Path.Combine(folder, "External.txt"), "preserve this file");
         world.Execute("UPDATE profiles SET generation=generation+1");
         Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
-        snapshot.RemoveFailedArtifacts();
-        staging.RemoveEmptyFolders();
+        staging.Abort();
         Assert.False(File.Exists(Path.Combine(folder, "RacedPatch.esp")));
         Assert.False(File.Exists(Path.Combine(folder, "meta.ini")));
         Assert.Equal(unrelatedFile, Directory.Exists(folder));

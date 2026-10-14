@@ -722,7 +722,7 @@ internal sealed class OutputLocations
             "\r\n" +
             "[installedFiles]\r\n" +
             "size=0\r\n";
-        File.WriteAllText(Path.Combine(folder, "meta.ini"), content);
+        AmethystStagingWrite.DeferOwnerMetadata(Path.Combine(folder, "meta.ini"), content);
     }
 
     /// <summary>Is a located file the copy the MO2 install serves for its filename, and if not, why not? One half of "does the game load this file", independent of <see cref="TickStanding"/>, since a copy can be both shadowed and unticked with a remedy each. NotAnInstallCopy is deliberately the zero value.</summary>

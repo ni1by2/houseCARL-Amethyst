@@ -53,7 +53,11 @@ public static class ApplyTools
         [Description("'text' (default) or 'json' (the same data). " + LaneSentences.Epoch)]
             string? format = null,
         [Description("Character limit on the reply: in json the applied-op rows and the read-back, in text the read-back. " + LaneSentences.MaxCharsCut + "; raise it for a readback=true dump.")]
-            int max_chars = 0) => Guard.Tool(ToolNames.Apply, () =>
+            int max_chars = 0,
+        [Description("Required for into= or in_place=: acknowledge that the transaction may require Amethyst redeployment.")]
+            bool confirm_amethyst_redeploy = false,
+        [Description("Required for into= or in_place=: acknowledge that an enabled deployed target may be visible to the game immediately.")]
+            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.Apply, () =>
     {
         // ---- TRANSPORT: format --------------------------------------------------------------------------
         // Ahead of the unconfigured-MO2 prompt; contract in docs/architecture/write-path.md.

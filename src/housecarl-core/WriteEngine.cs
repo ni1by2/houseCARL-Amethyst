@@ -1315,7 +1315,7 @@ public static class WriteEngine
     /// <summary>Stage 1 of the atomic write: serialize into a temp SUBDIRECTORY beside the target, so the stage-2 rename is atomic; temp cleaned on failure.</summary>
     static string WritePatchStaged(SkyrimMod patchMod, ISkyrimModGetter[] ordered, ModKey[] baseline, string outputPath)
     {
-        var tmpDir = Path.Combine(Path.GetDirectoryName(outputPath)!, ".housecarl-tmp");
+        var tmpDir = Path.Combine(Path.GetDirectoryName(outputPath)!, $".housecarl-{Guid.NewGuid():N}.tmp");
         var tmpPath = Path.Combine(tmpDir, Path.GetFileName(outputPath));
         Directory.CreateDirectory(tmpDir);
 
@@ -1353,7 +1353,12 @@ public static class WriteEngine
     /// <summary>Stage 2 of the atomic write: swap the staged temp over the target — File.Replace when it exists, a rename when it does not.</summary>
     static void CommitStagedPatch(string tmpPath, string outputPath)
     {
-        try { AtomicFile.Commit(tmpPath, outputPath); }
+        try
+        {
+            if (AmethystTransactionWriteScope.Current is { } transaction)
+                transaction.CommitPlugin(tmpPath, outputPath);
+            else AtomicFile.Commit(tmpPath, outputPath);
+        }
         finally { CleanupStaged(tmpPath); }
     }
 
@@ -1420,7 +1425,7 @@ public static class WriteEngine
     /// <summary>Stage 1 of the in-place write: own declared masters, the counter verbatim with NO floor, no baseline, staged in the sibling temp.</summary>
     static string WriteInPlaceStaged(SkyrimMod targetMod, ISkyrimModGetter[] ordered, string outputPath)
     {
-        var tmpDir = Path.Combine(Path.GetDirectoryName(outputPath)!, ".housecarl-tmp");
+        var tmpDir = Path.Combine(Path.GetDirectoryName(outputPath)!, $".housecarl-{Guid.NewGuid():N}.tmp");
         var tmpPath = Path.Combine(tmpDir, Path.GetFileName(outputPath));
         Directory.CreateDirectory(tmpDir);
         try

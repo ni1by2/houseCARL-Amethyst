@@ -1,5 +1,6 @@
 using System.Buffers.Binary;
 using System.Text;
+using System.Security.Cryptography;
 using System.Text.Json;
 using MessagePack;
 using Microsoft.Data.Sqlite;
@@ -16,6 +17,8 @@ public sealed class AmethystSavedSnapshot
     public AmethystSnapshotProvenance Provenance { get; private set; } = null!;
     /// <summary>Canonical profile folder selected by deploy_state.json.</summary>
     public string ProfileDir { get; private set; } = "";
+    /// <summary>Schema-v1 manifest used to select this saved profile.</summary>
+    public string ManifestPath { get; private set; } = "";
     /// <summary>Effective staging mods root; shared or profile-specific.</summary>
     public string ModsDir { get; private set; } = "";
     /// <summary>Effective overwrite provider root.</summary>
@@ -38,6 +41,11 @@ public sealed class AmethystSavedSnapshot
     public IReadOnlyList<ActiveArchive> VanillaArchives { get; private set; } = [];
     /// <summary>The profile's saved filegraph catalog.</summary>
     public string DatabasePath { get; private set; } = "";
+    /// <summary>Existing Amethyst native filegraph lock adjacent to its selected library catalog.</summary>
+    public string ManagerLockPath => Path.Combine(Path.GetDirectoryName(DatabasePath)!, "filegraph.lock");
+    /// <summary>Stable hashes of captured input contents, for transaction provenance.</summary>
+    public IReadOnlyList<string> InputSha256 => _inputs.Values.Where(x => x.Bytes is not null)
+        .Select(x => Convert.ToHexString(SHA256.HashData(x.Bytes!)).ToLowerInvariant()).Order(StringComparer.Ordinal).ToArray();
     /// <summary>Profile text composition, used only for plugin order/activation and user diagnostics.</summary>
     public Mo2Composition Composition { get; private set; } = null!;
     /// <summary>Exact staged or vanilla paths of active plugins, in the profile's load order.</summary>
@@ -116,6 +124,7 @@ public sealed class AmethystSavedSnapshot
     /// <summary>Read connection roots, one SQLite transaction, and the selected profile's plugin paths.</summary>
     void Read(string manifestPath)
     {
+        ManifestPath = Path.GetFullPath(manifestPath);
         Input(manifestPath, required: true);
         var connection = AmethystConnection.Open(manifestPath);
         using var paths = JsonDocument.Parse(Input(connection.PathsFile, true)!);
@@ -701,7 +710,10 @@ public sealed class AmethystSavedSnapshot
     }
 
     /// <summary>Revalidate profile/configuration, canonical roots, database identity/generation and all observed sources.</summary>
-    public void CheckUnchanged()
+    public void CheckUnchanged() => CheckUnchanged(transactionOutputs: null);
+
+    /// <summary>Revalidate saved inputs while excluding files the active transaction has deliberately replaced.</summary>
+    public void CheckUnchanged(IReadOnlySet<string>? transactionOutputs)
     {
         foreach (var (path, expected) in _inputs)
         {
@@ -746,7 +758,8 @@ public sealed class AmethystSavedSnapshot
         if (!row.Read() || row.GetInt64(0) != Provenance.Generation || row.GetInt64(1) != checked((long)Provenance.InventoryGeneration) || row.GetInt64(2) != 1)
             throw new InvalidOperationException("Amethyst filegraph generation changed during the call; retry");
         foreach (var (path, stamp) in _readSources)
-            if (LinuxFileIdentity.Of(path) != stamp) throw new InvalidOperationException($"source changed during the call: '{path}'; retry");
+            if ((transactionOutputs is null || !transactionOutputs.Contains(Path.GetFullPath(path))) && LinuxFileIdentity.Of(path) != stamp)
+                throw new InvalidOperationException($"source changed during the call: '{path}'; retry");
     }
 
     /// <summary>Register an artifact written by this call so a raced refusal cannot leave a seemingly valid result file.</summary>

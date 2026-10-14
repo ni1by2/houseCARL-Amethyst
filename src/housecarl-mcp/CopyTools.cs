@@ -44,7 +44,11 @@ public static class CopyTools
         [Description("Base filename for the new patch plugin and its mod folder (default: new_editorid= when cloning, else 'Patch'). " + LaneSentences.PatchSuffix)]
             string? patch = null,
         [Description(LaneSentences.IntoLead + LaneSentences.IntoFound)]
-            string? into = null) => Guard.Tool(ToolNames.Copy, () =>
+            string? into = null,
+        [Description("Required for into=: acknowledge that the transaction may require Amethyst redeployment.")]
+            bool confirm_amethyst_redeploy = false,
+        [Description("Required for into=: acknowledge that an enabled deployed target may be visible to the game immediately.")]
+            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.Copy, () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
 

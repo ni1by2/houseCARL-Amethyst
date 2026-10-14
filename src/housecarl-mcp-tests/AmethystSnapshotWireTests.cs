@@ -27,7 +27,7 @@ public sealed class AmethystSnapshotWireTests
         using (var server = new ServerFixture(environment))
         {
             Assert.Contains(ToolNames.SetAmethystConnection, server.PublishedNames);
-            Assert.Equal(32, server.PublishedNames.Count);
+            Assert.Equal(34, server.PublishedNames.Count);
             Assert.Contains("saved-snapshot", server.Call(ToolNames.Records, "{\"types\":[\"WEAP\"]}").Text);
             var rejected = server.Call(ToolNames.SetAmethystConnection, JsonSerializer.Serialize(new { manifest_path = world.Manifest, filegraph_mode = "automatic" }));
             Assert.True(rejected.IsError, rejected.Text);
@@ -90,7 +90,7 @@ public sealed class AmethystSnapshotWireTests
         {
             var result = server.Call(ToolNames.Apply, args);
             Assert.True(result.IsError, result.Text);
-            Assert.Contains("remain unavailable", result.Text);
+            Assert.Contains("confirm_amethyst_redeploy=true", result.Text);
         }
         Assert.False(File.Exists(world.Store.FilePath));
         Assert.Equal(files, Directory.GetFiles(Path.Combine(world.Root, "mods"), "*", SearchOption.AllDirectories).Order());
@@ -104,6 +104,7 @@ public sealed class AmethystSnapshotWireTests
             .ToDictionary(p => p, p => SHA256.HashData(File.ReadAllBytes(p)));
         var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
         var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
         using var server = new ServerFixture(EnvironmentFor(world, true));
         var ops = new[] { new { formid, field_path = "EditorID", value = "PatchedWeapon" } };
         var preview = server.Call(ToolNames.Apply, JsonSerializer.Serialize(new { ops, patch = "VerifiedPatch", dry_run = true, format = "json" }));
@@ -138,6 +139,7 @@ public sealed class AmethystSnapshotWireTests
         var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
         var original = File.ReadAllBytes(source);
         var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
         using var server = new ServerFixture(EnvironmentFor(world, true));
         var args = tool switch
         {
@@ -161,6 +163,93 @@ public sealed class AmethystSnapshotWireTests
             Assert.Equal(keyword.FormKey, Assert.Single(Assert.Single(patch.Weapons).Keywords!).FormKey);
         }
         Assert.Equal(original, File.ReadAllBytes(source));
+    }
+
+    [Fact]
+    public void InPlaceRecordWriteRequiresBothConsentsAndCommitsTheOwnerMarkerWithThePlugin()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var args = JsonSerializer.Serialize(new
+        {
+            ops = new[] { new { formid, field_path = "EditorID", value = "InPlaceVerified" } },
+            in_place = "Fixture.esp", acknowledge = true, confirm_amethyst_redeploy = true,
+            confirm_live_deployment_change = true, format = "json"
+        });
+        var result = server.Call(ToolNames.Apply, args);
+        Assert.False(result.IsError, result.Text);
+        Assert.Contains(SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons, weapon => weapon.EditorID == "InPlaceVerified");
+        var metadata = result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging");
+        Assert.True(metadata.GetProperty("immediate_visibility").GetBoolean());
+        Assert.Contains("editedInPlace=", File.ReadAllText(Path.Combine(world.Root, "mods", "Beta", "meta.ini")));
+    }
+
+    [Fact]
+    public void RemoveUsesTheSameConsentAndTransactionLaneForExistingPlugins()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var plugin = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE);
+        var formid = plugin.Weapons.First().FormKey.ToString();
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var args = JsonSerializer.Serialize(new
+        {
+            formids = new[] { formid }, in_place = "Fixture.esp", acknowledge = true,
+            confirm_amethyst_redeploy = true, confirm_live_deployment_change = true, format = "json"
+        });
+        var result = server.Call(ToolNames.Remove, args);
+        Assert.False(result.IsError, result.Text);
+        Assert.DoesNotContain(SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons,
+            weapon => weapon.FormKey.ToString() == formid);
+        Assert.True(result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging")
+            .GetProperty("immediate_visibility").GetBoolean());
+    }
+
+    [Fact]
+    public void HeaderOnlyPluginUsesTheSamePendingTransaction()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var result = server.Call(ToolNames.CreatePlugin, "{\"patch\":\"TransactionHeader\",\"esl\":true}");
+        Assert.False(result.IsError, result.Text);
+        var staging = result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging");
+        Assert.Equal("pending_deployment", staging.GetProperty("state").GetString());
+        var path = Assert.Single(staging.GetProperty("outputs").EnumerateArray()).GetProperty("path").GetString()!;
+        Assert.True(SkyrimMod.CreateFromBinary(path, SkyrimRelease.SkyrimSE).IsSmallMaster);
+        Assert.Contains("patchSha256=", File.ReadAllText(Path.Combine(Path.GetDirectoryName(path)!, "meta.ini")));
+    }
+
+    [Fact]
+    public void IntoUpdatesOwnedPatchAndOwnerMetadataAsOneConsentedTransaction()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var firstOps = new[] { new { formid, field_path = "EditorID", value = "BeforeInto" } };
+        var first = server.Call(ToolNames.Apply, JsonSerializer.Serialize(new { ops = firstOps, patch = "IntoTransaction", format = "json" }));
+        Assert.False(first.IsError, first.Text);
+        var plugin = Path.Combine(world.Root, "mods", "houseCARL - IntoTransaction", "IntoTransaction.esp");
+        var metaPath = Path.Combine(Path.GetDirectoryName(plugin)!, "meta.ini");
+        var beforeMetaHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(metaPath))).ToLowerInvariant();
+        var secondOps = new[] { new { formid, field_path = "EditorID", value = "AfterInto" } };
+        var second = server.Call(ToolNames.Apply, JsonSerializer.Serialize(new
+        {
+            ops = secondOps, into = "IntoTransaction.esp", confirm_amethyst_redeploy = true,
+            confirm_live_deployment_change = true, format = "json"
+        }));
+        Assert.False(second.IsError, second.Text);
+        Assert.Equal("AfterInto", Assert.Single(SkyrimMod.CreateFromBinary(plugin, SkyrimRelease.SkyrimSE).Weapons).EditorID);
+        var staging = second.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging");
+        Assert.True(staging.GetProperty("immediate_visibility").GetBoolean());
+        Assert.Equal(plugin, Assert.Single(staging.GetProperty("outputs").EnumerateArray()).GetProperty("path").GetString());
+        Assert.NotEqual(beforeMetaHash, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(metaPath))).ToLowerInvariant());
     }
 
     [Fact]

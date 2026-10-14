@@ -373,7 +373,9 @@ internal sealed partial class RecordWrites
             if (string.IsNullOrEmpty(modFolder) || !IsUnderModsDir(roots, modFolder)) return null;   // N/A for a non-MO2 target
             var meta = Path.Combine(modFolder, "meta.ini");
             var stamp = $"editedInPlace={DateTime.UtcNow:o}";
-            var lines = File.Exists(meta) ? File.ReadAllLines(meta).ToList() : new List<string>();
+            var original = File.Exists(meta) ? File.ReadAllBytes(meta) : null;
+            var expectedHash = original is null ? null : Convert.ToHexString(System.Security.Cryptography.SHA256.HashData(original)).ToLowerInvariant();
+            var lines = original is null ? new List<string>() : System.Text.Encoding.UTF8.GetString(original).Split(new[] { "\r\n", "\n" }, StringSplitOptions.None).ToList();
 
             int sec = lines.FindIndex(l => l.Trim().Equals(HousecarlOwnerMeta.Section, StringComparison.OrdinalIgnoreCase));
             if (sec < 0)
@@ -393,11 +395,12 @@ internal sealed partial class RecordWrites
                 }
                 if (edited >= 0) lines[edited] = stamp; else lines.Insert(sec + 1, stamp);    // update-or-insert within the section
             }
-            File.WriteAllText(meta, string.Join("\r\n", lines) + "\r\n");
+            AmethystStagingWrite.DeferExistingOwnerMetadata(meta, string.Join("\r\n", lines) + "\r\n", expectedHash, trackPluginHash: false);
             return null;
         }
         catch (Exception ex)
         {
+            if (AmethystStagingWrite.IsActive) throw;
             return $"the editedInPlace audit marker could not be written to the target's meta.ini ({ex.GetType().Name}) — the edit itself succeeded.";
         }
     }
@@ -708,9 +711,17 @@ internal sealed partial class RecordWrites
             // The .esp write lane shares the extend resolver with the rider and asset lanes; needEsp:true picks the .esp inside the folder.
             var folder = OutputLocations.ResolveOwnedPatchFolder(roots, into, needEsp: true, freshPatch, noFreshRule);
             var direct = Path.Combine(folder, OutputLocations.PatchStem(into) + ".esp");
-            if (File.Exists(direct)) return direct;
+            if (File.Exists(direct))
+            {
+                AmethystStagingWrite.RegisterExistingOwnedPatch(folder, Path.GetFileName(direct));
+                return direct;
+            }
             var sole = SoleEspInFolder(folder, out var why);
-            if (sole is not null) return sole;
+            if (sole is not null)
+            {
+                AmethystStagingWrite.RegisterExistingOwnedPatch(folder, Path.GetFileName(sole));
+                return sole;
+            }
             throw new InvalidOperationException($"cannot extend: houseCARL folder '{Path.GetFileName(folder)}' {why}.");
         }
 
