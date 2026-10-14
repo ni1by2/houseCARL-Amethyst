@@ -7,16 +7,16 @@ public sealed class CostCounters
     /// <summary>Overlay opens the service's sessions have paid.</summary>
     public long SessionOverlayOpens;
 
-    /// <summary>Per-record whole-plugin seeks.</summary>
+    /// <summary>Every per-record seek, typed or not; the flat walks are <c>BodySeeks - TypedSeeks</c>.</summary>
     public long BodySeeks;
 
-    /// <summary>Per-record seeks that walked only the named record type's groups.</summary>
+    /// <summary>Per-record seeks answered by walking only the record type's groups.</summary>
     public long TypedSeeks;
 
     /// <summary>Plugins a gather actually walked.</summary>
     public long CollectPasses;
 
-    /// <summary>Gather walks that read only the named record types' groups.</summary>
+    /// <summary>Gather walks answered by reading only the wanted record types' groups.</summary>
     public long TypedCollectPasses;
 
     /// <summary>Provider bodies the conflict-tree fold read.</summary>

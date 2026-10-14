@@ -37,6 +37,7 @@ internal sealed partial class RecordReads
         // The caller's own build when its FormID door already captured one, so the tokens it parsed and the
         // records this scan matches come from ONE build.
         var view = pinnedView ?? resolver.Capture();
+        var pin = new LoadOrderService.ViewPin(resolver, view);   // the outcome's and every prefilled row's
         // A plugins= scope naming a plugin the order does not carry answers for the ones it does; the missing
         // names ride the scan note, and only an ALL-missing scope is refused.
         string? scopeMissingNote = null;
@@ -238,7 +239,7 @@ internal sealed partial class RecordReads
                 // Gather one chunk's winner bodies and scan its keys in the universe's own order; false stops.
                 bool DrainSet()
                 {
-                    var bodies = WinnerBodies.For(view, sess, setPending, null, out var faults, ct);
+                    var bodies = WinnerBodies.For(view, sess, setPending, out var faults, ct);
                     // A winner plugin that would not open is a whole-plugin coverage gap, named once.
                     unreadablePlugins.AddRange(faults.Values);
                     // The containing records of the rows that reach where=, one walk per winner plugin.
@@ -296,7 +297,7 @@ internal sealed partial class RecordReads
                                     sources.Add(null);                            // the winner body is what matched and displays
                                     matched?.Add(hitTargets is not null ? string.Join(", ", hitTargets) : null);
                                     prefilled?.Add(RecordSummary.Of(fk, body, w.Value.WinnerPlugin, w.Value.OverrideDepth)
-                                                   .WithRuntime(view.RuntimeAddressOf(fk)));
+                                                   .WithRuntime(view.RuntimeAddressOf(fk)) with { Pin = pin });
                                 }
                             }
                             catch (Exception ex)
@@ -346,13 +347,20 @@ internal sealed partial class RecordReads
             var pending = chunked
                 ? new List<(FormKey fk, int depth, IMajorRecordGetter body, string? source, string? winner)>(WinnerGatherChunk)
                 : null;
+            // A winner scan that reads every GMST also builds the shared-EditorID lookup its rows' notes read.
+            var names = !hasPlugins && SharedEditorIds.Covers(types, _host.Types) ? new SharedEditorIds(view) : null;
+            var streamUnread = new List<PluginUnreadableException>();
             try
             {
                 // Carry the source plugin per record so the render shows the body the scan filtered: plugins= gives
                 // the scoped plugin's filename, type= gives null, meaning the winner.
                 IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body, string? source)> stream =
                     hasPlugins ? view.RecordsIn(plugins!, types).Select(x => (fk: x.fk, depth: x.depth, body: x.body, source: (string?)x.source))  // the scoped plugin's own body
-                               : view.WinnerRecordsOfType(types!, unreadablePlugins).Select(x => (fk: x.fk, depth: x.depth, body: x.body, source: (string?)null));    // the load-order winner's body
+                               : view.WinnerRecordsOfType(types!, streamUnread).Select(x =>
+                               {
+                                   names?.Add(x.fk, x.body);
+                                   return (fk: x.fk, depth: x.depth, body: x.body, source: (string?)null);    // the load-order winner's body
+                               });
                 bool stopped = false;
                 foreach (var (fk, depth, body, source) in stream)
                 {
@@ -380,6 +388,8 @@ internal sealed partial class RecordReads
                     if (pending.Count == WinnerGatherChunk && !DrainChunk()) { stopped = true; break; }
                 }
                 if (!stopped && chunked && pending!.Count > 0) DrainChunk();
+                unreadablePlugins.AddRange(streamUnread);
+                if (names is not null && !stopped) pin.Seed(names.Finish(streamUnread));
 
                 // Fetch one chunk's winner and containing-record bodies and scan its rows, in stream order; false stops the scan.
                 bool DrainChunk()
@@ -388,7 +398,7 @@ internal sealed partial class RecordReads
                     if (whereWinnerActive)
                         foreach (var p in pending)
                             if (!string.Equals(p.winner, p.source, StringComparison.OrdinalIgnoreCase)) needed.Add(p.fk);
-                    var bodies = WinnerBodies.For(view, winnerSession!, needed, types, out var faults, ct);
+                    var bodies = WinnerBodies.For(view, winnerSession!, needed, out var faults, ct);
                     // A winner plugin that would not open is a whole-plugin coverage gap, named once in the
                     // response rather than only sampled three rows deep.
                     unreadablePlugins.AddRange(faults.Values);
@@ -466,8 +476,11 @@ internal sealed partial class RecordReads
                             matched?.Add(hitTargets is not null ? string.Join(", ", hitTargets) : null);   // parallel to keys, multi-target only
                             // The winner comes off the SAME view the scan runs on; type, editorid and name come
                             // from the body that MATCHED.
-                            prefilled!.Add(RecordSummary.Of(fk, filterBody, view.ResolveWinner(fk)?.WinnerPlugin ?? "?", depth)
-                                           .WithRuntime(view.RuntimeAddressOf(fk)));
+                            var rowWinner = view.ResolveWinner(fk)?.WinnerPlugin;
+                            // A scoped body that is not the winner's owes no shared-EditorID note, so it carries no pin.
+                            bool winnerBody = source is null || string.Equals(source, rowWinner, StringComparison.OrdinalIgnoreCase);
+                            prefilled!.Add(RecordSummary.Of(fk, filterBody, rowWinner ?? "?", depth)
+                                           .WithRuntime(view.RuntimeAddressOf(fk)) with { Pin = winnerBody ? pin : null });
                         }
                     }
                     catch (Exception ex)
@@ -546,7 +559,7 @@ internal sealed partial class RecordReads
                                      predicate?.AccountingNote(), sources, scanNote,
                                      matched, groupRows, groupBy, definedIn ? string.Join(", ", plugins!) : null, offset,
                                      whereWinner, whereSourceNote)
-               { Stamp = view.Stamp, Pin = new LoadOrderService.ViewPin(resolver, view), GetterTypes = types,
+               { Stamp = view.Stamp, Pin = pin,
                  ReverseIndexNote = reverseNote,
                  UnreadPlugins = unreadablePlugins.Select(u => u.PluginName).ToList(),
                  Unmatched = predicate?.Unmatched ?? Array.Empty<string>(),
@@ -717,6 +730,7 @@ internal sealed partial class RecordReads
     {
         var resolver = _host.Resolver;
         var view = pinnedView ?? resolver.Capture();   // the caller's door build when it captured one — see CrossQuery
+        var pin = new LoadOrderService.ViewPin(resolver, view);
 
         if (groupBy is not null)
         {
@@ -867,6 +881,7 @@ internal sealed partial class RecordReads
                         keys.Add(fk);
                         sources.Add(pole.Plugin);
                         matched?.Add(hitTargets is not null ? string.Join(", ", hitTargets) : null);
+                        // No pin: an off-order body is never the copy the game loads, so it owes no shared-EditorID note.
                         prefilled.Add(RecordSummary.Of(fk, rec, w?.WinnerPlugin ?? "(not in the active order)", w?.OverrideDepth ?? 0)
                                       .WithRuntime(view.RuntimeAddressOf(fk)));
                     }
@@ -901,7 +916,7 @@ internal sealed partial class RecordReads
         return new CrossQueryOutcome(keys, prefilled, total, groups is null && total > offset + keys.Count, null,
                                      predicate?.AccountingNote(), sources, scanNote, matched, groupRows, groupBy,
                                      definedIn ? pole.Plugin : null, offset, false, null)
-               { Stamp = view.Stamp, Pin = new LoadOrderService.ViewPin(resolver, view),
+               { Stamp = view.Stamp, Pin = pin,
                  Unmatched = predicate?.Unmatched ?? Array.Empty<string>(),
                  UnmatchedGap = UnjudgedClause(0, unscannable) };
     }
@@ -945,7 +960,7 @@ internal sealed partial class RecordReads
     }
 
     /// <summary>A scan's '*parent' bulk fetch of a chunk's containing records; a winner that would not open goes to <paramref name="unreadable"/>.</summary>
-    static Func<IReadOnlyCollection<(FormKey Parent, Type ChildType, int Hops)>, IReadOnlyDictionary<FormKey, IMajorRecordGetter>> ParentGather(
+    static Func<IReadOnlyCollection<FormKey>, IReadOnlyDictionary<FormKey, IMajorRecordGetter>> ParentGather(
         LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session,
         List<PluginUnreadableException> unreadable, CancellationToken ct) => wanted =>
     {

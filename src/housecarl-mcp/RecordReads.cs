@@ -336,7 +336,7 @@ internal sealed partial class RecordReads
 
     /// <summary>The summary twin of <see cref="ResolveReadOn"/> — the conflicts-only lazy fill.</summary>
     internal RecordSummary ResolveSummaryOn(CrossQueryOutcome q, FormKey fk)
-        => q.Pin is { } p ? ResolveSummary(p.Resolver, p.View, fk) : ResolveSummary(fk);
+        => q.Pin is { } p ? ResolveSummary(p.Resolver, p.View, fk) with { Pin = p } : ResolveSummary(fk);
 
     /// <summary>What a folded tree carries besides its nodes: the winner's identity, and the precise owned-child
     /// tier for the whole tree — empty when the visitor stopped the walk early, since a partial tier would read as
@@ -438,9 +438,8 @@ internal sealed partial class RecordReads
                                                    string? containerHint,
                                                    IReadOnlyList<(int Depth, string[]? Tail)>? depths,
                                                    CancellationToken ct,
-                                                   IReadOnlyList<Type>? getterTypes,
                                                    IReadOnlyCollection<string>? countFields)
-        => ResolveBatch(formids, fields, conflictTree, depth, resolveNames, plugin, null, out _, out _, containerHint, depths, ct, getterTypes, countFields);
+        => ResolveBatch(formids, fields, conflictTree, depth, resolveNames, plugin, null, out _, out _, containerHint, depths, ct, countFields);
 
     /// <summary>The artifact-aware overload: <paramref name="artifactDemand"/> is checked against THIS capture's
     /// epoch — the same build that would answer — and a mismatch hands back <paramref name="artifactRefusal"/> and
@@ -452,7 +451,6 @@ internal sealed partial class RecordReads
                                                    string? containerHint,
                                                    IReadOnlyList<(int Depth, string[]? Tail)>? depths,
                                                    CancellationToken ct,
-                                                   IReadOnlyList<Type>? getterTypes,
                                                    IReadOnlyCollection<string>? countFields,
                                                    bool summary = false)
     {
@@ -492,7 +490,7 @@ internal sealed partial class RecordReads
             {
                 chunkStart = start;
                 chunk = BodyPrefetch.Gather(view, batchSession, resolver.Counters, keys, start, Math.Min(start + BodyPrefetch.ChunkRows, keys.Length),
-                                            _ => plugin, getterTypes, ct);
+                                            _ => plugin, ct);
             }
             var fk = keys[i];
             var body = chunk?.Body(fk);   // the plugin is walked here, on the first row of the chunk that wants it
@@ -598,7 +596,6 @@ internal sealed partial class RecordReads
         string? containerHint,
         IReadOnlyList<(int Depth, string[]? Tail)>? depths,
         CancellationToken ct,
-        IReadOnlyList<Type>? getterTypes,
         IReadOnlyCollection<string>? countFields,
         bool summary = false)
     {
@@ -649,7 +646,7 @@ internal sealed partial class RecordReads
                 {
                     chunkStart = start;
                     chunk = BodyPrefetch.Gather(view, batchSession, resolver.Counters, keys, start, Math.Min(start + BodyPrefetch.ChunkRows, keys.Length),
-                                                _ => plugin, getterTypes, ct);
+                                                _ => plugin, ct);
                 }
                 var fk = keys[i];
                 var body = chunk?.Body(fk);   // the plugin is walked here, on the first row of the chunk that wants it
@@ -729,9 +726,10 @@ internal sealed partial class RecordReads
                 if (summary) record = record with { Name = ReadEngine.DisplayName(rec) };
                 if (resolveNames) record = AnnotateLinks(record, view, session!, linkMemo!);
                 var winner = view.ResolveWinner(fk);                             // winner CONTEXT where the record also lives in the order
+                // No pin: an off-order body is never the copy the game loads, so it owes no shared-EditorID note.
                 results[index] = new ReadOutcome(fk, record, plugin, winner?.WinnerPlugin,
                                                  winner?.OverrideDepth ?? 0, null, null)
-                                 with { Stamp = view.Stamp, Pin = pin };
+                                 with { Stamp = view.Stamp };
             }
             return results.Select(r => r!).ToList();
         }

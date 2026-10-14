@@ -111,7 +111,21 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
 
     /// <summary>A pinned (resolver, view) pair, carried on the outcome so the render-time fills a response makes
     /// read the build the outcome's epoch names. Pure data, no handles.</summary>
-    internal sealed record ViewPin(LoadOrderResolver Resolver, LoadOrderResolver.IndexView View);
+    internal sealed record ViewPin(LoadOrderResolver Resolver, LoadOrderResolver.IndexView View)
+    {
+        SharedEditorIds? _sharedNames;
+
+        /// <summary>This call's shared-EditorID lookup, made on first use and dropped with the pin.</summary>
+        internal SharedEditorIds SharedNames => _sharedNames ??= SharedEditorIds.Walk(View);
+
+        /// <summary>Hand the pin a lookup its call's own scan already built, so the first row does not walk again.</summary>
+        internal void Seed(SharedEditorIds names) => _sharedNames ??= names;
+
+        // Equal by the build it pins, never by the lookup cached on it.
+        public bool Equals(ViewPin? other) => other is not null && Resolver == other.Resolver
+            && EqualityComparer<LoadOrderResolver.IndexView>.Default.Equals(View, other.View);
+        public override int GetHashCode() => HashCode.Combine(Resolver, View);
+    }
 
     /// <summary>One captured build plus the resolver it came from, for a lane that opens an overlay session against it.</summary>
     internal ViewPin CapturePin()
@@ -320,20 +334,18 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                                                    string? containerHint = ReadEngine.DepthExpandHint,
                                                    IReadOnlyList<(int Depth, string[]? Tail)>? depths = null,
                                                    CancellationToken ct = default,
-                                                   IReadOnlyList<Type>? getterTypes = null,
                                                    IReadOnlyCollection<string>? countFields = null)
-        => _reads.ResolveBatch(formids, fields, conflictTree, depth, resolveNames, plugin, containerHint, depths, ct, getterTypes, countFields);
+        => _reads.ResolveBatch(formids, fields, conflictTree, depth, resolveNames, plugin, containerHint, depths, ct, countFields);
     public IReadOnlyList<ReadOutcome> ResolveBatch(IReadOnlyList<string> formids, IReadOnlyList<string>? fields, bool conflictTree, int depth,
                                                    bool resolveNames, string? plugin, ArtifactDemand? artifactDemand,
                                                    out string? artifactRefusal, out OrderStamp? refusalEpoch,
                                                    string? containerHint = ReadEngine.DepthExpandHint,
                                                    IReadOnlyList<(int Depth, string[]? Tail)>? depths = null,
                                                    CancellationToken ct = default,
-                                                   IReadOnlyList<Type>? getterTypes = null,
                                                    IReadOnlyCollection<string>? countFields = null,
                                                    bool summary = false)
         => _reads.ResolveBatch(formids, fields, conflictTree, depth, resolveNames, plugin, artifactDemand, out artifactRefusal, out refusalEpoch,
-                               containerHint, depths, ct, getterTypes, countFields, summary);
+                               containerHint, depths, ct, countFields, summary);
     internal IReadOnlyList<ReadOutcome> ResolveBatchFromPole(
         IReadOnlyList<string> formids, string plugin, string? mod,
         IReadOnlyList<string>? fields, int depth, bool resolveNames,
@@ -342,11 +354,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         string? containerHint = ReadEngine.DepthExpandHint,
         IReadOnlyList<(int Depth, string[]? Tail)>? depths = null,
         CancellationToken ct = default,
-        IReadOnlyList<Type>? getterTypes = null,
         IReadOnlyCollection<string>? countFields = null,
         bool summary = false)
         => _reads.ResolveBatchFromPole(formids, plugin, mod, fields, depth, resolveNames, artifactDemand, out pole, out refusal, out refusalEpoch,
-                                       containerHint, depths, ct, getterTypes, countFields, summary);
+                                       containerHint, depths, ct, countFields, summary);
     internal RecordReads.PoleInfo? ProbeSourceArm(string plugin, string? mod, out string? error) => _reads.ProbeSourceArm(plugin, mod, out error);
     internal IReadOnlyList<RecordReads.DeltaRow> DeltaBatch(
         IReadOnlyList<string> formids, RecordReads.PoleSpec subject, RecordReads.PoleSpec reference, IReadOnlyList<string>? fields,

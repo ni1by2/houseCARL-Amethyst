@@ -528,6 +528,13 @@ public static partial class RecordsTools
             envelope.Add(new("source", statement));
             headerLine += $"  source={statement}";
         }
+        // A consumed scan's owed notes, appended after the header's own lines when the header is written.
+        CrossQueryOutcome? owed = null;
+        void OweNotes(CrossQueryOutcome scan) => owed = scan;
+        string Head(SpillState? sp) => owed is null ? headerLine
+            : headerLine + string.Concat(owed.OwedNotes(sp?.Spill is not null).Select(n => "\n" + n));
+        List<KeyValuePair<string, string>> Env(SpillState? sp) => owed is null ? envelope
+            : envelope.Concat(owed.OwedNotes(sp?.Spill is not null).Select(n => new KeyValuePair<string, string>("notes", n))).ToList();
         // A census is a text render too, so it is held to the same ceiling and says so when max_chars is smaller
         // than the statements it carries whatever the budget.
         string Census(string body) => RenderCap.Settle(body, Wire.Cap(max_chars));
@@ -737,38 +744,38 @@ public static partial class RecordsTools
                 return json ? JsonWire.RenderError(seamTear, epoch2) : "error: " + seamTear;
 
             if (form == "aggregate")
-                return RenderListAggregate(outcomes, project!.group_by!, json, epoch2, headerLine, envelope, listCost,
+                return RenderListAggregate(outcomes, project!.group_by!, json, epoch2, Head(null), Env(null), listCost,
                                            max_chars, svc.Types.DisplayNames(types), TableRowLimit(limit));
 
             if (counts_only && dense)
-                return JsonWire.RenderBatchDense(outcomes, form == "fields" ? readPaths : null, foldPlan, max_chars, null, out _, envelope, listCost, countsOnly: true);
+                return JsonWire.RenderBatchDense(outcomes, form == "fields" ? readPaths : null, foldPlan, max_chars, null, out _, Env(null), listCost, countsOnly: true);
             if (counts_only)
             {
                 int ok = outcomes.Count(o => o.Error is null), err = outcomes.Count - outcomes.Count(o => o.Error is null);
                 return json
-                    ? JsonWire.RenderCounts(envelope, outcomes.Count, ok, err, epoch2, max_chars)
-                    : Census($"{headerLine}\ncount={outcomes.Count} ok={ok} errors={err}" + Wire.EpochLine(epoch2));
+                    ? JsonWire.RenderCounts(Env(null), outcomes.Count, ok, err, epoch2, max_chars)
+                    : Census($"{Head(null)}\ncount={outcomes.Count} ok={ok} errors={err}" + Wire.EpochLine(epoch2));
             }
 
             var winOutcomes = Windowed(dense ? unfolded : outcomes);   // render window; census/aggregate/artifacts stay complete
             SpillState? spill2 = null;
             if (wantFile)
             {
-                var (s, aerr) = Artifacts.WriteBatch(outcomes, ArtifactTarget.Named(toFile!), "to_file", Echo(), formLevers, summary: form == "summary");
+                var (s, aerr) = Artifacts.WriteBatch(outcomes, ArtifactTarget.Named(toFile!), "to_file", Echo(), formLevers, summary: form == "summary", scan: owed);
                 if (aerr is not null) return json ? JsonWire.RenderError(aerr, epoch2) : "error: " + aerr;
                 spill2 = SpillState.Spilled(s!, manifestOnly: true);
             }
             string Render2(SpillState? sp, out bool trunc) => dense
-                ? JsonWire.RenderBatchDense(winOutcomes, form == "fields" ? readPaths : null, foldPlan, max_chars, sp, out trunc, envelope, listCost)
+                ? JsonWire.RenderBatchDense(winOutcomes, form == "fields" ? readPaths : null, foldPlan, max_chars, sp, out trunc, Env(sp), listCost)
                 : form == "summary"
-                ? RenderRecordsSummary(winOutcomes, json, headerLine, envelope, max_chars, sp, listCost, out trunc)
-                : json ? JsonWire.RenderBatch(winOutcomes, max_chars, sp, out trunc, envelope, formLevers, listCost)
-                       : Wire.RenderBatch(winOutcomes, max_chars, sp, out trunc, formLevers, listCost, headerLine);
+                ? RenderRecordsSummary(winOutcomes, json, Head(sp), Env(sp), max_chars, sp, listCost, out trunc)
+                : json ? JsonWire.RenderBatch(winOutcomes, max_chars, sp, out trunc, Env(sp), formLevers, listCost)
+                       : Wire.RenderBatch(winOutcomes, max_chars, sp, out trunc, formLevers, listCost, Head(sp));
             var rendered2 = Render2(spill2, out var truncated2);
             if (spill2 is null && truncated2)
             {
                 using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, epoch2?.Epoch ?? "none");
-                var (s, aerr) = Artifacts.WriteBatch(outcomes, reservation, "ceiling", Echo(), formLevers, summary: form == "summary");
+                var (s, aerr) = Artifacts.WriteBatch(outcomes, reservation, "ceiling", Echo(), formLevers, summary: form == "summary", scan: owed);
                 rendered2 = Render2(aerr is null ? SpillState.Spilled(s!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
             }
             return rendered2;
@@ -959,8 +966,8 @@ public static partial class RecordsTools
                     headerLine += $"\n[!] {cappedSeeds} seed(s) hit the walk.max_nodes carrier bound ({walkMaxNodes}, per seed on this lane) — their rows are a prefix of carrier_total; raise walk.max_nodes.";
                 if (counts_only)
                     return json
-                        ? JsonWire.RenderNamedCounts(envelope, revCounts, epochR, max_chars)
-                        : Census($"{headerLine}\nseeds={results.Count} carrier_rows={carrierRows} carrier_total={carrierTotal} capped_seeds={cappedSeeds} errors={seedErrs2}" + Wire.EpochLine(epochR));
+                        ? JsonWire.RenderNamedCounts(Env(null), revCounts, epochR, max_chars)
+                        : Census($"{Head(null)}\nseeds={results.Count} carrier_rows={carrierRows} carrier_total={carrierTotal} capped_seeds={cappedSeeds} errors={seedErrs2}" + Wire.EpochLine(epochR));
                 var winResults = Windowed(results);
                 SpillState? revSpill = null;
                 if (wantFile)
@@ -970,8 +977,8 @@ public static partial class RecordsTools
                     revSpill = SpillState.Spilled(sp!, manifestOnly: true);
                 }
                 string RenderRev(SpillState? sp, out bool trunc) => json
-                    ? JsonWire.RenderEffectChains(winResults, max_chars, envelope, revCounts, epochR, sp, out trunc)
-                    : RenderRecordsEffectChains(winResults, results.Count, carrierRows, carrierTotal, seedErrs2, headerLine, epochR, max_chars, sp, out trunc);
+                    ? JsonWire.RenderEffectChains(winResults, max_chars, Env(sp), revCounts, epochR, sp, out trunc)
+                    : RenderRecordsEffectChains(winResults, results.Count, carrierRows, carrierTotal, seedErrs2, Head(sp), epochR, max_chars, sp, out trunc);
                 var revRendered = RenderRev(revSpill, out var revTrunc);
                 if (revSpill is null && revTrunc)
                 {
@@ -1013,8 +1020,8 @@ public static partial class RecordsTools
                 envelope.Add(new("walk", $"forward{(walk.follow is { } f2 ? $" follow={f2}" : " (closure)")} depth={walkDepth}"));
                 if (counts_only)
                     return json
-                        ? JsonWire.RenderNamedCounts(envelope, new[] { KvI("seeds", rows.Count), KvI("reached", reached), KvI("errors", errs), KvI("cycles", cycles), KvI("truncated_seeds", cutSeeds) }, wEpoch, max_chars)
-                        : Census($"{headerLine}\nseeds={rows.Count} reached={reached} errors={errs} cycles={cycles}" + Wire.EpochLine(wEpoch));
+                        ? JsonWire.RenderNamedCounts(Env(null), new[] { KvI("seeds", rows.Count), KvI("reached", reached), KvI("errors", errs), KvI("cycles", cycles), KvI("truncated_seeds", cutSeeds) }, wEpoch, max_chars)
+                        : Census($"{Head(null)}\nseeds={rows.Count} reached={reached} errors={errs} cycles={cycles}" + Wire.EpochLine(wEpoch));
                 // Said only where the seeds ARE listed; a counts_only response's own cycles= is the whole answer.
                 if (cycles > 0)
                     headerLine += $"\n{cycles} cycle(s) — a record the walk reached again from itself, one per closing link, listed under its seed. A count is a lower bound on the number of distinct loops; none means none.";
@@ -1022,19 +1029,19 @@ public static partial class RecordsTools
                 SpillState? spill = null;
                 if (wantFile)
                 {
-                    var (s, aerr) = Artifacts.WriteChain(rows, wEpoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", Echo());
+                    var (s, aerr) = Artifacts.WriteChain(rows, wEpoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", Echo(), owed);
                     if (aerr is not null) return json ? JsonWire.RenderError(aerr, wEpoch) : "error: " + aerr;
                     spill = SpillState.Spilled(s!, manifestOnly: true);
                 }
                 var chainCounts = new[] { KvI("seeds", rows.Count), KvI("reached", reached), KvI("errors", errs), KvI("cycles", cycles) };
                 string Render(SpillState? sp, out bool trunc) => json
-                    ? JsonWire.RenderChain(winRows, max_chars, wEpoch, envelope, chainCounts, sp, out trunc)
-                    : RenderRecordsChain(winRows, rows.Count, reached, errs, headerLine, wEpoch, max_chars, sp, out trunc);
+                    ? JsonWire.RenderChain(winRows, max_chars, wEpoch, Env(sp), chainCounts, sp, out trunc)
+                    : RenderRecordsChain(winRows, rows.Count, reached, errs, Head(sp), wEpoch, max_chars, sp, out trunc);
                 var rendered = Render(spill, out var truncated);
                 if (spill is null && truncated)
                 {
                     using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, wEpoch?.Epoch ?? "none");
-                    var (s, aerr) = Artifacts.WriteChain(rows, wEpoch?.Epoch, reservation, "ceiling", Echo());
+                    var (s, aerr) = Artifacts.WriteChain(rows, wEpoch?.Epoch, reservation, "ceiling", Echo(), owed);
                     rendered = Render(aerr is null ? SpillState.Spilled(s!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
                 }
                 return rendered;
@@ -1144,25 +1151,25 @@ public static partial class RecordsTools
             int errs = rows.Count(x => x.Error is not null);
             if (counts_only)
                 return json
-                    ? JsonWire.RenderNamedCounts(envelope, CmpCounts(KvI("count", rows.Count), KvI("differing", differing), KvI("identical", identical), KvI("no_verdict", noVerdict), KvI("errors", errs)), epoch, max_chars)
-                    : Census($"{headerLine}\ncount={rows.Count} differing={differing} identical={identical} no_verdict={noVerdict} errors={errs}" + Wire.EpochLine(epoch));
+                    ? JsonWire.RenderNamedCounts(Env(null), CmpCounts(KvI("count", rows.Count), KvI("differing", differing), KvI("identical", identical), KvI("no_verdict", noVerdict), KvI("errors", errs)), epoch, max_chars)
+                    : Census($"{Head(null)}\ncount={rows.Count} differing={differing} identical={identical} no_verdict={noVerdict} errors={errs}" + Wire.EpochLine(epoch));
             var winRows = Windowed(rows);
             SpillState? spill = null;
             if (wantFile)
             {
-                var (s, aerr) = Artifacts.WriteDelta(rows, epoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", echo);
+                var (s, aerr) = Artifacts.WriteDelta(rows, epoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", echo, owed);
                 if (aerr is not null) return json ? JsonWire.RenderError(aerr, epoch) : "error: " + aerr;
                 spill = SpillState.Spilled(s!, manifestOnly: true);
             }
             var deltaCounts = CmpCounts(KvI("count", rows.Count), KvI("differing", differing), KvI("identical", identical), KvI("no_verdict", noVerdict), KvI("errors", errs));
             string Render(SpillState? sp, out bool trunc) => json
-                ? JsonWire.RenderDelta(winRows, max_chars, epoch, envelope, deltaCounts, sp, out trunc)
-                : RenderRecordsDelta(winRows, rows.Count, differing, identical, noVerdict, errs, headerLine, epoch, max_chars, sp, out trunc, noField: noField);
+                ? JsonWire.RenderDelta(winRows, max_chars, epoch, Env(sp), deltaCounts, sp, out trunc)
+                : RenderRecordsDelta(winRows, rows.Count, differing, identical, noVerdict, errs, Head(sp), epoch, max_chars, sp, out trunc, noField: noField);
             var rendered = Render(spill, out var truncated);
             if (spill is null && truncated)
             {
                 using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, epoch?.Epoch ?? "none");
-                var (s, aerr) = Artifacts.WriteDelta(rows, epoch?.Epoch, reservation, "ceiling", echo);
+                var (s, aerr) = Artifacts.WriteDelta(rows, epoch?.Epoch, reservation, "ceiling", echo, owed);
                 rendered = Render(aerr is null ? SpillState.Spilled(s!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
             }
             return rendered;
@@ -1184,25 +1191,25 @@ public static partial class RecordsTools
             int errs = rows.Count(x => x.Error is not null);
             if (counts_only)
                 return json
-                    ? JsonWire.RenderNamedCounts(envelope, new[] { KvI("count", rows.Count), KvI("contested", contested), KvI("errors", errs) }, epoch, max_chars)
-                    : Census($"{headerLine}\ncount={rows.Count} contested={contested} errors={errs}" + Wire.EpochLine(epoch));
+                    ? JsonWire.RenderNamedCounts(Env(null), new[] { KvI("count", rows.Count), KvI("contested", contested), KvI("errors", errs) }, epoch, max_chars)
+                    : Census($"{Head(null)}\ncount={rows.Count} contested={contested} errors={errs}" + Wire.EpochLine(epoch));
             var winRows = Windowed(rows);
             SpillState? spill = null;
             if (wantFile)
             {
-                var (s, aerr) = Artifacts.WriteTree(rows, epoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", echo);
+                var (s, aerr) = Artifacts.WriteTree(rows, epoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", echo, owed);
                 if (aerr is not null) return json ? JsonWire.RenderError(aerr, epoch) : "error: " + aerr;
                 spill = SpillState.Spilled(s!, manifestOnly: true);
             }
             var treeCounts = CmpCounts(KvI("count", rows.Count), KvI("contested", contested), KvI("errors", errs));
             string Render(SpillState? sp, out bool trunc) => json
-                ? JsonWire.RenderTree(winRows, max_chars, epoch, envelope, treeCounts, sp, out trunc, LeverNames.Records)
-                : RenderRecordsTree(winRows, rows.Count, contested, errs, projFields is { Length: > 0 }, headerLine, epoch, max_chars, sp, out trunc);
+                ? JsonWire.RenderTree(winRows, max_chars, epoch, Env(sp), treeCounts, sp, out trunc, LeverNames.Records)
+                : RenderRecordsTree(winRows, rows.Count, contested, errs, projFields is { Length: > 0 }, Head(sp), epoch, max_chars, sp, out trunc);
             var rendered = Render(spill, out var truncated);
             if (spill is null && truncated)
             {
                 using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, epoch?.Epoch ?? "none");
-                var (s, aerr) = Artifacts.WriteTree(rows, epoch?.Epoch, reservation, "ceiling", echo);
+                var (s, aerr) = Artifacts.WriteTree(rows, epoch?.Epoch, reservation, "ceiling", echo, owed);
                 rendered = Render(aerr is null ? SpillState.Spilled(s!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
             }
             return rendered;
@@ -1239,25 +1246,25 @@ public static partial class RecordsTools
             int errs = rows.Count(x => x.Error is not null);
             if (counts_only)
                 return json
-                    ? JsonWire.RenderNamedCounts(envelope, new[] { KvI("count", rows.Count), KvI("contested", contested), KvI("errors", errs) }, epoch, max_chars)
-                    : Census($"{headerLine}\ncount={rows.Count} contested={contested} errors={errs}" + Wire.EpochLine(epoch));
+                    ? JsonWire.RenderNamedCounts(Env(null), new[] { KvI("count", rows.Count), KvI("contested", contested), KvI("errors", errs) }, epoch, max_chars)
+                    : Census($"{Head(null)}\ncount={rows.Count} contested={contested} errors={errs}" + Wire.EpochLine(epoch));
             var winRows = Windowed(rows);
             SpillState? spill = null;
             if (wantFile)
             {
-                var (s, aerr) = Artifacts.WriteInfoOrder(rows, epoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", echo);
+                var (s, aerr) = Artifacts.WriteInfoOrder(rows, epoch?.Epoch, ArtifactTarget.Named(toFile!), "to_file", echo, owed);
                 if (aerr is not null) return json ? JsonWire.RenderError(aerr, epoch) : "error: " + aerr;
                 spill = SpillState.Spilled(s!, manifestOnly: true);
             }
             var ioCounts = new[] { KvI("count", rows.Count), KvI("contested", contested), KvI("errors", errs) };
             string Render(SpillState? sp, out bool trunc) => json
-                ? JsonWire.RenderInfoOrder(winRows, max_chars, epoch, envelope, ioCounts, sp, out trunc)
-                : RenderRecordsInfoOrder(winRows, rows.Count, contested, errs, headerLine, epoch, max_chars, sp, out trunc);
+                ? JsonWire.RenderInfoOrder(winRows, max_chars, epoch, Env(sp), ioCounts, sp, out trunc)
+                : RenderRecordsInfoOrder(winRows, rows.Count, contested, errs, Head(sp), epoch, max_chars, sp, out trunc);
             var rendered = Render(spill, out var truncated);
             if (spill is null && truncated)
             {
                 using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, epoch?.Epoch ?? "none");
-                var (s, aerr) = Artifacts.WriteInfoOrder(rows, epoch?.Epoch, reservation, "ceiling", echo);
+                var (s, aerr) = Artifacts.WriteInfoOrder(rows, epoch?.Epoch, reservation, "ceiling", echo, owed);
                 rendered = Render(aerr is null ? SpillState.Spilled(s!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
             }
             return rendered;
@@ -1463,17 +1470,16 @@ public static partial class RecordsTools
                 return e;
             }
 
-            // The reverse-reference index's accounting belongs to the response whatever consumes the scan: the two
-            // CrossQuery renderers read it off the outcome, and every form below carries it on header and envelope
-            // from here. bodyLaneForm is read by both this gate and the lane below, so the two cannot drift.
+            // What the scan owes belongs to the response whatever consumes the scan: the two CrossQuery renderers
+            // read it off the outcome, and every form below carries it from here. bodyLaneForm is read by both this
+            // gate and the lane below, so the two cannot drift.
             bool bodyLaneForm = form == "everything" || form == "rows"
                              || (form == "fields" && foldPlan is not null && !dense)
                              || (form is "fields" or "summary" && (scopePlusPole || srcSpec.ReplaysOverlay));
-            if (outcome.ReverseIndexNote is not null && outcome.Error is null && outcome.Groups is null
+            if (outcome.Error is null && outcome.Groups is null
                 && (walk is not null || comparisonForm || form == "info_order" || (bodyLaneForm && !counts_only)))
             {
-                envelope.Add(new("reverse_index", outcome.ReverseIndexNote));
-                headerLine += "\n" + outcome.ReverseIndexNote;
+                OweNotes(outcome);
             }
 
             // ---- walk= on a scan: the scan's matches are the seeds and the walk lane takes it from there,
@@ -1597,7 +1603,7 @@ public static partial class RecordsTools
                 {
                     bodies = svc.ResolveBatchFromPole(keys, srcName, srcMod, bodyRead, depth, resolveNames, null,
                                                       out _, out var bref, out var brefEpoch, containerHint, readDepths,
-                                                      ct, outcome.GetterTypes, countFields, summary: summaryRows);
+                                                      ct, countFields, summary: summaryRows);
                     // A refusal is judged on the named cause, never on row count: a zero-match scan is honest.
                     if (bref is not null)
                         return json ? JsonWire.RenderError(bref, brefEpoch)
@@ -1610,7 +1616,7 @@ public static partial class RecordsTools
                     // fields_source="winner" retargeting display to the winner.
                     var srcs = outcome.Sources;
                     if (winnerFields || srcs is null || srcs.Take(keys.Count).All(s => s is null))
-                        bodies = svc.ResolveBatch(keys, bodyRead, false, depth, resolveNames, containerHint: containerHint, depths: readDepths, ct: ct, getterTypes: outcome.GetterTypes, countFields: countFields);
+                        bodies = svc.ResolveBatch(keys, bodyRead, false, depth, resolveNames, containerHint: containerHint, depths: readDepths, ct: ct, countFields: countFields);
                     else
                     {
                         var byIndex = new ReadOutcome[keys.Count];
@@ -1625,12 +1631,12 @@ public static partial class RecordsTools
                         }
                         if (winnerIdx.Count > 0)
                         {
-                            var res = svc.ResolveBatch(winnerIdx.Select(i => keys[i]).ToList(), bodyRead, false, depth, resolveNames, containerHint: containerHint, depths: readDepths, ct: ct, getterTypes: outcome.GetterTypes, countFields: countFields);
+                            var res = svc.ResolveBatch(winnerIdx.Select(i => keys[i]).ToList(), bodyRead, false, depth, resolveNames, containerHint: containerHint, depths: readDepths, ct: ct, countFields: countFields);
                             for (int i = 0; i < winnerIdx.Count; i++) byIndex[winnerIdx[i]] = res[i];
                         }
                         foreach (var kv in bySource)
                         {
-                            var res = svc.ResolveBatch(kv.Value.Select(i => keys[i]).ToList(), bodyRead, false, depth, resolveNames, kv.Key, containerHint, readDepths, ct, outcome.GetterTypes, countFields);
+                            var res = svc.ResolveBatch(kv.Value.Select(i => keys[i]).ToList(), bodyRead, false, depth, resolveNames, kv.Key, containerHint, readDepths, ct, countFields);
                             for (int i = 0; i < kv.Value.Count; i++) byIndex[kv.Value[i]] = res[i];
                         }
                         bodies = byIndex;
@@ -1661,29 +1667,22 @@ public static partial class RecordsTools
                 var bodyEpoch = bodyEpochs.FirstOrDefault() ?? outcome.Stamp;
                 envelope.Add(new("total", outcome.Total.ToString()));
                 headerLine += $"\n{outcome.Total} match(es); bodies for the {keys.Count}-row window below";
-                // What the SCAN owes about its own coverage, carried on both transports here as it is on the scan
-                // lane, since a body form reads the same scan.
-                if (outcome.ScanNote is not null)
-                {
-                    headerLine += "\n" + outcome.ScanNote;
-                    envelope.Add(new("scan_note", outcome.ScanNote));
-                }
                 // Selected by a scan, not a formids list, so the batch notice's selection clause names limit=.
                 var evLevers = formLevers.OnScanSelection();
                 // Selected by the scan, so they carry its multi-target references= un-merge too, one row per key in
                 // key order, which is what makes the list parallel to the bodies.
                 var evMatches = outcome.MatchedTargets;
                 string RenderEv(SpillState? sp, out bool trunc) => dense
-                    ? JsonWire.RenderBatchDense(unfoldedBodies, readPaths, foldPlan, max_chars, sp, out trunc, envelope, (bodies.Count, bodyClock.ElapsedMilliseconds), evMatches)
+                    ? JsonWire.RenderBatchDense(unfoldedBodies, readPaths, foldPlan, max_chars, sp, out trunc, Env(sp), (bodies.Count, bodyClock.ElapsedMilliseconds), evMatches)
                     : summaryRows
-                    ? RenderRecordsSummary(bodies, json, headerLine, envelope, max_chars, sp, (bodies.Count, bodyClock.ElapsedMilliseconds), out trunc, evLevers, evMatches)
+                    ? RenderRecordsSummary(bodies, json, Head(sp), Env(sp), max_chars, sp, (bodies.Count, bodyClock.ElapsedMilliseconds), out trunc, evLevers, evMatches)
                     : json
-                    ? JsonWire.RenderBatch(bodies, max_chars, sp, out trunc, envelope, evLevers, (bodies.Count, bodyClock.ElapsedMilliseconds), evMatches)
-                    : Wire.RenderBatch(bodies, max_chars, sp, out trunc, evLevers, (bodies.Count, bodyClock.ElapsedMilliseconds), headerLine, evMatches);
+                    ? JsonWire.RenderBatch(bodies, max_chars, sp, out trunc, Env(sp), evLevers, (bodies.Count, bodyClock.ElapsedMilliseconds), evMatches)
+                    : Wire.RenderBatch(bodies, max_chars, sp, out trunc, evLevers, (bodies.Count, bodyClock.ElapsedMilliseconds), Head(sp), evMatches);
                 SpillState? evSpill = null;
                 if (wantFile)
                 {
-                    var (s, aerr) = Artifacts.WriteBatch(bodies, ArtifactTarget.Named(toFile!), "to_file", Echo(), evLevers, matches: evMatches, summary: summaryRows);
+                    var (s, aerr) = Artifacts.WriteBatch(bodies, ArtifactTarget.Named(toFile!), "to_file", Echo(), evLevers, matches: evMatches, summary: summaryRows, scan: outcome);
                     if (aerr is not null) return json ? JsonWire.RenderError(aerr, bodyEpoch) : "error: " + aerr;
                     evSpill = SpillState.Spilled(s!, manifestOnly: true);
                 }
@@ -1691,7 +1690,7 @@ public static partial class RecordsTools
                 if (evSpill is null && evTrunc)
                 {
                     using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, bodyEpoch?.Epoch ?? "none");
-                    var (s, aerr) = Artifacts.WriteBatch(bodies, reservation, "ceiling", Echo(), evLevers, matches: evMatches, summary: summaryRows);
+                    var (s, aerr) = Artifacts.WriteBatch(bodies, reservation, "ceiling", Echo(), evLevers, matches: evMatches, summary: summaryRows, scan: outcome);
                     evRendered = RenderEv(aerr is null ? SpillState.Spilled(s!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
                 }
                 return evRendered;
@@ -1820,6 +1819,12 @@ public static partial class RecordsTools
                 return e;
             }
 
+            // The file scan's owed notes ride every form that consumes it, as on the in-order lane; offBodyLane is
+            // read by both this gate and the lane below, so the two cannot drift.
+            bool offBodyLane = form is ("fields" or "rows" or "everything") && !counts_only;
+            if (outcome.Error is null && outcome.Groups is null && (comparisonForm || offBodyLane))
+                OweNotes(outcome);
+
             // Comparisons over the file's matches: the file IS the subject pole (its version of each match).
             if (comparisonForm && outcome.Error is null && outcome.Groups is null)
             {
@@ -1862,7 +1867,7 @@ public static partial class RecordsTools
             }
 
             // fields/everything over the file's matches: bodies via the one-pole batch (it reads the FILE).
-            if (form is ("fields" or "rows" or "everything") && !counts_only && outcome.Error is null && outcome.Groups is null)
+            if (offBodyLane && outcome.Error is null && outcome.Groups is null)
             {
                 var keys = outcome.Keys.Select(k => k.ToString()).ToList();
                 // The render bound is on the row cost, not on where the row came from, so it refuses on the same
@@ -1891,26 +1896,20 @@ public static partial class RecordsTools
                 }
                 envelope.Add(new("total", outcome.Total.ToString()));
                 headerLine += $"\n{outcome.Total} match(es); bodies for the {keys.Count}-row window below";
-                // Same coverage note the in-order body lane carries, on both transports, for the same reason.
-                if (outcome.ScanNote is not null)
-                {
-                    headerLine += "\n" + outcome.ScanNote;
-                    envelope.Add(new("scan_note", outcome.ScanNote));
-                }
                 // Selected by the off-order file scan, so the remedy vocabulary matches the body lane above.
                 var offLevers = formLevers.OnScanSelection();
                 // Same rule as the in-order body lane: the file scan's rows carry its references= un-merge too.
                 var offMatches = outcome.MatchedTargets;
                 string RenderOff(SpillState? sp, out bool trunc) => dense
-                    ? JsonWire.RenderBatchDense(unfoldedOff, readPaths, foldPlan, max_chars, sp, out trunc, envelope, (bodies.Count, offClock.ElapsedMilliseconds), offMatches)
+                    ? JsonWire.RenderBatchDense(unfoldedOff, readPaths, foldPlan, max_chars, sp, out trunc, Env(sp), (bodies.Count, offClock.ElapsedMilliseconds), offMatches)
                     : json
-                    ? JsonWire.RenderBatch(bodies, max_chars, sp, out trunc, envelope, offLevers, (bodies.Count, offClock.ElapsedMilliseconds), offMatches)
-                    : Wire.RenderBatch(bodies, max_chars, sp, out trunc, offLevers, (bodies.Count, offClock.ElapsedMilliseconds), headerLine, offMatches);
+                    ? JsonWire.RenderBatch(bodies, max_chars, sp, out trunc, Env(sp), offLevers, (bodies.Count, offClock.ElapsedMilliseconds), offMatches)
+                    : Wire.RenderBatch(bodies, max_chars, sp, out trunc, offLevers, (bodies.Count, offClock.ElapsedMilliseconds), Head(sp), offMatches);
                 SpillState? offSpill = null;
                 var offEpoch = bodies.FirstOrDefault(o => o.Stamp is not null)?.Stamp ?? outcome.Stamp;
                 if (wantFile)
                 {
-                    var (sp, aerr) = Artifacts.WriteBatch(bodies, ArtifactTarget.Named(toFile!), "to_file", Echo(), offLevers, matches: offMatches);
+                    var (sp, aerr) = Artifacts.WriteBatch(bodies, ArtifactTarget.Named(toFile!), "to_file", Echo(), offLevers, matches: offMatches, scan: outcome);
                     if (aerr is not null) return json ? JsonWire.RenderError(aerr, offEpoch) : "error: " + aerr;
                     offSpill = SpillState.Spilled(sp!, manifestOnly: true);
                 }
@@ -1918,7 +1917,7 @@ public static partial class RecordsTools
                 if (offSpill is null && offTrunc)
                 {
                     using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, offEpoch?.Epoch ?? "none");
-                    var (sp, aerr) = Artifacts.WriteBatch(bodies, reservation, "ceiling", Echo(), offLevers, matches: offMatches);
+                    var (sp, aerr) = Artifacts.WriteBatch(bodies, reservation, "ceiling", Echo(), offLevers, matches: offMatches, scan: outcome);
                     offRendered = RenderOff(aerr is null ? SpillState.Spilled(sp!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
                 }
                 return offRendered;

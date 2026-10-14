@@ -1,6 +1,6 @@
 ---
-updated: 2026-10-08
-covers: [src/housecarl-core/LoadOrderResolver.cs]
+updated: 2026-10-11
+covers: [src/housecarl-core/LoadOrderResolver.cs, src/housecarl-core/IndexTypes.cs]
 ---
 # The load-order resolver
 
@@ -19,6 +19,8 @@ with no record bodies and no plugin file handles at rest. The service that owns 
 - The order is INJECTED: override counts, depths and containment are order-independent, and winner identity is only as correct as the path list handed to `Build`.
 - One build is one immutable `IndexSnapshot`, swapped in as a single volatile reference write, so a reader outside the service's gate can never see a new index beside old overriders.
 - A logical operation captures that snapshot ONCE (`Capture`) and answers every question off the captured view, so no one response mixes two adjacent builds.
+- Each `Index` entry also carries a one-byte code for the winning copy's record class, interned while the build already holds every record (`IndexTypes`), so it costs no read and nothing is hand-written. The code stands for the class and for its seek type (`WriteEngine.SeekTypeFor`: the flat group's getter, so every Global variant shares `IGlobalGetter`). The entry is packed as `(ushort winner, ushort count, byte type)`, the same 40 bytes as before; `Build` refuses an order past 65,535 plugins, far above the engine's 254 full plus 4,096 light. Codes run 0 to 254: Mutagen models about 133 Skyrim classes, and interning a 256th class throws rather than reuse `Mixed` or wrap.
+- A key whose providers differ in class carries `IndexTypes.Mixed`, and each provider's own class code sits in `MixedTypes`, aligned with `Overriders`. That includes providers that share a seek type (a GlobalFloat overridden as a GlobalShort), so every provider's class is kept, not only the winner's.
 - Every build trims the winner index (`BuildIndex`); the heap is settled once, in the constructor after the FIRST build only, because on a `RefreshIfStale` re-index the old snapshot is still live and would be copied. Measured in #728, landed in #802.
 
 ### Exclusion
@@ -27,7 +29,7 @@ with no record bodies and no plugin file handles at rest. The service that owns 
 - `Unopenable` is the subset of `Excluded` whose file could not be opened at all, kept as its own set rather than derived from the reason string, because a message is display prose and membership is a fact.
 - A master set retains excluded-but-openable plugins on purpose — a clean plugin can override a record whose origin master is excluded, and that master must still appear in the patch header — and skips the unopenable ones, recording each name so a serialize failure can be attributed.
 - An ACTIVE baseline master (Skyrim.esm / Update.esm) that cannot be opened refuses every write, thrown from the master-set builders, the single point every write lane funnels through.
-- A plugin that opened at index time but not now is `PluginUnreadableException`; one that opened but could not be walked to the end is `PluginUnscannableException`. Two faults, worded differently, both reported as whole-plugin coverage gaps.
+- A plugin that opened at index time but not now is `PluginUnreadableException`; one that opened but could not be walked to the end is `PluginUnscannableException`. Two faults, worded differently, both reported as whole-plugin coverage gaps. `WinnerRecordsOfType` given a collector collects either one and walks on to the next plugin; without one it throws it. Partway through a plugin only a parse fault (`RecordParseFault`) is collected; anything else, a cancellation above all, goes on up.
 
 ### Identity and freshness
 - The epoch fingerprint is derived from every plugin's filename, RESOLVED PATH and freshness stamp in priority order, plus the names of the plugins the build excluded; two builds over an unchanged order that indexed the same set fingerprint identically.
@@ -38,6 +40,12 @@ with no record bodies and no plugin file handles at rest. The service that owns 
 - Every baseline is statted BEFORE the read it baselines, so a write landing during the read shows up on the next check rather than being absorbed into the baseline.
 - Freshness never fires between tool calls — no watcher, no loop — so an actively re-sorting user cannot make the server thrash.
 - The reverse-reference index is held on the RESOLVER, not the snapshot, and carried over when a rebuilt resolver replaces one (`AdoptReverseIndexFrom`); its partitions are keyed on (path, mtime), so only the plugins this order added are walked.
+
+### Fetching one record
+- Every in-order fetch is typed by the index, through one door: `SeekBody` for one record and `CollectRecords` for a gather, which groups the wanted keys by the seek type their copy in that plugin carries and walks each type's groups once. No caller passes a type. On Mutagen 0.54.4 every pass over a top-level group copies the whole group, so an untyped seek of a Skyrim.esm armor addon cost 1.5 s and 1.37 GB; typed it is about 1 ms (#1158).
+- A copy the build says a plugin does not hold is absent with no read. The flat walk is kept only for a key the build did not see, or a typed walk that misses because the plugin changed under the call; the next call's freshness check rebuilds. `CostCounters.TypedSeeks` and `TypedCollectPasses` count only fetches the typed walk answered, so a fallback shows as a gap.
+- `IndexView.WinnerClassOf` answers the winning record's class off the index with no body read: the write pre-flight's link-target check and the facegen check's "not an NPC" row read it.
+- Off-order files are not indexed, so their lanes still walk the file themselves.
 
 ### Sessions and writes
 - A per-call `OverlaySession` opens each plugin the call touches AT MOST ONCE and disposes every one when the call returns; the write path takes its master set and its link cache from that same session.
@@ -63,9 +71,10 @@ with no record bodies and no plugin file handles at rest. The service that owns 
 - `RecordsOwnedChildTests.ABatchOpensEachPluginOnce_NotOncePerRecordItUnions` and `RecordsRenderCostTests.ADetailRenderOpensOneOverlayPerPluginNotPerRow` — one overlay open per plugin per call, counted through the service's `CostCounters.SessionOverlayOpens`.
 - `RuntimeFormIdTests.ALightPluginsRecordReadsByItsRuntimeFormId`, `AFullPluginsRecordReadsByItsLoadIndex`, `ALightIndexNoActivePluginOccupiesIsRefused` and `ADynamicFormIdIsRefusedAsBelongingToNoPlugin` — the two runtime address tables and their refusals.
 - `DegradedOrderMarkerTests` — a build that lost plugins carries the marker on every lane, and a healthy one carries none.
+- `TypedIndexTests` — every lane's seeks and gather walks are typed, a key a later plugin redefines as another record type is sought in each provider's own groups, a Global variant keeps one seek type, each provider of a mixed key keeps its own class, and a plugin without a copy is not read; `IndexTypesTests` — a 256th class throws; `TypedIndexEquivalenceTests` — on the shared worlds every copy the typed door returns equals the one a flat walk finds.
 
 ## Where
 `src/housecarl-core/LoadOrderResolver.cs`: `Build`, `BuildIndex`, `IndexSnapshot`, `IndexView`,
 `Capture`, `OverlaySession`, `OpenOverlay`, `RefreshIfStale`, `ComputeEpoch`, the scan
-primitives (`WinnerRecordsOfType`, `RecordsIn`, `CollectRecords`, `SeekBody`).
+primitives (`WinnerRecordsOfType`, `RecordsIn`, `CollectRecords`, `SeekBody`); `src/housecarl-core/IndexTypes.cs`, the class codes.
 Measured figures: SPEC §3.2 (the reverse-index bounds) and #728 (the index compaction).

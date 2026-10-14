@@ -171,7 +171,7 @@ internal static class Artifacts
         {
             renderClock = System.Diagnostics.Stopwatch.StartNew();
             identity = "formid";
-            schema = new[] { "formid", "runtime_formid", "type", "editorid", "winner", "override_depth", "source", "matches?", "fields" };
+            schema = new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "winner", "override_depth", "source", "matches?", "fields" };
             sort = "load-order scan order (deterministic within one epoch)";
             var foldDepths = fold?.Read().Depths;   // the quantified paths' depth, and the caller's own for the rest
             // The same reader the inline renders use; a cancel throws before Save, so no half artifact reaches disk.
@@ -202,7 +202,7 @@ internal static class Artifacts
         else                                                                  // summary rows
         {
             identity = "formid";
-            schema = new[] { "formid", "runtime_formid", "type", "editorid", "name?", "winner", "override_depth", "matches?" };
+            schema = new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "name?", "winner", "override_depth", "matches?" };
             sort = "load-order scan order (deterministic within one epoch)";
             for (int i = 0; i < q.Keys.Count; i++)
             {
@@ -231,14 +231,14 @@ internal static class Artifacts
     /// <summary>The manifest notes a scan artifact carries: the scoped-vs-winner field-source note, then the owned-child clause. The scoped test is <see cref="JsonWire.AnyScopedFieldRow"/> itself, never a copy, so the two cannot disagree.</summary>
     static IReadOnlyList<string>? CrossQueryNotes(CrossQueryOutcome q, IReadOnlyList<string>? fields, bool winnerFields,
                                                   IReadOnlyDictionary<string, bool> annotatedFields,
-                                                  LeverNames? levers)
+                                                  LeverNames? levers) =>
+        ManifestNotes(q, JsonWire.AnyScopedFieldRow(q, fields) ? new[] { JsonWire.ScopedFieldsNote(winnerFields, q.WhereWinner, levers) } : null,
+                      OwnedChildNotes(annotatedFields));
+
+    /// <summary>A manifest's notes: what the scan that selected its rows owes, every unmatched member named, then the writer's own; null when none.</summary>
+    static IReadOnlyList<string>? ManifestNotes(CrossQueryOutcome? scan, params IReadOnlyList<string>?[] own)
     {
-        var notes = new List<string>();
-        if (JsonWire.AnyScopedFieldRow(q, fields))
-            notes.Add(JsonWire.ScopedFieldsNote(winnerFields, q.WhereWinner, levers));
-        if (OwnedChildNotes(annotatedFields) is { } child) notes.AddRange(child);
-        // The whole unmatched list: the response names only what fits.
-        if (q.Unmatched.Count > 0) notes.Add(FieldPredicateSet.UnmatchedSentence(q.Unmatched, q.Unmatched.Count, q.UnmatchedGap, inManifest: true));
+        var notes = (scan?.ManifestNotes() ?? Array.Empty<string>()).Concat(own.SelectMany(o => o ?? Array.Empty<string>())).ToList();
         return notes.Count > 0 ? notes : null;
     }
 
@@ -260,7 +260,8 @@ internal static class Artifacts
     /// <summary>Build and save the artifact for a batch read — one row per input, in input order, per-item errors included. <paramref name="matches"/> is parallel to <paramref name="outcomes"/> and carries the references= un-merge (#576).</summary>
     public static (SpillInfo? Spill, string? Error) WriteBatch(
         IReadOnlyList<ReadOutcome> outcomes, ArtifactTarget target, string reason, IReadOnlyList<KeyValuePair<string, string>> query,
-        LeverNames? levers = null, int rowCap = int.MaxValue, IReadOnlyList<string?>? matches = null, bool summary = false)
+        LeverNames? levers = null, int rowCap = int.MaxValue, IReadOnlyList<string?>? matches = null, bool summary = false,
+        CrossQueryOutcome? scan = null)
     {
         using var writer = new ResultArtifact.Writer();
         for (int i = 0; i < outcomes.Count; i++)
@@ -284,46 +285,46 @@ internal static class Artifacts
         // The manifest stamps which tool wrote the artifact; a re-entry refusal prints it back.
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
                                           summary
-                                              ? new[] { "formid", "runtime_formid", "type", "editorid", "name?", "source", "winner?", "override_depth", "matches?" }
-                                              : new[] { "formid", "runtime_formid", "type", "editorid", "winner", "override_depth", "source", "matches?", "fields" },
-                                          "input order", outcomes.Count, epoch, OwnedChildNotes(AnnotatedFields(outcomes)));
+                                              ? new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "name?", "source", "winner?", "override_depth", "matches?" }
+                                              : new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "winner", "override_depth", "source", "matches?", "fields" },
+                                          "input order", outcomes.Count, epoch, ManifestNotes(scan, OwnedChildNotes(AnnotatedFields(outcomes))));
         return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
     }
 
     /// <summary>Build and save the artifact for a delta result — one row per input, in input order, per-item refusals included.</summary>
     public static (SpillInfo? Spill, string? Error) WriteDelta(
         IReadOnlyList<RecordReads.DeltaRow> rows, string? epoch, ArtifactTarget target, string reason,
-        IReadOnlyList<KeyValuePair<string, string>> query)
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
     {
         using var writer = new ResultArtifact.Writer();
         foreach (var row in rows)
             writer.WriteRow((w, ms) => JsonWire.WriteDeltaRow(w, row, ms, int.MaxValue),
                             row.Error is null ? row.Subject?.RecordType : null);
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
-                                          new[] { "formid", "type", "editorid", "subject", "reference", "stack_above?", "note?", "complete", "deltas", "delta_count", "no_verdict_count", "agreed_count" },
-                                          "input order", rows.Count, epoch ?? "");
+                                          new[] { "formid", "type", "editorid", "editorid_note?", "subject", "reference", "stack_above?", "note?", "complete", "deltas", "delta_count", "no_verdict_count", "agreed_count" },
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan));
         return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
     }
 
     /// <summary>Build and save the artifact for a tree result — one row per record, the provider stack with per-node deltas.</summary>
     public static (SpillInfo? Spill, string? Error) WriteTree(
         IReadOnlyList<RecordReads.TreeRow> rows, string? epoch, ArtifactTarget target, string reason,
-        IReadOnlyList<KeyValuePair<string, string>> query)
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
     {
         using var writer = new ResultArtifact.Writer();
         foreach (var row in rows)
             writer.WriteRow((w, ms) => JsonWire.WriteTreeRow(w, row, ms, int.MaxValue, LeverNames.Records),
                             row.Error is null ? row.Type : null);   // a records-only artifact: the rows speak the records vocabulary
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
-                                          new[] { "formid", "type", "editorid", "reference", "touchers", "child_declarers?", "nodes" },
-                                          "input order", rows.Count, epoch ?? "", PreciseChildNotes(rows));
+                                          new[] { "formid", "type", "editorid", "editorid_note?", "reference", "touchers", "child_declarers?", "nodes" },
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan, PreciseChildNotes(rows)));
         return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
     }
 
     /// <summary>Build and save the artifact for a chain result — one row per seed, in input order: nodes with provenance, cycles, truncation notes, the template report.</summary>
     public static (SpillInfo? Spill, string? Error) WriteChain(
         IReadOnlyList<RecordReads.WalkSeedResult> rows, string? epoch, ArtifactTarget target, string reason,
-        IReadOnlyList<KeyValuePair<string, string>> query)
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
     {
         using var writer = new ResultArtifact.Writer();
         foreach (var row in rows)
@@ -331,7 +332,7 @@ internal static class Artifacts
                             row.Error is null ? row.Type : null);
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
                                           new[] { "formid", "type", "editorid", "nodes", "cycles?", "truncation?", "template_inheritance?" },
-                                          "input order", rows.Count, epoch ?? "");
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan));
         return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
     }
 
@@ -380,7 +381,7 @@ internal static class Artifacts
     /// <summary>Build and save the artifact for an info_order result — one row per topic, in input order, the confidence gates as data and per-item errors included.</summary>
     public static (SpillInfo? Spill, string? Error) WriteInfoOrder(
         IReadOnlyList<RecordReads.InfoOrderRow> rows, string? epoch, ArtifactTarget target, string reason,
-        IReadOnlyList<KeyValuePair<string, string>> query)
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
     {
         using var writer = new ResultArtifact.Writer();
         foreach (var row in rows)
@@ -388,7 +389,7 @@ internal static class Artifacts
                             row.Error is null ? row.Type : null);
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
                                           new[] { "formid", "type", "editorid", "winner", "contested", "complete", "folded_plugin?", "folded_contributed?", "moves_computed", "baseline_trusted", "contributing", "unread?", "note?", "moved_count", "order" },
-                                          "input order", rows.Count, epoch ?? "");
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan));
         return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
     }
 
