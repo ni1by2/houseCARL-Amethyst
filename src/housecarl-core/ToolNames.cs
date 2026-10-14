@@ -33,6 +33,8 @@ public static class ToolNames
     public const string SetMo2Instance = "housecarl_set_mo2_instance";
     public const string SetAmethystConnection = "housecarl_set_amethyst_connection";
     public const string SetToolPath = "housecarl_set_tool_path";
+    public const string StagingManage = "housecarl_staging_manage";
+    public const string StagingStatus = "housecarl_staging_status";
     public const string Skse = "housecarl_skse";
     public const string SkypatcherLayer = "housecarl_skypatcher_layer";
     public const string UpdateStatus = "housecarl_update_status";

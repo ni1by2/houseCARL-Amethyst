@@ -42,7 +42,14 @@ public static class StatusTools
         var profiles = svc.NamedProfileComposition(profile);     // available-profile discovery + inactive-profile inspection: text parse only, no index build, no switch
         // Read only for a filter: the facts are a per-plugin locate and header read, and the whole-profile summary asks about none.
         var facts = filter is { Length: > 0 } ? svc.PluginFactsFor(filter.Trim(), data) : null;
-        return StatusWire.Render(data, logs, profiles, filter, facts, Wire.Cap(max_chars));
+        var rendered = StatusWire.Render(data, logs, profiles, filter, facts, Wire.Cap(max_chars));
+        var pending = new AmethystTransactionCoordinator().PendingSummary();
+        if (pending.Count == 0) return rendered;
+        var summary = "\nstaging transactions needing attention (" + pending.Count + "):\n" + string.Join("\n", pending.Select(t =>
+            $"  {t.Id} · {t.State} · {t.Operation}" + (t.Diagnostic is null ? "" : $" · {t.Diagnostic}")));
+        return Wire.Cap(max_chars) > 0 && rendered.Length + summary.Length > Wire.Cap(max_chars)
+            ? rendered + "\nstaging transaction summary omitted at max_chars=" + Wire.Cap(max_chars)
+            : rendered + summary;
     });
 }
 
