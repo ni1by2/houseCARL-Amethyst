@@ -252,6 +252,35 @@ public sealed class AmethystSavedSnapshotTests
     }
 
     [Fact]
+    public void MissingProfileIniFallsBackToPrefixAndTracksBothCandidates()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var profileIniDir = Path.Combine(world.Profile, "ini files");
+        var prefixIniDir = Path.Combine(world.Root, "prefix", "drive_c", "users", "steamuser", "Documents", "My Games", "Skyrim Special Edition");
+        Directory.CreateDirectory(profileIniDir);
+        Directory.CreateDirectory(prefixIniDir);
+        File.WriteAllText(Path.Combine(prefixIniDir, "Skyrim.ini"), "[Archive]\nsResourceArchiveList=Prefix.bsa\n");
+        File.Copy(Path.Combine(world.Root, "mods", "Alpha", "Fixture.bsa"), Path.Combine(world.Root, "game", "Data", "Prefix.bsa"));
+        File.WriteAllText(Path.Combine(world.Root, "manager-config", "paths.json"), JsonSerializer.Serialize(new
+        {
+            staging_path = world.Root, game_path = Path.Combine(world.Root, "game"),
+            prefix_path = Path.Combine(world.Root, "prefix"), profile_ini_files = true
+        }));
+
+        var fallback = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Equal(prefixIniDir, fallback.EffectiveIniDir);
+        Assert.Contains(fallback.VanillaArchives, a => Path.GetFileName(a.Path) == "Prefix.bsa");
+        fallback.CheckUnchanged();
+        File.WriteAllText(Path.Combine(profileIniDir, "Skyrim.ini"), "[Archive]\nsResourceArchiveList=Profile.bsa\n");
+        Assert.Contains("configuration or profile changed", Assert.Throws<InvalidOperationException>(fallback.CheckUnchanged).Message);
+
+        var selectedProfile = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Equal(profileIniDir, selectedProfile.EffectiveIniDir);
+        File.Delete(Path.Combine(profileIniDir, "Skyrim.ini"));
+        Assert.Contains("configuration or profile changed", Assert.Throws<InvalidOperationException>(selectedProfile.CheckUnchanged).Message);
+    }
+
+    [Fact]
     public void SkyrimCccEntriesWithoutAnInstalledPluginDoNotActivateArchives()
     {
         using var world = new AmethystSnapshotWorld();

@@ -32,7 +32,7 @@ public sealed class AmethystSavedSnapshot
     public bool UsesShadowTreeVfs { get; private set; }
     /// <summary>True only when Amethyst's native committed plan matches this profile generation and saved deployment mode.</summary>
     public bool DeploymentTargetVerified { get; private set; }
-    /// <summary>Effective profile or Proton-prefix INI directory, when configured and present.</summary>
+    /// <summary>Directory containing the effective Skyrim.ini source, when present.</summary>
     public string? EffectiveIniDir { get; private set; }
     /// <summary>Engine-loaded vanilla archives whose activation is established by Skyrim.ini and saved plugin state.</summary>
     public IReadOnlyList<ActiveArchive> VanillaArchives { get; private set; } = [];
@@ -52,6 +52,7 @@ public sealed class AmethystSavedSnapshot
     readonly Dictionary<string, string> _roots = new(StringComparer.Ordinal);
     /// <summary>Directory listings that participated in effective INI and VFS state selection.</summary>
     readonly Dictionary<string, string[]> _inputDirectories = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string> _effectiveIniPaths = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, string[]> _watchedEntries = new(StringComparer.Ordinal);
     readonly Dictionary<string, string[]> _watchedCandidates = new(StringComparer.Ordinal);
     byte[]? _cccBytes;
@@ -258,33 +259,38 @@ public sealed class AmethystSavedSnapshot
             throw new InvalidOperationException($"Amethyst {label} is missing or is a symlink: '{path}'; restore or repair the selected profile before reading");
     }
 
-    /// <summary>Capture the effective INI directory and the game's implicit-plugin manifest from their saved locations.</summary>
+    /// <summary>Capture per-file profile-first INI inputs and the game's implicit-plugin manifest from saved locations.</summary>
     void ReadEffectiveInputs(JsonElement paths)
     {
-        var profileIni = paths.TryGetProperty("profile_ini_files", out var profileSetting) && profileSetting.ValueKind == JsonValueKind.True;
-        string? iniDir = null;
-        if (profileIni) iniDir = Path.Combine(ProfileDir, "ini files");
-        else if (paths.TryGetProperty("prefix_path", out var prefix) && prefix.ValueKind == JsonValueKind.String &&
+        var profileIniEnabled = paths.TryGetProperty("profile_ini_files", out var profileSetting) && profileSetting.ValueKind == JsonValueKind.True;
+        var profileIniDir = profileIniEnabled ? Path.Combine(ProfileDir, "ini files") : null;
+        string? prefixIniDir = null;
+        if (paths.TryGetProperty("prefix_path", out var prefix) && prefix.ValueKind == JsonValueKind.String &&
             !string.IsNullOrWhiteSpace(prefix.GetString()))
         {
             var prefixPath = prefix.GetString();
             if (prefixPath is null || !Path.IsPathFullyQualified(prefixPath)) throw new InvalidOperationException("Amethyst paths.json prefix_path is not an absolute path; configure a valid Proton prefix before reading effective INIs");
-            iniDir = Path.Combine(prefixPath, "drive_c", "users", "steamuser", "Documents", "My Games", "Skyrim Special Edition");
+            prefixIniDir = Path.Combine(prefixPath, "drive_c", "users", "steamuser", "Documents", "My Games", "Skyrim Special Edition");
         }
-        if (iniDir is not null)
+
+        var profileFiles = profileIniDir is null ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : CaptureIniDirectory(profileIniDir);
+        var prefixFiles = prefixIniDir is null ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : CaptureIniDirectory(prefixIniDir);
+        var names = profileFiles.Keys.Concat(prefixFiles.Keys).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        foreach (var name in names)
         {
-            EffectiveIniDir = iniDir;
-            Root(iniDir);
-            if (Directory.Exists(iniDir))
-            {
-                var entries = Directory.EnumerateFiles(iniDir).Where(p => Path.GetExtension(p).Equals(".ini", StringComparison.OrdinalIgnoreCase))
-                    .OrderBy(Path.GetFileName, StringComparer.Ordinal).ToArray();
-                _inputDirectories[iniDir] = entries.Select(p => Path.GetFileName(p)!).ToArray();
-                foreach (var file in entries) Input(file, required: true);
-            }
-            else _inputDirectories[iniDir] = [];
+            profileFiles.TryGetValue(name, out var profileFile);
+            prefixFiles.TryGetValue(name, out var prefixFile);
+            // Track the absent side too. Directory listings catch new INI names; these optional file stamps
+            // catch appearance/removal of this exact candidate even when the other side remains effective.
+            if (profileIniDir is not null)
+                Input(profileFile ?? Path.Combine(profileIniDir, Path.GetFileName(prefixFile ?? name)), required: false);
+            if (prefixIniDir is not null)
+                Input(prefixFile ?? Path.Combine(prefixIniDir, Path.GetFileName(profileFile ?? name)), required: false);
+            var effective = profileIniEnabled ? profileFile ?? prefixFile : prefixFile;
+            if (effective is not null) _effectiveIniPaths[name] = effective;
         }
-        else _vanillaArchiveCoverageIncomplete = true;
+        if (_effectiveIniPaths.TryGetValue("Skyrim.ini", out var effectiveSkyrimIni))
+            EffectiveIniDir = Path.GetDirectoryName(effectiveSkyrimIni);
 
         var cccPath = Path.Combine(GameDir, "Skyrim.ccc");
         TrackEntries(GameDir, "Skyrim.ccc");
@@ -292,10 +298,30 @@ public sealed class AmethystSavedSnapshot
         if (_cccBytes is not null) _cccPath = cccPath;
     }
 
+    /// <summary>Capture an INI candidate directory and its listing without creating a missing prefix or profile path.</summary>
+    Dictionary<string, string> CaptureIniDirectory(string directory)
+    {
+        Root(directory);
+        var result = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var entries = Directory.Exists(directory)
+            ? Directory.EnumerateFiles(directory).Where(p => Path.GetExtension(p).Equals(".ini", StringComparison.OrdinalIgnoreCase))
+                .OrderBy(Path.GetFileName, StringComparer.Ordinal).ToArray()
+            : [];
+        _inputDirectories[directory] = entries.Select(p => Path.GetFileName(p)!).ToArray();
+        foreach (var file in entries)
+        {
+            var filename = Path.GetFileName(file);
+            if (!result.TryAdd(filename, file))
+                throw new InvalidOperationException($"effective INI directory has case-colliding '{filename}' files");
+            Input(file, required: true);
+        }
+        return result;
+    }
+
     /// <summary>Build only the vanilla archive sources whose activation is established by effective Skyrim.ini and engine-loaded plugins.</summary>
     void ReadVanillaArchives()
     {
-        var ini = CapturedInputPath(EffectiveIniDir, "Skyrim.ini");
+        var ini = _effectiveIniPaths.GetValueOrDefault("Skyrim.ini");
         IReadOnlyList<string> baseArchives = [];
         if (ini is null) _vanillaArchiveCoverageIncomplete = true;
         else baseArchives = ParseBaseArchiveNames(_inputs[ini].Bytes!);
@@ -378,14 +404,6 @@ public sealed class AmethystSavedSnapshot
         _watchedCandidates[directory] = names.OrderBy(n => n, StringComparer.Ordinal).ToArray();
         _watchedEntries[directory] = names.Where(n => File.Exists(Path.Combine(directory, n)) || Directory.Exists(Path.Combine(directory, n)))
             .OrderBy(n => n, StringComparer.Ordinal).ToArray();
-    }
-
-    string? CapturedInputPath(string? directory, string name)
-    {
-        if (directory is null) return null;
-        var match = _inputs.Keys.Where(p => Path.GetDirectoryName(p) == directory && Path.GetFileName(p).Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
-        if (match.Count > 1) throw new InvalidOperationException($"effective INI directory has case-colliding '{name}' files");
-        return match.SingleOrDefault();
     }
 
     /// <summary>Check the saved profile's intent and generation; serialized payload contents must agree with their columns.</summary>
