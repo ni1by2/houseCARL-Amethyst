@@ -85,7 +85,23 @@ public sealed class AmethystTransactionWriteScope : IDisposable
     {
         _validateInputs();
         var journal = Journal;
-        foreach (var artifact in journal.Artifacts.Where(a => a.Role == "owner_metadata" && a.State == "prepared").ToArray())
+        var eligibleUnits = journal.Units
+            .Where(u => u.State is not (AmethystUnitState.Failed or AmethystUnitState.RolledBack or AmethystUnitState.RecoveryRequired))
+            .Where(u => journal.Artifacts.Any(a => a.UnitId == u.Id && a.Role != "owner_metadata" && a.State == "committed"))
+            .Select(u => u.Id).ToHashSet(StringComparer.Ordinal);
+        foreach (var unit in journal.Units.Where(u => u.Id == _metadataUnitId &&
+                     u.State is not (AmethystUnitState.Failed or AmethystUnitState.RolledBack or AmethystUnitState.RecoveryRequired)))
+            if ((unit.DependsOn ?? []).Count > 0 && (unit.DependsOn ?? []).All(eligibleUnits.Contains))
+                eligibleUnits.Add(unit.Id);
+        var defaultUnit = journal.Units.FirstOrDefault(u => u.Id == _metadataUnitId);
+        var metadataUnit = defaultUnit is not null && eligibleUnits.Contains(defaultUnit.Id)
+            ? defaultUnit.Id : eligibleUnits.FirstOrDefault();
+        // A newly-created asset folder gets ownership metadata only when an output unit succeeded.
+        if (_metadata.Count > 0 && metadataUnit is not null)
+            foreach (var (path, item) in _metadata.ToArray())
+                if (!_preparedMetadata.Contains(path)) PrepareMetadata(path, null, metadataUnit);
+        journal = Journal;
+        foreach (var artifact in journal.Artifacts.Where(a => a.Role == "owner_metadata" && a.State == "prepared" && eligibleUnits.Contains(a.UnitId)).ToArray())
         {
             _coordinator.Publish(_transactionId, artifact.Id, _locks);
             _publishedMetadata.Add(artifact.Destination);
@@ -103,10 +119,14 @@ public sealed class AmethystTransactionWriteScope : IDisposable
         {
             using var stream = new FileStream(stagedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
             var artifact = _coordinator.PrepareArtifact(_transactionId, unitId, destination, role, stream, _allowedRoot);
+            if (role == "new_archive" && artifact.OriginalExisted)
+                throw new IOException($"archive destination '{destination}' appeared before publication; repack never replaces an existing archive");
             prepared.Add(artifact);
             if (role == "plugin") pluginHashes[Path.GetDirectoryName(Path.GetFullPath(destination))!] = artifact.PreparedSha256!;
         }
-        foreach (var (path, item) in _metadata)
+        // Plugin output and its owner marker are one producer unit. Asset-only calls defer
+        // ownership metadata until the successful asset unit is known in PublishOwnerMetadata.
+        foreach (var (path, item) in _metadata.Where(_ => artifacts.Any(a => a.Role == "plugin")))
         {
             var hash = item.TrackPluginHash ? pluginHashes.GetValueOrDefault(Path.GetDirectoryName(path)!) : null;
             var artifact = PrepareMetadata(path, hash, unitId);
@@ -148,8 +168,19 @@ public sealed class AmethystTransactionWriteScope : IDisposable
     public AmethystTransactionOutcome Abort()
         => _coordinator.AbortWithLocks(_transactionId, _locks);
 
+    /// <summary>Record a producer-level per-item refusal when the unit has no enrolled filesystem effects.</summary>
+    public AmethystTransactionJournal FailUnit(string unitId, string diagnostic)
+        => _coordinator.FailUnit(_transactionId, unitId, diagnostic);
+
     public AmethystTransactionJournal Seal()
         => _locks.ReleaseAndSeal(_coordinator, _transactionId);
+
+    /// <summary>Release held locks without asserting restart safety when the journal still requires recovery.</summary>
+    public AmethystTransactionJournal ReleaseForRecovery()
+    {
+        _locks.Dispose();
+        return Journal;
+    }
 
     public IReadOnlyList<(string Path, string Hash)> PublishedPlugins => _plugins;
 

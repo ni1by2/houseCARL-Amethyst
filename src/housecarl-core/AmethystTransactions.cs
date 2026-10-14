@@ -76,7 +76,9 @@ public sealed record AmethystTransactionArtifact(
     string? PreparedSha256,
     string? CommittedIdentity = null,
     string? CommittedSha256 = null,
-    string State = "prepared");
+    string State = "prepared",
+    IReadOnlyList<string>? MissingParentDirectories = null,
+    IReadOnlyDictionary<string, string>? CreatedParentIdentities = null);
 
 /// <summary>Persisted deployment facts; pending is not equivalent to verified.</summary>
 public sealed record AmethystTransactionVisibility(
@@ -118,7 +120,8 @@ public sealed record AmethystTransactionJournal(
     bool PendingDeployment,
     bool ImmediateVisibility,
     bool SafeToRestartAmethyst,
-    string? RecoveryAction);
+    string? RecoveryAction,
+    bool Managed = true);
 
 /// <summary>One status entry. Corrupt/unknown journals remain visible and are never deleted by listing.</summary>
 public sealed record AmethystTransactionStatus(
@@ -199,6 +202,13 @@ public sealed class AmethystTransactionCoordinator
         return AmethystTransactionLockSet.Acquire(_root, libraryPath, managerLockPath, timeout ?? TimeSpan.FromSeconds(2));
     }
 
+    /// <summary>Acquire only houseCARL's shared-library lock for an explicitly external export destination.</summary>
+    public AmethystTransactionLockSet AcquireExternalWriteLock(string libraryPath, TimeSpan? timeout = null)
+    {
+        EnsurePrivateDirectory(_root);
+        return AmethystTransactionLockSet.AcquireExternal(_root, libraryPath, timeout ?? TimeSpan.FromSeconds(2));
+    }
+
     /// <summary>Create a private transaction directory and durably persist its initial journal before any output is allowed.</summary>
     public AmethystTransactionJournal Begin(AmethystTransactionRequest request)
     {
@@ -226,7 +236,7 @@ public sealed class AmethystTransactionCoordinator
             request.SnapshotGeneration, request.InventoryGeneration, request.ProducerContract,
             request.InputSha256 ?? [], request.ConsentScope ?? [], request.ToolVersions ?? [], units, [],
             [], [], [], [], [], AmethystTransactionState.Preparing, request.Managed, request.ImmediateVisibility,
-            false, null);
+            false, null, request.Managed);
         WriteJournal(journal);
         _fault?.Invoke("after_begin_journal");
         return journal;
@@ -240,7 +250,8 @@ public sealed class AmethystTransactionCoordinator
         RequireWritable(journal);
         if (!journal.Units.Any(u => u.Id == unitId)) throw new InvalidOperationException($"transaction unit '{unitId}' is not in the journal");
         var root = LinuxFileIdentity.Canonical(allowedRoot);
-        if (!IsWithin(root, journal.LibraryPath)) throw new IOException("transaction allowed root is outside the enrolled Amethyst library");
+        if (journal.Managed && !IsWithin(root, journal.LibraryPath)) throw new IOException("transaction allowed root is outside the enrolled Amethyst library");
+        if (!journal.Managed && root != journal.LibraryPath) throw new IOException("external transaction allowed root must equal its enrolled destination root");
         var target = ValidateDestination(destination, root, allowMissingLeaf: true);
         if (journal.Artifacts.Any(a => StringComparer.OrdinalIgnoreCase.Equals(a.Destination, target)))
             throw new InvalidOperationException("transaction contains a duplicate artifact destination");
@@ -250,8 +261,13 @@ public sealed class AmethystTransactionCoordinator
         var (size, hash) = WritePrivateArtifact(transactionId, payloadRel, preparedContents);
         _fault?.Invoke("after_payload_flush");
 
-        using var anchoredDestination = OpenDestinationParent(journal, target, createParents: false);
-        var original = LinuxAnchoredFileSystem.TryOpenFileAt(anchoredDestination.Parent, anchoredDestination.Leaf);
+        var missingParents = MissingParentDirectories(journal, target);
+        using var anchoredDestination = missingParents.Count == 0
+            ? OpenDestinationParent(journal, target, createParents: false)
+            : null;
+        var original = anchoredDestination is null
+            ? new SafeFileHandle(new IntPtr(-1), ownsHandle: true)
+            : LinuxAnchoredFileSystem.TryOpenFileAt(anchoredDestination.Parent, anchoredDestination.Leaf);
         var exists = !original.IsInvalid;
         string? originalIdentity = null, originalHash = null, backupRel = null;
         if (exists)
@@ -267,7 +283,8 @@ public sealed class AmethystTransactionCoordinator
                 throw new IOException("transaction recovery copy did not match the original destination");
         }
         var artifact = new AmethystTransactionArtifact(artifactId, unitId, role, target, exists,
-            originalIdentity, originalHash, payloadRel, backupRel, size, hash);
+            originalIdentity, originalHash, payloadRel, backupRel, size, hash,
+            MissingParentDirectories: missingParents);
         var next = journal with
         {
             UpdatedUtc = DateTimeOffset.UtcNow,
@@ -281,11 +298,38 @@ public sealed class AmethystTransactionCoordinator
         return artifact;
     }
 
+    /// <summary>Persist an independently refused producer unit that never enrolled filesystem effects.</summary>
+    public AmethystTransactionJournal FailUnit(string transactionId, string unitId, string diagnostic)
+    {
+        var journal = ReadJournal(transactionId);
+        RequireWritable(journal);
+        var unit = journal.Units.SingleOrDefault(u => u.Id == unitId)
+            ?? throw new InvalidOperationException($"transaction unit '{unitId}' is not in the journal");
+        if (unit.State == AmethystUnitState.Failed) return journal;
+        if (unit.State != AmethystUnitState.Prepared)
+            throw new InvalidOperationException($"transaction unit '{unitId}' cannot be failed from state '{unit.State}'");
+        var enrolled = journal.Artifacts.Where(a => a.UnitId == unitId).ToArray();
+        if (enrolled.Any(a => a.State != "prepared"))
+            throw new InvalidOperationException($"transaction unit '{unitId}' has publication in progress and cannot be marked as a producer refusal");
+        var updated = journal with
+        {
+            Artifacts = journal.Artifacts.Select(a => a.UnitId == unitId ? a with { State = "abandoned" } : a).ToArray(),
+            Units = journal.Units.Select(u => u.Id == unitId ? u with { State = AmethystUnitState.Failed, Diagnostic = diagnostic } : u).ToArray(),
+            FailedUnits = journal.FailedUnits.Append(unitId).Distinct(StringComparer.Ordinal).ToArray(),
+            Diagnostics = journal.Diagnostics.Append($"{unitId}: {diagnostic}").ToArray(),
+            UpdatedUtc = DateTimeOffset.UtcNow
+        };
+        if (updated.Units.All(u => u.State is AmethystUnitState.Completed or AmethystUnitState.Failed))
+            updated = updated with { State = AmethystTransactionState.Partial };
+        WriteJournal(updated);
+        return updated;
+    }
+
     /// <summary>Publish one enrolled artifact through a unique same-directory file after rechecking the old destination.</summary>
     public AmethystTransactionJournal Publish(string transactionId, string artifactId, AmethystTransactionLockSet locks)
     {
         var journal = ReadJournal(transactionId);
-        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath);
+        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath, journal.Managed);
         RequireWritable(journal);
         var artifact = journal.Artifacts.SingleOrDefault(a => a.Id == artifactId)
             ?? throw new InvalidOperationException("transaction artifact is not enrolled");
@@ -306,6 +350,11 @@ public sealed class AmethystTransactionCoordinator
         var target = artifact.Destination;
         ValidateDestination(target, journal.LibraryPath, allowMissingLeaf: true);
         using var destination = OpenDestinationParent(journal, target, createParents: true);
+        if (destination.CreatedParentIdentities.Count > 0)
+        {
+            journal = UpdateArtifact(journal, artifactId, a => a with { CreatedParentIdentities = destination.CreatedParentIdentities });
+            artifact = journal.Artifacts.Single(a => a.Id == artifactId);
+        }
         VerifyOriginalUnchanged(artifact, destination.Parent, destination.Leaf);
         _fault?.Invoke("after_destination_parent_open");
         using (var reopened = OpenDestinationParent(journal, target, createParents: false))
@@ -363,12 +412,14 @@ public sealed class AmethystTransactionCoordinator
             };
             WriteJournal(journal);
         }
-        var allDone = journal.Units.All(u => u.State == AmethystUnitState.Completed);
+        var allDone = journal.Units.All(u => u.State is AmethystUnitState.Completed or AmethystUnitState.Failed);
         if (allDone)
         {
+            var hasFailures = journal.Units.Any(u => u.State == AmethystUnitState.Failed);
             journal = journal with
             {
-                State = journal.PendingDeployment ? AmethystTransactionState.PendingDeployment : AmethystTransactionState.Completed,
+                State = hasFailures ? AmethystTransactionState.Partial
+                    : journal.PendingDeployment ? AmethystTransactionState.PendingDeployment : AmethystTransactionState.Completed,
                 UpdatedUtc = DateTimeOffset.UtcNow,
                 SafeToRestartAmethyst = false,
                 SuccessfulUnits = journal.Units.Where(u => u.State == AmethystUnitState.Completed).Select(u => u.Id).ToArray()
@@ -376,6 +427,17 @@ public sealed class AmethystTransactionCoordinator
             WriteJournal(journal);
             WriteReceipt(journal);
             _fault?.Invoke("after_completed_journal");
+        }
+        else
+        {
+            // Completed units are durable independently; later prepared units are not an interrupted commit.
+            journal = journal with
+            {
+                State = journal.Units.Any(u => u.State == AmethystUnitState.Failed)
+                    ? AmethystTransactionState.Partial : AmethystTransactionState.Prepared,
+                UpdatedUtc = DateTimeOffset.UtcNow
+            };
+            WriteJournal(journal);
         }
         return journal;
     }
@@ -508,11 +570,35 @@ public sealed class AmethystTransactionCoordinator
         return (size, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
     }
 
-    sealed class DestinationParent(SafeFileHandle parent, string leaf) : IDisposable
+    sealed class DestinationParent(SafeFileHandle parent, string leaf, IReadOnlyDictionary<string, string>? createdParentIdentities = null) : IDisposable
     {
         public SafeFileHandle Parent { get; } = parent;
         public string Leaf { get; } = leaf;
+        public IReadOnlyDictionary<string, string> CreatedParentIdentities { get; } = createdParentIdentities ?? new Dictionary<string, string>();
         public void Dispose() => Parent.Dispose();
+    }
+
+    List<string> MissingParentDirectories(AmethystTransactionJournal journal, string destination)
+    {
+        var rootPath = journal.LibraryPath.TrimEnd(Path.DirectorySeparatorChar);
+        var relative = Path.GetRelativePath(rootPath, destination);
+        var parts = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length <= 1) return [];
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(rootPath);
+        if (StableIdentityString(LinuxAnchoredFileSystem.Identity(root)) != journal.LibraryIdentity)
+            throw new IOException("enrolled library root identity changed; managed write refused");
+        var missing = new List<string>();
+        var parentParts = parts[..^1];
+        for (var i = 1; i <= parentParts.Length; i++)
+        {
+            var prefix = string.Join('/', parentParts[..i]);
+            using var opened = LinuxAnchoredFileSystem.TryOpenRelativeDirectory(root, prefix);
+            if (!opened.IsInvalid) continue;
+            for (var j = i; j <= parentParts.Length; j++)
+                missing.Add(string.Join('/', parentParts[..j]));
+            break;
+        }
+        return missing;
     }
 
     DestinationParent OpenDestinationParent(AmethystTransactionJournal journal, string destination, bool createParents)
@@ -529,8 +615,26 @@ public sealed class AmethystTransactionCoordinator
             if (parts.Length > 1)
             {
                 var parentRel = string.Join('/', parts[..^1]);
-                if (createParents) LinuxAnchoredFileSystem.CreateDirectories(root, parentRel);
-                var parent = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, parentRel);
+                SafeFileHandle parent;
+                if (createParents)
+                {
+                    var created = LinuxAnchoredFileSystem.CreateDirectoriesTracked(root, parentRel);
+                    parent = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, parentRel);
+                    var identities = new Dictionary<string, string>(StringComparer.Ordinal);
+                    foreach (var createdPath in created)
+                    {
+                        using var createdDirectory = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, createdPath);
+                        identities[createdPath] = StableIdentityString(LinuxAnchoredFileSystem.Identity(createdDirectory));
+                    }
+                    root.Dispose();
+                    return new DestinationParent(parent, parts[^1], identities);
+                }
+                else
+                {
+                    parent = LinuxAnchoredFileSystem.TryOpenRelativeDirectory(root, parentRel);
+                    if (parent.IsInvalid)
+                    { parent.Dispose(); throw new DirectoryNotFoundException("transaction destination parent is missing"); }
+                }
                 root.Dispose();
                 return new DestinationParent(parent, parts[^1]);
             }
@@ -559,7 +663,8 @@ public sealed class AmethystTransactionCoordinator
         if (action == AmethystTransactionAction.Verify)
             return Outcome(false, "verification_unavailable", journal,
                 ["Deployment verification requires the refreshed native evidence adapter; no deployment state was changed."], ["verify"]);
-        using var locks = AcquireWriteLocks(journal.LibraryPath, journal.ManagerLockPath);
+        using var locks = journal.Managed ? AcquireWriteLocks(journal.LibraryPath, journal.ManagerLockPath)
+            : AcquireExternalWriteLock(journal.LibraryPath);
         journal = ReadJournal(transactionId);
         if (journal.ImmediateVisibility && !confirmLiveDeploymentChange)
             return Outcome(false, "live_deployment_confirmation_required", journal,
@@ -588,7 +693,8 @@ public sealed class AmethystTransactionCoordinator
     internal AmethystTransactionJournal MarkLocksReleased(string transactionId)
     {
         var journal = ReadJournal(transactionId);
-        if (journal.State is AmethystTransactionState.Committing or AmethystTransactionState.RecoveryRequired ||
+        if (journal.State == AmethystTransactionState.RecoveryRequired ||
+            journal.Artifacts.Any(a => a.State == "committing") ||
             journal.Units.Any(u => u.State is AmethystUnitState.Committing or AmethystUnitState.RecoveryRequired))
             throw new InvalidOperationException("transaction has an unresolved unit; restart safety cannot be asserted");
         var updated = journal with { SafeToRestartAmethyst = true, UpdatedUtc = DateTimeOffset.UtcNow };
@@ -599,14 +705,17 @@ public sealed class AmethystTransactionCoordinator
     internal AmethystTransactionOutcome RecoverWithLocks(string transactionId, AmethystTransactionLockSet locks)
     {
         var journal = ReadJournal(transactionId);
-        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath);
+        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath, journal.Managed);
         return Recover(journal, locks);
     }
 
     internal AmethystTransactionOutcome AbortWithLocks(string transactionId, AmethystTransactionLockSet locks)
     {
         var journal = ReadJournal(transactionId);
-        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath);
+        locks.RequireFor(journal.LibraryPath, journal.ManagerLockPath, journal.Managed);
+        if (journal.State is AmethystTransactionState.Committing or AmethystTransactionState.RecoveryRequired ||
+            journal.Units.Any(u => u.State is AmethystUnitState.Committing or AmethystUnitState.RecoveryRequired))
+            return Recover(journal, locks);
         return journal.Artifacts.Any(a => a.State == "committed") ? Rollback(journal, locks) : Recover(journal, locks);
     }
 
@@ -614,7 +723,9 @@ public sealed class AmethystTransactionCoordinator
     AmethystTransactionOutcome Recover(AmethystTransactionJournal journal, AmethystTransactionLockSet locks)
     {
         var diagnostics = new List<string>();
-        var interruptedUnitIds = journal.Artifacts.Where(a => a.State == "committing").Select(a => a.UnitId).ToHashSet(StringComparer.Ordinal);
+        var interruptedUnitIds = journal.Artifacts.Where(a => a.State == "committing").Select(a => a.UnitId)
+            .Concat(journal.Units.Where(u => u.State == AmethystUnitState.Committing).Select(u => u.Id))
+            .ToHashSet(StringComparer.Ordinal);
         foreach (var artifact in journal.Artifacts.Where(a => interruptedUnitIds.Contains(a.UnitId) && (a.State is "committing" or "committed")).Reverse())
         {
             var (current, currentIdentity) = DestinationFingerprint(journal, artifact);
@@ -635,6 +746,18 @@ public sealed class AmethystTransactionCoordinator
                 expectedCommitted ? artifact.CommittedIdentity : null);
             journal = UpdateArtifact(journal, artifact.Id, a => a with { State = "rolled_back" }, unitState: AmethystUnitState.RolledBack);
         }
+        // An interrupted unit is atomic: prepared siblings must not remain resumable after its
+        // published siblings were recovered, or a paired asset could later be published alone.
+        journal = journal with
+        {
+            Artifacts = journal.Artifacts.Select(a => interruptedUnitIds.Contains(a.UnitId) && a.State == "prepared"
+                ? a with { State = "abandoned" } : a).ToArray(),
+            Units = journal.Units.Select(u => interruptedUnitIds.Contains(u.Id)
+                ? u with { State = AmethystUnitState.RolledBack } : u).ToArray(),
+            UpdatedUtc = DateTimeOffset.UtcNow
+        };
+        WriteJournal(journal);
+        CleanupTransactionCreatedParents(journal, journal.Artifacts.Where(a => interruptedUnitIds.Contains(a.UnitId)));
         journal = journal with
         {
             UpdatedUtc = DateTimeOffset.UtcNow,
@@ -663,6 +786,7 @@ public sealed class AmethystTransactionCoordinator
             RestoreOriginal(journal.Id, artifact, artifact.CommittedSha256, artifact.CommittedIdentity);
             journal = UpdateArtifact(journal, artifact.Id, a => a with { State = "rolled_back" }, unitState: AmethystUnitState.RolledBack);
         }
+        CleanupTransactionCreatedParents(journal, journal.Artifacts);
         journal = journal with
         {
             UpdatedUtc = DateTimeOffset.UtcNow,
@@ -681,7 +805,8 @@ public sealed class AmethystTransactionCoordinator
     {
         if (journal.State is not (AmethystTransactionState.Partial or AmethystTransactionState.Prepared or AmethystTransactionState.RecoveryRequired))
             return Outcome(false, "invalid_transition", journal, ["This transaction has no prepared remaining units to resume."], AllowedActions(journal));
-        var remaining = journal.Artifacts.Where(a => a.State == "prepared").ToArray();
+        var resumableUnits = journal.Units.Where(u => u.State == AmethystUnitState.Prepared).Select(u => u.Id).ToHashSet(StringComparer.Ordinal);
+        var remaining = journal.Artifacts.Where(a => a.State == "prepared" && resumableUnits.Contains(a.UnitId)).ToArray();
         if (remaining.Length == 0)
             return Outcome(false, "invalid_transition", journal, ["No recorded prepared artifact remains to resume."], AllowedActions(journal));
         var diagnostics = new List<string>();
@@ -828,9 +953,35 @@ public sealed class AmethystTransactionCoordinator
 
     (string? Hash, string? Identity) DestinationFingerprint(AmethystTransactionJournal journal, AmethystTransactionArtifact artifact)
     {
-        using var parent = OpenDestinationParent(journal, artifact.Destination, createParents: false);
+        DestinationParent parent;
+        try { parent = OpenDestinationParent(journal, artifact.Destination, createParents: false); }
+        catch (DirectoryNotFoundException) { return (null, null); }
+        using (parent)
+        {
         using var file = LinuxAnchoredFileSystem.TryOpenFileAt(parent.Parent, parent.Leaf);
         return file.IsInvalid ? (null, null) : (LinuxAnchoredFileSystem.Hash(file), IdentityString(LinuxAnchoredFileSystem.Identity(file)));
+        }
+    }
+
+    static void CleanupTransactionCreatedParents(AmethystTransactionJournal journal, IEnumerable<AmethystTransactionArtifact> artifacts)
+    {
+        var identities = artifacts.SelectMany(a => a.CreatedParentIdentities ?? new Dictionary<string, string>())
+            .GroupBy(pair => pair.Key, StringComparer.Ordinal).Select(group => group.First()).ToArray();
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(journal.LibraryPath);
+        foreach (var (path, identity) in identities.OrderByDescending(pair => pair.Key.Count(c => c == '/')))
+        {
+            var parentPath = Path.GetDirectoryName(path.Replace('/', Path.DirectorySeparatorChar))?.Replace(Path.DirectorySeparatorChar, '/');
+            var leaf = Path.GetFileName(path);
+            if (string.IsNullOrEmpty(leaf)) continue;
+            using var parent = string.IsNullOrEmpty(parentPath)
+                ? LinuxAnchoredFileSystem.Duplicate(root)
+                : LinuxAnchoredFileSystem.TryOpenRelativeDirectory(root, parentPath);
+            if (parent.IsInvalid) continue;
+            using var directory = LinuxAnchoredFileSystem.TryOpenDirectoryAt(parent, leaf);
+            if (directory.IsInvalid || StableIdentityString(LinuxAnchoredFileSystem.Identity(directory)) != identity) continue;
+            LinuxAnchoredFileSystem.RemoveEmptyDirectoryAt(parent, leaf);
+            LinuxAnchoredFileSystem.Sync(parent);
+        }
     }
 
     void VerifyOriginalUnchanged(AmethystTransactionArtifact artifact, SafeFileHandle parent, string leaf)
@@ -1006,8 +1157,9 @@ public sealed class AmethystTransactionLockSet : IDisposable
     readonly List<SafeFileHandle> _handles;
     readonly string _libraryPath;
     readonly string _managerLockPath;
-    AmethystTransactionLockSet(List<SafeFileHandle> handles, string libraryPath, string managerLockPath)
-    { _handles = handles; _libraryPath = libraryPath; _managerLockPath = managerLockPath; }
+    readonly bool _managerHeld;
+    AmethystTransactionLockSet(List<SafeFileHandle> handles, string libraryPath, string managerLockPath, bool managerHeld = true)
+    { _handles = handles; _libraryPath = libraryPath; _managerLockPath = managerLockPath; _managerHeld = managerHeld; }
 
     /// <summary>Acquire houseCARL's shared-library lock, then the existing Amethyst catalog lock.</summary>
     internal static AmethystTransactionLockSet Acquire(string stateRoot, string libraryPath, string managerLockPath, TimeSpan timeout)
@@ -1032,11 +1184,23 @@ public sealed class AmethystTransactionLockSet : IDisposable
         }
     }
 
-    internal void RequireFor(string libraryPath, string managerLockPath)
+    internal static AmethystTransactionLockSet AcquireExternal(string stateRoot, string libraryPath, TimeSpan timeout)
     {
-        if (_handles.Count != 2 || LinuxFileIdentity.Canonical(libraryPath) != _libraryPath ||
-            Path.GetFullPath(managerLockPath) != _managerLockPath)
-            throw new InvalidOperationException("publication requires the active lock set for this transaction's library and Amethyst manager lock");
+        if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Amethyst transaction locks currently require Linux flock");
+        var canonicalLibrary = LinuxFileIdentity.Canonical(libraryPath);
+        var lockRoot = Path.Combine(stateRoot, "locks");
+        AmethystTransactionCoordinator.EnsurePrivateDirectory(lockRoot);
+        var libraryKey = Convert.ToHexString(SHA256.HashData(Encoding.UTF8.GetBytes(canonicalLibrary))).ToLowerInvariant();
+        var libraryLock = Path.Combine(lockRoot, libraryKey + ".lock");
+        return new([AcquireFileLock(libraryLock, create: true, timeout, manager: false)], canonicalLibrary, "", managerHeld: false);
+    }
+
+    internal void RequireFor(string libraryPath, string managerLockPath, bool requireManager = true)
+    {
+        if (LinuxFileIdentity.Canonical(libraryPath) != _libraryPath || _managerHeld != requireManager ||
+            (requireManager && (_handles.Count != 2 || Path.GetFullPath(managerLockPath) != _managerLockPath)) ||
+            (!requireManager && _handles.Count != 1))
+            throw new InvalidOperationException("publication requires the active lock set for this transaction's library and deployment mode");
     }
 
     /// <summary>Release both locks, then durably mark restart safety when no incomplete unit remains.</summary>

@@ -13,9 +13,10 @@ internal static class AmethystSnapshotFilter
     /// <summary>Managed mutations and previews; refused before any tool body or consent side effect runs.</summary>
     static readonly HashSet<string> Writes = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward,
         ToolNames.Remove, ToolNames.Copy, ToolNames.CompactPlugin, ToolNames.MergePlugins, ToolNames.NifSet,
-        ToolNames.Place, ToolNames.WriteSeq, ToolNames.CompileScript];
+        ToolNames.Place, ToolNames.WriteSeq, ToolNames.CompileScript, ToolNames.BsaExtract, ToolNames.BsaRepack];
     /// <summary>Record-writing tools with a verified new-plugin path shared by all record types.</summary>
-    static readonly HashSet<string> TransactionRoutedRecordWrites = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward, ToolNames.Remove, ToolNames.Copy, ToolNames.CompactPlugin, ToolNames.MergePlugins];
+    static readonly HashSet<string> TransactionRoutedRecordWrites = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward, ToolNames.Remove, ToolNames.Copy,
+        ToolNames.CompactPlugin, ToolNames.MergePlugins, ToolNames.NifSet, ToolNames.Place, ToolNames.WriteSeq, ToolNames.BsaExtract, ToolNames.BsaRepack];
 
     /// <summary>Create the filter over the server's single service. Calls and connection changes run serially.</summary>
     internal static McpRequestFilter<CallToolRequestParams, CallToolResult> For(LoadOrderService service) => next => async (request, cancellationToken) =>
@@ -28,9 +29,15 @@ internal static class AmethystSnapshotFilter
             (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()));
         // repoint_externals can mutate other existing plugins even when no target= / in_place= argument is present.
         // Until per-entry deployment visibility is available, conservatively treat every compact repoint as immediate.
-        bool existingDestination = Names("into") || Names("in_place") || name == ToolNames.CompactPlugin && Names("repoint_externals");
+        bool requestedExplicitOutput = (name is ToolNames.BsaExtract or ToolNames.WriteSeq) && Names("out_path");
+        // With no explicit WriteSeq destination the producer may auto-select the existing owned folder of its source
+        // plugin. Until that resolved path is available to this preflight, require consent for the route conservatively.
+        bool defaultSeqMayReusePluginFolder = name == ToolNames.WriteSeq && !Names("out_path") && !Names("into") && !Names("patch");
+        bool existingDestination = Names("into") || Names("in_place") || name == ToolNames.CompactPlugin && Names("repoint_externals") || defaultSeqMayReusePluginFolder;
         if (write && existingDestination && (!Confirmed("confirm_amethyst_redeploy") || !Confirmed("confirm_live_deployment_change")))
-            return Error("Rewriting an existing plugin or compacting with external repointing requires both confirm_amethyst_redeploy=true and confirm_live_deployment_change=true on this call; a rewritten plugin may be visible to the game immediately.");
+            return Error(defaultSeqMayReusePluginFolder
+                ? "The default WriteSeq destination may reuse the source plugin's existing owned folder; pass both confirm_amethyst_redeploy=true and confirm_live_deployment_change=true because the .seq may be immediately visible to the game."
+                : "Rewriting an existing plugin or compacting with external repointing requires both confirm_amethyst_redeploy=true and confirm_live_deployment_change=true on this call; a rewritten plugin may be visible to the game immediately.");
         if (write && (!service.UsesSavedSnapshot || !TransactionRoutedRecordWrites.Contains(name) ||
             arguments is not null && new[] { "into", "in_place" }.Any(key => Names(key) && !existingDestination)))
             return Error(LoadOrderService.SnapshotWriteRefusal);
@@ -55,14 +62,46 @@ internal static class AmethystSnapshotFilter
             if (write)
             {
                 var reshape = name is ToolNames.CompactPlugin or ToolNames.MergePlugins;
-                staging = new AmethystStagingWrite(snapshot, name!, JsonSerializer.Serialize(arguments), existingDestination,
-                    reshape ? [new HousecarlCore.AmethystTransactionUnit("reshape-output")] : null,
-                    reshape ? "reshape-output" : "record-output", reshape ? "reshape-output" : "owner-metadata");
+                var managedAssetWrite = name is ToolNames.NifSet or ToolNames.Place or ToolNames.WriteSeq or ToolNames.BsaExtract or ToolNames.BsaRepack;
+                var explicitSeqPath = name == ToolNames.WriteSeq && Names("out_path")
+                    ? Path.GetFullPath(arguments!["out_path"].GetString()!.Trim().Trim('"')) : null;
+                var managedExplicitSeq = explicitSeqPath is not null && IsWithin(explicitSeqPath, snapshot.ModsDir);
+                if (managedExplicitSeq && (!Confirmed("confirm_amethyst_redeploy") || !Confirmed("confirm_live_deployment_change")))
+                    return Error("Writing a SEQ into Amethyst's ModsDir requires both confirm_amethyst_redeploy=true and confirm_live_deployment_change=true on this call; the selected mod folder may be immediately visible to the game.");
+                bool externalOutput = requestedExplicitOutput && !managedExplicitSeq;
+                string? externalRoot = null;
+                var immediate = existingDestination || managedExplicitSeq;
+                if (externalOutput)
+                {
+                    var rawOutput = arguments!["out_path"].GetString()!;
+                    var externalPath = Path.GetFullPath(rawOutput.Trim().Trim('"'));
+                    externalRoot = NearestExistingExternalRoot(externalPath, snapshot);
+                }
+                int? placeCount = name == ToolNames.Place && arguments is not null && arguments.TryGetValue("assets", out var assetArg)
+                    ? Math.Max(1, CapturePlaceInputCount(assetArg, snapshot) ?? 1) : null;
+                var placeUnits = placeCount is { } count
+                    ? Enumerable.Range(0, count).Select(i => new HousecarlCore.AmethystTransactionUnit($"place-{i}")).ToArray()
+                    : null;
+                var units = externalOutput
+                    ? [new HousecarlCore.AmethystTransactionUnit("external-output")]
+                    : reshape
+                    ? [new HousecarlCore.AmethystTransactionUnit("reshape-output")]
+                    : placeUnits is not null
+                        ? placeUnits
+                    : managedAssetWrite
+                        ? [new HousecarlCore.AmethystTransactionUnit("managed-output")]
+                        : null;
+                staging = new AmethystStagingWrite(snapshot, name!, JsonSerializer.Serialize(arguments), immediate,
+                    units,
+                    externalOutput ? "external-output" : reshape ? "reshape-output" : placeUnits is { Length: > 0 } ? placeUnits[0].Id : managedAssetWrite ? "managed-output" : "record-output",
+                    externalOutput ? "external-output" : managedAssetWrite ? "managed-output" : "owner-metadata",
+                    externalRoot);
             }
             var result = await next(request, cancellationToken);
             MarkErrors(result);
-            if (result.IsError == true && staging is not null) staging.Abort();
-            if (staging is null) snapshot.CheckUnchanged(); else staging.ValidateSnapshotInputs();
+            if (result.IsError == true && staging is not null) staging.FinalizeFailure(result);
+            else if (staging is null) snapshot.CheckUnchanged();
+            else staging.ValidateSnapshotInputs();
             Decorate(result, snapshot.Provenance);
             if (result.IsError != true) staging?.Complete(result);
             return result;
@@ -78,6 +117,43 @@ internal static class AmethystSnapshotFilter
         }
         finally { staging?.Dispose(); service.SnapshotCalls.Release(); }
     };
+
+    static string NearestExistingExternalRoot(string path, HousecarlCore.AmethystSavedSnapshot snapshot)
+    {
+        if (!Path.IsPathFullyQualified(path)) throw new InvalidOperationException("out_path must be absolute");
+        var full = Path.GetFullPath(path);
+        snapshot.ValidateExternalDestination(full);
+        var candidate = full;
+        while (!Directory.Exists(candidate))
+            candidate = Path.GetDirectoryName(candidate) ?? throw new InvalidOperationException("out_path has no existing parent directory");
+        var canonical = HousecarlCore.LinuxFileIdentity.Canonical(candidate);
+        if (!string.Equals(canonical, candidate, StringComparison.Ordinal))
+            throw new InvalidOperationException("out_path passes through a symlinked directory; external export refused");
+        snapshot.ValidateExternalDestination(canonical);
+        return canonical;
+    }
+
+    static bool IsWithin(string path, string root)
+    {
+        var full = Path.GetFullPath(path).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        var parent = Path.GetFullPath(root).TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+        return full.StartsWith(parent, StringComparison.Ordinal) || Path.GetFullPath(path) == Path.GetFullPath(root);
+    }
+
+    static int? CapturePlaceInputCount(JsonElement argument, HousecarlCore.AmethystSavedSnapshot snapshot)
+    {
+        string? path = argument.ValueKind == JsonValueKind.String ? argument.GetString() : null;
+        if (argument.ValueKind == JsonValueKind.Array && argument.GetArrayLength() == 1 && argument[0].ValueKind == JsonValueKind.String)
+            path = argument[0].GetString();
+        if (path?.Trim().Trim('"', '\'') is { Length: > 1 } token && token[0] == '@')
+        {
+            var full = token[1..].Trim();
+            var bytes = snapshot.CaptureAdditionalInput(full); // capture failures are a hard refusal, never a one-unit fallback
+            using var captured = JsonDocument.Parse(bytes, new JsonDocumentOptions { CommentHandling = JsonCommentHandling.Skip, AllowTrailingCommas = true });
+            return captured.RootElement.ValueKind == JsonValueKind.Array ? captured.RootElement.GetArrayLength() : null;
+        }
+        return argument.ValueKind == JsonValueKind.Array ? argument.GetArrayLength() : null;
+    }
 
     /// <summary>Attach provenance to each text/JSON result and MCP structured content without changing the result rows.</summary>
     internal static void Decorate(CallToolResult result, AmethystSnapshotProvenance provenance)

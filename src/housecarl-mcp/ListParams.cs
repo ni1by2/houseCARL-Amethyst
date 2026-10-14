@@ -73,7 +73,11 @@ internal static class ListParams
         if (PathArguments.NotAbsolute(path, $"{param}:", "the file to read", "C:\\jobs\\ops.json") is { } notAbsolute)
             return (null, notAbsolute);
         string text;
-        try { text = File.ReadAllText(path); }
+        try
+        {
+            var captured = AmethystSnapshotContext.Current?.CapturedInput(path);
+            text = captured is null ? File.ReadAllText(path) : new System.Text.UTF8Encoding(false, true).GetString(captured);
+        }
         catch (Exception ex) { return (null, $"{param}: could not read '{path}' — {ex.GetType().Name}: {ex.Message}"); }
         if (string.IsNullOrWhiteSpace(text))
             return (null, $"{param}: '{path}' is empty. Expected a JSON array.");

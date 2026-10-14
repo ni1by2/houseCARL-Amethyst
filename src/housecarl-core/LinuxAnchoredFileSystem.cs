@@ -36,6 +36,13 @@ internal static class LinuxAnchoredFileSystem
         return Handle(fd);
     }
 
+    internal static SafeFileHandle Duplicate(SafeFileHandle handle)
+    {
+        int fd = Native.dup(handle.DangerousGetHandle().ToInt32());
+        if (fd < 0) ThrowErrno("duplicate anchored directory descriptor");
+        return Handle(fd);
+    }
+
     internal static SafeFileHandle OpenAbsoluteDirectory(string path, bool create = false)
     {
         if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("managed Amethyst writes require Linux openat2");
@@ -59,6 +66,17 @@ internal static class LinuxAnchoredFileSystem
 
     internal static SafeFileHandle OpenDirectoryAt(SafeFileHandle parent, string name)
         => OpenAt(parent, name, Native.O_RDONLY | ODirectory | OCloExec | ONoFollow, 0);
+
+    internal static SafeFileHandle TryOpenDirectoryAt(SafeFileHandle parent, string name)
+    {
+        ValidateName(name); EnsureSupported();
+        var how = new OpenHow { flags = Native.O_RDONLY | ODirectory | OCloExec | ONoFollow, resolve = Resolve };
+        long fd = Native.syscall(SysOpenAt2, parent.DangerousGetHandle().ToInt32(), name, ref how, (nuint)Marshal.SizeOf<OpenHow>());
+        if (fd >= 0) return Handle(checked((int)fd));
+        int error = Marshal.GetLastPInvokeError();
+        if (error == ENoEnt) return new SafeFileHandle(new IntPtr(-1), ownsHandle: true);
+        ThrowErrno($"openat2 directory '{name}'", error); return null!;
+    }
 
     internal static SafeFileHandle OpenFileAt(SafeFileHandle parent, string name, bool write = false, bool createNew = false)
         => OpenAt(parent, name, (write ? OWriteOnly : Native.O_RDONLY) | OCloExec | ONoFollow |
@@ -94,19 +112,73 @@ internal static class LinuxAnchoredFileSystem
         catch { current.Dispose(); throw; }
     }
 
+    internal static SafeFileHandle TryOpenRelativeDirectory(SafeFileHandle root, string relative)
+    {
+        ValidateRelative(relative);
+        var parts = relative.Split('/');
+        SafeFileHandle current = Handle(Native.dup(root.DangerousGetHandle().ToInt32()));
+        if (current.IsInvalid) ThrowErrno("duplicate anchored directory descriptor");
+        try
+        {
+            foreach (var part in parts)
+            {
+                var next = TryOpenDirectoryAt(current, part);
+                if (next.IsInvalid)
+                { next.Dispose(); current.Dispose(); return new SafeFileHandle(new IntPtr(-1), ownsHandle: true); }
+                current.Dispose(); current = next;
+            }
+            return current;
+        }
+        catch { current.Dispose(); throw; }
+    }
+
+    internal static void RemoveEmptyDirectoryAt(SafeFileHandle parent, string name)
+    {
+        ValidateName(name);
+        if (Native.unlinkat(parent.DangerousGetHandle().ToInt32(), name, 0x200) == 0) return; // AT_REMOVEDIR
+        int error = Marshal.GetLastPInvokeError();
+        if (error is ENoEnt or 39) return; // ENOENT / ENOTEMPTY: preserve anything that appeared later.
+        ThrowErrno("descriptor-relative empty-directory removal", error);
+    }
+
     internal static void CreateDirectories(SafeFileHandle root, string relative)
     {
         if (string.IsNullOrEmpty(relative) || relative == ".") return;
         using var _ = OpenRelativeDirectory(root, relative, create: true);
     }
 
-    internal static void TryMkdirAt(SafeFileHandle parent, string name, uint mode)
+    internal static bool TryMkdirAt(SafeFileHandle parent, string name, uint mode)
     {
         ValidateName(name);
-        if (Native.mkdirat(parent.DangerousGetHandle().ToInt32(), name, mode) == 0) return;
+        if (Native.mkdirat(parent.DangerousGetHandle().ToInt32(), name, mode) == 0) return true;
         int error = Marshal.GetLastPInvokeError();
         if (error != EExist) ThrowErrno($"create anchored directory '{name}'", error);
         // Existing entries are opened with openat2 by the caller; symlinks and non-directories fail closed.
+        return false;
+    }
+
+    internal static IReadOnlyList<string> CreateDirectoriesTracked(SafeFileHandle root, string relative)
+    {
+        ValidateRelative(relative);
+        var created = new List<string>();
+        var parts = relative.Split('/');
+        using var currentRoot = Duplicate(root);
+        SafeFileHandle current = currentRoot;
+        var ownsCurrent = false;
+        try
+        {
+            var prefix = new List<string>();
+            foreach (var part in parts)
+            {
+                prefix.Add(part);
+                if (TryMkdirAt(current, part, Mode0700)) created.Add(string.Join('/', prefix));
+                var next = OpenDirectoryAt(current, part);
+                if (ownsCurrent) current.Dispose();
+                current = next; ownsCurrent = true;
+            }
+            return created;
+        }
+        finally { if (ownsCurrent) current.Dispose(); }
     }
 
     internal static void Rename(SafeFileHandle oldParent, string oldName, SafeFileHandle newParent, string newName, bool noReplace = false)

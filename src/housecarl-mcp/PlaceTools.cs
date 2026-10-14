@@ -116,7 +116,7 @@ public static class PlaceTools
             if (err is not null) problems.Add(err);
             else
             {
-                all.AddRange(reqs!);
+                all.AddRange(reqs!.Select(r => r with { TransactionGroup = $"place-{i}" }));
                 if (withheld) foreach (var r in reqs!) poleWithheld.Add(PoleKey(r.AssetPath));
             }
         }

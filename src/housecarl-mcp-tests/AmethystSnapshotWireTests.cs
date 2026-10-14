@@ -100,6 +100,20 @@ public sealed class AmethystSnapshotWireTests
     }
 
     [Fact]
+    public void DefaultSeqDestinationRequiresConsentForPossibleOwnedFolderReuse()
+    {
+        using var world = new AmethystSnapshotWorld();
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var result = server.Call(ToolNames.WriteSeq, "{\"source\":\"Fixture.esp\"}");
+
+        Assert.True(result.IsError, result.Text);
+        Assert.Contains("default WriteSeq destination may reuse", result.Text);
+        Assert.Contains("confirm_live_deployment_change=true", result.Text);
+        Assert.DoesNotContain(Directory.EnumerateDirectories(Path.Combine(world.Library, "mods")),
+            path => Path.GetFileName(path).Contains("SEQ", StringComparison.OrdinalIgnoreCase));
+    }
+
+    [Fact]
     public void NewPatchWritesOnlyStagingAndReportsPendingDeployment()
     {
         using var world = new AmethystSnapshotWorld();

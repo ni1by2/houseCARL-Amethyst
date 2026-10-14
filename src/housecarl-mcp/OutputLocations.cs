@@ -108,10 +108,14 @@ internal sealed class OutputLocations
             throw new InvalidOperationException($"out_path '{root}' is a file, not a folder. Give a mod-folder root — houseCARL appends {sub}\\.");
 
         var (outDir, appended, warn) = contract(root, roots.ModsDir, roots.DataDir, roots.OverwriteDir);
-        // A plain message for a folder that cannot be created, rather than a generic internal failure.
-        try { Directory.CreateDirectory(outDir); }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
-        { throw new InvalidOperationException($"out_path: couldn't create the output folder '{outDir}' ({ex.Message}). Check the path and that it's writable."); }
+        // Amethyst exports and managed SEQ writes leave missing parents to the descriptor-anchored transaction publisher.
+        // Other lanes preserve the historical create-before-write contract.
+        if (!AmethystStagingWrite.IsActive)
+        {
+            try { Directory.CreateDirectory(outDir); }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { throw new InvalidOperationException($"out_path: couldn't create the output folder '{outDir}' ({ex.Message}). Check the path and that it's writable."); }
+        }
         deployWarning = warn;
         // ModFolder stays accurate though cleanup is bypassed: the subfolder's parent, else the path given.
         var modRoot = appended ? root : (Path.GetDirectoryName(outDir.TrimEnd('\\', '/')) ?? outDir);
@@ -233,7 +237,7 @@ internal sealed class OutputLocations
     {
         var f = ResolvePatchModFolder(snapshot, patchName, into, "houseCARL_SEQ", new RiderNaming("patch", Noun: ".seq"));
         var seq = Path.Combine(f.ModFolder, "SEQ");
-        Directory.CreateDirectory(seq);
+        if (!AmethystStagingWrite.IsActive) Directory.CreateDirectory(seq);
         return f with { OutputDir = seq };
     }
 
@@ -325,7 +329,22 @@ internal sealed class OutputLocations
             bool replacedSameBytes = replaced && sameBytes;
 
             // Atomic write of <plugin>.seq under SEQ\.
-            try { AtomicFile.WriteAllBytes(dest, built.Bytes); }
+            try
+            {
+                if (AmethystStagingWrite.IsActive)
+                {
+                    AmethystStagingWrite.RegisterOutputPath(dest);
+                    var scratch = AmethystStagingWrite.CreateScratchDirectory("seq");
+                    try
+                    {
+                        var staged = Path.Combine(scratch, seqName);
+                        File.WriteAllBytes(staged, built.Bytes);
+                        AmethystStagingWrite.PublishActiveArtifact(staged, dest, "seq");
+                    }
+                    finally { Directory.Delete(scratch, recursive: true); }
+                }
+                else AtomicFile.WriteAllBytes(dest, built.Bytes);
+            }
             catch (Exception ex)
             {
                 var residue = RemoveOrNameRiderResidue(rf);             // nothing landed → a fresh folder is an orphan

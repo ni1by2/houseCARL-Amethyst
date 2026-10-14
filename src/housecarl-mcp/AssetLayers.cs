@@ -873,8 +873,25 @@ internal sealed partial class AssetLayers
             bool owesConsent = !already && acknowledge;
 
             if (InPlaceConsent.ParentUnwritable(targetPath, out var why)) return NifSetResult.Fail(why, providers, profileName);
-            try { AtomicFile.WriteAllBytes(targetPath, editedBytes); }
-            catch (Exception ex) { return NifSetResult.Fail($"could not overwrite '{targetPath}' in place: {ex.Message}. Nothing was written.", providers, profileName); }
+            try
+            {
+                if (AmethystStagingWrite.IsActive)
+                {
+                    AmethystStagingWrite.RegisterOutputPath(targetPath);
+                    var scratch = AmethystStagingWrite.CreateScratchDirectory("nif");
+                    try
+                    {
+                        var staged = Path.Combine(scratch, "edited.nif");
+                        File.WriteAllBytes(staged, editedBytes);
+                        AmethystStagingWrite.PublishManagedArtifact(staged, targetPath, "asset");
+                    }
+                    finally { Directory.Delete(scratch, recursive: true); }
+                }
+                else AtomicFile.WriteAllBytes(targetPath, editedBytes);
+            }
+            catch (Exception ex) { return NifSetResult.Fail(AmethystStagingWrite.IsActive
+                ? $"could not overwrite '{targetPath}' in place: {ex.Message}. The Amethyst transaction wrapper will report rollback or recovery status."
+                : $"could not overwrite '{targetPath}' in place: {ex.Message}. Nothing was written.", providers, profileName); }
             long sz; try { sz = new FileInfo(targetPath).Length; } catch { sz = -1; }
             if (sz != editedBytes.Length)
                 return NifSetResult.Fail($"wrote '{meshName}' but its on-disk size ({sz}) does not match the {editedBytes.Length} verified byte(s) — verify before relying on it.", providers, profileName);
@@ -890,12 +907,29 @@ internal sealed partial class AssetLayers
         catch (InvalidOperationException ex) { return NifSetResult.Fail(ex.Message, providers, profileName); }
 
         var dest = BethesdaPath.Under(rf.OutputDir, rel);
-        try { Directory.CreateDirectory(Path.GetDirectoryName(dest)!); AtomicFile.WriteAllBytes(dest, editedBytes); }
+        try
+        {
+            if (AmethystStagingWrite.IsActive)
+            {
+                AmethystStagingWrite.RegisterOutputPath(dest);
+                var scratch = AmethystStagingWrite.CreateScratchDirectory("nif");
+                try
+                {
+                    var staged = Path.Combine(scratch, "edited.nif");
+                    File.WriteAllBytes(staged, editedBytes);
+                    AmethystStagingWrite.PublishManagedArtifact(staged, dest, "asset");
+                }
+                finally { Directory.Delete(scratch, recursive: true); }
+            }
+            else { Directory.CreateDirectory(Path.GetDirectoryName(dest)!); AtomicFile.WriteAllBytes(dest, editedBytes); }
+        }
         catch (Exception ex)
         {
-            var residue = OutputLocations.RemoveOrNameRiderResidue(rf);
+            var residue = AmethystStagingWrite.IsActive ? null : OutputLocations.RemoveOrNameRiderResidue(rf);
             return NifSetResult.Fail($"could not write '{rel}' into the patch folder: {ex.Message}"
-                + (residue is null ? "" : $" The freshly created mod folder was left at '{residue}'."), providers, profileName);
+                + (AmethystStagingWrite.IsActive
+                    ? " The Amethyst transaction wrapper will report rollback or recovery status."
+                    : residue is null ? "" : $" The freshly created mod folder was left at '{residue}'."), providers, profileName);
         }
         long size; try { size = new FileInfo(dest).Length; } catch { size = -1; }
         if (size != editedBytes.Length)
@@ -968,12 +1002,70 @@ internal sealed partial class AssetLayers
 
             var view = captured.View;
             var results = new List<PlaceResult>(requests.Count);
+            var transactional = AmethystStagingWrite.IsActive;
+            var scratch = transactional ? AmethystStagingWrite.CreateScratchDirectory("place") : null;
             int placed = 0;
+            try
+            {
             foreach (var req in requests)
             {
-                var r = PlaceOne(req, view, captured.ModsRootOrNull, rf.OutputDir);
+                var r = PlaceOne(req, view, captured.ModsRootOrNull, rf.OutputDir, scratch);
                 results.Add(r);
-                if (r.Placed) placed++;
+            }
+
+            var requestGroups = Enumerable.Range(0, requests.Count)
+                .GroupBy(i => requests[i].TransactionGroup ?? $"place-{i}", StringComparer.Ordinal).ToArray();
+            foreach (var group in requestGroups)
+            {
+                var members = group.ToArray();
+                if (members.Any(i => requests[i].BothSlots) && members.Any(i => !results[i].Placed))
+                    foreach (var i in members.Where(i => results[i].Placed))
+                        results[i] = results[i] with { Placed = false, Error = "the paired FaceGen file failed, so neither half was published." };
+                var failure = string.Join("; ", members.Where(i => !results[i].Placed).Select(i => results[i].Error).Where(e => !string.IsNullOrWhiteSpace(e)));
+                if (transactional && members.All(i => !results[i].Placed))
+                    AmethystStagingWrite.FailManagedUnit(group.Key, failure.Length == 0 ? "no files were produced for this placement unit" : failure);
+            }
+
+            placed = results.Count(r => r.Placed);
+            if (transactional && placed > 0)
+            {
+                var groups = Enumerable.Range(0, requests.Count)
+                    .Where(i => results[i].Placed)
+                    .GroupBy(i => requests[i].TransactionGroup ?? $"place-{i}", StringComparer.Ordinal)
+                    .ToArray();
+                bool stop = false;
+                foreach (var group in groups)
+                {
+                    if (stop)
+                    {
+                        foreach (var i in group) results[i] = results[i] with { Placed = false, Error = "not published because an earlier placement unit needs transaction recovery." };
+                        continue;
+                    }
+                    try
+                    {
+                        var artifacts = group.Select(i =>
+                        {
+                            var staged = BethesdaPath.Under(scratch!, results[i].AssetPath);
+                            var destination = BethesdaPath.Under(rf.OutputDir, results[i].AssetPath);
+                            AmethystStagingWrite.RegisterOutputPath(destination);
+                            return (staged, destination, "asset");
+                        }).ToArray();
+                        AmethystStagingWrite.PublishManagedArtifactGroup(group.Key, artifacts);
+                    }
+                    catch (Exception ex)
+                    {
+                        foreach (var i in group) results[i] = results[i] with { Placed = false, Error = $"Amethyst could not publish this placement unit: {ex.Message}" };
+                        try { AmethystStagingWrite.FailManagedUnit(group.Key, ex.Message); }
+                        catch (InvalidOperationException) { /* a unit already committing is resolved by transaction recovery in Complete */ }
+                        stop = true;
+                    }
+                }
+                placed = results.Count(r => r.Placed);
+            }
+            }
+            finally
+            {
+                if (scratch is not null && Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true);
             }
 
             // Nothing placed into a fresh folder means an orphan to remove; a reused into= folder is never touched.
@@ -1001,7 +1093,7 @@ internal sealed partial class AssetLayers
     /// <summary>Place one asset: validate the destination rel-path, get the source bytes, and write them atomically
     /// under <paramref name="outDir"/>. Reports the CURRENT winner, because the placed file does not win until enabled.
     /// <paramref name="modsRoot"/> is from the same capture as <paramref name="view"/>.</summary>
-    PlaceResult PlaceOne(PlaceRequest req, AssetResolver.AssetView view, string? modsRoot, string outDir)
+    PlaceResult PlaceOne(PlaceRequest req, AssetResolver.AssetView view, string? modsRoot, string outDir, string? writeDir = null)
     {
         string rel;
         try { rel = AssetResolver.ValidateRelPath(req.AssetPath); }
@@ -1102,7 +1194,7 @@ internal sealed partial class AssetLayers
         }
 
         // ---- crash-atomic place under the owned folder (originals untouched; same-volume staging done in the core) ----
-        var dest = BethesdaPath.Under(outDir, rel);
+        var dest = BethesdaPath.Under(writeDir ?? outDir, rel);
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);

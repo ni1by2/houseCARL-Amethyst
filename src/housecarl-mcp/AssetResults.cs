@@ -326,6 +326,9 @@ public sealed record PlaceRequest(string AssetPath, string? Source, string? Sour
 {
     /// <summary>This request is one half of a FaceGen pair expanded from a formid with no kind, so a refusal about the shared source must not recommend a form the pair cannot take.</summary>
     public bool BothSlots { get; init; }
+
+    /// <summary>Transaction recovery unit shared by all files derived from one caller destination.</summary>
+    public string? TransactionGroup { get; init; }
 }
 
 /// <summary>One placed asset's outcome; <see cref="Placed"/> false means <see cref="Error"/> names why, per asset. <see cref="CurrentWinner"/> is the source that currently wins the VFS for this path, or null if nothing provided it before.</summary>

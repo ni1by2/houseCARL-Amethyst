@@ -7,6 +7,16 @@ using Xunit;
 
 namespace HousecarlMcpTests;
 
+sealed class NativeFilegraphFactAttribute : FactAttribute
+{
+    public NativeFilegraphFactAttribute()
+    {
+        var extension = Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_EXTENSION")
+            ?? Path.Combine(AppContext.BaseDirectory, "amethyst_filegraph.abi3.so");
+        if (!File.Exists(extension)) Skip = "native Amethyst filegraph extension is not present in this test environment";
+    }
+}
+
 /// <summary>Producer parity, structural refusal and source races against an independently generated catalog.</summary>
 [Trait("tier", "integration")]
 public sealed class AmethystSavedSnapshotTests
@@ -172,6 +182,28 @@ public sealed class AmethystSavedSnapshotTests
         var source = snapshot.ResolveAssets("meshes/example.nif")[0].LooseFilePath!;
         File.AppendAllText(source, "changed during call");
         Assert.Contains("source changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [NativeFilegraphFact]
+    public void InPlaceNifAssetOutputIsExcludedFromCapturedSourceDriftAfterJournaledCommit()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var source = Path.Combine(world.Root, "mods", "Beta", "Meshes", "example.nif");
+        var original = File.ReadAllBytes(source);
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        _ = snapshot.ResolveAssets("meshes/example.nif");
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        using var scope = new AmethystStagingWrite(snapshot, ToolNames.NifSet, "nif in-place fixture", immediateVisibility: true);
+        var staged = Path.Combine(world.Root, "edited.nif");
+        var edited = original.Concat(new byte[] { 1, 2, 3 }).ToArray();
+        File.WriteAllBytes(staged, edited);
+        AmethystStagingWrite.RegisterOutputPath(source);
+        AmethystStagingWrite.PublishManagedArtifact(staged, source, "asset");
+
+        scope.ValidateSnapshotInputs();
+        Assert.Equal(edited, File.ReadAllBytes(source));
+        scope.Abort();
+        Assert.Equal(original, File.ReadAllBytes(source));
     }
 
     [Fact]

@@ -60,6 +60,7 @@ public sealed class AmethystSavedSnapshot
     readonly Dictionary<string, string> _roots = new(StringComparer.Ordinal);
     /// <summary>Directory listings that participated in effective INI and VFS state selection.</summary>
     readonly Dictionary<string, string[]> _inputDirectories = new(StringComparer.Ordinal);
+    readonly HashSet<string> _protectedRoots = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _effectiveIniPaths = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, string[]> _watchedEntries = new(StringComparer.Ordinal);
     readonly Dictionary<string, string[]> _watchedCandidates = new(StringComparer.Ordinal);
@@ -127,6 +128,10 @@ public sealed class AmethystSavedSnapshot
         ManifestPath = Path.GetFullPath(manifestPath);
         Input(manifestPath, required: true);
         var connection = AmethystConnection.Open(manifestPath);
+        Protect(connection.ProfileRoot);
+        Protect(connection.GameConfigDir);
+        Protect(Path.GetDirectoryName(connection.PathsFile)!);
+        Protect(Path.GetDirectoryName(ManifestPath)!);
         using var paths = JsonDocument.Parse(Input(connection.PathsFile, true)!);
         using var deploy = JsonDocument.Parse(Input(connection.DeployStateFile, true)!);
         var profileName = deploy.RootElement.TryGetProperty("last_active_profile", out var active)
@@ -156,8 +161,18 @@ public sealed class AmethystSavedSnapshot
             settings.TryGetProperty("game_path", out var overridePath) && overridePath.GetString() is { Length: > 0 } selectedGame)
             game = selectedGame;
         GameDir = Root(game);
-        SelectDeploymentRoots(deployed: deploy.RootElement.TryGetProperty("deploy_active", out var flag) && flag.ValueKind == JsonValueKind.True);
+        Protect(GameDir);
+        Protect(ProfileDir);
+        Protect(library);
         DatabasePath = Path.Combine(library, "filegraph.sqlite3");
+        Protect(Path.GetDirectoryName(DatabasePath)!);
+        Protect(OverwriteDir);
+        Protect(RootFolderDir);
+        if (paths.RootElement.TryGetProperty("prefix_path", out var prefixRoot) && prefixRoot.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(prefixRoot.GetString()))
+            Protect(prefixRoot.GetString()!);
+        SelectDeploymentRoots(deployed: deploy.RootElement.TryGetProperty("deploy_active", out var flag) && flag.ValueKind == JsonValueKind.True);
+        Protect(VanillaDataDir);
+        Protect(DeploymentDataDir);
         _databaseIdentity = LinuxFileIdentity.Of(DatabasePath);
         using (var database = OpenDatabase(DatabasePath))
         {
@@ -764,6 +779,35 @@ public sealed class AmethystSavedSnapshot
 
     /// <summary>Register an artifact written by this call so a raced refusal cannot leave a seemingly valid result file.</summary>
     public void RegisterArtifact(string path, byte[]? previous) => _artifacts.TryAdd(path, previous);
+
+    /// <summary>Refuse exports that alias manager, game, profile, catalog, or staging roots.</summary>
+    public void ValidateExternalDestination(string path)
+    {
+        var full = Path.GetFullPath(path);
+        foreach (var root in _protectedRoots)
+        {
+            var prefix = root.TrimEnd(Path.DirectorySeparatorChar) + Path.DirectorySeparatorChar;
+            if (full.Equals(root, StringComparison.Ordinal) || full.StartsWith(prefix, StringComparison.Ordinal))
+                throw new InvalidOperationException($"external export destination '{full}' aliases protected Amethyst/game path '{root}'");
+        }
+    }
+
+    void Protect(string path)
+    {
+        if (!Path.IsPathFullyQualified(path) || !Directory.Exists(path)) return;
+        _protectedRoots.Add(LinuxFileIdentity.Canonical(path));
+    }
+
+    /// <summary>Capture an explicit user-provided input file so its exact bytes enter transaction provenance and are revalidated before publication.</summary>
+    public byte[] CaptureAdditionalInput(string path)
+    {
+        if (!Path.IsPathFullyQualified(path)) throw new InvalidOperationException("additional transaction inputs must be absolute paths");
+        return Input(Path.GetFullPath(path), required: true)!;
+    }
+
+    /// <summary>Return only bytes captured earlier in this call; a caller must not substitute a later path read.</summary>
+    public byte[]? CapturedInput(string path)
+        => _inputs.TryGetValue(Path.GetFullPath(path), out var input) ? input.Bytes?.ToArray() : null;
     /// <summary>Remove new artifacts and restore replaced artifacts from this failed call; all cleanup failures are reported.</summary>
     public void RemoveFailedArtifacts()
     {

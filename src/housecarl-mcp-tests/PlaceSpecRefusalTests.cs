@@ -36,16 +36,16 @@ public sealed class PlaceSpecRefusalTests : IClassFixture<PlaceSpecWorld>
     readonly PlaceSpecWorld _w;
     public PlaceSpecRefusalTests(PlaceSpecWorld w) => _w = w;
 
-    // Probe G: "one destination, formid with no kind: NOT refused — it places both FaceGen files". Strengthened: the
-    // probe only checked that a retired refusal was absent, which cannot fail; this asserts the two-file expansion.
+    // Probe G: "one destination, formid with no kind: NOT refused — it places both FaceGen files". The pair is one
+    // transaction unit, so a missing source half refuses the whole group instead of publishing an orphan half.
     [Fact]
-    public void AFormidWithNoKindExpandsToBothFaceGenFiles()
+    public void AFormidWithNoKindExpandsToBothFaceGenFilesAndNeverPublishesHalf()
     {
         var text = PlaceTools.Place(_w.Svc, new[] { new PlaceTarget { Formid = FacegenFormId } }, patch: "BothSlots");
 
-        Assert.Contains("placed 1 of 2 asset(s) (1 failed)", text);
+        Assert.Contains("placed 0 of 2 asset(s) (2 failed)", text);
         Assert.Contains("0001A51A.dds", text);
-        Assert.NotNull(_w.P.PlacedFileFrom(text, FacegenRel));
+        Assert.Null(_w.P.PlacedFileFrom(text, FacegenRel));
     }
 
     // Probe G: "a member carrying BOTH formid and path is refused" and "a member carrying NEITHER formid nor path is refused".

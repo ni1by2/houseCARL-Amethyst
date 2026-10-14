@@ -159,19 +159,43 @@ public static class BsaTools
             catch (Exception ex) { return $"error: out_path '{given}' is not a usable path ({ex.Message})."; }
         }
 
-        string residue = managed ? $"\nThe freshly created mod folder was left at '{target}' — delete it or retry into it." : "";
-        var r = HousecarlCore.BsaArchive.Unpack(archive, target, keep);
-        if (!r.Ran) return "error: " + r.RunError + residue;   // archive couldn't be opened/read
-        if (!r.Success)                                          // path-traversal refusal or a mid-extract error
-            return "extract FAILED: " + r.Raw + residue;
+        var transactional = AmethystStagingWrite.IsActive;
+        string residue = managed && !transactional ? $"\nThe freshly created mod folder was left at '{target}' — delete it or retry into it." : "";
+        var scratch = transactional ? AmethystStagingWrite.CreateScratchDirectory("bsa-extract") : null;
+        try
+        {
+            var extractionTarget = scratch ?? target;
+            var r = HousecarlCore.BsaArchive.Unpack(archive, extractionTarget, keep);
+            if (!r.Ran) return "error: " + r.RunError + residue;   // archive couldn't be opened/read
+            if (!r.Success)                                          // path-traversal refusal or a mid-extract error
+                return "extract FAILED: " + r.Raw + residue;
 
-        var sb = new StringBuilder();
-        sb.Append("extracted ").Append(Path.GetFileName(archive)).Append(" → ").Append(target).Append('\n');
-        sb.Append(matched).Append(r.Raw).Append('\n');   // e.g. "extracted 5826 file(s)."
-        sb.Append(managed
-            ? "(a new houseCARL mod folder — read the files you need from it; enable it in MO2 only if you want the loose files in your load order.)"
-            : "(read the files you need from that folder.)");
-        return sb.ToString();
+            if (transactional)
+            {
+                var artifacts = Directory.EnumerateFiles(scratch!, "*", SearchOption.AllDirectories)
+                    .OrderBy(p => p, StringComparer.Ordinal)
+                    .Select(staged =>
+                    {
+                        var rel = Path.GetRelativePath(scratch!, staged);
+                        var destination = BethesdaPath.Under(target, rel);
+                        AmethystStagingWrite.RegisterOutputPath(destination);
+                        return (staged, destination, "asset");
+                    }).ToArray();
+                if (artifacts.Length == 0) return "archive contains no matching files; nothing was extracted.";
+                AmethystStagingWrite.PublishActiveArtifactGroup(artifacts);
+            }
+
+            var sb = new StringBuilder();
+            sb.Append("extracted ").Append(Path.GetFileName(archive)).Append(" → ").Append(target).Append('\n');
+            sb.Append(matched).Append(r.Raw).Append('\n');   // e.g. "extracted 5826 file(s)."
+            sb.Append(managed
+                ? "(a new houseCARL mod folder — read the files you need from it; enable it in MO2 only if you want the loose files in your load order.)"
+                : "(read the files you need from that folder.)");
+            return sb.ToString();
+        }
+        catch (Exception ex) when (transactional && ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        { return "error: extracted files could not be committed as one recoverable Amethyst group: " + ex.Message + residue; }
+        finally { if (scratch is not null && Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true); }
     });
 
     /// <summary>How the repack lane names its mod folder, for the into= not-found refusal. That name is load-bearing
@@ -223,10 +247,13 @@ public static class BsaTools
         catch (InvalidOperationException ex) { return "error: " + ex.Message; }
         var folder = rf.OutputDir;
         var name = rf.Stem + ".bsa";
+        var transactional = AmethystStagingWrite.IsActive;
 
         // On any post-allocation failure: an empty fresh folder is deleted, a partial .bsa is kept and named, and a reused into= folder is left alone.
         string Refuse(string msg)
         {
+            if (transactional)
+                return msg + " The Amethyst transaction wrapper will record whether publication was rolled back or needs recovery.";
             var left = svc.RemoveOrNameRiderResidue(rf);
             return left is null ? msg
                 : msg + $"\nThe freshly created mod folder at '{left}' still holds a partial archive — delete it or retry with into=.";
@@ -242,13 +269,35 @@ public static class BsaTools
         var fmtFlag = HousecarlCore.BsaArchive.TryFormatFlag(format);
         if (fmtFlag is null)
             return Refuse($"error: unknown format '{format}'. Legal tokens: {HousecarlCore.BsaArchive.FormatTokens}.");
-        var r = HousecarlCore.BsaArchive.Pack(bsarch!, source_folder, archive, fmtFlag, compress);
-        if (!r.Ran) return Refuse("error: " + r.RunError);
-        if (r.CountError is { } mismatch) return Refuse("error: " + mismatch);
-        if (!r.Success)
-            return Refuse($"repack FAILED: no .bsa written at '{archive}'. Raw BSArch output:\n" + r.Raw + RootSkipNote(r.RootSkipped));
+        var scratch = transactional ? AmethystStagingWrite.CreateScratchDirectory("bsa-repack") : null;
+        try
+        {
+            var stagedArchive = scratch is null ? archive : Path.Combine(scratch, name);
+            var r = HousecarlCore.BsaArchive.Pack(bsarch!, source_folder, stagedArchive, fmtFlag, compress);
+            if (!r.Ran) return Refuse("error: " + r.RunError);
+            if (r.CountError is { } mismatch) return Refuse("error: " + mismatch);
+            if (!r.Success)
+                return Refuse($"repack FAILED: no .bsa written at '{archive}'. Raw BSArch output:\n" + r.Raw + RootSkipNote(r.RootSkipped));
 
-        return PackReport(r, name, archive, fmtFlag, compress);
+            if (transactional)
+            {
+                var readback = HousecarlCore.BsaArchive.List(stagedArchive);
+                var expectedCount = r.Packed ?? r.Expected;
+                if (!readback.Ran || !readback.Success || readback.Files.Count == 0 || expectedCount is { } expected && readback.Files.Count != expected)
+                    return Refuse("error: staged archive failed independent readback validation; it was not published. "
+                        + (readback.RunError ?? (!readback.Success ? readback.Raw : expectedCount is { } count
+                            ? $"expected {count} entries but read back {readback.Files.Count}." : "readback contained no entries.")));
+                try
+                {
+                    AmethystStagingWrite.RegisterOutputPath(archive);
+                    AmethystStagingWrite.PublishManagedArtifact(stagedArchive, archive, "new_archive");
+                }
+                catch (Exception ex)
+                { return Refuse("error: staged archive could not be committed safely: " + ex.Message); }
+            }
+            return PackReport(r, name, archive, fmtFlag, compress);
+        }
+        finally { if (scratch is not null && Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true); }
     });
 
     /// <summary>The success message for a repack: how many files the archive holds, where it landed, and any root-level files BSArch dropped.</summary>
