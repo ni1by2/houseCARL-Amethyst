@@ -26,9 +26,11 @@ internal static class AmethystSnapshotFilter
         var arguments = request.Params?.Arguments;
         bool Names(string key) => arguments is not null && arguments.TryGetValue(key, out var value) &&
             (value.ValueKind == JsonValueKind.True || value.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(value.GetString()));
-        bool existingDestination = Names("into") || Names("in_place");
+        // repoint_externals can mutate other existing plugins even when no target= / in_place= argument is present.
+        // Until per-entry deployment visibility is available, conservatively treat every compact repoint as immediate.
+        bool existingDestination = Names("into") || Names("in_place") || name == ToolNames.CompactPlugin && Names("repoint_externals");
         if (write && existingDestination && (!Confirmed("confirm_amethyst_redeploy") || !Confirmed("confirm_live_deployment_change")))
-            return Error("Updating an existing staged plugin requires both confirm_amethyst_redeploy=true and confirm_live_deployment_change=true on this call; an enabled target may be visible to the game immediately.");
+            return Error("Rewriting an existing plugin or compacting with external repointing requires both confirm_amethyst_redeploy=true and confirm_live_deployment_change=true on this call; a rewritten plugin may be visible to the game immediately.");
         if (write && (!service.UsesSavedSnapshot || !TransactionRoutedRecordWrites.Contains(name) ||
             arguments is not null && new[] { "into", "in_place" }.Any(key => Names(key) && !existingDestination)))
             return Error(LoadOrderService.SnapshotWriteRefusal);

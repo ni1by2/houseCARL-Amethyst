@@ -1,5 +1,6 @@
 using System.Text.Json;
 using HousecarlMcp;
+using HousecarlCore;
 using System.Security.Cryptography;
 using Mutagen.Bethesda;
 using Mutagen.Bethesda.Skyrim;
@@ -18,6 +19,7 @@ public sealed class AmethystSnapshotWireTests
         ["HouseCarl__ConnectionManifest"] = world.Manifest,
         ["HouseCarl__FilegraphMode"] = enabled ? "saved-snapshot" : "",
         ["HouseCarl__CorpusPath"] = TestCorpus.Path,
+        ["XDG_STATE_HOME"] = Path.Combine(world.Root, "state"),
     };
 
     [Fact]
@@ -266,6 +268,45 @@ public sealed class AmethystSnapshotWireTests
         var metadata = approved.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging");
         Assert.True(metadata.GetProperty("immediate_visibility").GetBoolean());
         Assert.Contains("editedInPlace=", File.ReadAllText(Path.Combine(Path.GetDirectoryName(source)!, "meta.ini")));
+    }
+
+    [Fact]
+    public void CompactExternalRepointNeedsAmethystConsentBeforeAnyOutputIsCreated()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var original = File.ReadAllBytes(source);
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+
+        var result = server.Call(ToolNames.CompactPlugin,
+            "{\"source\":\"Fixture.esp\",\"repoint_externals\":true,\"patch\":\"RefusedRepoint\"}");
+
+        Assert.True(result.IsError, result.Text);
+        Assert.Contains("confirm_amethyst_redeploy=true", result.Text);
+        Assert.Contains("confirm_live_deployment_change=true", result.Text);
+        Assert.Equal(original, File.ReadAllBytes(source));
+        Assert.False(Directory.Exists(Path.Combine(world.Root, "mods", "houseCARL - RefusedRepoint")));
+        Assert.Empty(new AmethystTransactionCoordinator(Path.Combine(world.Root, "state", "housecarl-amethyst")).Status());
+    }
+
+    [Fact]
+    public void CompactRepointRecordsConservativeImmediateVisibilityAndBothConsentScopes()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+
+        var result = server.Call(ToolNames.CompactPlugin,
+            "{\"source\":\"Fixture.esp\",\"in_place\":true,\"repoint_externals\":true,\"acknowledge\":true,\"confirm_amethyst_redeploy\":true,\"confirm_live_deployment_change\":true}");
+
+        Assert.False(result.IsError, result.Text);
+        var staging = result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging");
+        Assert.True(staging.GetProperty("immediate_visibility").GetBoolean());
+        var transactionId = staging.GetProperty("transaction_id").GetString()!;
+        var journal = new AmethystTransactionCoordinator(Path.Combine(world.Root, "state", "housecarl-amethyst")).ReadJournal(transactionId);
+        Assert.True(journal.ImmediateVisibility);
+        Assert.Equal(new[] { "confirm_amethyst_redeploy", "confirm_live_deployment_change" }, journal.ConsentScope);
     }
 
     [Fact]
