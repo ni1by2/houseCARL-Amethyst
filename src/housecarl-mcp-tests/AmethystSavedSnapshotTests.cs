@@ -189,6 +189,100 @@ public sealed class AmethystSavedSnapshotTests
     }
 
     [Fact]
+    public void ShadowTreeUsesValidatedViewAndOriginalGameDataAsVanilla()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var game = Path.Combine(world.Root, "game");
+        var state = Path.Combine(world.Profile, ".amethyst-vfs");
+        var view = Path.Combine(state, "view");
+        var rootUpper = Path.Combine(state, "root-upper");
+        Directory.CreateDirectory(Path.Combine(view, "Data"));
+        Directory.CreateDirectory(rootUpper);
+        File.WriteAllText(Path.Combine(game, "Data", "Vanilla.nif"), "vanilla source");
+        File.WriteAllText(Path.Combine(view, "Data", "Deployed.nif"), "deployed view");
+        File.WriteAllText(Path.Combine(state, "manifest.json"), JsonSerializer.Serialize(new
+        {
+            version = 1, profile = "default", backend = "shadow-tree", game_root = game,
+            data_root = Path.Combine(game, "Data"), view_root = view, root_layer = view,
+            data_layer = Path.Combine(view, "Data"), root_upper = rootUpper,
+            data_upper = Path.Combine(world.Library, "overwrite"), bind_hidden_source_symlinks = false
+        }));
+
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.True(snapshot.UsesShadowTreeVfs);
+        Assert.False(snapshot.DeploymentTargetVerified, "the synthetic profile has no native committed deployment record");
+        Assert.Equal(Path.Combine(view, "Data"), snapshot.DeploymentDataDir);
+        Assert.Equal(Path.Combine(game, "Data"), snapshot.VanillaDataDir);
+        Assert.Equal(Path.Combine(game, "Data", "Vanilla.nif"), snapshot.ResolveAssets("vanilla.nif")[0].LooseFilePath);
+        Assert.Empty(snapshot.ResolveAssets("deployed.nif"));
+        snapshot.CheckUnchanged();
+        File.WriteAllText(Path.Combine(state, "pending"), "default\n");
+        Assert.Contains("changed during the call", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Fact]
+    public void EffectiveProfileIniAndCccDriveVanillaArchiveAndImplicitPluginCoverage()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var iniDir = Path.Combine(world.Profile, "ini files");
+        Directory.CreateDirectory(iniDir);
+        File.WriteAllText(Path.Combine(iniDir, "Skyrim.ini"), "[Archive]\nsResourceArchiveList=Vanilla.bsa\n");
+        File.WriteAllText(Path.Combine(world.Root, "game", "Skyrim.ccc"), "cc-test.esl\n");
+        File.WriteAllText(Path.Combine(world.Root, "game", "Data", "cc-test.esl"), "implicit plugin source");
+        foreach (var name in new[] { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" })
+            File.WriteAllText(Path.Combine(world.Root, "game", "Data", name), "implicit master source");
+        File.Copy(Path.Combine(world.Root, "mods", "Alpha", "Fixture.bsa"), Path.Combine(world.Root, "game", "Data", "Vanilla.bsa"));
+        File.WriteAllText(Path.Combine(world.Root, "manager-config", "paths.json"), JsonSerializer.Serialize(new
+        {
+            staging_path = world.Root, game_path = Path.Combine(world.Root, "game"), profile_ini_files = true
+        }));
+
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Equal(7, snapshot.OrderedPluginPaths.Count);
+        Assert.Contains("cc-test.esl", snapshot.OrderedPluginPaths[^1]);
+        Assert.Contains(snapshot.VanillaArchives, a => Path.GetFileName(a.Path) == "Vanilla.bsa");
+        using var assets = AssetResolver.BuildSavedSnapshot(snapshot);
+        var hit = assets.Resolve("skse/plugins/skypatcher/weapon/bsaonly.ini");
+        Assert.True(hit.Exists);
+        Assert.Contains(hit.Providers, p => p.Source == "Vanilla.bsa");
+        Assert.False(assets.ReadIncomplete);
+        snapshot.CheckUnchanged();
+        File.WriteAllText(Path.Combine(iniDir, "new.ini"), "changed directory listing");
+        Assert.Contains("effective INI directory changed", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Fact]
+    public void SkyrimCccEntriesWithoutAnInstalledPluginDoNotActivateArchives()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var iniDir = Path.Combine(world.Profile, "ini files");
+        Directory.CreateDirectory(iniDir);
+        File.WriteAllText(Path.Combine(iniDir, "Skyrim.ini"), "[Archive]\nsResourceArchiveList=Vanilla.bsa\n");
+        File.WriteAllText(Path.Combine(world.Root, "game", "Skyrim.ccc"), "cc-not-installed.esl\n");
+        File.WriteAllText(Path.Combine(world.Root, "game", "Data", "cc-not-installed.bsa"), "not active");
+        File.WriteAllText(Path.Combine(world.Root, "manager-config", "paths.json"), JsonSerializer.Serialize(new
+        {
+            staging_path = world.Root, game_path = Path.Combine(world.Root, "game"), profile_ini_files = true
+        }));
+
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.DoesNotContain(snapshot.VanillaArchives, a => Path.GetFileName(a.Path) == "cc-not-installed.bsa");
+    }
+
+    [Fact]
+    public void UnknownVfsBackendAndMalformedShadowRootsRefuseInsteadOfFallingBack()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var state = Path.Combine(world.Profile, ".amethyst-vfs");
+        Directory.CreateDirectory(state);
+        var manifest = Path.Combine(state, "manifest.json");
+        File.WriteAllText(manifest, "{\"version\":1,\"profile\":\"default\",\"backend\":\"kernel-overlayfs\"}");
+        Assert.Contains("backend or manifest version is unsupported", Assert.Throws<InvalidOperationException>(() => AmethystSavedSnapshot.Capture(world.Manifest)).Message);
+        File.Delete(manifest);
+        Assert.Contains("without a manifest", Assert.Throws<InvalidOperationException>(() => AmethystSavedSnapshot.Capture(world.Manifest)).Message);
+    }
+
+    [Fact]
     public void CoreRecordReadsUseRecordedPluginOwnership()
     {
         using var world = new AmethystSnapshotWorld();

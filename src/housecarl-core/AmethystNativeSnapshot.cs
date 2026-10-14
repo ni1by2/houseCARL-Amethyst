@@ -15,7 +15,7 @@ internal static class AmethystNativeSnapshot
     /// <param name="generation">Expected saved profile generation.</param>
     /// <param name="inventory">Expected catalog inventory generation.</param>
     /// <param name="accept">Validate and retain one native winner against the captured candidates.</param>
-    internal static void Read(SqliteConnection database, string profile, long generation, ulong inventory, Action<JsonElement> accept)
+    internal static bool Read(SqliteConnection database, string profile, long generation, ulong inventory, string deployMode, Action<JsonElement> accept)
     {
         var extension = Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_EXTENSION")
             ?? Path.Combine(AppContext.BaseDirectory, "amethyst_filegraph.abi3.so");
@@ -34,7 +34,7 @@ internal static class AmethystNativeSnapshot
             }
             var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_PYTHON") ?? "python3")
             { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-            foreach (var argument in new[] { "-I", Path.Combine(AppContext.BaseDirectory, "amethyst_snapshot.py"), root, profile, extension })
+            foreach (var argument in new[] { "-I", Path.Combine(AppContext.BaseDirectory, "amethyst_snapshot.py"), root, profile, extension, deployMode })
                 start.ArgumentList.Add(argument);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("cannot start Amethyst's snapshot reader");
             var errors = process.StandardError.ReadToEndAsync();
@@ -63,9 +63,15 @@ internal static class AmethystNativeSnapshot
                         cursor = id;
                     }
                 }
+                process.StandardInput.WriteLine("deployment");
+                process.StandardInput.Flush();
+                using var deployment = JsonDocument.Parse(Frame(process.StandardOutput.BaseStream, deadline.Token));
+                if (deployment.RootElement.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                    throw new InvalidOperationException("Amethyst's native committed-deployment check has an unsupported shape");
                 process.StandardInput.Close();
                 process.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult();
                 if (process.ExitCode != 0) throw new InvalidOperationException("Amethyst's native snapshot reader failed: " + errors.GetAwaiter().GetResult().Trim());
+                return deployment.RootElement.GetBoolean();
             }
             catch (Exception ex) when (ex is EndOfStreamException or OperationCanceledException)
             {

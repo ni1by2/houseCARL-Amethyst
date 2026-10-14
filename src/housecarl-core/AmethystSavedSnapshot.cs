@@ -10,7 +10,7 @@ namespace HousecarlCore;
 /// <summary>A complete saved schema-9 filegraph. Amethyst's own native reader restores its winners from saved inputs.</summary>
 public sealed class AmethystSavedSnapshot
 {
-    /// <summary>The tested producer contract, Amethyst Testing e98cf70f / stable 2.5.4; native API 13, schema 9 and engine 1.</summary>
+    /// <summary>The tested producer contract, Amethyst 2.5.5-beta.1 / stable 2.5.4; native API 13, schema 9 and engine 1.</summary>
     public const ulong RulesRevision = 13;
     /// <summary>The selected profile and catalog generation, with an unverified-freshness warning.</summary>
     public AmethystSnapshotProvenance Provenance { get; private set; } = null!;
@@ -24,8 +24,18 @@ public sealed class AmethystSavedSnapshot
     public string RootFolderDir { get; private set; } = "";
     /// <summary>Effective game installation root, including a non-default profile's override.</summary>
     public string GameDir { get; private set; } = "";
-    /// <summary>The separately preserved vanilla Data_Core, or undeployed Data; never merged deployed Data.</summary>
+    /// <summary>The validated vanilla Data source selected for the saved deployment mode.</summary>
     public string VanillaDataDir { get; private set; } = "";
+    /// <summary>The validated physical or shadow-tree Data destination for this profile.</summary>
+    public string DeploymentDataDir { get; private set; } = "";
+    /// <summary>Whether the selected profile has a validated current shadow-tree VFS deployment.</summary>
+    public bool UsesShadowTreeVfs { get; private set; }
+    /// <summary>True only when Amethyst's native committed plan matches this profile generation and saved deployment mode.</summary>
+    public bool DeploymentTargetVerified { get; private set; }
+    /// <summary>Effective profile or Proton-prefix INI directory, when configured and present.</summary>
+    public string? EffectiveIniDir { get; private set; }
+    /// <summary>Engine-loaded vanilla archives whose activation is established by Skyrim.ini and saved plugin state.</summary>
+    public IReadOnlyList<ActiveArchive> VanillaArchives { get; private set; } = [];
     /// <summary>The profile's saved filegraph catalog.</summary>
     public string DatabasePath { get; private set; } = "";
     /// <summary>Profile text composition, used only for plugin order/activation and user diagnostics.</summary>
@@ -40,6 +50,17 @@ public sealed class AmethystSavedSnapshot
     readonly Dictionary<string, byte[]?> _artifacts = new(StringComparer.Ordinal);
     /// <summary>Canonical source roots, used to refuse escaping links and root changes during a call.</summary>
     readonly Dictionary<string, string> _roots = new(StringComparer.Ordinal);
+    /// <summary>Directory listings that participated in effective INI and VFS state selection.</summary>
+    readonly Dictionary<string, string[]> _inputDirectories = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string[]> _watchedEntries = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string[]> _watchedCandidates = new(StringComparer.Ordinal);
+    byte[]? _cccBytes;
+    string? _cccPath;
+    bool _vanillaArchiveCoverageIncomplete;
+    bool _deploymentExpected;
+    bool _nativeDeploymentMatches;
+    string _deployMode = "hardlink";
+    static readonly string[] SkyrimImplicitMasters = ["Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm"];
     /// <summary>All candidate rows of the profile's selected variants, including disabled-mod source lookup.</summary>
     readonly Dictionary<long, Candidate> _candidates = [];
     /// <summary>Producer-restored winners, indexed by their saved namespace and destination key.</summary>
@@ -110,6 +131,9 @@ public sealed class AmethystSavedSnapshot
             using var legacySettings = JsonDocument.Parse(legacy);
             settings = legacySettings.RootElement.Clone();
         }
+        var savedMode = settings.ValueKind == JsonValueKind.Object && settings.TryGetProperty("deploy_mode", out var modeOverride) && modeOverride.ValueKind == JsonValueKind.String
+            ? modeOverride.GetString() : paths.RootElement.TryGetProperty("deploy_mode", out var globalMode) && globalMode.ValueKind == JsonValueKind.String ? globalMode.GetString() : null;
+        _deployMode = savedMode is "symlink" or "copy" ? "symlink" : "hardlink";
         var specific = settings.ValueKind == JsonValueKind.Object && settings.TryGetProperty("profile_specific_mods", out var specificValue)
             && specificValue.ValueKind == JsonValueKind.True;
         var library = Root(specific ? ProfileDir : connection.ProfileRoot);
@@ -122,11 +146,7 @@ public sealed class AmethystSavedSnapshot
             settings.TryGetProperty("game_path", out var overridePath) && overridePath.GetString() is { Length: > 0 } selectedGame)
             game = selectedGame;
         GameDir = Root(game);
-        var core = Path.Combine(GameDir, "Data_Core");
-        var deployed = deploy.RootElement.TryGetProperty("deploy_active", out var flag) && flag.ValueKind == JsonValueKind.True;
-        if (!Directory.Exists(core) && deployed)
-            throw new InvalidOperationException("Amethyst is deployed but its vanilla Data_Core is missing; restore or repair the vanilla backup in Amethyst before reading");
-        VanillaDataDir = Root(Directory.Exists(core) ? core : Path.Combine(GameDir, "Data"));
+        SelectDeploymentRoots(deployed: deploy.RootElement.TryGetProperty("deploy_active", out var flag) && flag.ValueKind == JsonValueKind.True);
         DatabasePath = Path.Combine(library, "filegraph.sqlite3");
         _databaseIdentity = LinuxFileIdentity.Of(DatabasePath);
         using (var database = OpenDatabase(DatabasePath))
@@ -150,8 +170,222 @@ public sealed class AmethystSavedSnapshot
             Execute(database, "ROLLBACK");
         }
         Composition = ReadComposition();
+        ReadEffectiveInputs(paths.RootElement);
+        ReadVanillaArchives();
         OrderedPluginPaths = ResolvePlugins();
+        Provenance = Provenance with { VanillaArchivesOmitted = _vanillaArchiveCoverageIncomplete };
+        DeploymentTargetVerified = !_deploymentExpected || _nativeDeploymentMatches;
         CheckUnchanged();
+    }
+
+    /// <summary>Select the producer's physical or current shadow-tree roots without treating a merged Data tree as vanilla.</summary>
+    void SelectDeploymentRoots(bool deployed)
+    {
+        var data = Path.Combine(GameDir, "Data");
+        var core = Path.Combine(GameDir, "Data_Core");
+        var state = Path.Combine(ProfileDir, ".amethyst-vfs");
+        TrackEntries(ProfileDir, ".amethyst-vfs");
+        if (Directory.Exists(state) && new DirectoryInfo(state).LinkTarget is not null)
+            throw new InvalidOperationException("Amethyst profile VFS state is a symlink; repair the selected profile before reading");
+        var pending = Path.Combine(state, "pending");
+        if (File.Exists(pending))
+            throw new InvalidOperationException("Amethyst has an unfinished VFS deployment for the selected profile; finish or recover Deploy/Restore in Amethyst");
+        var manifestPath = Path.Combine(state, "manifest.json");
+        var manifestBytes = Input(manifestPath, required: false);
+        if (Directory.Exists(state) && manifestBytes is null)
+            throw new InvalidOperationException("Amethyst VFS state exists without a manifest; restore or repair this profile before reading");
+        if (manifestBytes is not null)
+        {
+            _deploymentExpected = true;
+            using var manifest = JsonDocument.Parse(manifestBytes);
+            var root = manifest.RootElement;
+            if (root.ValueKind != JsonValueKind.Object || root.GetProperty("version").GetInt32() != 1 ||
+                root.GetProperty("backend").GetString() != "shadow-tree")
+                throw new InvalidOperationException("Amethyst VFS backend or manifest version is unsupported; restore this profile to physical deployment before reading");
+            if (root.GetProperty("profile").GetString() != Path.GetFileName(ProfileDir))
+                throw new InvalidOperationException("Amethyst VFS manifest belongs to another profile; restore or repair the selected profile before reading");
+            if (!root.TryGetProperty("bind_hidden_source_symlinks", out var bindHiddenLinks) || bindHiddenLinks.ValueKind is not (JsonValueKind.True or JsonValueKind.False))
+                throw new InvalidOperationException("Amethyst VFS manifest has no valid bind_hidden_source_symlinks setting; restore or repair the selected profile before reading");
+            var dataRelative = Path.GetRelativePath(GameDir, data);
+            RequireRecordedPath(root, "game_root", GameDir);
+            RequireRecordedPath(root, "data_root", data);
+            var view = Path.Combine(state, "view");
+            var rootUpper = Path.Combine(state, "root-upper");
+            RequireRecordedPath(root, "view_root", view);
+            RequireRecordedPath(root, "root_layer", view);
+            RequireRecordedPath(root, "data_layer", Path.Combine(view, dataRelative));
+            RequireRecordedPath(root, "root_upper", rootUpper);
+            RequireRecordedPath(root, "data_upper", OverwriteDir);
+            EnsureRealDirectory(state, "VFS state");
+            EnsureRealDirectory(view, "VFS shadow view");
+            EnsureRealDirectory(rootUpper, "VFS root upper");
+            Root(state); Root(view); Root(rootUpper);
+            TrackEntries(state, "manifest.json", "pending");
+            var viewData = view;
+            foreach (var part in dataRelative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries))
+            {
+                viewData = Path.Combine(viewData, part);
+                if (Directory.Exists(viewData) && new DirectoryInfo(viewData).LinkTarget is not null)
+                    throw new InvalidOperationException($"Amethyst VFS shadow Data path contains a symlink: '{viewData}'");
+            }
+            EnsureRealDirectory(viewData, "VFS shadow Data");
+            if (!Directory.Exists(data)) throw new InvalidOperationException("Amethyst shadow-tree VFS has no original game Data directory; restore or repair the vanilla game files before reading");
+            UsesShadowTreeVfs = true;
+            DeploymentDataDir = Root(viewData);
+            VanillaDataDir = Root(data);
+            return;
+        }
+        if (deployed && !Directory.Exists(core))
+            throw new InvalidOperationException("Amethyst is physically deployed but its vanilla Data_Core is missing; restore or repair the vanilla backup in Amethyst before reading");
+        _deploymentExpected = deployed;
+        DeploymentDataDir = Root(data);
+        VanillaDataDir = Root(Directory.Exists(core) ? core : data);
+    }
+
+    /// <summary>Validate one absolute path recorded by Amethyst against its fixed profile-owned path.</summary>
+    static void RequireRecordedPath(JsonElement manifest, string key, string expected)
+    {
+        if (!manifest.TryGetProperty(key, out var value) || value.ValueKind != JsonValueKind.String ||
+            value.GetString() is not { } path || !Path.IsPathFullyQualified(path))
+            throw new InvalidOperationException($"Amethyst VFS manifest has no valid {key}; restore or repair the selected profile before reading");
+        if (LinuxFileIdentity.Canonical(path) != LinuxFileIdentity.Canonical(expected))
+            throw new InvalidOperationException($"Amethyst VFS manifest {key} does not match the selected profile's fixed path; restore or repair the profile before reading");
+    }
+
+    static void EnsureRealDirectory(string path, string label)
+    {
+        if (!Directory.Exists(path) || new DirectoryInfo(path).LinkTarget is not null)
+            throw new InvalidOperationException($"Amethyst {label} is missing or is a symlink: '{path}'; restore or repair the selected profile before reading");
+    }
+
+    /// <summary>Capture the effective INI directory and the game's implicit-plugin manifest from their saved locations.</summary>
+    void ReadEffectiveInputs(JsonElement paths)
+    {
+        var profileIni = paths.TryGetProperty("profile_ini_files", out var profileSetting) && profileSetting.ValueKind == JsonValueKind.True;
+        string? iniDir = null;
+        if (profileIni) iniDir = Path.Combine(ProfileDir, "ini files");
+        else if (paths.TryGetProperty("prefix_path", out var prefix) && prefix.ValueKind == JsonValueKind.String &&
+            !string.IsNullOrWhiteSpace(prefix.GetString()))
+        {
+            var prefixPath = prefix.GetString();
+            if (prefixPath is null || !Path.IsPathFullyQualified(prefixPath)) throw new InvalidOperationException("Amethyst paths.json prefix_path is not an absolute path; configure a valid Proton prefix before reading effective INIs");
+            iniDir = Path.Combine(prefixPath, "drive_c", "users", "steamuser", "Documents", "My Games", "Skyrim Special Edition");
+        }
+        if (iniDir is not null)
+        {
+            EffectiveIniDir = iniDir;
+            Root(iniDir);
+            if (Directory.Exists(iniDir))
+            {
+                var entries = Directory.EnumerateFiles(iniDir).Where(p => Path.GetExtension(p).Equals(".ini", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(Path.GetFileName, StringComparer.Ordinal).ToArray();
+                _inputDirectories[iniDir] = entries.Select(p => Path.GetFileName(p)!).ToArray();
+                foreach (var file in entries) Input(file, required: true);
+            }
+            else _inputDirectories[iniDir] = [];
+        }
+        else _vanillaArchiveCoverageIncomplete = true;
+
+        var cccPath = Path.Combine(GameDir, "Skyrim.ccc");
+        TrackEntries(GameDir, "Skyrim.ccc");
+        _cccBytes = Input(cccPath, required: false);
+        if (_cccBytes is not null) _cccPath = cccPath;
+    }
+
+    /// <summary>Build only the vanilla archive sources whose activation is established by effective Skyrim.ini and engine-loaded plugins.</summary>
+    void ReadVanillaArchives()
+    {
+        var ini = CapturedInputPath(EffectiveIniDir, "Skyrim.ini");
+        IReadOnlyList<string> baseArchives = [];
+        if (ini is null) _vanillaArchiveCoverageIncomplete = true;
+        else baseArchives = ParseBaseArchiveNames(_inputs[ini].Bytes!);
+
+        var activePlugins = EngineOrderedPluginNames();
+        var archives = new List<ActiveArchive>();
+        var rank = 0;
+        foreach (var archive in baseArchives)
+        {
+            SafePart(archive, "vanilla archive filename");
+            if (HasManagedArchive(archive)) { rank++; continue; }
+            var source = VanillaFile(archive);
+            if (source is null) _vanillaArchiveCoverageIncomplete = true;
+            else archives.Add(new(source, ArchiveDiscovery.IniArchiveOwner, rank, "Data"));
+            rank++;
+        }
+        var managedNames = SavedArchives().Select(a => Path.GetFileName(a.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var plugin in activePlugins)
+        {
+            var baseName = Path.GetFileNameWithoutExtension(plugin);
+            foreach (var filename in new[] { baseName + ".bsa", baseName + " - Textures.bsa" })
+            {
+                if (managedNames.Contains(filename)) continue;
+                if (HasManagedArchive(filename)) continue;
+                var source = VanillaFile(filename);
+                if (source is not null) archives.Add(new(source, plugin, rank, "Data"));
+            }
+            rank++;
+        }
+        VanillaArchives = archives;
+    }
+
+    /// <summary>INI archive list parser matching the pinned producer's [Archive] list semantics.</summary>
+    static IReadOnlyList<string> ParseBaseArchiveNames(byte[] bytes)
+    {
+        var result = new List<string>();
+        var inArchive = false;
+        foreach (var raw in Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF').Split('\n'))
+        {
+            var line = raw.Trim();
+            if (line.Length == 0 || line[0] == ';') continue;
+            if (line[0] == '[') { inArchive = line.Equals("[Archive]", StringComparison.OrdinalIgnoreCase); continue; }
+            if (!inArchive) continue;
+            var equals = line.IndexOf('=');
+            if (equals < 0) continue;
+            var key = line[..equals].Trim();
+            if (key.Equals("sResourceArchiveList", StringComparison.OrdinalIgnoreCase) || key.Equals("sResourceArchiveList2", StringComparison.OrdinalIgnoreCase))
+                result.AddRange(line[(equals + 1)..].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
+        }
+        return result;
+    }
+
+    string[] EngineOrderedPluginNames()
+    {
+        var result = new List<string>();
+        void Add(string name) { if (!result.Contains(name, StringComparer.OrdinalIgnoreCase)) result.Add(name); }
+        foreach (var name in SkyrimImplicitMasters) Add(name);
+        foreach (var name in Composition.OrderedPluginNames)
+            if (!Composition.InactivePluginNames.Contains(name, StringComparer.OrdinalIgnoreCase)) Add(name);
+        if (_cccBytes is not null)
+            foreach (var raw in Encoding.UTF8.GetString(_cccBytes).TrimStart('\uFEFF').Split('\n'))
+            {
+                var name = raw.Trim();
+                if (name.Length == 0 || name.StartsWith('#')) continue;
+                SafePart(name, "Skyrim.ccc plugin filename");
+                if (ResolveAssets(name).Count > 0) Add(name);
+            }
+        return result.ToArray();
+    }
+
+    bool HasManagedArchive(string filename)
+    {
+        var managed = SavedArchives().Where(a => Path.GetFileName(a.Path).Equals(filename, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (managed.Count > 1) throw new InvalidOperationException($"more than one saved managed archive overrides vanilla '{filename}'; refresh the selected Amethyst profile");
+        return managed.Count == 1;
+    }
+
+    void TrackEntries(string directory, params string[] names)
+    {
+        _watchedCandidates[directory] = names.OrderBy(n => n, StringComparer.Ordinal).ToArray();
+        _watchedEntries[directory] = names.Where(n => File.Exists(Path.Combine(directory, n)) || Directory.Exists(Path.Combine(directory, n)))
+            .OrderBy(n => n, StringComparer.Ordinal).ToArray();
+    }
+
+    string? CapturedInputPath(string? directory, string name)
+    {
+        if (directory is null) return null;
+        var match = _inputs.Keys.Where(p => Path.GetDirectoryName(p) == directory && Path.GetFileName(p).Equals(name, StringComparison.OrdinalIgnoreCase)).ToList();
+        if (match.Count > 1) throw new InvalidOperationException($"effective INI directory has case-colliding '{name}' files");
+        return match.SingleOrDefault();
     }
 
     /// <summary>Check the saved profile's intent and generation; serialized payload contents must agree with their columns.</summary>
@@ -186,7 +420,7 @@ public sealed class AmethystSavedSnapshot
         var current = new byte[24]; digest.DoFinal(current, 0);
         if (!current.AsSpan().SequenceEqual(intentHash))
             throw new InvalidOperationException("Amethyst profile intent changed since its last saved filegraph; refresh the selected profile before reading");
-        var vanillaArchivesOmitted = Directory.EnumerateFiles(VanillaDataDir).Any(p => Path.GetExtension(p).Equals(".bsa", StringComparison.OrdinalIgnoreCase));
+        var vanillaArchivesOmitted = false;
         Provenance = new(ProfileDir, generation, inventory, vanillaArchivesOmitted);
     }
 
@@ -258,7 +492,7 @@ public sealed class AmethystSavedSnapshot
         // Refuse an unexpected identity contract rather than emulate another game's suppression rules.
         if (_candidates.Values.Any(c => c.Identities.Count > 0))
             throw new InvalidOperationException("unsupported exclusive-identity candidates in a Skyrim saved filegraph");
-        AmethystNativeSnapshot.Read(database, ProfileDir, Provenance.Generation, Provenance.InventoryGeneration, row =>
+        _nativeDeploymentMatches = AmethystNativeSnapshot.Read(database, ProfileDir, Provenance.Generation, Provenance.InventoryGeneration, _deployMode, row =>
         {
             var ns = row.GetProperty("namespace").GetString() switch
             { "normal" => 0, "root" => 1, "archive" => 2, _ => throw new InvalidOperationException("unsupported Amethyst winner namespace") };
@@ -317,13 +551,16 @@ public sealed class AmethystSavedSnapshot
     IReadOnlyList<string> ResolvePlugins()
     {
         var paths = new List<string>();
-        foreach (var plugin in Composition.OrderedPluginNames)
+        var explicitActive = Composition.OrderedPluginNames.Where(p => !Composition.InactivePluginNames.Contains(p, StringComparer.OrdinalIgnoreCase)).ToHashSet(StringComparer.OrdinalIgnoreCase);
+        foreach (var plugin in EngineOrderedPluginNames())
         {
             SafePart(plugin, "plugin filename");
-            if (Composition.InactivePluginNames.Contains(plugin, StringComparer.OrdinalIgnoreCase)) continue;
             var sources = ResolveAssets(plugin);
             if (sources.Count == 0 || sources[0].Kind != AssetKind.Loose)
+            {
+                if (!explicitActive.Contains(plugin)) { _vanillaArchiveCoverageIncomplete = true; continue; }
                 throw new InvalidOperationException($"active plugin '{plugin}' has no saved filegraph or vanilla source; refresh Amethyst");
+            }
             paths.Add(sources[0].LooseFilePath!);
         }
         return paths;
@@ -381,7 +618,7 @@ public sealed class AmethystSavedSnapshot
             var plugin = Composition.OrderedPluginNames.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(candidate.PluginKey, StringComparison.OrdinalIgnoreCase));
             var rank = plugin is null ? -1 : Composition.OrderedPluginNames.ToList().IndexOf(plugin);
             return new ActiveArchive(SourcePath(candidate), plugin ?? ArchiveDiscovery.IniArchiveOwner, rank, candidate.Mod);
-        }).ToList();
+        }).Concat(VanillaArchives).ToList();
 
     /// <summary>Recorded plugin copies, including disabled providers, for source/header diagnostics; no directory rescan.</summary>
     public IReadOnlyList<PluginFileHit> PluginCopies(string filename)
@@ -457,6 +694,24 @@ public sealed class AmethystSavedSnapshot
         }
         foreach (var (path, canonical) in _roots)
             if (LinuxFileIdentity.Canonical(path) != canonical) throw new InvalidOperationException($"Amethyst source root changed during the call: '{path}'; retry");
+        foreach (var (directory, expected) in _inputDirectories)
+        {
+            var actual = Directory.Exists(directory)
+                ? Directory.EnumerateFileSystemEntries(directory).Select(Path.GetFileName).Where(n => n is not null).Cast<string>()
+                    .Where(n => expected.Contains(n, StringComparer.Ordinal) || n.EndsWith(".ini", StringComparison.OrdinalIgnoreCase))
+                    .OrderBy(n => n, StringComparer.Ordinal).ToArray()
+                : [];
+            if (!actual.SequenceEqual(expected, StringComparer.Ordinal)) throw new InvalidOperationException($"Amethyst VFS or effective INI directory changed during the call: '{directory}'; retry");
+        }
+        foreach (var (directory, expected) in _watchedEntries)
+        {
+            var actual = Directory.Exists(directory)
+                ? Directory.EnumerateFileSystemEntries(directory).Select(Path.GetFileName).Where(n => n is not null)
+                    .Cast<string>().Where(n => _watchedCandidates[directory].Contains(n, StringComparer.Ordinal)).OrderBy(n => n, StringComparer.Ordinal).ToArray()
+                : [];
+            if (!actual.SequenceEqual(expected, StringComparer.Ordinal))
+                throw new InvalidOperationException($"Amethyst VFS or implicit-plugin source state changed during the call: '{directory}'; retry");
+        }
         var identityNow = LinuxFileIdentity.Of(DatabasePath);
         if ((identityNow.DeviceMajor, identityNow.DeviceMinor, identityNow.Inode) != (_databaseIdentity.DeviceMajor, _databaseIdentity.DeviceMinor, _databaseIdentity.Inode))
             throw new InvalidOperationException("Amethyst filegraph database was replaced during the call; retry");

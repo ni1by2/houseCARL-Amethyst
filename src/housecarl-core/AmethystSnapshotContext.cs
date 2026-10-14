@@ -9,7 +9,7 @@ namespace HousecarlCore;
 public sealed record AmethystSnapshotProvenance(string Profile, long Generation, ulong InventoryGeneration, bool VanillaArchivesOmitted = false)
 {
     /// <summary>Explicit coverage limit of this preview; vanilla loose files use the distinct backup root.</summary>
-    public const string VanillaArchiveWarning = "This preview does not index vanilla BSA archives. Asset coverage is incomplete when those archives are present; use explicit archive tools for their contents.";
+    public const string VanillaArchiveWarning = "Vanilla BSA coverage is incomplete because an effective Skyrim.ini, an engine-loaded plugin source, or a referenced archive could not be verified. Asset-dependent reads cannot prove an asset is absent.";
     /// <summary>The warning carried by every result and artifact that depends on this snapshot.</summary>
     public const string Warning = "Using Amethyst's last saved filegraph. Changes made since its last refresh may be missing. " +
         "Refresh the selected profile in Amethyst after changing mods or settings. These results do not confirm what is deployed in-game.";

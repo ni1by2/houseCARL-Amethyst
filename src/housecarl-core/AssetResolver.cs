@@ -183,7 +183,7 @@ public sealed class AssetResolver : IDisposable
     /// <summary>Consume Amethyst's recorded providers; staging discovery and winner selection remain with the producer.</summary>
     public static AssetResolver BuildSavedSnapshot(AmethystSavedSnapshot snapshot)
         => new(snapshot.OverwriteDir, snapshot.ModsDir, snapshot.VanillaDataDir,
-               snapshot.Composition.EnabledMods, []) { _savedSnapshot = snapshot };
+               snapshot.Composition.EnabledMods, snapshot.SavedArchives()) { _savedSnapshot = snapshot };
 
     Snapshot BuildTables()
     {
@@ -309,7 +309,17 @@ public sealed class AssetResolver : IDisposable
     /// so the two cannot drift. Each provider comes back with its concrete on-disk descriptor, winner first.</summary>
     List<PlacementSource> ResolveProviders(string rel, Snapshot snap, int pass)
     {
-        if (_savedSnapshot is { } saved) return saved.ResolveAssets(rel).ToList();
+        if (_savedSnapshot is { } saved)
+        {
+            var recorded = saved.ResolveAssets(rel).ToList();
+            // The native snapshot remains authoritative for every managed provider. Vanilla archives are the
+            // only entries added here, in the engine order captured from effective Skyrim.ini and plugin state.
+            foreach (var archive in _archives.Where(a => string.Equals(a.OwningMod, "Data", StringComparison.Ordinal)))
+                if (snap.Tables.TryGetValue(archive.Path, out var table) && table.Contains(rel))
+                    recorded.Add(new PlacementSource(Path.GetFileName(archive.Path), AssetKind.Bsa,
+                        null, archive.Path, rel, OwningMod: "Data"));
+            return recorded;
+        }
         // ---- loose, in MO2 precedence order — via the per-subtree cache (warmed on first touch) ----
         var opened = AsWindowsOpens(rel);
         var subtreeDir = BethesdaPath.DirectoryName(opened);

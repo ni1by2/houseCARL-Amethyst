@@ -18,7 +18,7 @@ def frame(payload):
     sys.stdout.buffer.flush()
 
 
-def read_snapshot(copy_root, profile_id, extension):
+def read_snapshot(copy_root, profile_id, extension, deploy_mode):
     """Open only the caller's copy and serve complete, cursor-paged native winners."""
     if sys.version_info < (3, 12):
         raise RuntimeError('Amethyst snapshot reads require Python 3.12 or newer')
@@ -39,7 +39,12 @@ def read_snapshot(copy_root, profile_id, extension):
                       'generation': snapshot.generation,
                       'inventory_generation': snapshot.inventory_generation}).encode('utf-8'))
     for cursor in sys.stdin:
-        frame(snapshot.iter_winners(after_id=int(cursor.strip()), limit=1000))
+        request = cursor.strip()
+        if request == 'deployment':
+            frame(json.dumps(profile.deployment_unchanged(
+                snapshot.generation, deploy_mode)).encode('utf-8'))
+            break
+        frame(snapshot.iter_winners(after_id=int(request), limit=1000))
 
 
 if __name__ == '__main__':
