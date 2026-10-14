@@ -15,7 +15,7 @@ internal static class AmethystSnapshotFilter
         ToolNames.Remove, ToolNames.Copy, ToolNames.CompactPlugin, ToolNames.MergePlugins, ToolNames.NifSet,
         ToolNames.Place, ToolNames.WriteSeq, ToolNames.CompileScript];
     /// <summary>Record-writing tools with a verified new-plugin path shared by all record types.</summary>
-    static readonly HashSet<string> TransactionRoutedRecordWrites = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward, ToolNames.Remove, ToolNames.Copy];
+    static readonly HashSet<string> TransactionRoutedRecordWrites = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward, ToolNames.Remove, ToolNames.Copy, ToolNames.CompactPlugin, ToolNames.MergePlugins];
 
     /// <summary>Create the filter over the server's single service. Calls and connection changes run serially.</summary>
     internal static McpRequestFilter<CallToolRequestParams, CallToolResult> For(LoadOrderService service) => next => async (request, cancellationToken) =>
@@ -50,7 +50,13 @@ internal static class AmethystSnapshotFilter
             }
             snapshot = service.CaptureSavedSnapshot();
             using var scope = AmethystSnapshotContext.Use(snapshot);
-            if (write) staging = new AmethystStagingWrite(snapshot, name!, JsonSerializer.Serialize(arguments), existingDestination);
+            if (write)
+            {
+                var reshape = name is ToolNames.CompactPlugin or ToolNames.MergePlugins;
+                staging = new AmethystStagingWrite(snapshot, name!, JsonSerializer.Serialize(arguments), existingDestination,
+                    reshape ? [new HousecarlCore.AmethystTransactionUnit("reshape-output")] : null,
+                    reshape ? "reshape-output" : "record-output", reshape ? "reshape-output" : "owner-metadata");
+            }
             var result = await next(request, cancellationToken);
             MarkErrors(result);
             if (result.IsError == true && staging is not null) staging.Abort();

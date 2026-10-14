@@ -1,4 +1,6 @@
 using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Skyrim;
+using HousecarlCore;
 
 namespace HousecarlMcp;
 
@@ -264,8 +266,12 @@ internal sealed partial class RecordWrites
                 outPath = Path.Combine(rf.OutputDir, name);
             }
 
-            // Build and write the compacted plugin.
-            var build = WritePatchBuilder.CompactBuild(srcPath, modKey, remapDict, view.PluginPath, outPath, esl, floor, view.DataDir);
+            using var scratch = new ReshapeScratch();
+            var stagedPlugin = Path.Combine(scratch.Root, name);
+            // Build and validate privately; the transaction receives no destination bytes until riders/referencers are ready.
+            WritePatchBuilder.CompactBuildResult build;
+            using (AmethystTransactionWriteScope.SuspendPublication())
+                build = WritePatchBuilder.CompactBuild(srcPath, modKey, remapDict, view.PluginPath, stagedPlugin, esl, floor, view.DataDir);
             if (!build.Success)
             {
                 if (!inPlace && createdFresh) OutputLocations.RemoveOrNameRiderResidue(rf);   // a refused build leaves no orphan folder
@@ -277,7 +283,10 @@ internal sealed partial class RecordWrites
             if (willRepoint)
                 foreach (var ext in id.ExternalPlugins)
                 {
-                    var rep = RemapEngine.RepointInPlace(resolver, ext, remapDict);
+                    var repath = Path.Combine(scratch.Root, "referencers", ext);
+                    RemapEngine.RepointResult rep;
+                    using (AmethystTransactionWriteScope.SuspendPublication())
+                        rep = RemapEngine.RepointInPlace(resolver, ext, remapDict, repath);
                     repointed.Add(new WritePatchBuilder.RepointReport(ext, rep.Success, rep.Error));
                 }
 
@@ -292,9 +301,9 @@ internal sealed partial class RecordWrites
             {
                 var assetView = _host.Assets.Capture();
                 seqGate = assetView.ResolveForPlacement(srcSeqRel).Sources.Count > 0;   // VFS-aware (loose roots + active BSAs)
-                var outDir = Path.GetDirectoryName(outPath)!;
-                assetRename = AssetRenameService.CarryFaceGen(outPath, remapDict, assetView, outDir);
-                voiceRename = AssetRenameService.CarryVoice(outPath, remapDict, assetView, outDir);
+                var outDir = scratch.Root;
+                assetRename = AssetRenameService.CarryFaceGen(stagedPlugin, remapDict, assetView, outDir);
+                voiceRename = AssetRenameService.CarryVoice(stagedPlugin, remapDict, assetView, outDir);
             }
             catch (Exception ex)
             {
@@ -309,7 +318,7 @@ internal sealed partial class RecordWrites
             // Refresh the start-game-enabled-quest .seq from the renumbered plugin when the source shipped one, never
             // inventing one. Best-effort and reported: it never throws and never fails the compact.
             SeqRegenOutcome seqRegen;
-            try { seqRegen = AssetRenameService.RegenerateSeq(outPath, Path.GetDirectoryName(outPath)!, sourceHadSeq); }
+            try { seqRegen = AssetRenameService.RegenerateSeq(stagedPlugin, scratch.Root, sourceHadSeq); }
             catch (Exception ex)
             {
                 seqRegen = new SeqRegenOutcome(0, false, null,
@@ -338,6 +347,28 @@ internal sealed partial class RecordWrites
                 var rp = view.PluginPath(r.Plugin);
                 if (rp is not null) { var n = MergeEditedInPlaceMarker(roots, Path.GetDirectoryName(rp)); if (n is not null) markerNotes.Add(n); }
             }
+
+            if (AmethystStagingWrite.IsActive)
+            {
+                if (willRepoint && repointed.Any(r => !r.Success))
+                    return WritePatchBuilder.CompactOutcome.Fail("Amethyst transaction refused the compact because at least one external referencer could not be prepared; no target, referencer, metadata or sidecar was published. " +
+                        string.Join(" ", repointed.Where(r => !r.Success).Select(r => $"{r.Plugin}: {r.Error}")));
+                if (AssetCarryRefusal(assetRename, voiceRename, sourceHadSeq ? seqRegen : null,
+                    assetRename.NpcCount > 0, HasMappedDialogueInfo(stagedPlugin, remapDict)) is { } carryRefusal)
+                    return WritePatchBuilder.CompactOutcome.Fail(carryRefusal);
+                var group = CompactArtifacts(scratch.Root, stagedPlugin, outPath, inPlace, view, name);
+                try { AmethystStagingWrite.PublishArtifactGroup(group); }
+                catch (Exception ex) { return WritePatchBuilder.CompactOutcome.Fail($"Amethyst compact transaction could not publish its complete plugin/referencer/sidecar group; recovery is required if publication began: {ex.Message}"); }
+            }
+            else
+            {
+                if (willRepoint && repointed.Any(r => !r.Success))
+                    markerNotes.Add("One or more external referencers could not be rewritten; inspect the per-plugin report before using this compact.");
+                var group = CompactArtifacts(scratch.Root, stagedPlugin, outPath, inPlace, view, name);
+                (assetRename, voiceRename, seqRegen) = CommitLocalArtifacts(group, assetRename, voiceRename, seqRegen);
+            }
+            if (seqRegen.Written)
+                seqRegen = seqRegen with { SeqPath = Path.Combine(Path.GetDirectoryName(outPath)!, "SEQ", Path.GetFileName(seqRegen.SeqPath!)) };
 
             return new WritePatchBuilder.CompactOutcome(
                 true, null, false, outPath, name, inPlace, esl, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
@@ -597,6 +628,9 @@ internal sealed partial class RecordWrites
             }
             catch (InvalidOperationException ex) { return WritePatchBuilder.MergeOutcome.Fail(ex.Message); }
             outName = Path.GetFileName(outPath);
+            var finalOutPath = outPath;
+            using var scratch = new ReshapeScratch();
+            var stagedOutPath = Path.Combine(scratch.Root, outName);
             try { outKey = ModKey.FromFileName(outName); }
             catch (Exception ex) { return FailAfterFolder($"'{outName}' is not a valid plugin filename ({ex.Message})."); }
 
@@ -621,8 +655,10 @@ internal sealed partial class RecordWrites
             var id = RemapEngine.IdentifyExternalReferencers(resolver, targets, transformSet, readDeclaredMasters: true);
 
             // ---- build and write the merged plugin ----
-            var build = WritePatchBuilder.MergeBuild(
-                donorInfos.Select(d => (d.Name, d.Path, d.Key)).ToList(), outKey, plan.Dict, masterSet, view.PluginPath, outPath, view.DataDir);
+            WritePatchBuilder.MergeBuildResult build;
+            using (AmethystTransactionWriteScope.SuspendPublication())
+                build = WritePatchBuilder.MergeBuild(
+                    donorInfos.Select(d => (d.Name, d.Path, d.Key)).ToList(), outKey, plan.Dict, masterSet, view.PluginPath, stagedOutPath, view.DataDir);
             if (!build.Success)
             {
                 return FailAfterFolder(build.Error!);                      // a refused build leaves no orphan folder
@@ -640,10 +676,10 @@ internal sealed partial class RecordWrites
                 foreach (var (dName, _, _, _) in donorInfos)              // did any donor ship a .seq? VFS-aware, per donor
                     if (assetView.ResolveForPlacement($@"SEQ\{Path.GetFileNameWithoutExtension(dName)}.seq").Sources.Count > 0)
                         { seqGate = true; break; }
-                var outDir = Path.GetDirectoryName(outPath)!;
-                assetRename = AssetRenameService.CarryFaceGen(outPath, plan.Dict, assetView, outDir);
+                var outDir = scratch.Root;
+                assetRename = AssetRenameService.CarryFaceGen(stagedOutPath, plan.Dict, assetView, outDir);
                 var voiceParts = donorInfos
-                    .Select(d => AssetRenameService.CarryVoice(outPath, plan.Dict, assetView, outDir, sourcePlugin: d.Name))
+                    .Select(d => AssetRenameService.CarryVoice(stagedOutPath, plan.Dict, assetView, outDir, sourcePlugin: d.Name))
                     .ToList();
                 voiceRename = new VoiceCarryOutcome(
                     voiceParts.Sum(v => v.FilesScanned), voiceParts.Sum(v => v.FilesCarried), voiceParts.Sum(v => v.LinesCarried),
@@ -665,7 +701,7 @@ internal sealed partial class RecordWrites
             // ---- SEQ, refresh-only, off the merged plugin: rebuilt when any donor shipped a .seq, because all their
             //      quests now live in the output. A donor with SGE quests but no shipped .seq gets a named advisory. ----
             SeqRegenOutcome seqRegen;
-            try { seqRegen = AssetRenameService.RegenerateSeq(outPath, Path.GetDirectoryName(outPath)!, anyDonorSeq); }
+            try { seqRegen = AssetRenameService.RegenerateSeq(stagedOutPath, scratch.Root, anyDonorSeq); }
             catch (Exception ex)
             {
                 seqRegen = new SeqRegenOutcome(0, false, null,
@@ -684,13 +720,129 @@ internal sealed partial class RecordWrites
                 donorInfos.Select(d => (d.Name, d.Order)).ToList(), build.Masters,
                 p => orderIndex.TryGetValue(p, out var i) ? i : null);
 
+            if (AmethystStagingWrite.IsActive && AssetCarryRefusal(assetRename, voiceRename, anyDonorSeq ? seqRegen : null,
+                assetRename.NpcCount > 0, HasMappedDialogueInfo(stagedOutPath, plan.Dict)) is { } carryRefusal)
+                return FailAfterFolder(carryRefusal);
+            var group = MergeArtifacts(scratch.Root, finalOutPath, outName);
+            if (AmethystStagingWrite.IsActive)
+            {
+                try { AmethystStagingWrite.PublishArtifactGroup(group); }
+                catch (Exception ex) { return WritePatchBuilder.MergeOutcome.Fail($"Amethyst merge transaction could not publish its complete plugin/sidecar group; recovery is required if publication began: {ex.Message}"); }
+            }
+            else (assetRename, voiceRename, seqRegen) = CommitLocalArtifacts(group, assetRename, voiceRename, seqRegen);
+            if (seqRegen.Written)
+                seqRegen = seqRegen with { SeqPath = Path.Combine(Path.GetDirectoryName(finalOutPath)!, "SEQ", Path.GetFileName(seqRegen.SeqPath!)) };
+
             return new WritePatchBuilder.MergeOutcome(
-                true, null, outPath, outName, donorNames, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
+                true, null, finalOutPath, outName, donorNames, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
                 plan.Donors, build.Conflicts, id.ExternalPlugins, id.ExternalOverriders,
                 id.PluginsScanned, id.UnscannableRecords, id.UnscannableSamples, build.Bytes, note,
                 assetRename, voiceRename, seqRegen, build.LightDonors, build.HeaderMetaDonors, build.MasterDonors,
                 id.UnscannablePlugins, localizedDonors, id.MasterDeclarers, build.LightCarried, build.OriginatingRecords,
                 placement);
+        }
+    }
+
+    static string? AssetCarryRefusal(AssetRenameOutcome facegen, VoiceCarryOutcome voice, SeqRegenOutcome? seq,
+        bool facegenRelevant, bool voiceRelevant)
+    {
+        var problems = new List<string>();
+        if (facegenRelevant && (facegen.ReadIncomplete || facegen.Failures.Count > 0 || facegen.RootFailures.Count > 0))
+            problems.Add("FaceGen carry was incomplete: " + string.Join("; ", facegen.Failures.Concat(facegen.RootFailures)));
+        if (voiceRelevant && (voice.ReadIncomplete || voice.Failures.Count > 0 || voice.RootFailures.Count > 0))
+            problems.Add("voice carry was incomplete: " + string.Join("; ", voice.Failures.Concat(voice.RootFailures)));
+        if (seq is { Failures.Count: > 0 }) problems.Add("SEQ generation failed: " + string.Join("; ", seq.Failures));
+        return problems.Count == 0 ? null : "Amethyst transaction refused the reshape because dependent output could not be fully prepared; no output was published. " + string.Join(" ", problems);
+    }
+
+    static bool HasMappedDialogueInfo(string pluginPath, IReadOnlyDictionary<FormKey, FormKey> remap)
+    {
+        var mapped = remap.Values.ToHashSet();
+        using var plugin = SkyrimMod.CreateFromBinaryOverlay(pluginPath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(pluginPath));
+        return plugin.DialogTopics.SelectMany(topic => topic.Responses).Any(info => mapped.Contains(info.FormKey));
+    }
+
+    static IReadOnlyList<(string StagedPath, string Destination, string Role)> CompactArtifacts(
+        string scratchRoot, string stagedPlugin, string outputPath, bool inPlace,
+        LoadOrderResolver.IndexView view, string pluginName)
+    {
+        var artifacts = new List<(string StagedPath, string Destination, string Role)>();
+        foreach (var path in Directory.EnumerateFiles(scratchRoot, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal))
+        {
+            var relative = Path.GetRelativePath(scratchRoot, path);
+            string destination;
+            if (relative.StartsWith("referencers" + Path.DirectorySeparatorChar, StringComparison.Ordinal))
+            {
+                var referencer = Path.GetFileName(path);
+                destination = view.PluginPath(referencer)
+                    ?? throw new IOException($"repoint output '{referencer}' no longer resolves to an active plugin");
+            }
+            else if (inPlace && string.Equals(Path.GetFullPath(path), Path.GetFullPath(stagedPlugin), StringComparison.Ordinal))
+                destination = outputPath;
+            else destination = Path.Combine(Path.GetDirectoryName(outputPath)!, relative);
+            artifacts.Add((path, destination, PluginRole(path)));
+        }
+        if (!artifacts.Any(a => a.Role == "plugin" && string.Equals(Path.GetFullPath(a.Destination), Path.GetFullPath(outputPath), StringComparison.Ordinal)))
+            throw new IOException($"compacted plugin '{pluginName}' is missing from the prepared artifact group");
+        return artifacts;
+    }
+
+    static string PluginRole(string path)
+        => Path.GetExtension(path).ToLowerInvariant() switch
+        { ".esp" or ".esm" or ".esl" => "plugin", ".seq" => "seq", _ when path.Contains(Path.Combine("Sound", "Voice"), StringComparison.OrdinalIgnoreCase) => "voice", _ => "facegen" };
+
+    static (AssetRenameOutcome Facegen, VoiceCarryOutcome Voice, SeqRegenOutcome Seq) CommitLocalArtifacts(
+        IReadOnlyList<(string StagedPath, string Destination, string Role)> artifacts,
+        AssetRenameOutcome facegen, VoiceCarryOutcome voice, SeqRegenOutcome seq)
+    {
+        var facegenFailures = facegen.Failures.ToList();
+        var voiceFailures = voice.Failures.ToList();
+        var seqFailures = seq.Failures.ToList();
+        int facegenWritten = facegen.FacegenFilesCarried, voiceWritten = voice.FilesCarried;
+        bool seqWritten = seq.Written;
+        string? seqPath = seq.SeqPath;
+        foreach (var item in artifacts)
+        {
+            try
+            {
+                Directory.CreateDirectory(Path.GetDirectoryName(item.Destination)!);
+                AtomicFile.Commit(item.StagedPath, item.Destination);
+            }
+            catch (Exception ex) when (item.Role != "plugin")
+            {
+                var note = $"could not publish '{Path.GetFileName(item.Destination)}' ({ex.Message})";
+                if (item.Role == "facegen") { facegenFailures.Add(note); facegenWritten = Math.Max(0, facegenWritten - 1); }
+                else if (item.Role == "voice") { voiceFailures.Add(note); voiceWritten = Math.Max(0, voiceWritten - 1); }
+                else { seqFailures.Add(note); seqWritten = false; seqPath = null; }
+            }
+        }
+        return (facegen with { FacegenFilesCarried = facegenWritten, Failures = facegenFailures },
+            voice with { FilesCarried = voiceWritten, Failures = voiceFailures },
+            seq with { Written = seqWritten, SeqPath = seqPath, Failures = seqFailures });
+    }
+
+    static IReadOnlyList<(string StagedPath, string Destination, string Role)> MergeArtifacts(
+        string scratchRoot, string outputPath, string pluginName)
+    {
+        var artifacts = Directory.EnumerateFiles(scratchRoot, "*", SearchOption.AllDirectories).Order(StringComparer.Ordinal)
+            .Select(path => (StagedPath: path,
+                Destination: Path.Combine(Path.GetDirectoryName(outputPath)!, Path.GetRelativePath(scratchRoot, path)),
+                Role: PluginRole(path)))
+            .ToArray();
+        if (!artifacts.Any(a => a.Role == "plugin" && string.Equals(Path.GetFullPath(a.Destination), Path.GetFullPath(outputPath), StringComparison.Ordinal)))
+            throw new IOException($"merged plugin '{pluginName}' is missing from the prepared artifact group");
+        return artifacts;
+    }
+
+    sealed class ReshapeScratch : IDisposable
+    {
+        public string Root { get; } = Path.Combine(Path.GetTempPath(), "housecarl-reshape-" + Guid.NewGuid().ToString("N"));
+        public ReshapeScratch() => Directory.CreateDirectory(Root);
+        public void Dispose()
+        {
+            try { if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true); }
+            catch (IOException) { }
+            catch (UnauthorizedAccessException) { }
         }
     }
 }

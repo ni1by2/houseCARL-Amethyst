@@ -1,6 +1,7 @@
 using System.Text.Json;
 using HousecarlMcp;
 using System.Security.Cryptography;
+using Mutagen.Bethesda;
 using Mutagen.Bethesda.Skyrim;
 using Xunit;
 
@@ -207,6 +208,64 @@ public sealed class AmethystSnapshotWireTests
             weapon => weapon.FormKey.ToString() == formid);
         Assert.True(result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging")
             .GetProperty("immediate_visibility").GetBoolean());
+    }
+
+    [Fact]
+    public void CompactBuildsPluginAndSidecarsPrivatelyThenPublishesOneTransactionGroup()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var original = File.ReadAllBytes(source);
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var result = server.Call(ToolNames.CompactPlugin, JsonSerializer.Serialize(new { source = "Fixture.esp", patch = "TxnCompact" }));
+        Assert.False(result.IsError, result.Text);
+        var output = Path.Combine(world.Root, "mods", "houseCARL - TxnCompact", "Fixture.esp");
+        Assert.True(File.Exists(output));
+        Assert.Equal(original, File.ReadAllBytes(source));
+        Assert.Contains("pendingDeployment=true", File.ReadAllText(Path.Combine(Path.GetDirectoryName(output)!, "meta.ini")));
+        Assert.Contains("patchSha256=", File.ReadAllText(Path.Combine(Path.GetDirectoryName(output)!, "meta.ini")));
+        Assert.True(result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging")
+            .GetProperty("transaction_id").GetString() is { Length: 32 });
+    }
+
+    [Fact]
+    public void MergeBuildsNewPluginAndMetadataInsideOneTransactionGroup()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var original = File.ReadAllBytes(source);
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var result = server.Call(ToolNames.MergePlugins, "{\"plugins\":[\"Fixture.esp\"],\"patch\":\"TxnMerge\"}");
+        Assert.False(result.IsError, result.Text);
+        var output = Path.Combine(world.Root, "mods", "houseCARL - TxnMerge", "TxnMerge.esp");
+        Assert.True(File.Exists(output));
+        Assert.Equal(original, File.ReadAllBytes(source));
+        var meta = File.ReadAllText(Path.Combine(Path.GetDirectoryName(output)!, "meta.ini"));
+        Assert.Contains("pendingDeployment=true", meta);
+        Assert.Contains("patchSha256=", meta);
+        Assert.True(result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging")
+            .GetProperty("transaction_id").GetString() is { Length: 32 });
+    }
+
+    [Fact]
+    public void CompactInPlaceNeedsPerCallAmethystConsentsAndMarksImmediateVisibility()
+    {
+        using var world = new AmethystSnapshotWorld();
+        File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        using var server = new ServerFixture(EnvironmentFor(world, true));
+        var denied = server.Call(ToolNames.CompactPlugin, "{\"source\":\"Fixture.esp\",\"in_place\":true,\"acknowledge\":true}");
+        Assert.True(denied.IsError, denied.Text);
+        Assert.Contains("confirm_amethyst_redeploy=true", denied.Text);
+
+        var approved = server.Call(ToolNames.CompactPlugin,
+            "{\"source\":\"Fixture.esp\",\"in_place\":true,\"acknowledge\":true,\"confirm_amethyst_redeploy\":true,\"confirm_live_deployment_change\":true}");
+        Assert.False(approved.IsError, approved.Text);
+        var metadata = approved.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging");
+        Assert.True(metadata.GetProperty("immediate_visibility").GetBoolean());
+        Assert.Contains("editedInPlace=", File.ReadAllText(Path.Combine(Path.GetDirectoryName(source)!, "meta.ini")));
     }
 
     [Fact]

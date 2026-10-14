@@ -60,7 +60,11 @@ public static partial class WriteTools
         [Description("Default false. Consent for an in-place rewrite (in_place=true or repoint_externals=true). Without it the call returns a prompt listing every file that would be overwritten; call again with acknowledge=true to proceed.")]
             bool acknowledge = false,
         [Description("Optional. Base name for the new mod folder (auto-suffixed if taken); ignored with in_place=true. The plugin inside always keeps the source's basename.")]
-            string? patch = null) => Guard.Tool(ToolNames.CompactPlugin, () =>
+            string? patch = null,
+        [Description("Per-call Amethyst consent required when this compact overwrites an existing plugin.")]
+            bool confirm_amethyst_redeploy = false,
+        [Description("Per-call consent required when the target is immediately visible through Amethyst's active deployment.")]
+            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.CompactPlugin, () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
         if (string.IsNullOrWhiteSpace(source))

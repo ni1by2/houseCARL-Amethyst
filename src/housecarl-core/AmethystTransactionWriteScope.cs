@@ -7,6 +7,7 @@ namespace HousecarlCore;
 public sealed class AmethystTransactionWriteScope : IDisposable
 {
     static readonly AsyncLocal<AmethystTransactionWriteScope?> Active = new();
+    static readonly AsyncLocal<int> SuppressDepth = new();
     readonly AmethystTransactionWriteScope? _previous;
     readonly AmethystTransactionCoordinator _coordinator;
     readonly AmethystTransactionLockSet _locks;
@@ -21,7 +22,25 @@ public sealed class AmethystTransactionWriteScope : IDisposable
     readonly List<(string Path, string Hash)> _plugins = [];
     bool _disposed;
 
-    public static AmethystTransactionWriteScope? Current => Active.Value;
+    public static AmethystTransactionWriteScope? Current => SuppressDepth.Value == 0 ? Active.Value : null;
+
+    /// <summary>Allow a complex producer to build and validate private scratch files before enrolling their destinations.</summary>
+    public static IDisposable SuspendPublication()
+    {
+        SuppressDepth.Value++;
+        return new RestoreSuppression();
+    }
+
+    sealed class RestoreSuppression : IDisposable
+    {
+        bool _disposed;
+        public void Dispose()
+        {
+            if (_disposed) return;
+            _disposed = true;
+            SuppressDepth.Value--;
+        }
+    }
     public AmethystTransactionJournal Journal => _coordinator.ReadJournal(_transactionId);
 
     public AmethystTransactionWriteScope(AmethystTransactionCoordinator coordinator,
@@ -36,8 +55,14 @@ public sealed class AmethystTransactionWriteScope : IDisposable
     public void DeferOwnerMetadata(string destination, string contents, string? expectedOriginalSha256 = null, bool trackPluginHash = true)
     {
         var path = Path.GetFullPath(destination);
-        if (!_metadata.TryAdd(path, (contents, expectedOriginalSha256, trackPluginHash)))
-            throw new InvalidOperationException("transaction received duplicate owner-metadata destination");
+        if (_metadata.TryGetValue(path, out var existing))
+        {
+            if (_preparedMetadata.Contains(path)) throw new InvalidOperationException("owner metadata was re-enrolled after preparation");
+            if (existing.ExpectedOriginalSha256 != expectedOriginalSha256)
+                throw new InvalidOperationException("transaction received conflicting owner-metadata preconditions");
+            _metadata[path] = (contents, expectedOriginalSha256, trackPluginHash);
+        }
+        else _metadata.Add(path, (contents, expectedOriginalSha256, trackPluginHash));
         if (_plugins.Count > 0) PrepareMetadata(path, trackPluginHash ? _plugins[^1].Hash : null);
     }
 
@@ -67,9 +92,39 @@ public sealed class AmethystTransactionWriteScope : IDisposable
         }
     }
 
-    void PrepareMetadata(string path, string? pluginHash = null)
+    /// <summary>Prepare every member before publishing any; a failed preparation leaves the unit unpublished.</summary>
+    public void CommitArtifactGroup(string unitId, IReadOnlyList<(string StagedPath, string Destination, string Role)> artifacts)
     {
-        if (!_preparedMetadata.Add(path)) return;
+        _validateInputs();
+        if (artifacts.Count == 0) throw new InvalidOperationException("transaction artifact group is empty");
+        var prepared = new List<AmethystTransactionArtifact>(artifacts.Count + _metadata.Count);
+        var pluginHashes = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (stagedPath, destination, role) in artifacts)
+        {
+            using var stream = new FileStream(stagedPath, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
+            var artifact = _coordinator.PrepareArtifact(_transactionId, unitId, destination, role, stream, _allowedRoot);
+            prepared.Add(artifact);
+            if (role == "plugin") pluginHashes[Path.GetDirectoryName(Path.GetFullPath(destination))!] = artifact.PreparedSha256!;
+        }
+        foreach (var (path, item) in _metadata)
+        {
+            var hash = item.TrackPluginHash ? pluginHashes.GetValueOrDefault(Path.GetDirectoryName(path)!) : null;
+            var artifact = PrepareMetadata(path, hash, unitId);
+            prepared.Add(artifact);
+        }
+        _validateInputs();
+        foreach (var artifact in prepared)
+        {
+            _coordinator.Publish(_transactionId, artifact.Id, _locks);
+            if (artifact.Role == "plugin") _plugins.Add((artifact.Destination, artifact.PreparedSha256!));
+            if (artifact.Role == "owner_metadata") _publishedMetadata.Add(artifact.Destination);
+        }
+    }
+
+    AmethystTransactionArtifact PrepareMetadata(string path, string? pluginHash = null, string? unitId = null)
+    {
+        if (!_preparedMetadata.Add(path))
+            return Journal.Artifacts.Single(a => a.Destination == path);
         var item = _metadata[path];
         var contents = item.Contents;
         if (pluginHash is not null)
@@ -80,13 +135,14 @@ public sealed class AmethystTransactionWriteScope : IDisposable
                 : contents + $"\r\npatchSha256={pluginHash}\r\n";
         }
         using var metadata = new MemoryStream(Encoding.UTF8.GetBytes(contents));
-        var metadataArtifact = _coordinator.PrepareArtifact(_transactionId, _metadataUnitId, path, "owner_metadata", metadata, _allowedRoot);
+        var metadataArtifact = _coordinator.PrepareArtifact(_transactionId, unitId ?? _metadataUnitId, path, "owner_metadata", metadata, _allowedRoot);
         if (item.ExpectedOriginalSha256 is not null && metadataArtifact.OriginalSha256 != item.ExpectedOriginalSha256 ||
             item.ExpectedOriginalSha256 is null && metadataArtifact.OriginalExisted)
         {
             _preparedMetadata.Remove(path);
             throw new IOException("owner metadata changed while preparing the transaction; retry without overwriting concurrent edits");
         }
+        return metadataArtifact;
     }
 
     public AmethystTransactionOutcome Abort()

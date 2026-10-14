@@ -19,11 +19,14 @@ internal sealed class AmethystStagingWrite : IDisposable
     readonly AmethystTransactionWriteScope _transaction;
     /// <summary>New plugin paths registered before any output bytes are written.</summary>
     readonly List<string> _plugins = [];
+    readonly HashSet<string> _folders = new(StringComparer.Ordinal);
+    readonly HashSet<string> _registeredArtifacts = new(StringComparer.Ordinal);
     /// <summary>Whether the caller is inside the guarded new-patch lane.</summary>
     internal static bool IsActive => Active.Value is not null;
 
     /// <summary>Bind output permission to one captured manager generation.</summary>
-    internal AmethystStagingWrite(AmethystSavedSnapshot snapshot, string operation, string requestJson, bool immediateVisibility = false)
+    internal AmethystStagingWrite(AmethystSavedSnapshot snapshot, string operation, string requestJson, bool immediateVisibility = false,
+        IReadOnlyList<AmethystTransactionUnit>? units = null, string outputUnitId = "record-output", string metadataUnitId = "owner-metadata")
     {
         _snapshot = snapshot; _previous = Active.Value;
         _coordinator = new AmethystTransactionCoordinator();
@@ -32,7 +35,7 @@ internal sealed class AmethystStagingWrite : IDisposable
             snapshot.ManifestPath, snapshot.ModsDir, snapshot.ManagerLockPath,
             snapshot.Provenance.Generation, snapshot.Provenance.InventoryGeneration,
             "amethyst-schema9-engine1-rules13", requestHash,
-            [new AmethystTransactionUnit("record-output"), new AmethystTransactionUnit("owner-metadata", ["record-output"])],
+            units ?? [new AmethystTransactionUnit("record-output"), new AmethystTransactionUnit("owner-metadata", ["record-output"])],
             InputSha256: snapshot.InputSha256,
             ConsentScope: immediateVisibility ? ["confirm_amethyst_redeploy", "confirm_live_deployment_change"] : [],
             Managed: true, ImmediateVisibility: immediateVisibility);
@@ -40,7 +43,7 @@ internal sealed class AmethystStagingWrite : IDisposable
         try
         {
             var journal = _coordinator.Begin(request);
-            _transaction = new AmethystTransactionWriteScope(_coordinator, journal, _locks, snapshot.ModsDir, ValidateSnapshotInputs);
+            _transaction = new AmethystTransactionWriteScope(_coordinator, journal, _locks, snapshot.ModsDir, ValidateSnapshotInputs, outputUnitId, metadataUnitId);
             Active.Value = this;
         }
         catch { _locks.Dispose(); throw; }
@@ -83,16 +86,23 @@ internal sealed class AmethystStagingWrite : IDisposable
     internal static string Register(string folder, string plugin)
     {
         if (Active.Value is not { } call) return "";
-        if (Path.GetDirectoryName(Path.GetFullPath(folder)) != call._snapshot.ModsDir ||
-            Path.GetFileName(plugin) != plugin || !plugin.EndsWith(".esp", StringComparison.OrdinalIgnoreCase))
-            throw new InvalidOperationException("Amethyst new patches must be direct staging mods containing a new .esp");
+        if (!string.Equals(Path.GetDirectoryName(Path.GetFullPath(folder)), call._snapshot.ModsDir, StringComparison.Ordinal) ||
+            Path.GetFileName(plugin) != plugin)
+            throw new InvalidOperationException("Amethyst outputs must be direct staging mods with a safe owner name");
+        var hasPlugin = plugin.EndsWith(".esp", StringComparison.OrdinalIgnoreCase);
+        if (!hasPlugin && plugin != "(houseCARL output)")
+            throw new InvalidOperationException("Amethyst plugin outputs must use an .esp filename");
         var path = Path.Combine(folder, plugin);
         var meta = Path.Combine(folder, "meta.ini");
-        if (File.Exists(path) || File.Exists(meta))
+        if (hasPlugin && File.Exists(path) || File.Exists(meta))
             throw new InvalidOperationException("Amethyst patch output appeared during allocation; retry with a fresh patch name");
-        call._snapshot.RegisterArtifact(path, null);
-        call._snapshot.RegisterArtifact(meta, null);
-        call._plugins.Add(path);
+        if (hasPlugin)
+        {
+            if (call._registeredArtifacts.Add(Path.GetFullPath(path))) call._snapshot.RegisterArtifact(path, null);
+            call._plugins.Add(path);
+        }
+        if (call._registeredArtifacts.Add(Path.GetFullPath(meta))) call._snapshot.RegisterArtifact(meta, null);
+        call._folders.Add(Path.GetFullPath(folder));
         return $"amethystProfile={call._snapshot.ProfileDir}\r\n" +
             $"amethystGeneration={call._snapshot.Provenance.Generation}\r\n" +
             "pendingDeployment=true\r\n";
@@ -156,8 +166,14 @@ internal sealed class AmethystStagingWrite : IDisposable
     /// <summary>Remove only empty output directories after registered artifacts have been rolled back.</summary>
     internal void RemoveEmptyFolders()
     {
-        foreach (var folder in _plugins.Select(p => Path.GetDirectoryName(p)!).Distinct())
+        foreach (var folder in _folders.Concat(_plugins.Select(p => Path.GetDirectoryName(p)!)).Distinct(StringComparer.Ordinal))
             if (Directory.Exists(folder) && !Directory.EnumerateFileSystemEntries(folder).Any()) Directory.Delete(folder);
+    }
+
+    internal static void PublishArtifactGroup(IReadOnlyList<(string StagedPath, string Destination, string Role)> artifacts)
+    {
+        var call = Active.Value ?? throw new InvalidOperationException("Amethyst reshape transaction scope is unavailable");
+        call._transaction.CommitArtifactGroup("reshape-output", artifacts);
     }
 
     internal void Abort()

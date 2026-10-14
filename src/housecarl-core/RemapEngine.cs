@@ -721,7 +721,7 @@ public static class RemapEngine
     /// It opens the single plugin mutable, remaps, resolves the target's OWN declared masters, and re-serializes over
     /// itself; any refusal or serialize fault leaves the original file byte-intact.</summary>
     public static RepointResult RepointInPlace(
-        LoadOrderResolver resolver, string pluginName, IReadOnlyDictionary<FormKey, FormKey> dict)
+        LoadOrderResolver resolver, string pluginName, IReadOnlyDictionary<FormKey, FormKey> dict, string? outputPath = null)
     {
         if (dict.Count == 0) return RepointResult.Fail("no remap entries supplied — nothing to repoint.");
         var view = resolver.Capture();
@@ -783,7 +783,7 @@ public static class RemapEngine
                 resolved.Add(ov);
             }
 
-            try { WriteEngine.WriteInPlace(targetMod, resolved, path, resolver.DataDir); }
+            try { WriteEngine.WriteInPlace(targetMod, resolved, outputPath ?? path, resolver.DataDir); }
             // The localized-target refusal is its own sentence, and the generic arm below would misattribute it.
             catch (LocalizedTargetUnsupportedException ex) { return RepointResult.Fail(ex.Message); }
             catch (Exception ex)
@@ -795,7 +795,7 @@ public static class RemapEngine
         finally { foreach (var d in overlays) { try { d.Dispose(); } catch { /* best-effort; never mask the write result */ } } }
 
         long bytes = 0;
-        try { bytes = new FileInfo(path).Length; } catch { }
+        try { bytes = new FileInfo(outputPath ?? path).Length; } catch { }
         return new RepointResult(true, null, bytes, dict.Count);
     }
 }
