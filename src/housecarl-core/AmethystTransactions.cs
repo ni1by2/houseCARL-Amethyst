@@ -205,14 +205,18 @@ public sealed class AmethystTransactionCoordinator
         if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("Amethyst transaction coordination currently requires Linux advisory locks");
         ValidateRequest(request);
         EnsurePrivateDirectory(_root);
-        var transactions = Path.Combine(_root, "transactions");
-        EnsurePrivateDirectory(transactions);
         var id = Guid.NewGuid().ToString("N");
-        var directory = Path.Combine(transactions, id);
-        Directory.CreateDirectory(directory);
-        SetPrivateDirectory(directory);
-        EnsurePrivateDirectory(Path.Combine(directory, "payloads"));
-        EnsurePrivateDirectory(Path.Combine(directory, "backups"));
+        using (var state = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(_root))
+        {
+            LinuxAnchoredFileSystem.CreateDirectories(state, "transactions");
+            using var transactions = LinuxAnchoredFileSystem.OpenRelativeDirectory(state, "transactions");
+            LinuxAnchoredFileSystem.TryMkdirAt(transactions, id, 0x1c0);
+            using var tx = LinuxAnchoredFileSystem.OpenDirectoryAt(transactions, id);
+            LinuxAnchoredFileSystem.SetMode(tx, 0x1c0);
+            LinuxAnchoredFileSystem.CreateDirectories(tx, "payloads");
+            LinuxAnchoredFileSystem.CreateDirectories(tx, "backups");
+            LinuxAnchoredFileSystem.Sync(transactions);
+        }
         var library = LinuxFileIdentity.Canonical(request.LibraryPath);
         var now = DateTimeOffset.UtcNow;
         var units = request.Units.Select(u => u with { DependsOn = u.DependsOn ?? [] }).ToArray();
@@ -243,21 +247,23 @@ public sealed class AmethystTransactionCoordinator
 
         var artifactId = Guid.NewGuid().ToString("N");
         var payloadRel = $"payloads/{artifactId}.bin";
-        var payload = Path.Combine(TransactionDirectory(transactionId), payloadRel);
-        var (size, hash) = CopyAndHash(preparedContents, payload, createNew: true);
+        var (size, hash) = WritePrivateArtifact(transactionId, payloadRel, preparedContents);
         _fault?.Invoke("after_payload_flush");
 
-        var exists = File.Exists(target);
+        using var anchoredDestination = OpenDestinationParent(journal, target, createParents: false);
+        var original = LinuxAnchoredFileSystem.TryOpenFileAt(anchoredDestination.Parent, anchoredDestination.Leaf);
+        var exists = !original.IsInvalid;
         string? originalIdentity = null, originalHash = null, backupRel = null;
         if (exists)
         {
-            RefuseSymlink(target);
-            var identity = LinuxFileIdentity.Of(target);
+            var identity = LinuxAnchoredFileSystem.Identity(original);
             originalIdentity = IdentityString(identity);
-            originalHash = HashFile(target);
+            originalHash = LinuxAnchoredFileSystem.Hash(original);
             backupRel = $"backups/{artifactId}.bak";
-            CopyFileDurable(target, Path.Combine(TransactionDirectory(transactionId), backupRel));
-            if (HashFile(Path.Combine(TransactionDirectory(transactionId), backupRel)) != originalHash)
+            using (var source = LinuxAnchoredFileSystem.Stream(original, FileAccess.Read))
+                _ = WritePrivateArtifact(transactionId, backupRel, source);
+            if (HashPrivateArtifact(transactionId, backupRel) != originalHash ||
+                IdentityString(LinuxAnchoredFileSystem.Identity(original)) != originalIdentity)
                 throw new IOException("transaction recovery copy did not match the original destination");
         }
         var artifact = new AmethystTransactionArtifact(artifactId, unitId, role, target, exists,
@@ -294,27 +300,52 @@ public sealed class AmethystTransactionCoordinator
             state: AmethystTransactionState.Committing,
             unitState: AmethystUnitState.Committing,
             diagnostic: null);
+        journal = journal with { SafeToRestartAmethyst = false, UpdatedUtc = DateTimeOffset.UtcNow };
+        WriteJournal(journal);
         _fault?.Invoke("after_committing_journal");
         var target = artifact.Destination;
         ValidateDestination(target, journal.LibraryPath, allowMissingLeaf: true);
-        VerifyOriginalUnchanged(artifact);
-        var parent = Path.GetDirectoryName(target)!;
-        Directory.CreateDirectory(parent);
-        ValidateDestination(target, journal.LibraryPath, allowMissingLeaf: true);
-        var sibling = Path.Combine(parent, $".housecarl-{journal.Id}-{artifact.Id}.tmp");
-        if (File.Exists(sibling)) throw new IOException("transaction-owned publication temp already exists; recovery is required");
-        CopyFileDurable(PrivateArtifactPath(transactionId, artifact.PayloadRelativePath!), sibling);
-        VerifyOriginalUnchanged(artifact);
-        try { File.Move(sibling, target, overwrite: artifact.OriginalExisted); }
-        catch
+        using var destination = OpenDestinationParent(journal, target, createParents: true);
+        VerifyOriginalUnchanged(artifact, destination.Parent, destination.Leaf);
+        _fault?.Invoke("after_destination_parent_open");
+        using (var reopened = OpenDestinationParent(journal, target, createParents: false))
+            if (LinuxAnchoredFileSystem.Identity(destination.Parent) != LinuxAnchoredFileSystem.Identity(reopened.Parent))
+                throw new IOException("destination parent was replaced after it was anchored; no publication occurred");
+        var sibling = $".housecarl-{journal.Id}-{artifact.Id}-{Guid.NewGuid():N}.tmp";
+        using (var payload = OpenPrivateArtifact(transactionId, artifact.PayloadRelativePath!))
+        using (var input = LinuxAnchoredFileSystem.Stream(payload, FileAccess.Read))
+        using (var outputHandle = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, sibling, write: true, createNew: true))
+        using (var output = LinuxAnchoredFileSystem.Stream(outputHandle, FileAccess.Write))
+        { input.CopyTo(output); output.Flush(true); LinuxAnchoredFileSystem.Sync(outputHandle); }
+        using (var staged = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, sibling))
         {
-            try { if (File.Exists(sibling)) File.Delete(sibling); } catch { }
-            throw;
+            var stagedHash = LinuxAnchoredFileSystem.Hash(staged);
+            if (stagedHash != artifact.PreparedSha256) throw new IOException("publication staging file does not match the prepared payload");
+            var stagedIdentity = IdentityString(LinuxAnchoredFileSystem.Identity(staged));
+            journal = UpdateArtifact(journal, artifactId, a => a with { CommittedIdentity = stagedIdentity, CommittedSha256 = stagedHash });
+            artifact = journal.Artifacts.Single(a => a.Id == artifactId);
         }
-        SyncDirectory(parent);
-        var committedIdentity = LinuxFileIdentity.Of(target);
-        var committedHash = HashFile(target);
-        if (committedHash != artifact.PreparedSha256)
+        VerifyOriginalUnchanged(artifact, destination.Parent, destination.Leaf);
+        _fault?.Invoke("after_final_destination_check");
+        EnsureDestinationParentStillAnchored(journal, target, destination.Parent);
+        if (artifact.OriginalExisted)
+        {
+            LinuxAnchoredFileSystem.Exchange(destination.Parent, sibling, destination.Leaf);
+            using var old = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, sibling);
+            if (IdentityString(LinuxAnchoredFileSystem.Identity(old)) != artifact.OriginalIdentity || LinuxAnchoredFileSystem.Hash(old) != artifact.OriginalSha256)
+            {
+                LinuxAnchoredFileSystem.Exchange(destination.Parent, sibling, destination.Leaf);
+                LinuxAnchoredFileSystem.Unlink(destination.Parent, sibling);
+                throw new IOException("destination changed at publication; external content was preserved");
+            }
+            LinuxAnchoredFileSystem.Unlink(destination.Parent, sibling);
+        }
+        else LinuxAnchoredFileSystem.Rename(destination.Parent, sibling, destination.Parent, destination.Leaf, noReplace: true);
+        LinuxAnchoredFileSystem.Sync(destination.Parent);
+        using var committed = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, destination.Leaf);
+        var committedIdentity = LinuxAnchoredFileSystem.Identity(committed);
+        var committedHash = LinuxAnchoredFileSystem.Hash(committed);
+        if (committedHash != artifact.PreparedSha256 || IdentityString(committedIdentity) != artifact.CommittedIdentity)
             return MarkRecoveryRequired(journal, $"published destination '{target}' does not match the prepared bytes");
         _fault?.Invoke("after_publish");
 
@@ -387,11 +418,12 @@ public sealed class AmethystTransactionCoordinator
     public AmethystTransactionJournal ReadJournal(string transactionId)
     {
         var id = ParseId(transactionId);
-        if (new DirectoryInfo(TransactionDirectory(id)).LinkTarget is not null)
-            throw new IOException("transaction directory is a symlink; preserve it and inspect manually");
-        var path = Path.Combine(TransactionDirectory(id), "journal.json");
-        if (new FileInfo(path).LinkTarget is not null) throw new IOException("transaction journal is a symlink; preserve it and inspect manually");
-        var bytes = File.ReadAllBytes(path);
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(_root);
+        using var tx = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, $"transactions/{id}");
+        using var handle = LinuxAnchoredFileSystem.OpenFileAt(tx, "journal.json");
+        using var stream = LinuxAnchoredFileSystem.Stream(handle, FileAccess.Read);
+        using var memory = new MemoryStream(); stream.CopyTo(memory);
+        var bytes = memory.ToArray();
         var journal = JsonSerializer.Deserialize<AmethystTransactionJournal>(bytes, Json)
             ?? throw new JsonException("transaction journal is empty");
         if (journal.SchemaVersion != JournalSchema) throw new InvalidOperationException($"transaction journal schema {journal.SchemaVersion} is unsupported; evidence was preserved and mutation is refused");
@@ -443,19 +475,77 @@ public sealed class AmethystTransactionCoordinator
             throw new InvalidOperationException("transaction private artifact escapes state storage");
     }
 
-    string PrivateArtifactPath(string transactionId, string relativePath)
+    SafeFileHandle OpenPrivateArtifact(string transactionId, string relativePath)
     {
-        var id = ParseId(transactionId);
-        var root = TransactionDirectory(id);
-        var full = Path.GetFullPath(Path.Combine(root, relativePath.Replace('/', Path.DirectorySeparatorChar)));
-        if (!full.StartsWith(root + Path.DirectorySeparatorChar, StringComparison.Ordinal))
-            throw new InvalidOperationException("transaction private artifact escapes its transaction directory");
-        var parent = Path.GetDirectoryName(full)!;
-        if (new DirectoryInfo(parent).LinkTarget is not null || new DirectoryInfo(root).LinkTarget is not null)
-            throw new IOException("transaction private artifact directory is a symlink; preserve evidence and inspect manually");
-        if (File.Exists(full) && new FileInfo(full).LinkTarget is not null)
-            throw new IOException("transaction private artifact is a symlink; preserve evidence and inspect manually");
-        return full;
+        ValidatePrivateRelativePath(relativePath, relativePath.StartsWith("payloads/", StringComparison.Ordinal) ? "payloads/" : "backups/");
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(_root);
+        using var tx = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, $"transactions/{ParseId(transactionId)}");
+        var parts = relativePath.Split('/');
+        using var parent = LinuxAnchoredFileSystem.OpenRelativeDirectory(tx, parts[0]);
+        return LinuxAnchoredFileSystem.OpenFileAt(parent, parts[1]);
+    }
+
+    string HashPrivateArtifact(string transactionId, string relativePath)
+    {
+        using var file = OpenPrivateArtifact(transactionId, relativePath);
+        return LinuxAnchoredFileSystem.Hash(file);
+    }
+
+    (long Size, string Sha256) WritePrivateArtifact(string transactionId, string relativePath, Stream source)
+    {
+        ValidatePrivateRelativePath(relativePath, relativePath.StartsWith("payloads/", StringComparison.Ordinal) ? "payloads/" : "backups/");
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(_root);
+        using var tx = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, $"transactions/{ParseId(transactionId)}");
+        var parts = relativePath.Split('/');
+        using var parent = LinuxAnchoredFileSystem.OpenRelativeDirectory(tx, parts[0]);
+        using var file = LinuxAnchoredFileSystem.OpenFileAt(parent, parts[1], write: true, createNew: true);
+        using var output = LinuxAnchoredFileSystem.Stream(file, FileAccess.Write);
+        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
+        var buffer = new byte[128 * 1024]; long size = 0; int read;
+        while ((read = source.Read(buffer, 0, buffer.Length)) > 0)
+        { output.Write(buffer, 0, read); hash.AppendData(buffer, 0, read); size = checked(size + read); }
+        output.Flush(true); LinuxAnchoredFileSystem.Sync(file); LinuxAnchoredFileSystem.Sync(parent);
+        return (size, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
+    }
+
+    sealed class DestinationParent(SafeFileHandle parent, string leaf) : IDisposable
+    {
+        public SafeFileHandle Parent { get; } = parent;
+        public string Leaf { get; } = leaf;
+        public void Dispose() => Parent.Dispose();
+    }
+
+    DestinationParent OpenDestinationParent(AmethystTransactionJournal journal, string destination, bool createParents)
+    {
+        var rootPath = journal.LibraryPath.TrimEnd(Path.DirectorySeparatorChar);
+        var relative = Path.GetRelativePath(rootPath, destination);
+        var parts = relative.Split(Path.DirectorySeparatorChar, StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0 || parts.Any(p => p is "." or ".." || p.Contains('/'))) throw new IOException("unsafe enrolled destination path");
+        var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(rootPath);
+        try
+        {
+            if (StableIdentityString(LinuxAnchoredFileSystem.Identity(root)) != journal.LibraryIdentity)
+                throw new IOException("enrolled library root identity changed; managed write refused");
+            if (parts.Length > 1)
+            {
+                var parentRel = string.Join('/', parts[..^1]);
+                if (createParents) LinuxAnchoredFileSystem.CreateDirectories(root, parentRel);
+                var parent = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, parentRel);
+                root.Dispose();
+                return new DestinationParent(parent, parts[^1]);
+            }
+            return new DestinationParent(root, parts[^1]);
+        }
+        catch { root.Dispose(); throw; }
+    }
+
+    void EnsureDestinationParentStillAnchored(AmethystTransactionJournal journal, string destination, SafeFileHandle heldParent)
+    {
+        using var reopened = OpenDestinationParent(journal, destination, createParents: false);
+        var held = LinuxAnchoredFileSystem.Identity(heldParent);
+        var current = LinuxAnchoredFileSystem.Identity(reopened.Parent);
+        if (held.DeviceMajor != current.DeviceMajor || held.DeviceMinor != current.DeviceMinor || held.Inode != current.Inode)
+            throw new IOException("destination parent changed after it was anchored; managed write refused");
     }
 
     /// <summary>Manage one transaction. No wildcard, implicit replay, or automatic Amethyst/game process control.</summary>
@@ -513,17 +603,14 @@ public sealed class AmethystTransactionCoordinator
         var interruptedUnitIds = journal.Artifacts.Where(a => a.State == "committing").Select(a => a.UnitId).ToHashSet(StringComparer.Ordinal);
         foreach (var artifact in journal.Artifacts.Where(a => interruptedUnitIds.Contains(a.UnitId) && (a.State is "committing" or "committed")).Reverse())
         {
-            var current = File.Exists(artifact.Destination) ? HashFile(artifact.Destination) : null;
-            var currentIdentity = File.Exists(artifact.Destination) ? IdentityString(LinuxFileIdentity.Of(artifact.Destination)) : null;
+            var (current, currentIdentity) = DestinationFingerprint(journal, artifact);
             if ((current == artifact.OriginalSha256 && currentIdentity == artifact.OriginalIdentity && artifact.OriginalExisted) || current is null && !artifact.OriginalExisted)
             {
                 journal = UpdateArtifact(journal, artifact.Id, a => a with { State = "rolled_back" }, unitState: AmethystUnitState.RolledBack);
                 continue;
             }
-            var expectedCommitted = artifact.State == "committed";
-            if (expectedCommitted
-                    ? current != artifact.CommittedSha256 || currentIdentity != artifact.CommittedIdentity
-                    : current != artifact.PreparedSha256)
+            var expectedCommitted = artifact.State == "committed" || artifact.CommittedIdentity is not null;
+            if (!expectedCommitted || current != artifact.CommittedSha256 || currentIdentity != artifact.CommittedIdentity)
             {
                 journal = MarkRecoveryRequired(journal, $"destination '{artifact.Destination}' matches neither recorded old nor new bytes; external content was preserved");
                 diagnostics.Add("Destination differs from the recorded original and prepared hashes; no bytes were changed.");
@@ -552,8 +639,8 @@ public sealed class AmethystTransactionCoordinator
         var diagnostics = new List<string>();
         foreach (var artifact in journal.Artifacts.Where(a => a.State == "committed").Reverse())
         {
-            var current = File.Exists(artifact.Destination) ? HashFile(artifact.Destination) : null;
-            if (current != artifact.CommittedSha256 || IdentityString(LinuxFileIdentity.Of(artifact.Destination)) != artifact.CommittedIdentity)
+            var (current, currentIdentity) = DestinationFingerprint(journal, artifact);
+            if (current != artifact.CommittedSha256 || currentIdentity != artifact.CommittedIdentity)
             {
                 journal = MarkRecoveryRequired(journal, $"destination '{artifact.Destination}' changed after commit; external content was preserved");
                 return Outcome(false, "external_conflict", journal,
@@ -678,100 +765,97 @@ public sealed class AmethystTransactionCoordinator
 
     void RestoreOriginal(string transactionId, AmethystTransactionArtifact artifact, string? expectedCurrentHash, string? expectedIdentity)
     {
+        var journal = ReadJournal(transactionId);
+        using var destination = OpenDestinationParent(journal, artifact.Destination, createParents: false);
+        var leaf = destination.Leaf;
+        var displacedName = $".housecarl-{transactionId}-{artifact.Id}-{Guid.NewGuid():N}.recovery";
         if (!artifact.OriginalExisted)
         {
-            if (File.Exists(artifact.Destination))
-            {
-                if (HashFile(artifact.Destination) != expectedCurrentHash || (expectedIdentity is not null && IdentityString(LinuxFileIdentity.Of(artifact.Destination)) != expectedIdentity))
-                    throw new IOException("destination changed during recovery; external content was preserved");
-                File.Delete(artifact.Destination);
-            }
-            SyncDirectory(Path.GetDirectoryName(artifact.Destination)!);
+            using var marker = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, displacedName, write: true, createNew: true);
+            using var current = LinuxAnchoredFileSystem.TryOpenFileAt(destination.Parent, leaf);
+            if (current.IsInvalid)
+            { LinuxAnchoredFileSystem.Unlink(destination.Parent, displacedName); return; }
+            if (LinuxAnchoredFileSystem.Hash(current) != expectedCurrentHash ||
+                (expectedIdentity is not null && IdentityString(LinuxAnchoredFileSystem.Identity(current)) != expectedIdentity))
+            { LinuxAnchoredFileSystem.Unlink(destination.Parent, displacedName); throw new IOException("destination changed during recovery; external content was preserved"); }
+            EnsureDestinationParentStillAnchored(journal, artifact.Destination, destination.Parent);
+            LinuxAnchoredFileSystem.Exchange(destination.Parent, displacedName, leaf);
+            using var displaced = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, displacedName);
+            if (LinuxAnchoredFileSystem.Hash(displaced) != expectedCurrentHash ||
+                (expectedIdentity is not null && IdentityString(LinuxAnchoredFileSystem.Identity(displaced)) != expectedIdentity))
+            { LinuxAnchoredFileSystem.Exchange(destination.Parent, displacedName, leaf); LinuxAnchoredFileSystem.Unlink(destination.Parent, displacedName); throw new IOException("destination changed at recovery removal; external content was preserved"); }
+            LinuxAnchoredFileSystem.Unlink(destination.Parent, displacedName);
+            LinuxAnchoredFileSystem.Unlink(destination.Parent, leaf);
+            LinuxAnchoredFileSystem.Sync(destination.Parent);
             return;
         }
-        var backup = PrivateArtifactPath(transactionId, artifact.BackupRelativePath
-            ?? throw new InvalidOperationException("recorded original has no recovery copy"));
-        if (HashFile(backup) != artifact.OriginalSha256) throw new IOException("transaction recovery copy is missing or corrupt; original was not replaced");
-        var destination = artifact.Destination;
-        var parent = Path.GetDirectoryName(destination)!;
-        var temp = Path.Combine(parent, $".housecarl-{transactionId}-{artifact.Id}-restore.tmp");
-        CopyFileDurable(backup, temp);
-        if (File.Exists(destination))
-        {
-            var actualHash = HashFile(destination);
-            var actualIdentity = IdentityString(LinuxFileIdentity.Of(destination));
-            if (actualHash != expectedCurrentHash || (expectedIdentity is not null && actualIdentity != expectedIdentity))
-            { File.Delete(temp); throw new IOException("destination changed during recovery; external content was preserved"); }
-        }
-        else if (expectedCurrentHash is not null)
-        { File.Delete(temp); throw new IOException("destination disappeared during recovery; external change was preserved"); }
-        File.Move(temp, destination, overwrite: true);
-        SyncDirectory(parent);
-        if (HashFile(destination) != artifact.OriginalSha256) throw new IOException("restored original hash verification failed");
+        var backupRel = artifact.BackupRelativePath ?? throw new InvalidOperationException("recorded original has no recovery copy");
+        using var backup = OpenPrivateArtifact(transactionId, backupRel);
+        if (LinuxAnchoredFileSystem.Hash(backup) != artifact.OriginalSha256) throw new IOException("transaction recovery copy is missing or corrupt; original was not replaced");
+        using (var input = LinuxAnchoredFileSystem.Stream(backup, FileAccess.Read))
+        using (var temp = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, displacedName, write: true, createNew: true))
+        using (var output = LinuxAnchoredFileSystem.Stream(temp, FileAccess.Write))
+        { input.CopyTo(output); output.Flush(true); LinuxAnchoredFileSystem.Sync(temp); }
+        using var actual = LinuxAnchoredFileSystem.TryOpenFileAt(destination.Parent, leaf);
+        if (actual.IsInvalid || LinuxAnchoredFileSystem.Hash(actual) != expectedCurrentHash ||
+            (expectedIdentity is not null && IdentityString(LinuxAnchoredFileSystem.Identity(actual)) != expectedIdentity))
+        { LinuxAnchoredFileSystem.Unlink(destination.Parent, displacedName); throw new IOException("destination changed during recovery; external content was preserved"); }
+        EnsureDestinationParentStillAnchored(journal, artifact.Destination, destination.Parent);
+        LinuxAnchoredFileSystem.Exchange(destination.Parent, displacedName, leaf);
+        using var displacedOriginal = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, displacedName);
+        if (LinuxAnchoredFileSystem.Hash(displacedOriginal) != expectedCurrentHash ||
+            (expectedIdentity is not null && IdentityString(LinuxAnchoredFileSystem.Identity(displacedOriginal)) != expectedIdentity))
+        { LinuxAnchoredFileSystem.Exchange(destination.Parent, displacedName, leaf); LinuxAnchoredFileSystem.Unlink(destination.Parent, displacedName); throw new IOException("destination changed at recovery publication; external content was preserved"); }
+        LinuxAnchoredFileSystem.Unlink(destination.Parent, displacedName);
+        LinuxAnchoredFileSystem.Sync(destination.Parent);
+        using var restored = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, leaf);
+        if (LinuxAnchoredFileSystem.Hash(restored) != artifact.OriginalSha256) throw new IOException("restored original hash verification failed");
     }
 
-    void VerifyOriginalUnchanged(AmethystTransactionArtifact artifact)
+    (string? Hash, string? Identity) DestinationFingerprint(AmethystTransactionJournal journal, AmethystTransactionArtifact artifact)
     {
+        using var parent = OpenDestinationParent(journal, artifact.Destination, createParents: false);
+        using var file = LinuxAnchoredFileSystem.TryOpenFileAt(parent.Parent, parent.Leaf);
+        return file.IsInvalid ? (null, null) : (LinuxAnchoredFileSystem.Hash(file), IdentityString(LinuxAnchoredFileSystem.Identity(file)));
+    }
+
+    void VerifyOriginalUnchanged(AmethystTransactionArtifact artifact, SafeFileHandle parent, string leaf)
+    {
+        using var current = LinuxAnchoredFileSystem.TryOpenFileAt(parent, leaf);
         if (!artifact.OriginalExisted)
         {
-            if (File.Exists(artifact.Destination) || Directory.Exists(artifact.Destination))
+            if (!current.IsInvalid)
                 throw new IOException($"transaction destination appeared after preflight: '{artifact.Destination}'");
             return;
         }
-        if (!File.Exists(artifact.Destination) || IdentityString(LinuxFileIdentity.Of(artifact.Destination)) != artifact.OriginalIdentity ||
-            HashFile(artifact.Destination) != artifact.OriginalSha256)
+        if (current.IsInvalid || IdentityString(LinuxAnchoredFileSystem.Identity(current)) != artifact.OriginalIdentity ||
+            LinuxAnchoredFileSystem.Hash(current) != artifact.OriginalSha256)
             throw new IOException($"transaction destination changed after preflight: '{artifact.Destination}'");
     }
 
     void WriteJournal(AmethystTransactionJournal journal)
     {
-        var directory = TransactionDirectory(journal.Id);
-        EnsurePrivateDirectory(directory);
-        var journalPath = Path.Combine(directory, "journal.json");
-        var temp = Path.Combine(directory, $"journal.{Guid.NewGuid():N}.tmp");
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(_root);
+        using var directory = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, $"transactions/{ParseId(journal.Id)}");
+        var temp = $"journal.{Guid.NewGuid():N}.tmp";
         var bytes = JsonSerializer.SerializeToUtf8Bytes(journal, Json);
-        using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        { stream.Write(bytes); stream.Flush(flushToDisk: true); }
-        File.Move(temp, journalPath, overwrite: true);
-        SyncDirectory(directory);
+        using (var file = LinuxAnchoredFileSystem.OpenFileAt(directory, temp, write: true, createNew: true))
+        using (var stream = LinuxAnchoredFileSystem.Stream(file, FileAccess.Write))
+        { stream.Write(bytes); stream.Flush(flushToDisk: true); LinuxAnchoredFileSystem.Sync(file); }
+        LinuxAnchoredFileSystem.Rename(directory, temp, directory, "journal.json");
+        LinuxAnchoredFileSystem.Sync(directory);
     }
 
     void WriteReceipt(AmethystTransactionJournal journal)
     {
-        var directory = TransactionDirectory(journal.Id);
-        var temp = Path.Combine(directory, $"receipt.{Guid.NewGuid():N}.tmp");
-        using (var stream = new FileStream(temp, FileMode.CreateNew, FileAccess.Write, FileShare.None))
-        { JsonSerializer.Serialize(stream, journal, Json); stream.Flush(flushToDisk: true); }
-        File.Move(temp, Path.Combine(directory, "receipt.json"), overwrite: true);
-        SyncDirectory(directory);
-    }
-
-    static (long Size, string Sha256) CopyAndHash(Stream source, string destination, bool createNew)
-    {
-        Directory.CreateDirectory(Path.GetDirectoryName(destination)!);
-        using var target = new FileStream(destination, createNew ? FileMode.CreateNew : FileMode.Create,
-            FileAccess.Write, FileShare.None, 128 * 1024, FileOptions.SequentialScan);
-        using var hash = IncrementalHash.CreateHash(HashAlgorithmName.SHA256);
-        var buffer = new byte[128 * 1024];
-        long size = 0;
-        int read;
-        while ((read = source.Read(buffer, 0, buffer.Length)) != 0)
-        { target.Write(buffer, 0, read); hash.AppendData(buffer, 0, read); size = checked(size + read); }
-        target.Flush(flushToDisk: true);
-        SyncDirectory(Path.GetDirectoryName(destination)!);
-        return (size, Convert.ToHexString(hash.GetHashAndReset()).ToLowerInvariant());
-    }
-
-    static void CopyFileDurable(string source, string destination)
-    {
-        using var input = new FileStream(source, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
-        _ = CopyAndHash(input, destination, createNew: true);
-    }
-
-    static string HashFile(string path)
-    {
-        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
-        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(_root);
+        using var directory = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, $"transactions/{ParseId(journal.Id)}");
+        var temp = $"receipt.{Guid.NewGuid():N}.tmp";
+        using (var file = LinuxAnchoredFileSystem.OpenFileAt(directory, temp, write: true, createNew: true))
+        using (var stream = LinuxAnchoredFileSystem.Stream(file, FileAccess.Write))
+        { JsonSerializer.Serialize(stream, journal, Json); stream.Flush(flushToDisk: true); LinuxAnchoredFileSystem.Sync(file); }
+        LinuxAnchoredFileSystem.Rename(directory, temp, directory, "receipt.json");
+        LinuxAnchoredFileSystem.Sync(directory);
     }
 
     static string ValidateDestination(string destination, string allowedRoot, bool allowMissingLeaf)
@@ -874,25 +958,9 @@ public sealed class AmethystTransactionCoordinator
 
     internal static void EnsurePrivateDirectory(string path)
     {
-        Directory.CreateDirectory(path);
-        SetPrivateDirectory(path);
-    }
-
-    static void SetPrivateDirectory(string path)
-    {
-        if (!OperatingSystem.IsLinux()) throw new PlatformNotSupportedException("private Amethyst transaction directories require Linux");
-        if ((File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0 || !Directory.Exists(path))
-            throw new IOException($"transaction state path is not a real directory: '{path}'");
-        File.SetUnixFileMode(path, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
-        SyncDirectory(Path.GetDirectoryName(path)!);
-    }
-
-    static void SyncDirectory(string directory)
-    {
-        var fd = Native.open(directory, Native.O_RDONLY | Native.O_DIRECTORY | Native.O_CLOEXEC | Native.O_NOFOLLOW, 0);
-        if (fd < 0) throw new IOException($"cannot open directory for durability sync '{directory}' (errno {Marshal.GetLastPInvokeError()})");
-        using var handle = new SafeFileHandle((IntPtr)fd, ownsHandle: true);
-        if (Native.fsync(fd) != 0) throw new IOException($"cannot sync directory '{directory}' (errno {Marshal.GetLastPInvokeError()})");
+        using var directory = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(path, create: true);
+        LinuxAnchoredFileSystem.SetMode(directory, 0x1c0);
+        LinuxAnchoredFileSystem.Sync(directory);
     }
 
     internal static class Native

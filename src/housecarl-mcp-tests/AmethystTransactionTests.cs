@@ -183,6 +183,53 @@ public sealed class AmethystTransactionTests
     }
 
     [Fact]
+    public void ParentSymlinkSwapAfterAnchoringCannotRedirectPublication()
+    {
+        using var fixture = new TransactionFixture();
+        var parent = Path.GetDirectoryName(fixture.Destination)!;
+        var moved = parent + ".held";
+        var outside = Path.Combine(fixture.Library, "outside");
+        Directory.CreateDirectory(outside);
+        var coordinator = new AmethystTransactionCoordinator(fixture.State, point =>
+        {
+            if (point != "after_destination_parent_open") return;
+            Directory.Move(parent, moved);
+            Directory.CreateSymbolicLink(parent, outside);
+        });
+        var journal = coordinator.Begin(fixture.Request());
+        using var locks = coordinator.AcquireWriteLocks(fixture.Library, fixture.ManagerLock);
+        using var content = new MemoryStream(Encoding.UTF8.GetBytes("prepared output"));
+        var artifact = coordinator.PrepareArtifact(journal.Id, "unit-1", fixture.Destination, "plugin", content, fixture.Library);
+
+        Assert.Throws<IOException>(() => coordinator.Publish(journal.Id, artifact.Id, locks));
+        Assert.False(File.Exists(Path.Combine(outside, "patch.esp")));
+        Assert.False(File.Exists(Path.Combine(moved, "patch.esp")));
+    }
+
+    [Fact]
+    public void LeafReplacementAfterFinalCheckIsPreserved()
+    {
+        using var fixture = new TransactionFixture();
+        File.WriteAllText(fixture.Destination, "original");
+        var injected = false;
+        var coordinator = new AmethystTransactionCoordinator(fixture.State, point =>
+        {
+            if (point != "after_final_destination_check" || injected) return;
+            injected = true;
+            File.Move(fixture.Destination, fixture.Destination + ".old");
+            File.WriteAllText(fixture.Destination, "external replacement");
+        });
+        var journal = coordinator.Begin(fixture.Request());
+        using var locks = coordinator.AcquireWriteLocks(fixture.Library, fixture.ManagerLock);
+        using var content = new MemoryStream(Encoding.UTF8.GetBytes("prepared output"));
+        var artifact = coordinator.PrepareArtifact(journal.Id, "unit-1", fixture.Destination, "plugin", content, fixture.Library);
+
+        Assert.Throws<IOException>(() => coordinator.Publish(journal.Id, artifact.Id, locks));
+        Assert.Equal("external replacement", File.ReadAllText(fixture.Destination));
+        Assert.Equal("original", File.ReadAllText(fixture.Destination + ".old"));
+    }
+
+    [Fact]
     public void RollbackRequiresRedeployAcknowledgementAndRestoresIndependentBackup()
     {
         using var fixture = new TransactionFixture();
