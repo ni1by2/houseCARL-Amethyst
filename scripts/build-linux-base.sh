@@ -7,6 +7,13 @@ dotnet="${DOTNET:-dotnet}"
 out="$repo/dist/linux-base"
 extension="${AMETHYST_FILEGRAPH_EXTENSION:?Set AMETHYST_FILEGRAPH_EXTENSION to the tested Amethyst API-13 native module}"
 test -f "$extension"
+version="$(python3 - "$repo/plugin/.claude-plugin/plugin.json" <<'PY'
+import json
+import sys
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)["version"])
+PY
+)"
 python3 -I - "$extension" <<'PY'
 import importlib.util
 import sys
@@ -27,7 +34,7 @@ mkdir -p -- "$out/generated" "$out/references" "$out/server"
   "$out/generated" "$out/references"
 "$dotnet" restore "$repo/src/housecarl-mcp" -r linux-x64 --disable-parallel -m:1
 "$dotnet" publish "$repo/src/housecarl-mcp" -c Release -r linux-x64 \
-  --self-contained true --no-restore -p:PublishTrimmed=false -m:1 -o "$out/server"
+  --self-contained true --no-restore -p:PublishTrimmed=false -p:Version="$version" -m:1 -o "$out/server"
 rm -f -- "$out/server"/appsettings*.json
 cp -- "$out/generated/corpus.json" "$out/server/corpus.json"
 cp -- "$extension" "$out/server/amethyst_filegraph.abi3.so"

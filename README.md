@@ -11,7 +11,7 @@ houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders manag
 ### Linux / Amethyst preview
 
 - Linux x64, Python 3.12 or newer, and Amethyst. Version 2.5.4 is the tested stable release. The reader expects filegraph API 13 and database schema 9; other Amethyst versions require compatibility verification even if those numbers match.
-- .NET 9 SDK to build the server and run its tests. The packaged Linux preview bundles the .NET runtime.
+- .NET 9 SDK to build the server and run its tests. The packaged Linux preview bundles the .NET runtime; its required operating-system libraries are listed in the [Linux installation guide](docs/linux-install.md).
 - Rust/C build tools for Amethyst's filegraph; C/C++ build tools are also needed to build the pinned Papyrus utilities.
 - Claude Code or OpenAI Codex to host the MCP server.
 

@@ -6,7 +6,7 @@ The source build and CI target Ubuntu 24.04 x64. Amethyst and its native filegra
 
 - Linux x64, .NET 9 SDK and Python 3.12 or newer.
 - Git, Rust/Cargo, a C compiler and the normal Rust build prerequisites for Amethyst's filegraph.
-- To build Caprica and Champollion from source: Clang/Clang++, CMake, Ninja, curl, zip, unzip and tar.
+- To build Caprica and Champollion from source: Clang/Clang++, Clang's dependency scanner (`clang-tools-18` on Ubuntu 24.04), CMake, Ninja, curl, zip, unzip and tar.
 - Claude Code or OpenAI Codex to run the MCP server.
 
 ## Build the Amethyst native component
@@ -47,3 +47,11 @@ The C# suite builds saved-snapshot fixtures with Amethyst's native producer, usi
 The release recipe targets Ubuntu 24.04 x64 and requires Python 3.12+, the native build tools above, and the Amethyst extension built from the pinned source. Run `scripts/build-linux-package.sh` from the repository root with `AMETHYST_FILEGRAPH_EXTENSION` set to the built module. Package installation, upgrade, rollback, uninstall and selected-Proton acceptance are separate release checks; passing the source CI does not claim those checks have run.
 
 The current Arch-derived development build is useful for development and tests, but its glibc 2.44 native binaries cannot be used for the Ubuntu 24.04 package. Build the distributable native tools on Ubuntu 24.04 x64, where the glibc baseline is 2.39.
+
+After assembling the archive, check the actual packaged server:
+
+```sh
+python3 scripts/probes/check_linux_package.py dist/housecarl-amethyst-linux-x64.tar.gz
+```
+
+This validates the payload hashes, extracts it to a temporary directory, and checks MCP initialization, package version and the published tool list. It uses temporary server configuration and does not register hosts or connect to Amethyst. Add `--installed-prefix /path/to/install` to check an existing installation's active version against the same archive. Installation itself also changes host registrations in the current user's home; custom `--prefix` and `--state-root` paths alone do not isolate those registrations. Use a disposable user or container for installation tests.
