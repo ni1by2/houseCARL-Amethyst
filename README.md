@@ -1,6 +1,6 @@
-# houseCARL
+# houseCARL-Amethyst
 
-houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders managed by Amethyst. It reads Amethyst's saved profile snapshot and gives an AI assistant access to plugin records, game assets, compiled Papyrus, SKSE configuration, and SkyPatcher INI data. It uses [Mutagen](https://github.com/Mutagen-Modding/Mutagen) and runs in Claude Code or OpenAI Codex.
+houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders managed by [Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager). It reads Amethyst's saved profile snapshot and gives an AI assistant access to plugin records, game assets, compiled Papyrus, SKSE configuration, and SkyPatcher INI data. It uses [Mutagen](https://github.com/Mutagen-Modding/Mutagen) and runs in Claude Code or OpenAI Codex.
 
 **IMPORTANT NOTICE:** houseCARL-Amethyst is a vibe-coded project. I am not a dev - I pointed Codex at the original houseCARL and Amethyst projects and asked to make a port. Avick3110, the maintainer of houseCARL, gave me permission to port this to Linux as he doesn't work with Linux. There is an eventual intention to re-factor all of this into Rust, but I want to be clear right now about what this project currently is. While this does work as intended, I am not pretending to have made anything original here; I wanted the functionality created by Avick3110 applied to my own situation, and burned tokens for it. Publishing so that anyone else who wants the same doesn't have to duplicate any token spend or effort. I'm open to all pull-requests and contributions of code.
 
