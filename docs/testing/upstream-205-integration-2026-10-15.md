@@ -1,5 +1,7 @@
 # houseCARL 2.0.5 integration and Linux package checks
 
+The [v2.0.5 Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5) was published as a prerelease on 15 October 2026 from `87e9268dc1052e31343fc8ff5bc014bd53b6c264`, after [PR #10](https://github.com/ni1by2/houseCARL-Amethyst/pull/10) and [PR #11](https://github.com/ni1by2/houseCARL-Amethyst/pull/11). The final verification below supplements the original candidate results; earlier installation/rollback checks were not repeated after the Proton resolver change.
+
 ## Source revisions
 
 - Fork baseline: `7101d549747aebb15b006942ed5ebe2fa0c35233`.
@@ -16,7 +18,7 @@ The merge conflicts were in `read-engine.md`, `select-and-walk.md` and the plugi
 
 Existing predicate tests now assert planning refusals before records are read. For example, `ARememberedVerdictNamesItsOwnNote` becomes `ALinkSideBadPathIsRefusedBeforeAnyTargetIsRead`: invalid paths no longer reach the link-verdict cache. List-key and quantifier assertions likewise move to the planner. These are changes to the tested contract, not platform skips. The previous Linux test-removal audit is unchanged.
 
-## Verification on 15 October 2026
+## Earlier candidate verification on 15 October 2026
 
 | Check | Result |
 |---|---|
@@ -45,8 +47,25 @@ A bare Ubuntu image also exposed a missing ICU prerequisite. Installation guidan
 
 The rollback test proves activation and state retention. The earlier 2.0.4 test package was the known incomplete archive, so this does not claim that its server became runnable after rollback. The final activation was restored to the working 2.0.5 candidate.
 
-## Remaining release acceptance
+## Final release verification
 
-These are local candidate results, not a published release or a hosted CI result for the final commit. Commit and merge the changes, then rebuild the final archive from that committed source and repeat its package check before upload.
+The follow-up added discovery of explicitly selected system-installed Proton runners, including root-level VDF manifests. Independent GitHub Codex reviews found stale server output in the package build and missing root-level manifests in runner discovery. Both findings were corrected before publication.
 
-Acceptance against the user's actual Amethyst profile, desktop host registration on the Arch-derived system, and a real selected-Proton utility run remain separate. No live Skyrim profile, installed mod category, activation or deployment was changed by this integration. The adapter refactor is deferred until after release.
+| Check | Result |
+|---|---|
+| [Fixed-head PR CI](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/38777264531) | 7,218 C# tests passed, 0 failed, 1 Windows-only skip; all 21 Python tests passed; archive startup passed |
+| [Final merged-source CI](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/38779627212) | Passed for `87e9268d`; its tree matched the tested PR head |
+| Focused Steam/Proton resolver cases | All 18 passed, including root-level absolute/relative descriptors and symlink escape refusals |
+| Final Ubuntu 24.04 package build | Seeded stale output removed; payload hashes, native API 13/schema 9, MCP version 2.0.5 and 34 tools, and archive checksum passed |
+| Final archive installed on the Arch-derived host | Isolated home, Claude Code/Codex registration and installed-server startup passed without a host .NET SDK |
+| Real selected-Proton utility execution | BSArch pack/list/extract passed under Proton CachyOS with a copied prefix and synthetic inputs; extracted bytes matched the source, including a source path with spaces and Unicode |
+| Input preservation | All 14 original synthetic profile/source files unchanged; eight monitored live configuration/prefix files unchanged; outputs remained in disposable staging |
+| Publication | Public prerelease, three assets with matching server-side SHA-256 digests, tag at `87e9268d`, and unauthenticated checksum download verified |
+
+The final archive is 64,413,479 bytes with SHA-256 `dc0e7a7aa859943a5ceb461c0c5c0da38fe3802ebb310865e4b1dc0615cab382`. The Ubuntu/glibc 2.39 native utilities were reused from the previously verified pinned build; they were not rebuilt for the Proton-only change.
+
+The isolated acceptance used the installed MCP server, a synthetic catalog created with Amethyst's native producer, copied BSArch/game executables and a copied native Steam prefix. The game was never launched. The selected runner was the system-installed `proton-cachyos-slr` package `1:11.0.20261005-1`. Its actual invocation was verified through an execution trace. A private virtual display supported the headless Wine run; the host and live Skyrim paths were mounted read-only. Only the copied prefix was migrated by Proton. Raw logs, prefix contents and copied executables are private test artifacts and are not release assets.
+
+## Scope and limits
+
+No live Steam mapping, Skyrim profile/prefix, installed mod category/order, host MCP registration, activation or deployment was changed. The test establishes isolated package/registration/staging and selected-Proton archive behavior. It does not establish Creation Kit compiler compatibility with that runner, the actual manager GUI workflow, live-profile deployment or gameplay. Windows execution was not tested. The adapter refactor remains deferred.

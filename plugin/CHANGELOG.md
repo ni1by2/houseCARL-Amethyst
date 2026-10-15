@@ -1,5 +1,14 @@
 ﻿# Changelog
 
+## 2.0.5 — Linux preview (15 October 2026)
+
+- Published the first downloadable Linux x64 preview, integrating upstream houseCARL 2.0.5 with Amethyst saved-snapshot access and guarded staging writes.
+- Included the complete self-contained .NET runtime, pinned native filegraph and Papyrus utilities, references, skills, installer, checksums and source/license material. Package builds clear stale server output before publishing.
+- Added discovery of explicitly selected system-installed Proton tools, including Proton CachyOS and root-level VDF manifests. Missing selections and ambiguous runners refuse without initializing or changing a prefix.
+- Final CI, archive verification and isolated Claude Code/Codex installation plus BSArch pack/list/extract under Proton CachyOS passed. Windows execution, the actual manager GUI workflow, live-profile deployment and gameplay were not tested.
+
+See the [installation guide](../docs/linux-install.md), [verification record](../docs/testing/upstream-205-integration-2026-10-15.md) and [published release](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5). The adapter refactor remains deferred.
+
 ## Early Amethyst port — historical notes (July 2026)
 
 These notes describe the superseded filemap implementation. Current saved-snapshot behavior and release limits are documented in the README and Linux guides.

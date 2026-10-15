@@ -1,0 +1,1 @@
+- The README and Linux guides now link to the published 2.0.5 preview, with download verification, connection setup and completed acceptance results. Historical planning and candidate results are labeled separately from current release status.

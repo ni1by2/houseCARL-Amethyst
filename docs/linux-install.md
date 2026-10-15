@@ -1,6 +1,22 @@
-# Linux package candidate
+# Install the Linux 2.0.5 preview
 
-The Linux x64 package is a preview candidate targeting Ubuntu 24.04 x64. Its Amethyst snapshot helper requires Python 3.12 or newer. Version 2.0.5 passed installation and startup checks in a fresh Ubuntu container and archive startup on the Arch-derived development host; full desktop-host acceptance remains separate.
+Version [2.0.5 is published as a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5), targeting Ubuntu 24.04 x64. Its Amethyst snapshot helper requires Python 3.12 or newer. The final package also passed installation, isolated Claude Code/Codex registration and a Proton CachyOS utility round trip on an Arch-derived host. See the [verification record](testing/upstream-205-integration-2026-10-15.md) for the checks and their limits.
+
+Download these three assets into the same directory:
+
+- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/housecarl-amethyst-linux-x64.tar.gz)
+- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/housecarl-amethyst-linux-x64.tar.gz.sha256)
+- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/install-linux.py)
+
+Verify the archive before installation:
+
+```sh
+sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256
+```
+
+The published archive's SHA-256 is `dc0e7a7aa859943a5ceb461c0c5c0da38fe3802ebb310865e4b1dc0615cab382`. Its bundled documentation records the candidate state at the release commit; use this online guide for the completed release status.
+
+## Runtime requirements
 
 The package includes .NET itself; it also needs the operating system's runtime libraries. On Ubuntu 24.04, install Python and those libraries with:
 
@@ -9,6 +25,8 @@ sudo apt-get install python3 ca-certificates libc6 libgcc-s1 libgssapi-krb5-2 li
 ```
 
 ICU is needed even for MCP startup. A build machine may already have it through Clang, while a minimal Ubuntu installation does not. The .NET SDK and C++ build tools are unnecessary for running the package.
+
+## Install, update and remove
 
 The offline installer keeps program versions under `~/.local/opt/housecarl-amethyst/versions`, activating them through `current` and `previous` links. It validates the archive manifest and every payload hash before activation, refuses unknown or pending transaction journals, and retains user configuration and transaction state outside the program directory. `rollback` switches to the previous owned version. `uninstall` removes only validated owned versions and host registration; modified or unrelated host settings remain.
 
@@ -22,10 +40,34 @@ The installer registers the server for Claude Code in `~/.claude.json` and Codex
 
 Use `python3 install-linux.py rollback` to switch back or `python3 install-linux.py uninstall` to remove the program. Both actions refuse to switch or remove files while a transaction journal is pending, corrupt, or newer than the package understands. The installer does not remove Amethyst data, houseCARL transaction recovery data, unrelated settings, or modified skill directories.
 
+To update from an earlier package, run the new release's installer with its archive using the same `install` command. The previous activation is retained for rollback. Installing a version that is already present refuses to overwrite it.
+
+## Select an Amethyst connection
+
+Installation registers the MCP server; it does not select or change an Amethyst profile. After restarting Claude Code or Codex, select your existing schema-v1 connection manifest with `housecarl_set_amethyst_connection`, passing its absolute path as `manifest_path` and explicitly setting `filegraph_mode="saved-snapshot"`.
+
+If you do not have a manifest, save a separate JSON file using the following structure and replace every placeholder with an existing absolute native path:
+
+```json
+{
+  "schemaVersion": 1,
+  "manager": "amethyst",
+  "gameId": "skyrim_se",
+  "profileRoot": "/absolute/path/to/Amethyst/staging-root",
+  "gameConfigDir": "/absolute/path/to/AmethystModManager/games/skyrim_se",
+  "pathsFile": "/absolute/path/to/AmethystModManager/games/skyrim_se/paths.json",
+  "deployStateFile": "/absolute/path/to/AmethystModManager/games/skyrim_se/deploy_state.json"
+}
+```
+
+Use Amethyst's existing configuration paths. `profileRoot` is the staging root containing `mods` and `profiles`, not an individual profile directory; it must match a nonempty `staging_path` in `paths.json`. Both JSON configuration files must reside directly inside `gameConfigDir`. Do not edit those manager files to fit the example. The server validates the selected saved filegraph and refuses incompatible or incomplete inputs. Automatic connection discovery is also available through the [source-only setup command](linux-development.md#create-a-connection-manifest-from-source), which requires the .NET SDK.
+
+Saved-snapshot responses identify the profile and generation used and warn that changes since Amethyst's last Refresh may be missing. Writes stay in staging until you review, Refresh, enable and deploy them through Amethyst. A later deployment check verifies which file wins; a successful staging write alone does not establish game visibility.
+
 ## Release limits
 
 Windows utilities such as the Creation Kit compiler and BSArch require Skyrim SE's explicit Steam compatibility-tool selection and the matching Amethyst prefix. Runner discovery includes Steam library installations, the user's `compatibilitytools.d`, and `/usr/share/steam/compatibilitytools.d` and `/usr/local/share/steam/compatibilitytools.d` for distro packages such as Proton CachyOS. These directories can contain a tool subdirectory or a root-level `.vdf` manifest with a relative or absolute installation path. Relative paths must stay inside the manifest's directory after resolving symlinks. Multiple matching runner copies refuse instead of guessing. Discovery reads configuration only; it does not select a tool in Steam, create a prefix or reconfigure an existing prefix.
 
-The package build fetches the pinned Caprica and Champollion source commits, builds them with the pinned vcpkg dependency baseline, smoke-tests a synthetic compile/decompile round trip, and stages source archives and license notices. The [2.0.5 integration record in the source repository](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/testing/upstream-205-integration-2026-10-15.md) records the Linux suite, Ubuntu build, clean installation, candidate upgrade/rollback and archive startup checks.
+The package build fetches the pinned Caprica and Champollion source commits, builds them with the pinned vcpkg dependency baseline, smoke-tests a synthetic compile/decompile round trip, and stages source archives and license notices. The [2.0.5 verification record](testing/upstream-205-integration-2026-10-15.md) separates earlier clean Ubuntu install/upgrade/rollback checks from final-source CI, package verification and isolated Arch-derived installation/Proton acceptance.
 
-A real selected-Proton utility run and acceptance against the user's Amethyst installation remain outstanding. The Arch check covers the extracted server and native filegraph module; it does not establish desktop host registration or deployment behaviour. Windows execution is outside this Linux release's supported target. Package verification does not prove which outputs the game currently loads.
+The selected-Proton check used real BSArch with Proton CachyOS, a copied prefix and synthetic inputs. It verified pack/list/extract and byte equality without touching the live profile. It does not establish Creation Kit compiler compatibility with that runner. Flatpak/custom Steam runner layouts are unsupported. Windows execution, the actual manager GUI workflow, live-profile deployment and gameplay were not tested. Package verification does not prove which outputs the game currently loads.
