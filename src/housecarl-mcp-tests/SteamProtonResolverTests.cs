@@ -15,7 +15,7 @@ public sealed class SteamProtonResolverTests
         var fixture = CreateSteam(world);
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
-        var selected = SteamProtonResolver.Resolve(snapshot, fixture.Home);
+        var selected = SteamProtonResolver.Resolve(snapshot, fixture.Home, []);
 
         Assert.Equal("489830", selected.AppId);
         Assert.Equal(fixture.ToolName, selected.ToolName);
@@ -46,7 +46,7 @@ public sealed class SteamProtonResolverTests
         File.WriteAllText(Path.Combine(fixture.CompatData, "config_info"), "proton_test\n");
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
-        var error = Assert.Throws<InvalidOperationException>(() => SteamProtonResolver.Resolve(snapshot, fixture.Home));
+        var error = Assert.Throws<InvalidOperationException>(() => SteamProtonResolver.Resolve(snapshot, fixture.Home, []));
         Assert.Contains("CompatToolMapping", error.Message);
         Assert.Contains("config_info", error.Message);
     }
@@ -64,7 +64,7 @@ public sealed class SteamProtonResolverTests
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
         Assert.Contains("multiple installed runners", Assert.Throws<InvalidOperationException>(
-            () => SteamProtonResolver.Resolve(snapshot, fixture.Home)).Message);
+            () => SteamProtonResolver.Resolve(snapshot, fixture.Home, [])).Message);
     }
 
     [Fact]
@@ -78,7 +78,7 @@ public sealed class SteamProtonResolverTests
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
         Assert.Contains("unsupported prefix layout", Assert.Throws<InvalidOperationException>(
-            () => SteamProtonResolver.Resolve(snapshot, fixture.Home)).Message);
+            () => SteamProtonResolver.Resolve(snapshot, fixture.Home, [])).Message);
     }
 
     [Fact]
@@ -88,7 +88,7 @@ public sealed class SteamProtonResolverTests
         using var world = new AmethystSnapshotWorld();
         var fixture = CreateSteam(world, createRootDrive: false);
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
-        var selected = SteamProtonResolver.Resolve(snapshot, fixture.Home);
+        var selected = SteamProtonResolver.Resolve(snapshot, fixture.Home, []);
 
         var error = Assert.Throws<InvalidOperationException>(() => selected.TranslatePath("/etc/passwd"));
         Assert.Contains("not reachable through a drive mapping", error.Message);
@@ -102,7 +102,7 @@ public sealed class SteamProtonResolverTests
         var fixture = CreateSteam(world);
         var dosDevices = Path.Combine(fixture.Prefix, "dosdevices");
         Directory.CreateSymbolicLink(Path.Combine(dosDevices, "Z:"), "/tmp");
-        var selected = SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home);
+        var selected = SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, []);
 
         Assert.Contains("multiple host mappings for drive Z", Assert.Throws<InvalidOperationException>(
             () => selected.TranslatePath("/tmp")).Message);
@@ -118,7 +118,7 @@ public sealed class SteamProtonResolverTests
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
         Assert.Contains("effective Skyrim SE game path", Assert.Throws<InvalidOperationException>(
-            () => SteamProtonResolver.Resolve(snapshot, fixture.Home)).Message);
+            () => SteamProtonResolver.Resolve(snapshot, fixture.Home, [])).Message);
     }
 
     [Fact]
@@ -132,7 +132,7 @@ public sealed class SteamProtonResolverTests
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
         Assert.Contains("unsupported or malformed bytes", Assert.Throws<InvalidOperationException>(
-            () => SteamProtonResolver.Resolve(snapshot, fixture.Home)).Message);
+            () => SteamProtonResolver.Resolve(snapshot, fixture.Home, [])).Message);
     }
 
     [Theory]
@@ -145,7 +145,7 @@ public sealed class SteamProtonResolverTests
         var fixture = CreateSteam(world, toolName: toolName, includeDescriptor: false, toolDirectoryName: directory);
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
-        var selected = SteamProtonResolver.Resolve(snapshot, fixture.Home);
+        var selected = SteamProtonResolver.Resolve(snapshot, fixture.Home, []);
 
         Assert.Equal(toolName, selected.ToolName);
         Assert.EndsWith(directory, selected.ToolDirectory, StringComparison.Ordinal);
@@ -166,7 +166,83 @@ public sealed class SteamProtonResolverTests
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
 
         Assert.Contains("no matching installed Proton", Assert.Throws<InvalidOperationException>(
-            () => SteamProtonResolver.Resolve(snapshot, fixture.Home)).Message);
+            () => SteamProtonResolver.Resolve(snapshot, fixture.Home, [])).Message);
+    }
+
+    [Fact]
+    public void ResolvesSelectedToolFromSystemCompatibilityDirectory()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var world = new AmethystSnapshotWorld();
+        var fixture = CreateSteam(world, toolName: "proton-cachyos-slr");
+        var systemRoot = Path.Combine(world.Root, "usr", "share", "steam", "compatibilitytools.d");
+        var installed = Path.Combine(systemRoot, fixture.ToolName);
+        Directory.CreateDirectory(systemRoot);
+        Directory.Move(fixture.ToolDirectory, installed);
+
+        var selected = SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, [systemRoot]);
+
+        Assert.Equal(fixture.ToolName, selected.ToolName);
+        Assert.Equal(Path.Combine(installed, "proton"), selected.ProtonExecutable);
+        Assert.Equal(fixture.Prefix, selected.PrefixPath);
+        Assert.Equal(fixture.CompatData, selected.CompatDataPath);
+    }
+
+    [Fact]
+    public void RefusesDistinctLibraryAndSystemCopiesOfTheSelectedTool()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var world = new AmethystSnapshotWorld();
+        var fixture = CreateSteam(world);
+        var systemRoot = Path.Combine(world.Root, "usr", "local", "share", "steam", "compatibilitytools.d");
+        var installed = Path.Combine(systemRoot, fixture.ToolName);
+        Directory.CreateDirectory(installed);
+        File.Copy(Path.Combine(fixture.ToolDirectory, "compatibilitytool.vdf"), Path.Combine(installed, "compatibilitytool.vdf"));
+        File.Copy(fixture.Proton, Path.Combine(installed, "proton"));
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, [systemRoot]));
+
+        Assert.Contains("multiple installed runners", error.Message);
+    }
+
+    [Fact]
+    public void SystemToolDoesNotSupplyAMissingSkyrimMapping()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var world = new AmethystSnapshotWorld();
+        var fixture = CreateSteam(world, includeMapping: false);
+        var systemRoot = Path.Combine(world.Root, "system-tools");
+        Directory.CreateDirectory(systemRoot);
+        Directory.Move(fixture.ToolDirectory, Path.Combine(systemRoot, fixture.ToolName));
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, [systemRoot]));
+
+        Assert.Contains("no current CompatToolMapping", error.Message);
+    }
+
+    [Fact]
+    public void RejectsSystemToolInstallPathEscapingThroughSymlinkedParent()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var world = new AmethystSnapshotWorld();
+        var fixture = CreateSteam(world);
+        var systemRoot = Path.Combine(world.Root, "system-tools");
+        var installed = Path.Combine(systemRoot, fixture.ToolName);
+        Directory.CreateDirectory(systemRoot);
+        Directory.Move(fixture.ToolDirectory, installed);
+        var outside = Path.Combine(world.Root, "outside-tool");
+        Directory.CreateDirectory(outside);
+        File.WriteAllText(Path.Combine(outside, "proton"), "#!/bin/sh\nexit 0\n");
+        Directory.CreateSymbolicLink(Path.Combine(installed, "linked"), outside);
+        File.WriteAllText(Path.Combine(installed, "compatibilitytool.vdf"),
+            $"\"compatibilitytools\" {{ \"compat_tools\" {{ \"{fixture.ToolName}\" {{ \"install_path\" \"linked\" }} }} }}");
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, [systemRoot]));
+
+        Assert.Contains("no matching installed Proton", error.Message);
     }
 
     sealed record SteamFixture(string Home, string SteamRoot, string Library, string ToolName,

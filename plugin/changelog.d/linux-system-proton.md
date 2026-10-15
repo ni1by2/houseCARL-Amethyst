@@ -1,0 +1,1 @@
+- Linux now finds explicitly selected Proton builds installed in the system's Steam compatibility-tool directories, including distro-packaged Proton CachyOS. Missing Skyrim selections and ambiguous runner copies still refuse; discovery never initializes or modifies a prefix.
