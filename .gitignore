@@ -63,6 +63,9 @@ write-output/
 ## the plugin SOURCE lives in plugin/ (tracked). Never source-of-truth.
 dist/
 
+## Temporary checkout used by the Linux CI job to build Amethyst's pinned native filegraph.
+_ci/
+
 ## Shippable release zip(s) - release/houseCARL-<ver>.zip, packed from dist/ by
 ## scripts/build-plugin.ps1. (Already matched by the [Rr]elease/ rule above; listed for intent.)
 ## Build artifact, reproducible on demand; never source-of-truth.

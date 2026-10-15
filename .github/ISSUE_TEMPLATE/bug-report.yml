@@ -33,6 +33,8 @@ body:
     id: environment
     attributes:
       label: Environment (where relevant)
-      description: Skyrim SE version, MO2 or manual install, rough load-order size.
+      description: >-
+        Manager (Amethyst or MO2), manager version, Linux distribution/version or Windows version,
+        Skyrim SE runtime, and rough load-order size. Scrub local paths and usernames.
     validations:
       required: false

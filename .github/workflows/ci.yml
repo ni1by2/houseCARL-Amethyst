@@ -171,3 +171,65 @@ jobs:
             src/housecarl-mcp-tests/TestResults/**/Sequence_*.xml
             coverage/**/Sequence_*.xml
           if-no-files-found: ignore
+
+  linux-amethyst:
+    name: Linux / Amethyst build and tests
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Check out houseCARL-Amethyst
+        uses: actions/checkout@v7
+
+      - name: Set up .NET 9
+        uses: actions/setup-dotnet@v6
+        with:
+          dotnet-version: '9.0.x'
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Cache pinned native-tool downloads
+        uses: actions/cache@v6
+        with:
+          path: dist/vcpkg-downloads
+          key: linux-tools-${{ runner.os }}-${{ hashFiles('scripts/native-tools.lock.json', 'scripts/vcpkg-linux-tools.json') }}
+
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes clang cmake ninja-build zip unzip curl tar
+
+      - name: Check out the tested Amethyst filegraph source
+        uses: actions/checkout@v7
+        with:
+          repository: ChrisDKN/Amethyst-Mod-Manager
+          ref: edde06e518c0a3ca5ba47a8bbf065c4ecc4a8f92
+          path: _ci/amethyst-filegraph-source
+
+      - name: Build Amethyst's pinned native filegraph
+        working-directory: _ci/amethyst-filegraph-source
+        run: |
+          native/amethyst_filegraph/build.sh
+          test -s src/amethyst_filegraph.abi3.so
+          echo "AMETHYST_FILEGRAPH_EXTENSION=$GITHUB_WORKSPACE/_ci/amethyst-filegraph-source/src/amethyst_filegraph.abi3.so" >> "$GITHUB_ENV"
+
+      - name: Build pinned Caprica and Champollion
+        run: python3 scripts/build-linux-tools.py
+
+      - name: Build the whole solution (Release)
+        run: dotnet build housecarl.sln --configuration Release
+
+      - name: Tests — Linux / Amethyst suite, with native tools
+        run: dotnet test src/housecarl-mcp-tests --configuration Release --no-build --logger "trx;LogFileName=linux-amethyst.trx"
+
+      - name: Tests — Linux installer and package
+        run: python3 -m unittest discover -s scripts/tests -v
+
+      - name: Upload Linux test results
+        if: ${{ always() }}
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-amethyst-test-results
+          path: src/housecarl-mcp-tests/TestResults/**/linux-amethyst.trx
+          if-no-files-found: ignore

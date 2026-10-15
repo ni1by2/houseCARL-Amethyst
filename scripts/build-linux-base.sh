@@ -31,8 +31,34 @@ mkdir -p -- "$out/generated" "$out/references" "$out/server"
 rm -f -- "$out/server"/appsettings*.json
 cp -- "$out/generated/corpus.json" "$out/server/corpus.json"
 cp -- "$extension" "$out/server/amethyst_filegraph.abi3.so"
+cp -- "$repo/src/housecarl-core/amethyst_snapshot.py" "$out/server/amethyst_snapshot.py"
+
+# Keep the native filegraph contract and the Python adapter pinned together. The
+# helper checks the loaded extension at runtime; this build-time check catches a
+# copied helper from a stale source tree before an archive can be assembled.
+python3 -I - "$out/server/amethyst_snapshot.py" <<'PY'
+import ast
+import pathlib
+import sys
+
+path = pathlib.Path(sys.argv[1])
+tree = ast.parse(path.read_text(encoding="utf-8"), filename=str(path))
+contracts = {
+    node.targets[0].id: node.value.value
+    for node in tree.body
+    if isinstance(node, ast.Assign)
+    and len(node.targets) == 1
+    and isinstance(node.targets[0], ast.Name)
+    and isinstance(node.value, ast.Constant)
+}
+if contracts.get("NATIVE_API") != 13 or contracts.get("NATIVE_SCHEMA") != 9:
+    raise SystemExit("snapshot helper contract mismatch: expected native API 13 / schema 9")
+if not any(isinstance(node, ast.FunctionDef) and node.name == "read_snapshot" for node in tree.body):
+    raise SystemExit("snapshot helper is missing read_snapshot")
+PY
 
 test -x "$out/server/housecarl-mcp"
 test -f "$out/server/libhostfxr.so"
 test -s "$out/server/corpus.json"
+test -s "$out/server/amethyst_snapshot.py"
 echo "Linux integration build: $out/server"
