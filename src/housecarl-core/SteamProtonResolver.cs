@@ -152,8 +152,12 @@ public static class SteamProtonResolver
         var customRoots = systemToolRoots.Append(Path.Combine(steamRoot, "compatibilitytools.d"));
         foreach (var customRoot in customRoots)
             if (Directory.Exists(customRoot) && new DirectoryInfo(customRoot).LinkTarget is null)
+            {
                 foreach (var directory in Directory.EnumerateDirectories(customRoot))
                     AddDescriptorMatch(steamRoot, directory, toolName, matches);
+                foreach (var descriptor in Directory.EnumerateFiles(customRoot, "*.vdf"))
+                    AddDescriptorMatch(steamRoot, customRoot, toolName, matches, descriptor);
+            }
         if (BuiltInToolDirectory(toolName) is { } builtInDirectory)
             foreach (var library in libraries)
             {
@@ -182,23 +186,23 @@ public static class SteamProtonResolver
     }
 
     static void AddDescriptorMatch(string library, string directory, string requestedTool,
-        List<(string Library, string Directory, string Proton)> matches)
+        List<(string Library, string Directory, string Proton)> matches, string? rootManifest = null)
     {
         if (new DirectoryInfo(directory).LinkTarget is not null) return;
-        var descriptor = Path.Combine(directory, "compatibilitytool.vdf");
+        var descriptor = rootManifest ?? Path.Combine(directory, "compatibilitytool.vdf");
         if (!File.Exists(descriptor) || new FileInfo(descriptor).LinkTarget is not null) return;
         try
         {
             var tools = Child(Child(ReadVdf(descriptor, "compatibilitytool.vdf"), "compatibilitytools"), "compat_tools");
             if (!tools.TryGetValue(requestedTool, out var selected) || selected.Children is null) return;
             var installPath = Text(selected.Children, "install_path");
-            if (string.IsNullOrWhiteSpace(installPath) || Path.IsPathRooted(installPath)) return;
+            if (string.IsNullOrWhiteSpace(installPath) || (rootManifest is null && Path.IsPathRooted(installPath))) return;
             var canonicalRoot = CanonicalDirectory(directory);
             var toolDirectory = Path.GetFullPath(Path.Combine(canonicalRoot, installPath));
             if (!Directory.Exists(toolDirectory) || new DirectoryInfo(toolDirectory).LinkTarget is not null) return;
             // install_path may traverse symlinked intermediate components even when the leaf itself is ordinary.
             toolDirectory = CanonicalDirectory(toolDirectory);
-            if (!IsUnder(canonicalRoot, toolDirectory)) return;
+            if (!Path.IsPathFullyQualified(installPath) && !IsUnder(canonicalRoot, toolDirectory)) return;
             var proton = Path.Combine(toolDirectory, "proton");
             if (File.Exists(proton) && new FileInfo(proton).LinkTarget is null)
                 matches.Add((library, toolDirectory, Path.GetFullPath(proton)));
@@ -224,16 +228,12 @@ public static class SteamProtonResolver
 
     static string CanonicalDirectory(string path)
     {
-        var info = new DirectoryInfo(Path.GetFullPath(path));
-        var target = info.ResolveLinkTarget(returnFinalTarget: true);
-        return Path.TrimEndingDirectorySeparator(Path.GetFullPath(target?.FullName ?? info.FullName));
+        return Path.TrimEndingDirectorySeparator(LinuxFileIdentity.Canonical(Path.GetFullPath(path)));
     }
 
     static string CanonicalFile(string path)
     {
-        var info = new FileInfo(path);
-        var target = info.ResolveLinkTarget(returnFinalTarget: true);
-        return Path.GetFullPath(target?.FullName ?? info.FullName);
+        return LinuxFileIdentity.Canonical(Path.GetFullPath(path));
     }
 
     static Dictionary<string, VdfValue> ReadVdf(string path, string label)
