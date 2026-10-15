@@ -206,6 +206,48 @@ public sealed class SteamProtonResolverTests
         Assert.Contains("multiple installed runners", error.Message);
     }
 
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ResolvesRootLevelManifestWithRelativeOrAbsoluteInstallPath(bool absolute)
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var world = new AmethystSnapshotWorld();
+        var fixture = CreateSteam(world);
+        var systemRoot = Path.Combine(world.Root, "system-tools");
+        var installed = absolute ? Path.Combine(world.Root, "opt", fixture.ToolName) : Path.Combine(systemRoot, fixture.ToolName);
+        Directory.CreateDirectory(systemRoot);
+        Directory.CreateDirectory(Path.GetDirectoryName(installed)!);
+        Directory.Move(fixture.ToolDirectory, installed);
+        File.Delete(Path.Combine(installed, "compatibilitytool.vdf"));
+        var installPath = absolute ? installed : fixture.ToolName;
+        File.WriteAllText(Path.Combine(systemRoot, "selected.vdf"),
+            $"\"compatibilitytools\" {{ \"compat_tools\" {{ \"{fixture.ToolName}\" {{ \"install_path\" \"{Escape(installPath)}\" }} }} }}");
+
+        var selected = SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, [systemRoot]);
+
+        Assert.Equal(Path.Combine(installed, "proton"), selected.ProtonExecutable);
+        Assert.Equal(fixture.Prefix, selected.PrefixPath);
+    }
+
+    [Fact]
+    public void RejectsRootManifestRelativePathOutsideCompatibilityDirectory()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var world = new AmethystSnapshotWorld();
+        var fixture = CreateSteam(world);
+        var systemRoot = Path.Combine(world.Root, "system-tools");
+        Directory.CreateDirectory(systemRoot);
+        Directory.Move(fixture.ToolDirectory, Path.Combine(world.Root, "outside-tool"));
+        File.WriteAllText(Path.Combine(systemRoot, "selected.vdf"),
+            $"\"compatibilitytools\" {{ \"compat_tools\" {{ \"{fixture.ToolName}\" {{ \"install_path\" \"../outside-tool\" }} }} }}");
+
+        var error = Assert.Throws<InvalidOperationException>(() =>
+            SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, [systemRoot]));
+
+        Assert.Contains("no matching installed Proton", error.Message);
+    }
+
     [Fact]
     public void SystemToolDoesNotSupplyAMissingSkyrimMapping()
     {
@@ -233,11 +275,11 @@ public sealed class SteamProtonResolverTests
         Directory.CreateDirectory(systemRoot);
         Directory.Move(fixture.ToolDirectory, installed);
         var outside = Path.Combine(world.Root, "outside-tool");
-        Directory.CreateDirectory(outside);
-        File.WriteAllText(Path.Combine(outside, "proton"), "#!/bin/sh\nexit 0\n");
+        Directory.CreateDirectory(Path.Combine(outside, "runner"));
+        File.WriteAllText(Path.Combine(outside, "runner", "proton"), "#!/bin/sh\nexit 0\n");
         Directory.CreateSymbolicLink(Path.Combine(installed, "linked"), outside);
         File.WriteAllText(Path.Combine(installed, "compatibilitytool.vdf"),
-            $"\"compatibilitytools\" {{ \"compat_tools\" {{ \"{fixture.ToolName}\" {{ \"install_path\" \"linked\" }} }} }}");
+            $"\"compatibilitytools\" {{ \"compat_tools\" {{ \"{fixture.ToolName}\" {{ \"install_path\" \"linked/runner\" }} }} }}");
 
         var error = Assert.Throws<InvalidOperationException>(() =>
             SteamProtonResolver.Resolve(AmethystSavedSnapshot.Capture(world.Manifest), fixture.Home, [systemRoot]));
