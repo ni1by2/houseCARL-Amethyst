@@ -10,7 +10,7 @@ using Mutagen.Bethesda.Strings;
 namespace HousecarlGenerator;
 
 /// <summary>
-/// Probe for the localized-strings read fix (Heisen 2026-06-24): a localized DLC master resolved to an MO2
+/// Probe for the localized-strings read fix (Heisen 2026-06-24): a localized DLC master resolved to a staged
 /// mod folder with no adjacent Strings/BSA (the "Cleaned Base Game Masters" pattern) reads its FULL/Name EMPTY
 /// through the bare <c>CreateFromBinaryOverlay(path, release)</c> overlay — Mutagen's per-plugin strings lookup
 /// only scans the plugin's own folder, so cross-plugin strings (dragonborn strings live in Skyrim - Interface.bsa
@@ -24,7 +24,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator strings-resolve-probe &lt;cleaned-plugin.esm&gt; &lt;stockgame-data-dir&gt; [nameSubstr]
 /// </summary>
-public static class StringsResolveProbe
+internal static class StringsResolveProbe
 {
     public static int Run(string[] args)
     {

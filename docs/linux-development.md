@@ -19,6 +19,16 @@ git -C ../Amethyst-Mod-Manager checkout edde06e518c0a3ca5ba47a8bbf065c4ecc4a8f92
 (cd ../Amethyst-Mod-Manager && native/amethyst_filegraph/build.sh)
 ```
 
+## Create a connection manifest from source
+
+The standalone setup command retains native and Flatpak discovery. It creates a schema-v1 connection manifest without installing the package, registering an MCP host, changing a profile, or deploying mods:
+
+```sh
+dotnet run --project src/housecarl-setup -- --connect-only
+```
+
+If more than one Amethyst configuration is found, add `--amethyst-config /absolute/path/to/AmethystModManager` to select one explicitly. This checks connection paths only. The server checks filegraph compatibility when you select the printed manifest with `housecarl_set_amethyst_connection` and `filegraph_mode="saved-snapshot"`.
+
 ## Build and test this source tree
 
 Build the native Papyrus tools from the pinned source commits first. The five Caprica tests use the resulting binary; an absent compiler is reported as a skip.

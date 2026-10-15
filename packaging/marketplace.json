@@ -1,13 +1,13 @@
 {
-  "name": "housecarl-local",
+  "name": "housecarl-amethyst-local",
   "owner": {
-    "name": "Avick3110"
+    "name": "ni1by2"
   },
   "plugins": [
     {
       "name": "housecarl",
       "source": "./housecarl",
-      "description": "houseCARL - data-layer access to your Skyrim SE load order, in plain English."
+      "description": "houseCARL-Amethyst - native Linux data-layer access to an Amethyst Skyrim SE profile."
     }
   ]
 }

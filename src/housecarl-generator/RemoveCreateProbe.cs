@@ -18,13 +18,12 @@ namespace HousecarlGenerator;
 ///     "clean unused masters" is automatic — a side effect of any write, including a removal that drops the last
 ///     reference to a master (Q3b). If no, it needs an explicit prune (ModHeader.MasterReferences is writable).
 /// </summary>
-public static class RemoveCreateProbe
+internal static class RemoveCreateProbe
 {
-    const string SkyrimEsm = @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
-
     public static int RunProbe(string[] args)
     {
-        var src = args.FirstOrDefault(a => a.EndsWith(".esm", StringComparison.OrdinalIgnoreCase)) ?? SkyrimEsm;
+        var src = args.FirstOrDefault(a => a.EndsWith(".esm", StringComparison.OrdinalIgnoreCase))
+                  ?? ProbeInputs.DataFile("Skyrim.esm");
         if (!File.Exists(src)) { Console.Error.WriteLine($"error: source master not found: {src}"); return 1; }
 
         Console.WriteLine("================================================================");

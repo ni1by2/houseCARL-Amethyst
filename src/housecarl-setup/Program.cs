@@ -66,11 +66,15 @@ public static class Program
 
     private static int Main(string[] args)
     {
+        if (args.Contains("--connect-only")) return AmethystDiscovery.Run(args);
+
         if (args.Contains("--help") || args.Contains("-h"))
         {
             Console.WriteLine("houseCARL setup - installs houseCARL into Claude Code and/or Codex.");
             Console.WriteLine();
             Console.WriteLine("  Just run it (double-click) and pick which host(s) to install for.");
+            Console.WriteLine("  --connect-only [--amethyst-config PATH] creates an Amethyst connection manifest only.");
+            Console.WriteLine("  Use scripts/install-linux.py for Linux package installation.");
             Console.WriteLine("  Or pass a flag to skip the prompt:");
             Console.WriteLine("    --claude   install for Claude Code only");
             Console.WriteLine("    --codex    install for Codex only");

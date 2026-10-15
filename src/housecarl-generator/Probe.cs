@@ -14,7 +14,7 @@ namespace HousecarlGenerator;
 /// the genuinely read-only shapes — IReadOnlyList / IReadOnlyCache — should be excluded).
 /// A new shape appearing here that the whitelist doesn't cover = silently read-only fields.
 /// </summary>
-public static class Probe
+internal static class Probe
 {
     public static int RunVocab()
     {

@@ -17,7 +17,7 @@ namespace HousecarlGenerator;
 /// Terse field keys (n/t/c/w + sparse refs) keep the JSON small; the legend lives once in the skill's
 /// SKILL.md. The human-readable view is <c>corpus.summary.md</c>.
 /// </summary>
-public static class ReferenceEmitter
+internal static class ReferenceEmitter
 {
     public static void Emit(Corpus corpus, string refDir)
     {

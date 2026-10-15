@@ -9,7 +9,7 @@ namespace HousecarlGenerator;
 /// serialises a model-deleted record with an EMPTY body — which is exactly the clean case, not the wild one. So the
 /// fixture is written normally and then patched on disk.
 /// </summary>
-public static class ProbeBytes
+internal static class ProbeBytes
 {
     /// <summary>Set the record-header Deleted flag (0x20) on the record of signature <paramref name="sig"/> whose
     /// on-disk FormID equals <paramref name="rawFormId"/>, by locating its 24-byte header (sig at +0, flags word at

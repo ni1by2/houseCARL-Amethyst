@@ -133,7 +133,7 @@ if (args.Length > 0 && args[0] == "multimaster-patch") return MultiMasterProof.R
 if (args.Length > 0 && args[0] == "apply-proof") return ApplyProof.RunApplyProof(args[1..]);
 
 // Verify the TRUE active order read from MO2's static profile files (loadorder.txt + modlist.txt + plugins.txt).
-if (args.Length > 0 && args[0] == "mo2-order") return Mo2OrderHarness.RunMo2Order(args[1..]);
+if (args.Length > 0 && args[0] == "amethyst-order") return AmethystOrderHarness.Run(args[1..]);
 
 // Remove + Create recon: AddNew/FormID allocation, and write-path master derivation (clean-masters).
 if (args.Length > 0 && args[0] == "remove-create-probe") return RemoveCreateProbe.RunProbe(args[1..]);

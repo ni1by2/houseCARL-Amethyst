@@ -7,7 +7,7 @@ description: >-
   game hooks (trampoline, Address Library), SE + AE + VR targeting, or reading someone else's SKSE
   DLL source. Multi-runtime and lifecycle rules compile clean yet fail at load.
 compatibility: >-
-  Requires the houseCARL MCP server and a configured Mod Organizer 2 instance. Building also
+  Requires the houseCARL MCP server and an explicitly selected Amethyst saved-snapshot connection. Building also
   needs MSVC (VS2022 Build Tools), CMake, vcpkg or xmake, and a CommonLibSSE-NG (alandtse ng)
   checkout.
 ---

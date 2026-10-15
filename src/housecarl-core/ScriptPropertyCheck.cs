@@ -444,6 +444,7 @@ public sealed record RecordScriptFindings(
     IReadOnlyList<UnboundProperty> Unbound, IReadOnlyList<NullObjectProperty> NullObjects,
     IReadOnlyList<ScriptUnverifiable> Unverifiable, string? ScanError = null)
 {
+    /// <summary>Creates a plugin-level report when record enumeration cannot complete.</summary>
     public static RecordScriptFindings PluginScanError(string plugin, string error) =>
         new(FormKey.Null, "", null, plugin,
             Array.Empty<UnboundProperty>(), Array.Empty<NullObjectProperty>(),
@@ -481,7 +482,10 @@ public sealed record ScriptCheckResult(
     IReadOnlyList<string>? AssetWarnings = null,  // the asset build's own warnings (an archive list not found, a kept profile), set by the host on a sweep that ran; null or empty when it had none
     IReadOnlyList<string>? ArchiveFailures = null) // the archives this build could not open, each named with the reason, set on a sweep that ran; null or empty when every archive read
 {
+    /// <summary>True when the sweep ran; false means <see cref="Error"/> contains a scope refusal.</summary>
     public bool Success => Error is null;
+
+    /// <summary>Creates a recoverable failure with no partial reports or totals.</summary>
     public static ScriptCheckResult Fail(string error) =>
         new(Array.Empty<RecordScriptFindings>(), 0, 0, 0, 0, 0, false, false,
             new Dictionary<string, string>(), error);

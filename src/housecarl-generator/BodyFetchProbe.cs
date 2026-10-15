@@ -37,7 +37,7 @@ namespace HousecarlGenerator;
 /// Run: dotnet run --project src/housecarl-generator body-fetch-probe [maxPlugins]
 ///      (maxPlugins caps the set for a fast smoke run; 0/absent = the full set).
 /// </summary>
-public static class BodyFetchProbe
+internal static class BodyFetchProbe
 {
     public static int RunBodyFetchProbe(string[] args)
     {

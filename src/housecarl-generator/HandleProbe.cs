@@ -10,7 +10,7 @@ namespace HousecarlGenerator;
 /// Cleanup-gotcha / Option-B viability probe — the file-HANDLE lifecycle of a Mutagen overlay.
 ///
 /// Context: the retrospective named the "cleanup-gotcha" — houseCARL mmap'ing plugin files keeps a
-/// Windows handle open, so MO2/xEdit/Explorer can't delete/rename/overwrite them until release
+/// Windows handle open, so Amethyst/xEdit/Explorer can't delete/rename/overwrite them until release
 /// (RETROSPECTIVE_PIVOT_2026-05-23 §"Cleanup-gotcha is unusable-class"; "Cannot ship v1.0 with this
 /// limitation"). The legacy FILE_SHARE_DELETE fix lived in the custom mmap reader the rebuild REPLACED
 /// with Mutagen's overlay; a Codex tester re-hit the lock on the shipped build. Aaron LOCKED Option B:
@@ -29,7 +29,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator handle-probe [worstCaseN]   (default worstCaseN=300)
 /// </summary>
-public static class HandleProbe
+internal static class HandleProbe
 {
     public static int RunProbe(string[] args)
     {

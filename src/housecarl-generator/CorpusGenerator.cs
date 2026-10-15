@@ -16,7 +16,7 @@ namespace HousecarlGenerator;
 /// every polymorphic arm — at full depth, by construction. Coverage == Mutagen's
 /// coverage; no category filter, no depth limit, no subset.
 /// </summary>
-public static class CorpusGenerator
+internal static class CorpusGenerator
 {
     /// <summary>Internal (not private) so CorpusHygieneGuardTests can drive <see cref="ClassifyField"/>
     /// directly on a real Mutagen type — the classifier's own branches, checked without going through a whole

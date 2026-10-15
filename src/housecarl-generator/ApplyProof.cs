@@ -25,7 +25,7 @@ namespace HousecarlGenerator;
 ///
 /// Run: dotnet run --project src/housecarl-generator apply-proof [maxPlugins]
 /// </summary>
-public static class ApplyProof
+internal static class ApplyProof
 {
     static readonly HashSet<string> Vanilla = new(StringComparer.OrdinalIgnoreCase)
         { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" };

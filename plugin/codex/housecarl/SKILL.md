@@ -1,23 +1,21 @@
 ---
 name: housecarl
 description: >-
-  Use whenever a task touches a Mod Organizer 2 modlist, load order, plugins,
+  Use whenever a task touches an Amethyst modlist, load order, plugins,
   conflicts, ESP patches or overrides, a record type (ARMO, WEAP, NPC_, LVLI,
   MGEF), leveled lists, dark faces or facegen, dialogue, NIF meshes, SkyPatcher,
   SPID or KID lines, SKSE plugins, Papyrus, or BSA archives. Routes Skyrim
-  Special Edition data-layer work through the houseCARL MCP server — a live MO2
-  instance read at the true load-order winner, written into reviewable patch
+  Special Edition data-layer work through the houseCARL MCP server — a saved Amethyst
+  snapshot with explicit freshness warnings, written into reviewable staging patch
   plugins — and names the specialist skill that owns each grammar. Not for
-  another game, for installing MO2, or for gameplay advice with no data-layer
+  another game, for installing Amethyst, or for gameplay advice with no data-layer
   step.
-compatibility: Requires the houseCARL MCP server and a configured Mod Organizer 2 instance.
+compatibility: Requires the houseCARL MCP server and an explicitly selected Amethyst saved-snapshot connection.
 ---
 
 # houseCARL
 
-**In:** a live Mod Organizer 2 instance, read through the houseCARL MCP server. **The work:** read the
-record at its true load-order winner, check the schema, then write. **Out:** a patch plugin the user
-reviews and enables in MO2. Use the routing table to choose the grammar skill and follow the read order before writing.
+Read the selected Amethyst saved snapshot through the houseCARL MCP server, check the record schema, then write a staging patch for review and activation through Amethyst. Every dependent result carries saved-generation and freshness information; a successful write does not prove what the game loads. Use the routing table to choose the grammar skill and follow the read order before writing.
 Each tool description defines its parameters.
 
 The user's instructions take precedence over guidelines provided in a skill.
@@ -49,8 +47,8 @@ Claude Code form — on Codex it is the bare folder name (`mutagen-reference`) i
 
 ## Read before you write
 
-1. **Confirm context when it matters.** `housecarl_load_order_status` says what is active;
-   `housecarl_set_mo2_instance` when the user names another MO2 instance folder.
+1. **Confirm context when it matters.** `housecarl_load_order_status` describes the saved profile;
+   use `housecarl_set_amethyst_connection` with the selected manifest and `filegraph_mode="saved-snapshot"` when changing connections. Preserve freshness warnings in your report.
 2. **Read the winner and the schema.** `housecarl:mutagen-reference` for the field path and its legal
    values — no entry for a type means say so, never guess; `housecarl_records` for the record
    as the order resolves it, `project={"form":"tree"}` for every provider when contested.
@@ -64,8 +62,8 @@ housecarl_apply(ops=[{"formid": "012EB7:Skyrim.esm", "field_path": "BasicStats.D
 ```
 ```
 wrote SwordFix.esp (new patch; 1284 bytes)
-mod folder: SwordFix  — enable it in MO2 to use the patch; MO2 adds a newly activated plugin at the END of the load order, so it overrides what is already there
-full read-back — … NOT load-order truth; the patch wins nothing until it is enabled in MO2:
+mod folder: SwordFix — review the new staging patch, then refresh, enable and deploy it through Amethyst
+full read-back — written file contents; successful staging does not establish what the game currently loads:
   Weapon 012EB7:Skyrim.esm  editorid=IronSword
     BasicStats.Damage = 12
     ...
@@ -82,11 +80,11 @@ or the console prints is read-only: `housecarl_records` takes it, every write re
 
 `housecarl_apply`, `housecarl_create` and `housecarl_forward` take three lanes: `patch=` a new plugin, `into=`
 an existing houseCARL patch, `in_place=` the file it names. `housecarl_remove` edits only what exists: `into=`
-or `in_place=`, no `patch=`. In place is consent-gated per plugin by `acknowledge=`.
+or `in_place=`, no `patch=`. In place is consent-gated per plugin by `acknowledge=`. Existing-destination writes also require the applicable Amethyst redeployment and live-visibility confirmations; they may be immediately visible to the game. New output requires Amethyst activation and deployment.
 
 ## Where this does not apply
 
-Another game; installing or configuring MO2; gameplay advice with no record, file or INI. Two reaches the
+Another game; installing or configuring Amethyst; gameplay advice with no record, file or INI. Two reaches the
 surface lacks today, both filed: `housecarl_check` with `findings=["dialogue"]` resolves against the active
 order, so a plugin not yet enabled cannot be dialogue-checked (#615); and a hand-composed raw mods-folder path
 is not refused in one sentence by `housecarl_place` or `housecarl_nif_inspect` (#617) — pass the mod folder a
