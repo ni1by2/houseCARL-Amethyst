@@ -1,8 +1,8 @@
 # Dialogue: what decides which line plays, and where a line lands
 
-A dialogue line that is byte-valid still plays nothing if the order around it is wrong. Two of those rules were
-measured in game rather than reasoned about, and a third is bookkeeping `housecarl_create` fills for you — with
-one default that is the wrong one and one flag it never sets. This page carries all three.
+A dialogue record can be valid on disk and still fail to play because of its ordering. Two rules
+below were measured in-game. The third concerns bookkeeping filled by `housecarl_create`,
+including one default that can be wrong for the intended use and one flag it never sets.
 
 ## Quest priority decides the greeting, before intra-topic order
 
@@ -13,14 +13,14 @@ present, played on **every** approach and the vanilla greeting did not. The iden
 `Priority = 0` never played, and vanilla greeted as normal. For scale: vanilla `DialogueWhiterun` is
 `Priority = 30` and `DialogueGeneric` is `0`.
 
-The consequence is the trap. A high-priority greeting whose condition passes on every activation replaces the
+This affects the entire greeting pool. A high-priority greeting whose condition passes on every activation replaces the
 NPC's **whole** greeting pool for as long as it is active — the vanilla lines are not merged in behind it, they
 are simply not reached. Gate the line so it passes only sometimes (a quest stage, a time of day, a one-shot
 global), or accept that you have silenced everything else that NPC said.
 
 ## A re-listed INFO falls to the bottom unless it carries its PNAM
 
-Any override of an existing INFO is a **re-list** — including an override that only adds a condition — and a
+Any override of an existing INFO is a **re-list** (including an override that only adds a condition) and a
 re-listed INFO moves to the bottom of the merged topic order unless the override carries `PreviousDialog`
 (PNAM) naming the line immediately above it in the merged order. Most lines, vanilla ones included, carry no
 PNAM and there is nothing to preserve — but some do, and on those the PNAM is load-bearing: a PNAM present with
@@ -58,8 +58,8 @@ position minus one can be one defined by a plugin your patch does not master. Th
 is handed the whole load order and Mutagen derives the master list from the records' own FormLinks, so writing
 that FormID **adds that plugin as a master** of your patch — a new hard dependency, one more plugin your patch
 requires and must load after. Decide whether you want it before you write the link; if you do not, name a line
-from a plugin you already master and accept the position it gives you. (A PNAM that truly resolves to nothing — a
-target no active plugin defines — places the line at the HEAD, not the bottom.)
+from a plugin you already master and accept the position it gives you. (A PNAM that truly resolves to nothing (a
+target no active plugin defines) places the line at the HEAD, not the bottom.)
 
 ## A topic only one plugin touches: PNAM against file order
 
@@ -79,10 +79,10 @@ here is silent. A `DialogBranch`'s `Flags` is the one field it will not fill: a 
 is **refused**, and nothing is written.
 
 That is because the two shapes are both real, and each is fatal in the other's place. `TopLevel` is what
-publishes a branch to the player's menu, so a menu branch without it — and every topic under it — is dead
+publishes a branch to the player's menu, so a menu branch without it (and every topic under it) is dead
 (#693). But `0` is exactly what a scripted `Say()` topic needs: a branch left at `TopLevel` when it should
 have been hidden puts a nameless line in the player's menu as a selectable `...` (#212). Skyrim.esm carries
-both on purpose — 2117 branches at `TopLevel`, and 203 `Player` branches at exactly `0` — so there is no
+both on purpose (2117 branches at `TopLevel`, and 203 `Player` branches at exactly `0`) so there is no
 honest default to fill, and houseCARL asks instead of guessing. Pass `TopLevel` for a menu entry the player
 can pick, or `0` for a scripted `Say()` topic that must stay hidden. A value you pass always wins, an
 explicit `0` included.
@@ -110,7 +110,7 @@ housecarl_records(formids=["02707A:Skyrim.esm"], project={"form":"info_order"},
 
 The answer is the order as it **would** be with that file enabled: every line the file places is marked
 `[FOLDED]` and named with the file that placed it, and the response says the whole order is a projection. One
-file per call — two files have no order between them until MO2 sorts them — and a filename that is already
+file per call (two files have no order between them until MO2 sorts them) and a filename that is already
 active is refused, since its lines are in the merge already. A topic only the patch defines has no winner in
 the order, so name it in `formids=`; a scan (`types=["DIAL"]`) selects out of the active order and will not
 reach it.

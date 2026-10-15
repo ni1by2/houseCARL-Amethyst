@@ -6,9 +6,9 @@ covers: [src/housecarl-mcp/RenderCap.cs, src/housecarl-mcp/RenderBudget.cs, src/
 
 ## What it is
 
-Two budgets share the word, and are not the same thing: **`max_chars`**, how WIDE the response may be, and
-**the render bound** (`RenderBudget`), how LONG a call may spend rendering before it refuses up front. This
-file is the home of both, cited from the code under ADR 0001.
+The response has two independent budgets. `max_chars` limits its width in characters.
+The render bound (`RenderBudget`) limits how long a call may spend rendering, with excessive
+work refused up front. The code cites these contracts under ADR 0001.
 
 ## Contracts
 
@@ -37,7 +37,7 @@ Multilingual Plane (#754), and two constraints hold that bound:
 ### The bound holds by layout, never by trimming
 
 `RenderCap` carries two numbers together so neither is used where the other belongs: `Cap` is the `max_chars`
-the caller passed — the number a cut notice names and the finished response may not exceed — and `Budget` is
+the caller passed (the number a cut notice names and the finished response may not exceed) and `Budget` is
 the room content has once everything written after it is charged. A unit is written only when it fits whole,
 so nothing is cut mid-token, and what did not fit is counted in a notice.
 
@@ -50,8 +50,8 @@ point. The merged sweep's `max_chars_overrun` has the same shape (#361).
 
 `housecarl_check` can run several families in one response, and the room its body may occupy is divided
 **max-min fair**: every child gets `min(its demand, λ)`, where λ is the level at which the budget is
-exhausted. The fill is **hierarchical** — one top-level participant per family, plus one for the response's
-own subjects (the excluded-plugin roster) — and each participant's subjects then fill its share.
+exhausted. The fill is **hierarchical** (one top-level participant per family, plus one for the response's
+own subjects (the excluded-plugin roster)) and each participant's subjects then fill its share.
 
 It is computed **before** anything is written, so each share is a function of the budget and the demand vector
 alone, never of render order. `BodyAllocation.Done` is therefore deliberately a no-op.
@@ -75,9 +75,9 @@ through `Emit`, and a subject's own share sits on top of the response-wide test,
 
 No-stranding is a claim about the **allocation**, not about spending, and two measured shapes under-fill:
 
-- **#398** — a biting cap leaves a few hundred characters no row can use: reserve that was held and never
+- **#398**: a biting cap leaves a few hundred characters no row can use: reserve that was held and never
   written, plus whole-unit granularity.
-- **#400** — a child subject's demand counts units the render can never reach, because some units are only
+- **#400**: a child subject's demand counts units the render can never reach, because some units are only
   reachable through another subject's, and the render breaks the outer loop when the parent's subject stops.
 
 Both are over-measures in the safe direction: monotonicity holds and no response overruns. Neither is intended
@@ -106,7 +106,7 @@ sections, per-record sections, dialogue topic blocks, facegen finding rows and h
 
 ### Spilling to a file
 
-The spill dispositions themselves — `to_file=` and the `ceiling` auto-spill — are stated in
+The spill dispositions themselves (`to_file=` and the `ceiling` auto-spill) are stated in
 [output-and-artifacts.md](output-and-artifacts.md), the note covering `src/housecarl-mcp/Artifacts.cs`. What a
 spilled `check` artifact contains is here.
 
@@ -120,8 +120,8 @@ missing because the inline body ran out of characters. What `limit=` already cut
 cut here too, and the manifest says so by carrying `total` above `row_count`. Each family's listing cut (dangling
 refs, unbound and null-object script properties, facegen findings) is added back into `total` for that reason.
 The dialogue family's rows come from `DialogueSweep.Findings`, the same list its finding count is taken from, so
-every kind it counts — topic and seed-level issues, scan gaps (`scan_error`), the `.seq` lint (`seq_unconfirmed`,
-both its `[!]` and `[?]` grades), silent lines, result scripts that will not fire — has a row (the file or path it
+every kind it counts (topic and seed-level issues, scan gaps (`scan_error`), the `.seq` lint (`seq_unconfirmed`,
+both its `[!]` and `[?]` grades), silent lines, result scripts that will not fire) has a row (the file or path it
 names rides `target`, one file per row: a result script missing two `.pex` files is two rows; the `.seq` row's
 `target` is `SEQ/<plugin>.seq` for the plugin its verdict names, the winning override when it defers to one; an INFO
 row's `plugin` and `editorid` are null, since the report carries only its topic's). Its `total` is that count plus
@@ -292,5 +292,5 @@ json lane takes its length from, and `src/housecarl-core/JsonTextEncoder.cs` is 
 
 ## Related
 
-- `docs/architecture/check-family-tests.md` — which lane a check-family fact is driven from.
-- `docs/architecture/tool-schema-publication.md` — the published-schema passes, including `SchemaDepthCap`.
+- `docs/architecture/check-family-tests.md`: which lane a check-family fact is driven from.
+- `docs/architecture/tool-schema-publication.md`: the published-schema passes, including `SchemaDepthCap`.

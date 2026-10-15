@@ -5,9 +5,10 @@ covers: [src/housecarl-core/DialogueInfoOrder.cs, src/housecarl-core/DialogueFol
 # Dialogue: the merged INFO order, the fold, and the SNAM marker
 
 ## What it is
-The modder-facing page is [`docs/dialogue.md`](../dialogue.md): what decides which line plays, and where a line
-lands. This note is the implementation side — the contracts the code cannot state about itself.
-What houseCARL checks before it lets dialogue out — CK parity, a clean pass, the check family — is
+
+[`docs/dialogue.md`](../dialogue.md) explains which line plays and where it belongs. These
+implementation contracts describe the merged INFO order, fold, and SNAM marker. Validation
+against the Creation Kit, the meaning of a clean pass, and the check family are covered in
 [`dialogue-validation.md`](dialogue-validation.md).
 
 ## Contracts
@@ -40,8 +41,7 @@ Consequences the render depends on:
   own list (`NO-FALSE-MOVE`, `REORDER-TO-TAIL`).
 - Input is plain `InfoLine` data, not record getters: the caller projects each child list while the body is live, so
   the merge runs after every overlay is gone and one typed DIAL pass per plugin serves every topic in a batch.
-- Pure, no I/O, never throws. Malformed input — a self-referencing PNAM, a cycle, a chain past the depth ceiling —
-  degrades to a stated placement and is reported on the view's `Note`, never as an exception or a silent guess.
+- Pure, no I/O, never throws. Malformed input (a self-referencing PNAM, a cycle, a chain past the depth ceiling) degrades to a stated placement and is reported on the view's `Note`, never as an exception or a silent guess.
   Cycles are counted over the final placed set rather than off the recursion, because a cycle both of whose members
   an earlier plugin already placed never trips the placement-time guard (`CYCLE-PREPLACED`; `PNAM-CYCLE` pins that
   the recursion terminates).
@@ -115,12 +115,12 @@ and did not set `SubtypeName` — gating on "this call set Subtype" is the calle
 off the countless vanilla topics whose number is legitimately noisy.
 
 ## Pinned by
-- `InfoOrderMergeTests`, `InfoOrderDegradeTests` and `InfoOrderRenderTests` — the merged INFO order, by the arms
+- `InfoOrderMergeTests`, `InfoOrderDegradeTests` and `InfoOrderRenderTests`: the merged INFO order, by the arms
   named beside its sentences above.
-- `InfoOrderSoloPnamTests` — a one-plugin topic whose PNAM disagrees with its file order is listed in `Place`'s
+- `InfoOrderSoloPnamTests`: a one-plugin topic whose PNAM disagrees with its file order is listed in `Place`'s
   order with the moved line marked under a header naming the plugin, and one whose PNAM chain agrees keeps the
   one-line answer, folded or not; `InfoOrderRenderTests` pins the solo topic past the move-analysis ceiling.
-- `DialogueFamilyTests.FactD1_TheShippedRenderStatesTheMergeModel` — the `info_order` render states the merge
+- `DialogueFamilyTests.FactD1_TheShippedRenderStatesTheMergeModel`: the `info_order` render states the merge
   model and never says a line is dropped; `FactD3_UnreadWired` — a touching plugin that could not be read makes
   the view INCOMPLETE and is named.
 - `CheckDialogueFoldTests.AMasterFoldDoesNotWinWhatARegularPluginOverrides` and
@@ -134,9 +134,9 @@ off the countless vanilla topics whose number is legitimately noisy.
   marker as authoritative, and the advice turns on the renumbering signature.
 
 ## Where
-- `src/housecarl-core/DialogueInfoOrder.cs` — the merge over `InfoLine` data, and the view with its gates.
-- `src/housecarl-core/DialogueFold.cs` — `DialogueFold`: `PlaceIn`, the `Read` and `Open` depths, `Label`.
-- `src/housecarl-core/DialogueSubtype.cs` — the SNAM marker table and `MarkerDisagreesWithSubtype`.
-- `src/housecarl-mcp/DialogueTools.cs` — `DialogueWire`, the composers a dialogue report is rendered from.
-- `src/housecarl-mcp/ReadTools.cs` — `Wire.AppendInfoOrderView`, the merged-order render (reads; `records-tool-front.md`).
+- `src/housecarl-core/DialogueInfoOrder.cs`: the merge over `InfoLine` data, and the view with its gates.
+- `src/housecarl-core/DialogueFold.cs`: `DialogueFold`: `PlaceIn`, the `Read` and `Open` depths, `Label`.
+- `src/housecarl-core/DialogueSubtype.cs`: the SNAM marker table and `MarkerDisagreesWithSubtype`.
+- `src/housecarl-mcp/DialogueTools.cs`: `DialogueWire`, the composers a dialogue report is rendered from.
+- `src/housecarl-mcp/ReadTools.cs`: `Wire.AppendInfoOrderView`, the merged-order render (reads; `records-tool-front.md`).
 - Tool: `housecarl_records project=info_order`.

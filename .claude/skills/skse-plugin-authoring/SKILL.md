@@ -21,9 +21,8 @@ An SKSE plugin is a native **C++ DLL** built against CommonLibSSE-NG and shipped
 frameworks, OAR and every crash logger are SKSE DLLs; this skill is how you write one, extend one, or
 read one.
 
-**Audience note.** This skill serves the mod author writing C++, not the modlist builder working at
-the data layer. The word "plugin" in a request is not a routing signal: editing a record or
-distributing a form is a different skill.
+Use this skill when authoring C++. A request about a "plugin" may instead concern record edits or
+form distribution; route those jobs to the skill for that data layer.
 
 **The houseCARL surface here is thin.** `housecarl_compile_script` is the only tool in the build
 lane, and it compiles the consumer `.psc`, never the C++; the read tools for job (c) and for
@@ -37,15 +36,15 @@ name (`papyrus-reference`).
 Four shapes of work land here. Identify the job before opening a reference: each has its own entry
 point, and the reference list below says which files that job touches.
 
-- **(a) Write a new plugin** — an event sink, a hook, or native code that reacts to or patches the
+- **(a) Write a new plugin**: an event sink, a hook, or native code that reacts to or patches the
   game. Runs the toolchain gate, then the skeleton, then whichever capability the behaviour needs.
-- **(b) Add a native Papyrus function** *(the flagship)* — expose a function to `.psc` scripts that
+- **(b) Add a native Papyrus function** to expose a function to `.psc` scripts that
   vanilla Papyrus and SKSE cannot provide. Runs the toolchain gate, then the section below: **both
   halves of the pair are written here**, the C++ registration and the `.psc` declaration.
-- **(c) Audit or explain an existing plugin** — someone else's repo, or a DLL already sitting in the
+- **(c) Audit or explain an existing plugin**: someone else's repo, or a DLL already sitting in the
   load order. **No toolchain gate**: this is reading, not building. `housecarl_skse` finds the DLL,
   the mod that wins the VFS for it, and the static manifest the SKSE loader itself reads.
-- **(d, deferred) Port someone else's old plugin across runtimes** — an SE-only DLL's source dragged
+- **(d, deferred) Port someone else's old plugin across runtimes**: an SE-only DLL's source dragged
   up to SE+AE+VR. **This skill does not do it.** Say so plainly rather than improvising: it can
   author fresh multi-runtime code and read the existing plugin, but a port procedure is not here.
 
@@ -110,8 +109,8 @@ vm->RegisterLatentFunction<std::int32_t>("WaitForBounty", "HCDemo", WaitForBount
 Int Function WaitForBounty(Faction akFaction) global native
 ```
 
-**A narrowing return type.** `size_t`, `std::int64_t` and `double` all marshal — as Int, Int and
-Float — so this **compiles and then silently truncates**. Declare `std::int32_t` / `std::uint32_t`
+**A narrowing return type.** `size_t`, `std::int64_t` and `double` all marshal (as Int, Int and
+Float) so this **compiles and then silently truncates**. Declare `std::int32_t` / `std::uint32_t`
 for Int and `float` for Float, and do the widening in C++ before you return.
 
 ```cpp
@@ -153,8 +152,8 @@ back.
 ## Common mistakes, and the rule that replaces each
 
 - **Discriminate SE from AE at runtime in a dual build, and read every runtime-varying member
-  through its accessor.** A dual SE+AE build defines `EXCLUSIVE_SKYRIM_FLAT` alone — FLAT means "not
-  VR", not "one non-VR runtime" — so `EXCLUSIVE_SKYRIM_SE` / `_AE` are undefined there and an `#if`
+  through its accessor.** A dual SE+AE build defines `EXCLUSIVE_SKYRIM_FLAT` alone (FLAT means "not
+  VR", not "one non-VR runtime") so `EXCLUSIVE_SKYRIM_SE` / `_AE` are undefined there and an `#if`
   on them drops the divergent code on both runtimes. Use `REL::Module::IsAE()` or
   `REL::Relocate(seAndVr, ae)`; the macros gate only a single-runtime build. The probe reaches an offset,
   not a layout: a differing size, vtable or base class (`BaseExtraList`) cannot be carried in a dual build
@@ -172,7 +171,7 @@ back.
   configured and replaces your logger, taking every pre-`Init` line with it. Call
   `SKSE::Init(a_skse, false)` when you own the logger.
 - **Marshal state changes onto the game thread.** Most game-state writes must run on Skyrim's main
-  thread, but the code that *discovers* the work — an event sink, a hook thunk, a Papyrus call — runs
+  thread, but the code that *discovers* the work (an event sink, a hook thunk, a Papyrus call) runs
   elsewhere. Mutating where you stand is a race and an intermittent CTD.
 - **Pace repeats from your own thread, not by self-requeueing `AddTask`.** The SKSE task queue drains
   pop-until-empty each pass, so a task that re-queues itself runs again in the *same* drain: the
@@ -192,8 +191,7 @@ divergence, that is so you read borrowed code correctly — never a recommendati
 goes for idioms: the NG wiki documents a declarative loader (`OnSKSEPluginLoad`, `DECLARATIVE`) that
 does **not** exist on the `ng` branch, so hand-write `SKSEPlugin_Load` and call `SKSE::Init` yourself.
 
-**This corpus is paper-verified.** It was built by reading the CommonLibSSE-NG source, its wiki and
-real production plugins; an in-game validation pass is still owed, and every reference ends with a
-"Not yet verified in-game" section saying which of its claims that covers. Present those runtime
-behaviours as untested, not proven: a clean build proves the code compiles, not that the game
-behaves.
+These references have been checked against CommonLibSSE-NG source, its wiki, and production
+plugins. In-game validation remains outstanding. Each reference ends with a "Not yet verified
+in-game" section identifying the affected claims. Report those runtime behaviors as untested;
+a successful build establishes only that the code compiles.

@@ -6,8 +6,8 @@ covers: [src/housecarl-core/AssetResolver.cs, src/housecarl-core/AssetSourceSele
 
 ## What it is
 
-FaceGen's own contracts — the FormID→path transform, the check's classes, what a dark face is — are in
-[`docs/facegen.md`](../facegen.md), not here.
+For FaceGen's FormID-to-path mapping, finding classes, and dark-face causes, see
+[`docs/facegen.md`](../facegen.md).
 
 ## Contracts
 
@@ -28,6 +28,11 @@ archives with their ranks. The BSA winner is only as correct as those ranks, whi
 resolver reads no profile.
 
 ### What an answer may claim
+
+Case-insensitive path resolution can itself encounter a Linux permission denial before the subtree
+walk starts. The asset resolver records that root and keeps the response incomplete. A directly
+traversable subtree can still contribute verified files; denial is never evidence that an asset is
+absent. Ambiguous case-equivalent paths continue to refuse rather than choosing one silently.
 
 - **Every provider comes back, not just the winner.** `Ambiguous` is more than one provider, or a loose copy
   coexisting with a BSA copy — the one edge the common rule cannot promise under MO2's managed archives. It flags
@@ -92,7 +97,7 @@ resolver reads no profile.
 
 ### One build per call
 
-- A build holds **string sets only** — each archive's table copied out and the reader dropped — plus a lazily warmed
+- A build holds **string sets only** (each archive's table copied out and the reader dropped) plus a lazily warmed
   per-subtree set of loose filenames. **Zero archive handles at rest.**
 - `RefreshIfStale` re-stats the active archives and re-lists the build's **watched directories**, and swaps one
   reference. A changed archive or mod *set* is an order change, and the service rebuilds the resolver. Warming a
@@ -103,7 +108,7 @@ resolver reads no profile.
   lists and does not hold the next name, and only THAT name appearing counts — so a root with nothing under `meshes\`
   at all lands on its own mod folder, and an unrelated file written beside it does not throw the build away. A
   name a plain FILE holds is a real absence too, watched for the name becoming a directory. The cost is one listing per
-  watched DIRECTORY: it grows with the directories that ANSWER — one per (root, answering directory) pair — and not
+  watched DIRECTORY: it grows with the directories that ANSWER (one per (root, answering directory) pair) and not
   with roots times subtrees. Which directory answers is what decides how far that collapses: roots answering from one
   shared ancestor, typically their own mod folder, add nothing for further subtrees, while roots whose deepest listing
   ancestor differs per subtree (two subtrees under different `meshes\` subfolders) add one each, as does every root
@@ -122,8 +127,7 @@ refusal — the caller chooses), the VFS winner, or a named provider.
 
 - **The named pole is answered first**, ahead of the empty-universe return, because a disabled mod's copy is exactly
   a path nothing enabled supplies.
-- **Naming is the consent, and the only door.** `OffOrderAssetSource` reads a named mod folder's disk directly —
-  loose file first, then its root archives — and is consulted only under that pole, so a mod nobody named can never
+- **Naming is the consent, and the only door.** `OffOrderAssetSource` reads a named mod folder's disk directly (loose file first, then its root archives) and is consulted only under that pole, so a mod nobody named can never
   contend silently or be reported as the winner. `PlacementSource.OffOrder`/`OwnerEnabled` carry that the copy is
   one the game is not loading, and which of the two reasons it is.
 - **Reserved names mean the layer, never a folder.** `overwrite`, `Data` and an active archive's filename are
@@ -136,7 +140,7 @@ refusal — the caller chooses), the VFS winner, or a named provider.
   that will not read is an unknown, and calling it "this mod does not have it" is the silent-wrong-answer class.
 - **Refusals name providers, never on-disk paths**, which go stale between resolve and read. `ModsPathAddress`
   covers the other direction: a raw path into MO2's mods tree reads past the VFS, so it is refused and the caller is
-  handed the address form — mod folder name plus Data-relative path — that every pole takes.
+  handed the address form (mod folder name plus Data-relative path) that every pole takes.
 - `AssetSourceSelection.Describe` is the one formatter for a provider in any list a selector is read out of: the
   name in **double quotes**, which Windows forbids inside a name, with the kind outside them. The printed token is
   the token a selector accepts.
@@ -229,8 +233,8 @@ path, declined for an off-order copy. The write is crash-atomic and the on-disk 
 arms, because collapsing them makes four of them wrong: nothing else provides the path; the destination folder
 already wins (a re-place); MO2's overwrite layer wins, which sits above every mod so neither enabling nor sorting
 reaches it; a BSA or the game's Data folder wins, which any enabled mod's loose copy beats at any priority; or
-another mod wins, which a *fresh* folder out-ranks on enable — MO2 registers an unseen folder at the highest
-priority — while an `into=` folder must also be sorted above it. `PlaceWire.WinnerLine` and `EnableAndSort` are the
+another mod wins, which a *fresh* folder out-ranks on enable (MO2 registers an unseen folder at the highest
+priority) while an `into=` folder must also be sorted above it. `PlaceWire.WinnerLine` and `EnableAndSort` are the
 one home, because the JSON transport carries them verbatim.
 
 ### Suggesting a root prefix
@@ -314,8 +318,8 @@ a miss, stating that form is not provided either; the generic lane does not, bec
   manual `bsa-probe` command (`BsaProbe`; needs a local BSArch and archive, so it is not on CI).
 - *Archives*: `BsaExtractTests.AnEntryResolvingOutsideTheDestinationIsRefused` — unpack refuses an entry resolving outside
   the destination; `ASecondUnpackIntoTheSameFolderWritesNothing` in the same class — it skips a byte-identical file.
-- *Archives*: `BsaPackContractTests` locks both halves of the pack contract — a stuck stale scratch refuses up front
-  and a failing pack leaves the prior archive untouched — and the unknown format token refusal.
+- *Archives*: `BsaPackContractTests` locks both halves of the pack contract (a stuck stale scratch refuses up front
+  and a failing pack leaves the prior archive untouched) and the unknown format token refusal.
 - *Archives*: `BsaPackReadBackTests.PackRefusesAScratchFromANonZeroExit` — a non-zero exit is a failed pack whatever it
   left behind; `PackRefusesAnArchiveThatCountsShort` in the same class and
   `BsaPackCountTests.ACountMismatchRefusesNamingBothNumbers` — the header count is checked against the source scan.

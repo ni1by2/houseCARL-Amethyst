@@ -5,10 +5,10 @@ covers: [src/housecarl-mcp-tests/CheckErrorsFamilyTests.cs, src/housecarl-mcp-te
 # The check families' tests: which lane a fact is driven from, and why
 
 ## What it is
-The errors, scripts and dialogue families of `housecarl_check` are asserted from **two** driving lanes, and
-which lane a given fact uses is a decision, not a convenience. This file is the home of that decision, cited
-from `CheckErrorsFixtures`, `ScriptsFixtures` and `CheckErrorsFamilyTests` under ADR 0001 (a terse comment is
-terse because the knowledge has a public home).
+
+The errors, scripts and dialogue families of `housecarl_check` use two test lanes. Choose the
+lane according to the behavior being tested. `CheckErrorsFixtures`, `ScriptsFixtures` and
+`CheckErrorsFamilyTests` cite these rules under ADR 0001.
 
 ## Contracts
 
@@ -31,9 +31,9 @@ computes must be live — a hand-shaped result would be asserting the fixture, n
 the RENDERER does with a given result may be DTO-driven, and must be whenever the shape is one a synthetic
 world cannot be made to emit without engineering the failure itself.
 
-The shapes that force the DTO lane today — the population, derived from every `Result(...)` call in
+The shapes that force the DTO lane today (the population, derived from every `Result(...)` call in
 `CheckErrorsFamilyTests` and `ScriptsFamilyTests` (8 sites) plus the one place a result is hand-shaped
-without going through `Result(...)` — `FactS13`'s `listing with { ExcludedPlugins = … }`, 9 sites in all —
+without going through `Result(...)`) `FactS13`'s `listing with { ExcludedPlugins = … }`, 9 sites in all —
 each named in the test that uses it:
 
 | shape | why the live world cannot make it |
@@ -44,8 +44,8 @@ each named in the test that uses it:
 | an **empty histogram axis** (a sweep that ran the walk and tallied nothing) | every world that carries findings tallies them; an axis that ran and found nothing needs a world with no findings at all, which then proves nothing else |
 | a **cap band** wider than the world's own body | the band has to reach caps at which this world simply renders whole |
 
-Everything else — totals, class exclusion, budget and cut accounting over real findings, the baseline split,
-the histograms, the epoch stamps, the off-order qualifier, the dialogue merge — is live.
+Everything else (totals, class exclusion, budget and cut accounting over real findings, the baseline split,
+the histograms, the epoch stamps, the off-order qualifier, the dialogue merge) is live.
 
 ### What the DTO lane must not be used for
 
@@ -73,23 +73,23 @@ own doc and issue #353 for the behaviour that makes this necessary.
 - `CheckErrorsWorldTests.TheWorldSweepsThreePluginsAndFindsSixDanglingRefsOneMissingMasterAndOneUnparseablePlugin`
   — *The fixture-known totals have their own test*: `CheckErrorsWorld`'s `TotalDangling` / `BaselineDangling` /
   `ScannedPlugins` against a live sweep.
-- `ScriptsWorldTests.TheServiceSweepsTheInstanceAndExactlyTheVmadCarryingRecordsAreScriptBearing` — the same
+- `ScriptsWorldTests.TheServiceSweepsTheInstanceAndExactlyTheVmadCarryingRecordsAreScriptBearing`: the same
   arrangement for `ScriptsWorld`: its `RecordsWithScripts` against a live sweep.
 - Nothing pins the rest: the two lanes, the rule, the DTO lane's bans and the lock facts' own world.
 
 ## Where
 - `src/housecarl-mcp-tests/CheckErrorsFamilyTests.cs`, `ScriptsFamilyTests.cs`, `DialogueFamilyTests.cs` and
   `EpochCheckSweepTests.cs` — the family facts.
-- `src/housecarl-mcp-tests/CheckErrorsFixtures.cs` and `ScriptsFixtures.cs` — the DTO lane's `Result(...)`
+- `src/housecarl-mcp-tests/CheckErrorsFixtures.cs` and `ScriptsFixtures.cs`: the DTO lane's `Result(...)`
   builders and the readers the DTO tests share.
-- `src/housecarl-mcp-tests/CheckErrorsWorld.cs`, `EpochWorld.cs` and `DialogueWorld.cs` — the live worlds;
+- `src/housecarl-mcp-tests/CheckErrorsWorld.cs`, `EpochWorld.cs` and `DialogueWorld.cs`: the live worlds;
   `CheckErrorsWorldTests.cs` — the fixture-known totals.
 
 ## Related
 
-- `docs/architecture/test-project-fixtures.md` — the Papyrus `.pex` writer and the file-lock harness these
+- `docs/architecture/test-project-fixtures.md`: the Papyrus `.pex` writer and the file-lock harness these
   tests are built on.
-- `docs/decisions/0005-the-1x-tools-are-deleted-not-deprecated.md` — "guards on a deleted tool die with the
+- `docs/decisions/0005-the-1x-tools-are-deleted-not-deprecated.md`: "guards on a deleted tool die with the
   tool; behaviour that survives gets a fresh test", the rule #486 PR 2 discharges.
-- `docs/architecture/check-families.md` and `docs/architecture/check-scripts-and-dialogue-families.md` — the
+- `docs/architecture/check-families.md` and `docs/architecture/check-scripts-and-dialogue-families.md`: the
   contracts these tests assert.

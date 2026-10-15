@@ -22,14 +22,13 @@ stated here once:
 1. `base\overwrite` — the top of MO2's VFS, where tool outputs land (Synthesis patches, xEdit "new
    file", Wrye Bash). MO2 lists those plugins in the profile files, so skipping this layer leaves
    them unresolvable.
-2. Enabled mods under `base\mods`, in `modlist.txt` order — **top = highest priority** — each mod
+2. Enabled mods under `base\mods`, in `modlist.txt` order (**top = highest priority**) each mod
    root being a Data root, so plugins sit at its top level.
 3. `<gamePath>\Data` — vanilla masters and base game, filling only names no mod provided.
 
 `Mo2LoadOrder.Build` walks exactly that sequence for the ACTIVE order (enabled mods only).
-`LocatePlugin` and `AllPluginFileNames` walk a longer sequence in the same precedence —
-overwrite → enabled → **disabled** → **unlisted** (a folder on disk `modlist.txt` mentions in
-neither list, the state of a patch houseCARL just wrote) → Data — and return *all* hits rather than
+`LocatePlugin` and `AllPluginFileNames` walk a longer sequence in the same precedence (overwrite → enabled → **disabled** → **unlisted** (a folder on disk `modlist.txt` mentions in
+neither list, the state of a patch houseCARL just wrote) → Data) and return *all* hits rather than
 the first, so a filename several folders provide is reported instead of silently picked. The two
 share one `CandidateFolders` sequence: a "not found" and the "did you mean" that follows it must be
 drawn from the same set of places.
@@ -72,10 +71,10 @@ it until a tool writes there.
 
 ### The profile files
 
-- `loadorder.txt` — every plugin in load order, masters first, **winner last**.
-- `modlist.txt` — mod priority, `+`enabled / `-`disabled / `#`comment, `…_separator` entries
+- `loadorder.txt`: every plugin in load order, masters first, **winner last**.
+- `modlist.txt`: mod priority, `+`enabled / `-`disabled / `#`comment, `…_separator` entries
   skipped from both lists.
-- `plugins.txt` — the `*` active flag. Listed without a `*` = present but unchecked, and dropped
+- `plugins.txt`: the `*` active flag. Listed without a `*` = present but unchecked, and dropped
   from the order. Absent from the file entirely = an implicit force-loaded base/CC master.
 
 MO2 holds `loadorder.txt` and `plugins.txt` open while it re-sorts, so a read landing in that
@@ -125,7 +124,7 @@ not survive a restart.
 That last point is a sharp edge, not a nicety: a corrupt config followed by one
 `housecarl_set_tool_path` leaves the live file holding that one field and nothing else, and every
 other saved setting is recoverable only from `.corrupt.bak`. The loudness is what makes it
-survivable — `Load` and `Update` both return the note naming the backup — so a caller that
+survivable (`Load` and `Update` both return the note naming the backup) so a caller that
 swallows the note turns a recoverable state into a silent loss.
 
 ## Pinned by
@@ -153,8 +152,7 @@ swallows the note turns a recoverable state into a silent loss.
   raw, and the `[installedFiles]` file ids.
 - *houseCARL's own config file*: all four are pinned. `UserConfigStoreClobberTests` writes a corrupt file and
   asserts the load comes back blank with a note naming the backup, that the backup is byte-identical, and that two
-  `UserConfigStore` instances on one file — each with its own process-local gate, the way the two hosts share it —
-  hammering different fields for 200 rounds each leave BOTH concerns' last values intact. The commit itself is
+  `UserConfigStore` instances on one file (each with its own process-local gate, the way the two hosts share it) hammering different fields for 200 rounds each leave BOTH concerns' last values intact. The commit itself is
   `AtomicFile.Commit`, pinned by `AtomicCommitGuardTests`, one of whose three call sites is `UserConfig.Update`;
   those tests prove the `File.Replace` path is taken, not
   crash-atomicity across a power cut, which is not demonstrable in-process and is not claimed.

@@ -1,240 +1,30 @@
 # houseCARL
 
-houseCARL is an MCP server that exposes a Skyrim Special Edition load order at the data layer. It reads a Mod Organizer 2 instance's profile and presents every plugin record, every Data-relative asset, the compiled Papyrus, the SKSE plugin layer and the SkyPatcher INI layer to an AI assistant as a set of tools. It is built on [Mutagen](https://github.com/Mutagen-Modding/Mutagen). The host is [Claude Code](https://claude.com/claude-code) or OpenAI Codex.
+houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders managed by Amethyst. It reads Amethyst's saved profile snapshot and gives an AI assistant access to plugin records, game assets, compiled Papyrus, SKSE configuration, and SkyPatcher INI data. It uses [Mutagen](https://github.com/Mutagen-Modding/Mutagen) and runs in Claude Code or OpenAI Codex.
 
-## Amethyst Linux preview
+**IMPORTANT NOTICE:** houseCARL-Amethyst is a vibe-coded project. I am not a dev - I pointed Codex at the original houseCARL and Amethyst projects and asked to make a port. Avick3110, the maintainer of houseCARL, gave me permission to port this to Linux as he doesn't work with Linux. There is an eventual intention to re-factor all of this into Rust, but I want to be clear right now about what this project currently is. While this does work as intended, I am not pretending to have made anything original here; I wanted the functionality created by Avick3110 applied to my own situation, and burned tokens for it. Publishing so that anyone else who wants the same doesn't have to duplicate any token spend or effort. I'm open to all pull-requests and contributions of code.
 
-This fork adds explicitly selected **saved-snapshot mode** for Amethyst, with new
-record patches written only to staging.
-Select a schema-v1 connection using `housecarl_set_amethyst_connection` with
-`manifest_path` and `filegraph_mode="saved-snapshot"`. The selection survives restart.
-Every dependent response and JSONL export names the saved profile/generation and
-warns that changes since Amethyst's last refresh may be missing. These results do
-not verify deployment or what wins in-game.
-
-The preview reads Amethyst's own saved-snapshot winners, including BSA members, plus distinct
-vanilla loose files. Vanilla BSA discovery remains pending: when those archives are
-present, results explicitly report incomplete asset coverage. `apply`, `create`,
-`forward` and `copy` can write a new record patch; `apply`/`forward` previews write
-nothing. Each output remains pending deployment: Refresh Amethyst, place and
-enable the patch, rebuild and deploy. Existing patches, in-place edits, other
-managed writes and MO2 update-cache operations remain unavailable.
-
-Verified sources: houseCARL main `b77ba4b2` and Amethyst Testing `e98cf70f` / stable
-2.5.4 (native API 13; schema 9, engine 1, rules 13). A real installed 2.5.4 profile
-has been read successfully. The complete Linux package bundles the .NET runtime
-and Amethyst native component; **Python 3.12+ must be installed**. The native
-reader opens a private catalog copy and does not write manager files. See the
-[snapshot contract](docs/architecture/amethyst-saved-snapshot.md) for configuration,
-checks and limitations. The remaining sections describe the upstream tool surface;
-their Windows write workflows are not enabled by this Linux preview.
-
-A write produces a new plugin in a new MO2 mod folder. Editing an existing plugin in place is an opt-in that names the file. MO2 does not need to be running. No plugin file handle is held between calls.
-
-| | |
-|---|---|
-| Process | C#/.NET 9 MCP over stdio; Linux snapshot reads use a short-lived Python helper |
-| Substrate | Mutagen.Bethesda.Skyrim 0.54.4 |
-| Tools | 32 registered; Linux availability described above |
-| Skills | 7 |
-| Record coverage | 133 record types, 242 sub-structures, 497 polymorphic arms, 280 enums, generated at build time |
-| Licence | GPL-3.0-only |
-
-## Design
-
-Four rules. The surface follows from them.
-
-1. **Record coverage is generated.** A build-time generator reflects over Mutagen's record interfaces and emits the schema and validation data. The set of record types houseCARL handles is the set Mutagen models. Where Mutagen lags xEdit, the tools report the gap.
-2. **One grammar, closed under composition.** Every operation is one call composed from orthogonal axes: select a set of records, project what to read, apply one of a fixed set of write verbs. There is no verb per job and no single/bulk tool pair. One record is a set of one.
-3. **Errors are one sentence: what went wrong and what to try.** A tool does not return a wrong answer or a degraded answer without stating so. An unknown field, an illegal verb, an illegal enum value, or a FormLink at a record of the wrong type is refused by name before any file is opened for writing.
-4. **Reads are lazy; freshness is a cheap check.** Records parse on access from a binary overlay. The load order is not held in memory. A change on disk is detected by a last-write-plus-size check on the next call.
-
-## The tool surface
-
-All tools carry the `housecarl_` prefix.
-
-| Substrate | Tools |
-|---|---|
-| Records | `records` `check` `apply` `create` `remove` `forward` `copy` `write_seq` `create_plugin` `compact_plugin` `merge_plugins` |
-| Assets | `asset_status` `place` |
-| NIF | `nif_inspect` `nif_set` |
-| Papyrus | `compile_script` `decompile_script` |
-| BSA | `bsa_list` `bsa_extract` `bsa_repack` |
-| SkyPatcher | `skypatcher_layer` |
-| SKSE | `skse` |
-| Nexus | `nexus_search` `nexus_mod` `nexus_graphql` `nexus_check_updates` `nexus_identify` |
-| Session | `set_amethyst_connection` `set_mo2_instance` `set_tool_path` `load_order_status` `update_status` |
-
-`records` is the read surface for the record plane. A read is composed from four axes:
-
-| Axis | Decides | Values |
-|---|---|---|
-| SELECT | which records | `formids` `types` `plugins` (with `defined_in`) `conflicts_only` `where` `references` `walk` |
-| SOURCE | whose version | the winner (default), a plugin filename active or not, a `{file, mod}` pair, the SkyPatcher overlay pre or post replay; `versus` names a second pole for `delta` and `tree` |
-| PROJECT | the shape of the answer | `identity` `summary` `fields` `rows` `everything` `aggregate` `delta` `tree` `chain` `info_order` |
-| TRANSPORT | the rendering | `format` (text, json, dense) `limit` `offset` `max_chars` `counts_only` `to_file` |
-
-A write is composed from the op list, the lane and the transport:
-
-| Axis | Values |
-|---|---|
-| Verb | `Set` `Add` `Remove` `SetAtIndex` `InsertAtIndex` `ReplaceAll` `Merge` `CopyFrom` |
-| Lane | `patch=` a new plugin (default), `into=` an existing houseCARL patch, `in_place=` a named plugin overwritten, `dry_run=` |
-| Transport | `readback` `format` `max_chars` |
-
-One read. Every WEAP Requiem.esp touches whose damage, as Requiem.esp sets it, is 50 or more, reading two fields from that plugin. `where_source="winner"` and `fields_source="winner"` ask the same question of the load-order winner.
-
-```jsonc
-housecarl_records(
-  plugins = {"names": ["Requiem.esp"]},
-  types   = ["WEAP"],
-  where   = ["BasicStats.Damage >= 50"],
-  project = {"form": "fields", "fields": ["BasicStats.Damage", "Keywords"]})
-```
-
-One write. Two ops on one record, validated and stopped before disk.
-
-```jsonc
-housecarl_apply(
-  ops = [
-    {"formid": "013989:Skyrim.esm", "field_path": "BasicStats.Damage", "op": "Set", "value": "12"},
-    {"formid": "013989:Skyrim.esm", "field_path": "Keywords", "op": "Add", "value": "0A8668:Skyrim.esm"}],
-  patch   = "IronSwordRebalance",
-  dry_run = true)
-```
-
-`dry_run` runs the full pipeline (winner resolution, schema pre-flight, every op applied in memory, the reference check) and stops before disk. It returns what would change, or the refusal the real call would return.
-
-**Predicates.** `where=` accepts comparisons (`BasicStats.Damage >= 50`), EditorID tests (`editorid startswith REQ_`), the negated string operators (`Name not contains Dagger`, `not startswith`), flag tests over bit fields (`BodyTemplate.FirstPersonFlags has Body`, `has_any`, `has_none`), presence (`VirtualMachineAdapter exists`), membership from a file (`formid not in @<path>`), one link step (`Perks->editorid startswith REQ_NULL_`), a provenance term (`winner = X.esp`), a containment step (`*parent.EditorID`), and quantified steps over a list (`Effects[*none].BaseEffect->editorid startswith REQ_`, `Effects[*count] > 2`). Predicates are ANDed.
-
-**FormIDs.** A record is addressed as `XXXXXX:Plugin.esp`, or in the runtime form the console, Papyrus log and crash log print (`FExxxYYY`, `XX######`), resolved against the current order. Reads accept both forms. Writes accept the plugin form only; a runtime form is refused with the plugin form to use.
-
-**Large results.** Every response on the record plane carries an `epoch` stamp identifying the index build it was answered from. A result over the render limit is written in full to a JSONL file whose first line is a manifest, and the response names the file. The file re-enters a later call as `formids=["@<absolute path>"]`, epoch-checked, and a plain file with one plugin filename per line scopes a call as `plugins={"names": ["@<absolute path>"]}`, or `check`'s `plugins=`/`exclude=`; an inline plugin filename that starts with `@` is written `@@`.
-
-**Findings.** `check` runs derived-findings families over the order: `errors` (dangling FormLinks, missing masters, unparseable records), `scripts` (script properties the VMAD does not bind), `dialogue` (dialogue graph validation over seeded topics and quests — this family takes seeds, it does not sweep), `facegen` (per NPC: the mod winning the head `.nif`, the mod winning the face `.dds`, the plugin winning the record, the mismatch class). Each family's description states what it does not cover.
-
-## Coverage
-
-The schema is generated from Mutagen.Bethesda.Skyrim 0.54.4 by reflection at build time: 1,174 types, at full field depth, with per-field type, cardinality, writability, nullability and xEdit signature. The `mutagen-reference` skill carries the same generated data for offline lookup.
-
-A record type Mutagen does not model is absent from the reference and from the tools. A request for it is refused by name as a library coverage gap. The server is published with trimming off: trimming a reflection-driven server strips types and loses coverage without an error.
-
-Record identity is not writable. `FormKey` on a record, and `ModKey` and `Master` on the mod header and master references, are refused by the write pre-flight and reported as not writable by the reference.
-
-## Runtime layers
-
-Four layers below the plugin plane decide what the game runs. houseCARL reads all four.
-
-- **The MO2 virtual file system.** Which copy of a Data-relative path wins: the overwrite folder, a mod folder, game Data, or a BSA, with the conflict chain. `place` writes a winning override into a new mod folder and reports that the file is written and not yet winning.
-- **NIF internals.** Shape names, embedded skin and FaceTint texture paths, flags, alpha, partitions, read from the winning copy. A whitelisted subset is written back with readback verification.
-- **The SKSE plugin layer.** Every DLL and configuration file under `Data\SKSE\Plugins`, resolved to its winning mod, with each DLL's declared version metadata read without loading it. Two audits: native Papyrus functions declared by scripts against the DLLs that must implement them; form references declared in SKSE configuration files against the load order.
-- **The SkyPatcher INI layer.** Every INI in apply order, with VFS shadows, INI-versus-INI conflicts and no-op writes; or one record's state after the layer has replayed over it. A draft INI not yet in a mod folder can be included in the replay.
-
-The SKSE and SkyPatcher tools report what a file declares. They do not observe the running game.
-
-Two independent precedences decide an NPC's face: the VFS for the baked files, the load order for the record. `check findings=["facegen"]` joins them. Causes and fixes: [docs/facegen.md](docs/facegen.md).
-
-## Writing
-
-Three lanes, mutually exclusive.
-
-| Lane | Parameter | Target | Existing files |
-|---|---|---|---|
-| New patch (default) | `patch=` | A new mod folder `houseCARL - <name>` holding one plugin whose masters span every referenced plugin | Untouched |
-| Extend | `into=` | An existing houseCARL patch; a record already in it is edited, one not in it is copied in from the winner first | The named patch only |
-| In place | `in_place=` | The named plugin, including one houseCARL did not author; re-laid out on save as xEdit and the CK do | The named plugin is overwritten |
-
-A patch name already taken by an earlier houseCARL patch is suffixed. A name matching a plugin on disk that the order is not loading is refused, naming the place and the file.
-
-The in-place lane keeps no backup and has no undo. The first in-place write to a given plugin returns a confirmation instead of writing; the call is repeated with `acknowledge=true`. The acknowledgement covers the overwrite of that plugin only. The pre-flight and record verify run on every call. Before any change, the unedited plugin is re-serialized in memory, and the write is refused, file untouched, if any record would lose a subrecord or change its length; the refusal names the record and the subrecords. `into=` runs the same check on the patch it extends. Four measured losses that carry no information are allowed: an all-zero LTEX `INAM` below form version 43, a deleted REFR's `NAME`, an all-zero REFR `XRMR`, and a RACE `PHWT` written back as its own leading bytes with an all-zero tail cut.
-
-**Pre-flight.** Every op is checked before any file is opened for writing: record type, field path, enum value, verb against cardinality, value range, writability, record identity, the target type of every FormLink. Each failing op is named and counted. One failing op refuses the whole call.
-
-**Readback.** Each edited field is read back from the written file. `readback=true` deep-reads every touched record. The readback reports the file's content. The patch has no effect until it is enabled in MO2; MO2 adds a newly activated plugin at the end of the load order.
-
-**Beyond field edits.** Create records with fresh FormIDs, including nested dialogue structures. Remove records and list entries. Forward a named plugin's version of a record as a winning override, or revert a record to vanilla. Copy an NPC's appearance closure into a standalone record with no dependency on the donor. Create an empty plugin. ESL-compact a plugin, carrying its FormID-keyed FaceGen and voice files. Merge plugins with collision-only renumbering. Unused masters are trimmed on every write.
-
-Dialogue records have bookkeeping that a byte-valid insert does not satisfy: [docs/dialogue.md](docs/dialogue.md).
-
-## Skills
-
-Seven skills ship with the plugin: `/housecarl:<name>` in Claude Code, `$housecarl` in Codex. Each is a `SKILL.md` and a `references/` tree. Reference corpora are read by grep, never loaded whole. Four of the seven — `mutagen-reference`, `papyrus-reference`, `spid-authoring`, `kid-authoring` — carry a `references/index.jsonl` mapping a name to the file that holds it; the two generated corpora carry the line as well.
-
-| Skill | Carries |
-|---|---|
-| `mutagen-reference` | The schema of every modelled record type: fields, types, cardinality, writability, enum values. Emitted by the same generator pass as the server's rulebook. |
-| `papyrus-reference` | Papyrus, SKSE and shipped SKSE-plugin API signatures (PapyrusUtil, JContainers, MCMHelper, po3, SkyUI), 7,345 entries, from [papyrus-index](https://github.com/BellCubeDev/papyrus-index). A function the corpus does not carry is reported as absent. |
-| `skypatcher-authoring` | SkyPatcher 6.4.1 INI grammar and the offline check of a draft INI through the overlay. |
-| `spid-authoring` | SPID 7.3.0 `_DISTR.ini` grammar. |
-| `kid-authoring` | KID 3.5.0 `_KID.ini` grammar. |
-| `open-animation-replacer` | OAR 3.0.0 `config.json` / `user.json` conditions, submod priorities, DAR `_conditions.txt` conversion. |
-| `skse-plugin-authoring` | Native SKSE plugin DLLs on CommonLibSSE-NG: lifecycle, event sinks, trampoline and Address Library hooks, native Papyrus functions, SE + AE + VR from one DLL. |
-
-Dialogue and facegen are not skills. Their tools carry the bookkeeping, and the measured facts are in [docs/dialogue.md](docs/dialogue.md) and [docs/facegen.md](docs/facegen.md), cited from the tool descriptions.
+**IMPORTANT NOTICE 2:** both upstream projects are being heavily developed. This tool may not always have caught up. If you face any issues using houseCARL-Amethyst, _**DO NOT BOTHER THE ORIGNAL DEVS**_
 
 ## Requirements
 
-- Windows, x64.
-- .NET Runtime 9.0 and ASP.NET Core Runtime 9.0, both x64, from the [.NET 9 download page](https://dotnet.microsoft.com/download/dotnet/9.0). Both are required, and the ASP.NET Core installer does not include the base runtime. Take the x64 builds: the download page offers arm64 by default on an ARM machine, and an arm64 runtime does not run the x64 server or the x64 setup utility. Setup is framework-dependent like the server, so it needs the base runtime to start at all — if its window opens and closes with nothing in it, that is the missing runtime, so install it and run setup again. Running it from an open terminal instead shows the message, which the double-clicked window closes over. Once setup starts it checks the ASP.NET Core one and names it if that is what is missing.
-- [Mod Organizer 2](https://www.modorganizer.org/) with a profile. MO2 does not need to be running.
-- Claude Code v2.1.143 or newer (the terminal CLI, or the Claude desktop app's Code tab), or OpenAI Codex. houseCARL runs inside the host.
+### Linux / Amethyst preview
+
+- Linux x64, Python 3.12 or newer, and Amethyst. Version 2.5.4 is the tested stable release. The reader expects filegraph API 13 and database schema 9; other Amethyst versions require compatibility verification even if those numbers match.
+- .NET 9 SDK to build the server and run its tests. The packaged Linux preview bundles the .NET runtime.
+- Rust/C build tools for Amethyst's filegraph; C/C++ build tools are also needed to build the pinned Papyrus utilities.
+- Claude Code or OpenAI Codex to host the MCP server.
+
+Use the [Linux development and build guide](docs/linux-development.md) to build the pinned filegraph, run the Amethyst test suite, or assemble a Linux package candidate. Linux support is in preview. The guide names the tested Amethyst revision and describes the remaining limits.
 
 ## Install
 
-### From a release
-
-1. Download `houseCARL-<version>.zip` from the [latest release](https://github.com/Avick3110/houseCARL/releases).
-2. Extract it and run `houseCARL-Setup.exe`.
-3. Select the host: `[1] Claude Code`, `[2] Codex`, `[3] Both`, `[4] Uninstall`.
-   - Claude Code: skills to `~/.claude/skills/housecarl/`, server registered in `~/.claude.json`. The terminal CLI and the desktop app's Code tab both read these.
-   - Codex: server under `%LOCALAPPDATA%\houseCARL\server\`, skills flat under `~/.agents/skills/` with a `$housecarl` entry point, server registered as `[mcp_servers.housecarl]` in `~/.codex/config.toml`.
-4. Read the plan. Setup prints what it found on the machine and then every path it is about to write, and writes nothing until Enter; `q` quits.
-5. Restart the host. The closing block says what was written and what to do next. On first use, houseCARL asks for the MO2 instance folder, the one containing `ModOrganizer.ini`. The instance can be changed at any time by asking.
-
-Flags, for an unattended run: `--claude` / `--codex` / `--both` pick the host, `--yes` skips the confirm at the plan, `--uninstall` removes instead of installing, `--skip-runtime-check` skips the .NET check. A run whose input is redirected has nobody to answer a question, so it stops and names the flag that answers it rather than assuming one.
-
-Updating: quit Claude Code and Codex first. Setup cannot replace a server a session is running; if one is, it stops and says so.
-
-### By hand
-
-The package is plain enough to install without the setup utility, which is the way out if the exe will not run on a machine. This produces the same layout setup produces.
-
-1. Extract the zip and move the whole `housecarl` folder to `~/.claude/skills/housecarl`, so that folder holds `.claude-plugin/`, `server/` and `skills/`. Claude Code loads the skills out of it.
-2. Register the server in `~/.claude.json`, under the top-level `mcpServers` object, leaving everything else in the file alone:
-
-   ```json
-   "housecarl": {
-     "type": "stdio",
-     "command": "<full path to server\\housecarl-mcp.exe from step 1>",
-     "args": []
-   }
-   ```
-
-   The path is the `.exe`, not the `.dll`, and its backslashes are doubled, as JSON requires.
-3. Restart the host.
-
-`~/.claude.json` is Claude Code's file — the terminal CLI and the desktop app's Code tab. The desktop app's plain chat is a separate surface with its own file, `%APPDATA%\Claude\claude_desktop_config.json`, which takes the same `mcpServers` entry; put houseCARL there as well if that is where you want it. Neither surface reads `~/.claude/claude_mcp_config.json`, so editing that file changes nothing and leaves the host spawning whatever server it had registered before.
-
-A provider that refuses the whole server at `tools/list` over JSON schema nesting depth: set `HOUSECARL_MAX_SCHEMA_DEPTH` on houseCARL's server entry to the depth that provider accepts (10, for the one that reports "exceeds the maximum nesting depth of 10 levels"). The published schemas are cut there and closed with a node saying nesting continues below and is accepted but is not spelled out; what the tools accept does not change. It applies to the server entry, so every model behind that entry gets the cut schemas — use a second entry to split them. Unset, the schemas publish in full, and a value that is not a whole number of 4 or more stops the server with one sentence naming the variable — below 4 a schema loses the parameters and parameter types every call is checked against.
-
-Uninstalling: `[4] Uninstall`, or `--uninstall` with a host flag. It removes the skill folders it recorded installing, the server, the rest of the files a houseCARL package ships, and the `housecarl` entry in `~/.claude.json` and `~/.codex/config.toml` — each config copied to a `.houseCARL.uninstall.bak` beside it first, and every other byte in it left as it was. Anything under those locations that houseCARL did not install stays where it is, and the run names it. The saved MO2 instance sits beside the server and goes with it; the patches houseCARL wrote live in the MO2 mods folder and are left alone. When it is over, the run lists what it actually took off.
-
-### From source
-
-Requires the .NET 9 SDK, Windows and PowerShell.
-
-```powershell
-git clone https://github.com/Avick3110/houseCARL.git
-cd houseCARL
-./scripts/build-plugin.ps1
-```
-
-The script regenerates the rulebook, publishes the server framework-dependent with trimming off, bundles the skills, builds the setup utility, and packs `release/houseCARL-<version>.zip`. Install the output with `houseCARL-Setup.exe`, with `claude --plugin-dir ./dist/housecarl`, or through the bundled local marketplace descriptor. The script header has the details.
+The Amethyst Linux package is still a preview candidate and has not been publicly released. See [Linux installation and release limits](docs/linux-install.md), or follow the [Linux development guide](docs/linux-development.md) to build from source.
 
 ## Usage
 
 ```
-> point houseCARL at D:\Modding\ARR
+> connect houseCARL to my Amethyst Skyrim profile
 
 > which plugins override Hulda's NPC record, and what does each change
   records: formids=[<Hulda>], project={"form": "tree"}
@@ -253,21 +43,191 @@ The script regenerates the rulebook, publishes the server framework-dependent wi
            project={"form": "fields", "fields": ["BasicStats.Damage"]}, format="dense"
 ```
 
-A write resolves the record's load-order winner and overrides it into the patch. The edit is made once, on that record; which plugins touched it before is what `project={"form": "tree"}` shows, not something the write repeats per plugin.
+A write resolves the record's load-order winner and overrides it into the patch. It edits that record once. Use `project={"form": "tree"}` to see how earlier plugins changed it; the write does not repeat the edit across those plugins.
 
-Each write lands as its own MO2 mod folder, `houseCARL - <patch>`. Refresh MO2, review the plugin, sort it, enable it. houseCARL does none of those.
+New patches and managed assets go through Amethyst's transaction workflow and remain in staging until deployed. Refresh and deploy them in Amethyst, then use houseCARL's deployment check to confirm which file wins in the game.
 
 ## How it works
 
-One process, MCP over stdio. The load order is read from the MO2 profile's `loadorder.txt`, `modlist.txt` and `plugins.txt`. No USVFS, no hook into MO2. Records parse on access from Mutagen's lazy binary overlay. A structural index (FormKey to winning plugin and override count, plus the touching-plugin list for contested records) is built by opening each plugin once and disposing it; measured at 125–185 MB on a 3,400-plugin order. A call that needs record bodies opens each plugin at most once for the call. No plugin handle is held between calls, so MO2, xEdit and Explorer operate on the plugins normally while houseCARL runs.
+houseCARL runs as one MCP process over stdio. Amethyst supplies a saved profile snapshot and filegraph. Each response that depends on them identifies the profile and generation it used, since changes made after Amethyst's last refresh may be missing. Mutagen parses records from its lazy binary overlay as needed. houseCARL does not hold plugin file handles between calls.
 
-Freshness is a last-write-plus-size check on every call. A rebuild is an immutable snapshot swapped in as one reference. A plugin the build cannot read is excluded whole with the reason, and every response from that build says which plugins are missing.
+houseCARL checks freshness by comparing each file's last-write time and size. It replaces the current index with a new immutable snapshot when it rebuilds. If it cannot read a plugin, it excludes that plugin and gives the reason in each response from that snapshot.
 
-Writes are verified by a per-kind oracle: 17 cells, each performing one mutation two ways — through the reflection engine, and through a hand-written typed Mutagen setter — with the two output plugins required to be byte-identical. The engine is blind to which record it edits, so proving a kind proves every record carrying that kind. The oracle is run by hand against a real `Skyrim.esm`. 134 probe harnesses run in CI against real plugins.
+The write oracle has 17 cells. Each applies a mutation through the reflection engine and a typed Mutagen setter, then requires the output plugins to match byte for byte. Since the engine does not depend on record type, each cell covers every record that supports that operation. The oracle is also run by hand against a real `Skyrim.esm`. CI runs 134 probe harnesses against real plugins.
 
-The only outbound network use is the Nexus lookups. They need no account or API key. Offline, they say so, and every local tool keeps working. `update_status` reads MO2's local cache first and checks at the exact-file level.
+Nexus lookups are the only tools that use the network. They need no account or API key. When offline, the lookups report that status and local tools keep working. `update_status` reads cached Amethyst metadata; explicit update checks use the installed file ID.
 
-`decompile_script` reconstructs `.psc` from `.pex` without an external tool. Measured on a 3,400-plugin order: 98.80% of 10,189 provable script pairs decompile and recompile byte-exact. A script it cannot prove is reported as such in the output.
+`decompile_script` reconstructs `.psc` files from `.pex` without an external tool. In a 3,400-plugin order, 10,189 script pairs could be compared; 98.80% decompiled and recompiled byte for byte. The output identifies scripts it cannot prove.
+
+## Amethyst connection and saved snapshot
+
+Select Amethyst's schema-v1 saved-snapshot connection with `housecarl_set_amethyst_connection`,
+using `manifest_path` and `filegraph_mode="saved-snapshot"`. The selection persists across
+restarts. Each dependent response and JSONL export identifies the saved profile and generation,
+and warns that changes made since Amethyst's last refresh may be missing.
+
+The adapter reads record winners and asset inputs from one captured profile state, including
+vanilla archives and effective profile inputs. Record and asset writes use durable transactions
+to place output in staging. They leave categories, priorities, plugin enablement, and the live
+deployment unchanged. Output stays pending until Amethyst refreshes and deploys it. A later
+verification records whether the expected file won. `update_status` reads cached Nexus metadata;
+explicit update checks use the installed file ID.
+
+The [Linux installation and current limits](docs/linux-install.md) page describes the candidate
+installer and checks that remain before release.
+
+The tested sources are houseCARL main `b77ba4b2` and Amethyst Testing `e98cf70f`,
+with stable Amethyst 2.5.4 (native API 13; schema 9, engine 1, rules 13). houseCARL
+has read a real installed 2.5.4 profile. The Linux package bundles the .NET runtime and
+Amethyst's native component. **Python 3.12+ must be installed.** The native reader opens
+a private catalog copy and does not write manager files. The [snapshot contract](docs/architecture/amethyst-saved-snapshot.md)
+covers configuration, checks, and limits. Amethyst must close normally before a managed write
+that needs its library lock. The server refuses that write while Amethyst is open. Papyrus and
+BSA tools use the selected native Steam/Proton environment where supported. Flatpak and custom
+Steam layouts, along with a run inside the selected prefix, remain release checks.
+
+| | |
+|---|---|
+| Process | C#/.NET 9 MCP over stdio; Linux snapshot reads use a short-lived Python helper |
+| Substrate | Mutagen.Bethesda.Skyrim 0.54.4 |
+| Tools | 32 registered; Linux availability described above |
+| Skills | 7 |
+| Record coverage | 133 record types, 242 sub-structures, 497 polymorphic arms, 280 enums, generated at build time |
+| Licence | GPL-3.0-only |
+
+## Design
+
+The design follows four rules.
+
+1. **Record coverage is generated.** A build-time generator reflects over Mutagen's record interfaces and emits the schema and validation data. houseCARL handles every record type Mutagen models. When Mutagen lacks a type supported by xEdit, the tools report that gap.
+2. **One grammar, closed under composition.** Every operation is one call composed from orthogonal axes: select a set of records, project what to read, apply one of a fixed set of write verbs.
+3. **Errors name the problem and the next step.** Tools explain wrong or incomplete results. Before opening a file for writing, preflight names unknown fields, invalid verbs or enum values, and FormLinks used with the wrong record type.
+4. **Reads are lazy; freshness is checked cheaply.** Records parse from a binary overlay as needed. houseCARL does not keep the load order in memory and detects disk changes with a last-write-plus-size check on the next call.
+
+## The tool surface
+
+All tools carry the `housecarl_` prefix.
+
+| Substrate | Tools |
+|---|---|
+| Records | `records` `check` `apply` `create` `remove` `forward` `copy` `write_seq` `create_plugin` `compact_plugin` `merge_plugins` |
+| Assets | `asset_status` `place` |
+| NIF | `nif_inspect` `nif_set` |
+| Papyrus | `compile_script` `decompile_script` |
+| BSA | `bsa_list` `bsa_extract` `bsa_repack` |
+| SkyPatcher | `skypatcher_layer` |
+| SKSE | `skse` |
+| Nexus | `nexus_search` `nexus_mod` `nexus_graphql` `nexus_check_updates` `nexus_identify` |
+| Session | `set_amethyst_connection` `set_tool_path` `load_order_status` `update_status` |
+
+`records` is the read surface for the record plane. A read is composed from four axes:
+
+| Axis | Decides | Values |
+|---|---|---|
+| SELECT | which records | `formids` `types` `plugins` (with `defined_in`) `conflicts_only` `where` `references` `walk` |
+| SOURCE | whose version | the winner (default), a plugin filename active or not, a `{file, mod}` pair, the SkyPatcher overlay pre or post replay; `versus` names a second pole for `delta` and `tree` |
+| PROJECT | the shape of the answer | `identity` `summary` `fields` `rows` `everything` `aggregate` `delta` `tree` `chain` `info_order` |
+| TRANSPORT | the rendering | `format` (text, json, dense) `limit` `offset` `max_chars` `counts_only` `to_file` |
+
+A write is composed from the op list, the lane and the transport:
+
+| Axis | Values |
+|---|---|
+| Verb | `Set` `Add` `Remove` `SetAtIndex` `InsertAtIndex` `ReplaceAll` `Merge` `CopyFrom` |
+| Lane | `patch=` a new plugin (default), `into=` an existing houseCARL patch, `in_place=` a named plugin overwritten, `dry_run=` |
+| Transport | `readback` `format` `max_chars` |
+
+For example, this read finds each WEAP touched by Requiem.esp whose damage, as set by Requiem.esp, is at least 50. It reads two fields from that plugin. Set `where_source="winner"` and `fields_source="winner"` to ask the same question about the load-order winner.
+
+```jsonc
+housecarl_records(
+  plugins = {"names": ["Requiem.esp"]},
+  types   = ["WEAP"],
+  where   = ["BasicStats.Damage >= 50"],
+  project = {"form": "fields", "fields": ["BasicStats.Damage", "Keywords"]})
+```
+
+This write applies two ops to one record. Both are validated before any file is changed.
+
+```jsonc
+housecarl_apply(
+  ops = [
+    {"formid": "013989:Skyrim.esm", "field_path": "BasicStats.Damage", "op": "Set", "value": "12"},
+    {"formid": "013989:Skyrim.esm", "field_path": "Keywords", "op": "Add", "value": "0A8668:Skyrim.esm"}],
+  patch   = "IronSwordRebalance",
+  dry_run = true)
+```
+
+`dry_run` runs the full pipeline: winner resolution, schema preflight, in-memory application of each op, and reference checks. It stops before writing and returns either the proposed changes or the refusal the real call would produce.
+
+**Predicates.** `where=` accepts comparisons (`BasicStats.Damage >= 50`), EditorID tests (`editorid startswith REQ_`), negated string operators (`Name not contains Dagger`, `not startswith`), bit-field tests (`BodyTemplate.FirstPersonFlags has Body`, `has_any`, `has_none`), presence (`VirtualMachineAdapter exists`), file-based membership (`formid not in @<path>`), a link step (`Perks->editorid startswith REQ_NULL_`), provenance (`winner = X.esp`), containment (`*parent.EditorID`), and quantified list steps (`Effects[*none].BaseEffect->editorid startswith REQ_`, `Effects[*count] > 2`). Predicates are ANDed.
+
+**FormIDs.** Address a record as `XXXXXX:Plugin.esp` or use the runtime form printed by the console, Papyrus log, or crash log (`FExxxYYY`, `XX######`). houseCARL resolves runtime IDs against the current order. Reads accept both forms. Writes require the plugin form and return it when given a runtime ID.
+
+**Large results.** Every record response carries an `epoch` stamp for the index build that produced it. When a result exceeds the render limit, houseCARL writes the full result to JSONL, with a manifest on the first line, and returns the file path. Pass that file to a later call as `formids=["@<absolute path>"]`; houseCARL checks the epoch. A plain file with one plugin filename per line can scope `plugins={"names": ["@<absolute path>"]}` or `check`'s `plugins=` and `exclude=`. Prefix an inline plugin filename that starts with `@` with `@@`.
+
+**Findings.** `check` runs four finding families over the load order: `errors` (dangling FormLinks, missing masters, unparseable records), `scripts` (script properties the VMAD does not bind), `dialogue` (dialogue graph checks for seeded topics and quests), and `facegen` (the winning head `.nif`, face `.dds`, and NPC record for each NPC, plus the mismatch class). Dialogue checks use the supplied seeds. Each family description lists its limits.
+
+## Coverage
+
+At build time, reflection generates the schema from Mutagen.Bethesda.Skyrim 0.54.4. It covers 1,174 types at full field depth and records each field's type, cardinality, writability, nullability, and xEdit signature. The `mutagen-reference` skill carries the same data for offline lookup.
+
+If Mutagen does not model a record type, the reference and tools do not include it. A request for that type returns a named library coverage gap. The server is published with trimming off because trimming a reflection-driven server can remove types and silently reduce coverage.
+
+Record identity is not writable. `FormKey` on a record, and `ModKey` and `Master` on the mod header and master references, are refused by the write pre-flight and reported as not writable by the reference.
+
+## Runtime layers
+
+Four layers below the plugin plane affect what the game runs. houseCARL reads each of them.
+
+- **Amethyst's saved asset view.** Which loose or archived file wins for a Data-relative path, with its saved source and conflict chain. Managed asset writes go to Amethyst staging and remain pending until refresh and deployment.
+- **NIF internals.** Shape names, embedded skin and FaceTint texture paths, flags, alpha, partitions, read from the winning copy. A whitelisted subset is written back with readback verification.
+- **The SKSE plugin layer.** houseCARL finds each DLL and configuration file under `Data\SKSE\Plugins` and resolves its winning source. It reads declared DLL version metadata without loading the DLL. It also checks that DLLs implement native Papyrus functions declared by scripts and that SKSE configuration files reference plugins in the load order.
+- **The SkyPatcher INI layer.** houseCARL reads INIs in apply order, including VFS shadows and conflicts between INIs. It can also replay the layer over a record or include a draft INI that is not yet in a mod folder.
+
+The SKSE and SkyPatcher tools report what a file declares. They do not observe the running game.
+
+Two precedence orders determine an NPC's face: the file view selects the baked files, and the load order selects the record. `check findings=["facegen"]` compares them. See [docs/facegen.md](docs/facegen.md) for causes and fixes.
+
+## Writing
+
+Three lanes, mutually exclusive.
+
+| Lane | Parameter | Target | Existing files |
+|---|---|---|---|
+| New patch (default) | `patch=` | A new mod folder `houseCARL - <name>` holding one plugin whose masters span every referenced plugin | Untouched |
+| Extend | `into=` | An existing houseCARL patch; a record already in it is edited, one not in it is copied in from the winner first | The named patch only |
+| In place | `in_place=` | The named plugin, including one houseCARL did not author; re-laid out on save as xEdit and the CK do | The named plugin is overwritten |
+
+A patch name already taken by an earlier houseCARL patch is suffixed. A name matching a plugin on disk that the order is not loading is refused, naming the place and the file.
+
+The in-place lane does not create a backup or provide an undo. On the first write to a plugin, houseCARL asks for confirmation; repeat the call with `acknowledge=true` to proceed. That acknowledgement covers only the named plugin. Every call runs preflight and verifies the record. Before writing, houseCARL serializes the original plugin in memory and refuses the write if any record would lose a subrecord or change length. The refusal names the affected record and subrecords, and leaves the file untouched. `into=` applies the same check to the patch being extended. Four measured losses that carry no information are allowed: an all-zero LTEX `INAM` below form version 43, a deleted REFR's `NAME`, an all-zero REFR `XRMR`, and a RACE `PHWT` written back as its own leading bytes with an all-zero tail cut.
+
+**Preflight.** Before opening a file for writing, houseCARL checks every op's record type, field path, enum value, verb and cardinality, value range, writability, record identity, and FormLink target type. It names and counts each failing op. One invalid op refuses the entire call.
+
+**Readback.** houseCARL reads each edited field from the output file. Set `readback=true` to read every touched record in full. The response describes the file's contents. A staged patch affects the game only after Amethyst refreshes and deploys it. houseCARL can then check whether the expected file won.
+
+The write tools also create records with fresh FormIDs, including nested dialogue structures, and remove records or list entries. They can forward a named plugin's record as the winning override, restore a vanilla record, copy an NPC's appearance into a standalone record, create an empty plugin, ESL-compact a plugin while carrying its FormID-keyed FaceGen and voice files, and merge plugins while renumbering only collisions. Every write trims unused masters.
+
+Dialogue records have bookkeeping that a byte-valid insert does not satisfy: [docs/dialogue.md](docs/dialogue.md).
+
+## Skills
+
+The plugin ships seven skills, invoked as `/housecarl:<name>` in Claude Code or `$housecarl` in Codex. Each skill has a `SKILL.md` and a `references/` tree. Skills search reference corpora as needed instead of loading them whole. Four skills, `mutagen-reference`, `papyrus-reference`, `spid-authoring`, and `kid-authoring`, include a `references/index.jsonl` that maps names to files. The two generated corpora include the indexed line as well.
+
+| Skill | Carries |
+|---|---|
+| `mutagen-reference` | The schema of every modelled record type: fields, types, cardinality, writability, enum values. Emitted by the same generator pass as the server's rulebook. |
+| `papyrus-reference` | Papyrus, SKSE and shipped SKSE-plugin API signatures (PapyrusUtil, JContainers, MCMHelper, po3, SkyUI), 7,345 entries, from [papyrus-index](https://github.com/BellCubeDev/papyrus-index). A function the corpus does not carry is reported as absent. |
+| `skypatcher-authoring` | SkyPatcher 6.4.1 INI grammar and the offline check of a draft INI through the overlay. |
+| `spid-authoring` | SPID 7.3.0 `_DISTR.ini` grammar. |
+| `kid-authoring` | KID 3.5.0 `_KID.ini` grammar. |
+| `open-animation-replacer` | OAR 3.0.0 `config.json` / `user.json` conditions, submod priorities, DAR `_conditions.txt` conversion. |
+| `skse-plugin-authoring` | Native SKSE plugin DLLs on CommonLibSSE-NG: lifecycle, event sinks, trampoline and Address Library hooks, native Papyrus functions, SE + AE + VR from one DLL. |
+
+Dialogue and facegen tools handle their own bookkeeping. Their measured behavior is documented in [docs/dialogue.md](docs/dialogue.md) and [docs/facegen.md](docs/facegen.md), which the tool descriptions link to.
+
+
 
 ## Development
 
@@ -277,30 +237,30 @@ The only outbound network use is the Nexus lookups. They need no account or API 
 | `src/housecarl-core/` | Record, asset, read and write engines; the load-order resolver |
 | `src/housecarl-generator/` | Build-time schema generator; the probe runner |
 | `src/housecarl-mcp-tests/` | xUnit tests against the built server |
-| `src/housecarl-setup/` | Installer |
+| `scripts/` | Linux package, native-tool and installer workflows |
 | `plugin/` | Plugin manifest, changelog, notices; skills are copied in at build |
 | `.claude/skills/` | Skill sources |
 | `docs/` | Architecture notes and decision records |
 | `standards/` | Testing and naming |
 
-```powershell
-dotnet build housecarl.sln -c Release
-dotnet test src/housecarl-mcp-tests -c Release --no-build
-```
+Use the Linux build and test commands in [docs/linux-development.md](docs/linux-development.md).
 
-Read [CLAUDE.md](CLAUDE.md) before changing anything, then the note in `docs/architecture/` for the subsystem. Decisions are recorded one per file in `docs/decisions/`. Contribution process: [CONTRIBUTING.md](CONTRIBUTING.md).
-
-## Upgrading from 1.x
-
-2.0.0 replaces the 1.x tool surface with 31 tools built from one grammar. There is no alias layer and no deprecation window. A 1.x tool name is refused with one sentence naming its successor and the call shape to use. The rows those sentences come from are in `src/housecarl-mcp/AliasTable.cs`.
+Before changing the code, read [CLAUDE.md](CLAUDE.md) and the architecture note for the subsystem in `docs/architecture/`. Each decision has its own file in `docs/decisions/`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process.
 
 ## Licence
 
-GPL-3.0-only. See [LICENSE](LICENSE). Required by Mutagen (GPL-3.0-only, no linking exception), which houseCARL is built on and bundles. Third-party components and licences are listed in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) with corresponding-source pointers.
+houseCARL-Amethyst inherits GPL-3.0-only from the [original houseCARL project](https://github.com/Avick3110/houseCARL). Upstream houseCARL uses and bundles Mutagen and other GPL-3.0-only libraries without a linking exception, so the combined program must be distributed under GPL version 3. The bundled Amethyst filegraph is GPL-3.0-or-later and is distributed with this program under version 3. Caprica retains its MIT licence. See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) for the licence texts, component notices, and source links.
+
+If you distribute houseCARL-Amethyst or a modified version, keep the copyright and licence notices, identify your changes, and license the covered combined work under GPL-3.0-only. Distributing binaries also requires providing their Corresponding Source in a form permitted by GPLv3, including modified source and the scripts needed to build and install it. Separate bundled components retain their own licence notices. These obligations are explained in [GPLv3, sections 4 to 6](https://www.gnu.org/licenses/gpl.en.html).
+
+You can run the program and make private changes without publishing your source. Using it does not automatically place your mods or generated patches under the GPL; output is covered only when its contents themselves form a covered work. Any source material used in a patch still carries its own permissions and licence requirements. See the [GNU licence FAQ](https://www.gnu.org/licenses/gpl-faq.en.html#GPLOutput).
 
 ## Credits
 
-- [Mutagen](https://github.com/Mutagen-Modding/Mutagen), Noggog. The Bethesda-format library houseCARL is built on.
-- [papyrus-index](https://github.com/BellCubeDev/papyrus-index), BellCube. Source corpus for `papyrus-reference`.
-- Zzyxzz (SkyPatcher) and powerofthree (SPID, KID). Public documentation the distributor grammars were drawn from.
-- DrHeisen. The `open-animation-replacer` skill, and two earlier skills since retired.
+- [Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager) by ChrisDKN and contributors, whose manager and native filegraph provide the profile and asset view used by this fork.
+- [Original houseCARL](https://github.com/Avick3110/houseCARL) by Avick3110 and contributors, the project this Amethyst integration builds on.
+- [Caprica](https://github.com/Styyx1/Caprica), originally by Orvid King, with the fork used here maintained by Styyx1. It provides the native Papyrus compiler.
+- [Mutagen](https://github.com/Mutagen-Modding/Mutagen) by Noggog, the Bethesda-format library used by houseCARL.
+- [papyrus-index](https://github.com/BellCubeDev/papyrus-index) by BellCube, the source corpus for `papyrus-reference`.
+- Zzyxzz for SkyPatcher and powerofthree for SPID and KID. Their public documentation informed the distributor grammars.
+- DrHeisen for the `open-animation-replacer` skill and two earlier skills that have since been retired.

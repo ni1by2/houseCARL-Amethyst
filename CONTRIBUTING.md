@@ -1,32 +1,32 @@
 # Contributing to houseCARL
 
-Thanks for your interest — houseCARL accepts issues and pull requests.
+houseCARL accepts issues and pull requests.
 
 ## Before you start
 
-For anything beyond a typo fix, **open an issue first** describing the problem or proposal. It lets us confirm direction before you invest in an implementation — and lets us tell you if the gap is already fixed on `main` awaiting release.
+For changes beyond a typo fix, open an issue describing the problem or proposal before you implement it. Maintainers can confirm the direction or point you to a fix already on `main`.
 
 ## Bug reports
 
-The fastest reports to act on include:
+Include the following in a bug report:
 
-- **houseCARL version** — fixes often land on `main` before a release, so the version tells us whether you're hitting a known-fixed gap.
-- **Exact repro** — the tool call(s) you made and the full error or wrong output you got. Driving the server directly over stdio and quoting its stderr is gold, but not required.
-- **Environment** where relevant — Skyrim SE version, MO2 or manual install, load-order size.
+- The houseCARL version. Fixes may already be on `main` awaiting release.
+- The tool calls and full error or incorrect output. Stderr from a direct stdio run is useful when available.
+- Relevant environment details: Amethyst version, Linux distribution, Skyrim SE runtime, and load-order size.
 
 ## Pull requests
 
-- **Fork and branch** — PRs come from a branch on your fork, targeting `main`.
-- **One logical change per PR.** Small and reviewable beats broad.
-- **Link the issue.** Reference the issue your PR resolves with a closing keyword in the description — `Fixes #123` (or `Closes #123`) — so it closes automatically when the PR merges instead of being left open by hand.
-- **Update the changelog.** A user-facing change (new or changed tool behaviour, a bug fix users would notice) adds its entry as `plugin/changelog.d/<branch>.md` in the **same PR** (see the README there) — so release notes accrue as work lands instead of being reconstructed at the cut. The entry says what a user notices and how to check it; how it works, contracts, caveats and edge cases go in the matching `docs/architecture/` note. `plugin.json` stays untouched until an actual release.
-- **CI must be green** — the `build + probes` check is required to merge. First-time contributors' CI runs wait for maintainer approval; that's a GitHub safety default, not distrust.
-- **Linear history** — we merge by rebase only. Keep your branch rebased on current `main`.
-- **Bring a test.** A fix comes with a test in `src/housecarl-mcp-tests` that fails before the change and passes after; see `standards/TESTING.md`. Anything that needs real game data runs locally, with what you ran and saw noted in the PR.
-- **Stay generic.** Record-type support is generated from Mutagen's model, never hand-written per type, and bulk work composes from a small set of generic verbs, never a one-off tool for one job. A change that special-cases one record type, or hard-codes one job's domain knowledge into a tool, will be asked to generalize (domain knowledge belongs in skills as data).
-- **Fail loud.** No silent failure and no silently degraded mode: an unsupported path returns a named error saying what was checked and what to try next — never a wrong answer or a bare miss.
-- **Naming** — MCP tools are `housecarl_<snake_case>`; see `standards/NAMING.md`.
+- Open the PR from a branch on your fork and target `main`.
+- Keep each PR to one logical change so it can be reviewed on its own.
+- Link the issue using `Fixes #123` (or `Closes #123`) in the description so GitHub closes it when the PR merges.
+- For a change users would notice, add `plugin/changelog.d/<branch>.md` in the same PR. See the README in that directory. The entry says what a user notices and how to check it; how it works, contracts, caveats and edge cases go in the matching `docs/architecture/` note. `plugin.json` stays untouched until an actual release.
+- The `build + probes` CI check must pass before merge. GitHub requires maintainer approval before running CI for first-time contributors.
+- Keep your branch rebased on current `main`; PRs are merged by rebase.
+- Include a test for each fix in `src/housecarl-mcp-tests` that fails before the change and passes after; see `standards/TESTING.md`. Anything that needs real game data runs locally, with what you ran and saw noted in the PR.
+- Keep record-type support generic. Support is generated from Mutagen's model, never hand-written per type, and bulk work composes from a small set of generic verbs, never a one-off tool for one job. A change that special-cases one record type, or hard-codes one job's domain knowledge into a tool, will be asked to generalize (domain knowledge belongs in skills as data).
+- Report unsupported operations with a named error that explains what was checked and what to try next. Do not return a wrong answer, an unexplained miss, or silently degraded results.
+- MCP tools are `housecarl_<snake_case>`; see `standards/NAMING.md`.
 
 ## License
 
-houseCARL is GPL-3.0. By submitting a pull request you agree your contribution is licensed under GPL-3.0 like the rest of the project.
+houseCARL-Amethyst inherits GPL-3.0-only from upstream houseCARL. By submitting a pull request, you agree to license your contribution under GPL-3.0-only. See the repository README for the licence chain and redistribution requirements.

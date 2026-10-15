@@ -22,8 +22,8 @@ INSTALL  (about 30 seconds, no command line)
 
   2.  FULLY restart Claude.
       Close and reopen the Claude desktop app, or restart the `claude`
-      terminal. This is the step people forget -- Claude only picks up
-      houseCARL after a restart.
+      terminal. Claude picks up houseCARL only after
+      a restart.
 
   3.  Point houseCARL at your modlist. In Claude, say (with YOUR path):
 
@@ -114,7 +114,7 @@ WHAT'S IN HERE
   housecarl\README.md   full README, more usage examples, and credits
   housecarl\LICENSE     GPL-3.0-only  (+ THIRD-PARTY-NOTICES.txt)
 
-Prefer the terminal? The "housecarl" folder is also a normal Claude Code
-plugin -- see housecarl\README.md. Otherwise just use the installer above.
+The "housecarl" folder can also be used as a Claude Code plugin from the
+terminal. See housecarl\README.md for those instructions.
 
 ========================================================================

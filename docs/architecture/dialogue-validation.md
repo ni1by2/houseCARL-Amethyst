@@ -5,9 +5,10 @@ covers: [src/housecarl-core/DialogueValidate.cs, src/housecarl-core/DialogueCkPa
 # Dialogue validation: CK parity, what a clean pass means, and the check family
 
 ## What it is
-What houseCARL checks before a dialogue record goes out, and what the dialogue family on `housecarl_check` may
-claim. The merged INFO order, the fold and the SNAM marker are [`dialogue.md`](dialogue.md); the modder-facing
-page is [`docs/dialogue.md`](../dialogue.md).
+
+These checks run before houseCARL writes dialogue records and define what the dialogue family
+of `housecarl_check` can report. [`dialogue.md`](dialogue.md) covers merged INFO order, the fold,
+and the SNAM marker. The modder-facing guide is [`docs/dialogue.md`](../dialogue.md).
 
 ## Contracts
 
@@ -47,8 +48,8 @@ Two exceptions to the is-null signal:
 - Alias VTCK is scoped to REFERENCE aliases; a Location alias resolves to a place, not an actor, and the same gate
   guards the fill and the gap.
 
-A `0`-fill materialises the subrecord only, so every named flag inside it — `OrWithPrevious` on an objective, the
-alias flags, and the INFO `Flags` struct's `Goodbye`, which [`docs/dialogue.md`](../dialogue.md) covers — stays an
+A `0`-fill materialises the subrecord only, so every named flag inside it (`OrWithPrevious` on an objective, the
+alias flags, and the INFO `Flags` struct's `Goodbye`, which [`docs/dialogue.md`](../dialogue.md) covers) stays an
 explicit authoring choice.
 
 ### What a clean pass means
@@ -58,7 +59,7 @@ checks walk the WINNING topic's child list, so an INFO another plugin contribute
 not body-checked: a clean pass means "every line this winner lists is sound", not "every line in this topic is". The
 effective ORDER view is the merge across all of them.
 
-PNAM ABSENCE is never flagged — vanilla leaves it empty and selects intra-topic by Conditions — and only a SET but
+PNAM ABSENCE is never flagged (vanilla leaves it empty and selects intra-topic by Conditions) and only a SET but
 unresolvable PNAM is reported. Deleted INFOs are skipped and tallied. Resolution scope is the active order;
 validating within {plugin + its masters} alone is a deliberately deferred capability. The whole run is wrapped, so a
 resolve or asset failure rides `CheckError` rather than being swallowed.
@@ -87,8 +88,8 @@ value, and intra-topic Info-variant ordering.
 
 ### The check family
 
-The dialogue family on the merged `check` surface is SEEDED, not swept. Selection is by record — a quest expands into
-every topic it owns — so `plugins=` and `exclude=` do not scope it, and the response says so. An empty seed list is a
+The dialogue family on the merged `check` surface is SEEDED, not swept. Selection is by record (a quest expands into
+every topic it owns) so `plugins=` and `exclude=` do not scope it, and the response says so. An empty seed list is a
 REFUSAL, never a widening: resolving it to "the whole order" would run a whole-order dialogue sweep, which is refused
 on cost. A seed that does not resolve is carried as a named refusal, never dropped, because the scope IS the seed
 list and a discarded seed silently narrows it.
@@ -105,13 +106,12 @@ defaulting to the widest set. The same table decides what the epoch stamp names:
 substrate throughout and the stamp caveats nothing.
 
 ## Pinned by
-- `DialogueCkParityPairTests` and `DialogueCkParityCreateTests` — the fill and gap pairs; their `*-WINS` tests pin
+- `DialogueCkParityPairTests` and `DialogueCkParityCreateTests`: the fill and gap pairs; their `*-WINS` tests pin
   NON-OVERRIDE, their `*-AUTOFILL` tests NEVER SILENT, `DIAL-PNAM-WINS` an explicit `0` Priority, and
   `QUST-ALIAS-LOCATION` VTCK's scope to reference aliases.
-- `DialogBranchFlagsRefusalTests` — a branch with no `Flags` is refused naming both values, and an explicit
+- `DialogBranchFlagsRefusalTests`: a branch with no `Flags` is refused naming both values, and an explicit
   value, `0` included, lands.
-- `DialogueValidateGraphTests.ASetPreviousLinkToNoInfoIsAProblem` / `APreviousLinkToARealSiblingIsNotFlagged` —
-  only a set but unresolvable PNAM is reported; `ADeletedInfoIsSkippedAndTallied` — deleted INFOs are skipped and
+- `DialogueValidateGraphTests.ASetPreviousLinkToNoInfoIsAProblem` / `APreviousLinkToARealSiblingIsNotFlagged`:   only a set but unresolvable PNAM is reported; `ADeletedInfoIsSkippedAndTallied` — deleted INFOs are skipped and
   tallied; `DialogueValidateConditionTests.AnAliasModeFormParameterIsNotFlagged` — the FLOI mode gate;
   `DialogueValidateInputTests.AQuestFansOutToTheTopicsItOwns` — a quest expands into the topics it owns.
 - `DialogueFamilyTests.AVanillaTopicNoPluginTouchesIsLabelledButNotWarnedAbout`,
@@ -119,19 +119,19 @@ substrate throughout and the stamp caveats nothing.
   `AnOverrideInheritingAStaleSubtypeIsNotWarnedAbout` — the subtype-disagreement ownership gate and its second
   exemption; `TheJsonSweepFlagsAStaleSubtype` and `TheJsonSweepNamesTheSubtypeTheMarkerGives` — the ungated
   `subtype_stale` and `subtype_from_marker` fields.
-- `DialogueFamilyTests.FactD4b_WinnerLockIsLoud` — the whole run is wrapped: a locked winner comes back as the
+- `DialogueFamilyTests.FactD4b_WinnerLockIsLoud`: the whole run is wrapped: a locked winner comes back as the
   named error, not swallowed. `FactD4a_DefinerLockIsLoud` — a locked definer makes `records project=info_order`
   refuse and name it (the check family does not read the definer for that fixture).
-- `DialogueFamilyTests.FactV2_TheStampDeclaresItsBound` — a topic seed's stamp names the verdict classes it does
+- `DialogueFamilyTests.FactV2_TheStampDeclaresItsBound`: a topic seed's stamp names the verdict classes it does
   not cover, on both transports, and an empty seed list is a refusal. The all-DLVW-or-DLBR arm is not asserted
   there.
 
 ## Where
-- `src/housecarl-core/DialogueCkParity.cs` — the fills and their read-only gap checks.
-- `src/housecarl-core/DialogueValidate.cs` — the whole-topic validator, including `CheckConditions`.
-- `src/housecarl-core/DialogueScriptCheck.cs` — the result-script check the validator reuses.
-- `src/housecarl-core/DialogueCheck.cs` — the family's result over a seed list.
-- `src/housecarl-mcp/DialogueSweep.cs` — the family's orchestration: seeds to validations, and the tally.
-- `src/housecarl-mcp/DialogueSweepRender.cs` — the family's section in both transports.
-- `src/housecarl-mcp/DialogueKindChecks.cs` — which checks a seed's kind runs.
+- `src/housecarl-core/DialogueCkParity.cs`: the fills and their read-only gap checks.
+- `src/housecarl-core/DialogueValidate.cs`: the whole-topic validator, including `CheckConditions`.
+- `src/housecarl-core/DialogueScriptCheck.cs`: the result-script check the validator reuses.
+- `src/housecarl-core/DialogueCheck.cs`: the family's result over a seed list.
+- `src/housecarl-mcp/DialogueSweep.cs`: the family's orchestration: seeds to validations, and the tally.
+- `src/housecarl-mcp/DialogueSweepRender.cs`: the family's section in both transports.
+- `src/housecarl-mcp/DialogueKindChecks.cs`: which checks a seed's kind runs.
 - Tool: `housecarl_check findings=["dialogue"]`.

@@ -1,6 +1,6 @@
 # houseCARL
 
-houseCARL is an MCP server that gives Claude direct, data-layer access to a Skyrim Special Edition load order through a live Mod Organizer 2 instance: every plugin record, every Papyrus script, every asset path, the runtime layers, and the modlist state. The modder works in plain English in Claude Code; Claude does the mechanical work and writes results into a new plugin the modder reviews and enables. Editing an existing plugin in place is an opt-in with per-plugin consent.
+houseCARL-Amethyst is an MCP server that gives Claude Code or Codex access to Skyrim Special Edition records, scripts, assets, runtime layers, and modlist state through Amethyst's saved profile snapshot. The modder works in plain English. The assistant writes new output to staging for review and deployment through Amethyst. Editing an existing plugin in place requires per-plugin consent.
 
 It is one C# process built on Mutagen. Users start at [README.md](README.md). This file is for whoever is changing the code.
 
@@ -8,12 +8,12 @@ It is one C# process built on Mutagen. Users start at [README.md](README.md). Th
 
 ## Design
 
-- **Record coverage is generated, never hand-written.** A build-time generator walks Mutagen's record interfaces and emits the schema and validation data. The set of record types houseCARL handles is the set Mutagen models. Do not add a per-record-type schema or write mapping by hand. Where Mutagen lags xEdit, say so loudly; never paper over it.
+- **Record coverage is generated, never hand-written.** A build-time generator walks Mutagen's record interfaces and emits the schema and validation data. The set of record types houseCARL handles is the set Mutagen models. Do not add a per-record-type schema or write mapping by hand. Report gaps between Mutagen and xEdit explicitly; do not invent coverage.
 - **One grammar, closed under composition.** Every operation, single or bulk, is one call composed from a small set of orthogonal axes: select a set of records (one is a set of one), project what to read, apply one of a few generic write verbs. There is no verb per job and no single/bulk tool pair. A new need lands as a value on an existing axis; if it truly cannot, add one general primitive, never a job-shaped tool. The surface contract is `dev/projects/tool-surface-2.0/SPEC.md`; look the verb set up there rather than reciting it. Domain knowledge (field bundles, forbidden prefixes) lives in skills as data.
 - **Errors are one plain sentence: what went wrong and what to try.** A tool never returns a silently wrong answer or a silently degraded mode. When it cannot do the thing, it says so.
-- **Reads are lazy, freshness is cheap.** Records parse on access from a binary overlay; nothing holds the load order in memory or keeps plugin file handles open at rest; a change on disk is picked up by a last-write-plus-size check. One process, no daemon, no live tracking of MO2.
+- **Reads are lazy, freshness is cheap.** Records parse on access from a binary overlay; nothing holds the load order in memory or keeps plugin file handles open at rest; a change on disk is picked up by a last-write-plus-size check. The server runs as one process, with no daemon or live manager tracking.
 
-Code comments call the first two of these the cornerstones. A design question that these four do not settle goes to the PRFAQ (`dev/PRFAQ/`, the problem statement and press release first) and then to Aaron. If something blocks you, say so before working around it.
+Code comments refer to the first two rules as the cornerstones. A design question that these four do not settle goes to the PRFAQ (`dev/PRFAQ/`, the problem statement and press release first) and then to Aaron. If something blocks you, say so before working around it.
 
 ## How to work
 
@@ -25,8 +25,8 @@ Code comments call the first two of these the cornerstones. A design question th
    ```
    Tests drive the built server. How to write one: [standards/TESTING.md](standards/TESTING.md).
 3. **Commit small.** One change per commit, plain imperative subject under 72 characters. Temp files go in the session's own scratchpad directory; the shared temp directory, under any spelling, is where parallel sessions overwrite each other.
-4. **Open the PR.** A paragraph saying what changed and why, `Closes #N` for the issue, and, if a user would notice the change, its changelog entry as `plugin/changelog.d/<branch>.md` (see the README there): what a user notices and how to check it; how it works, contracts, caveats and edge cases go in the matching `docs/architecture/` note. Do not run a review pass yourself: the advisor spawns a fresh agent that reviews the PR blind and comments on it; fold what is real. Aaron then reviews the same way, so a finding from either can be wrong. Fold what is real; refute the rest in a reply on the PR with the reason, and Aaron decides. He merges on his word with `gh pr merge <N> --rebase --delete-branch`; then remove the worktree.
-5. **Write plainly.** Comments are one line saying what. Commit messages, PR bodies, and issues use ordinary words: bug, test, review, fix. No project jargon, no lore.
+4. **Open the PR.** A paragraph saying what changed and why, `Closes #N` for the issue, and, if a user would notice the change, its changelog entry as `plugin/changelog.d/<branch>.md` (see the README there): what a user notices and how to check it; how it works, contracts, caveats and edge cases go in the matching `docs/architecture/` note. The advisor assigns a fresh agent to review the PR without the implementation discussion. Do not review your own change in its place. Aaron reviews independently as well. Address supported findings and explain disagreements in a PR reply; Aaron decides which findings require changes. He merges on his word with `gh pr merge <N> --rebase --delete-branch`; then remove the worktree.
+5. **Write plainly.** Write comments as one line explaining the action. Use ordinary words in commit messages, PR descriptions, and issues; avoid project jargon and lore.
 
 ## Where things live
 

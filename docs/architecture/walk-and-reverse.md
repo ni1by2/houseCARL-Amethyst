@@ -6,9 +6,10 @@ covers: [src/housecarl-core/ClosureWalk.cs, src/housecarl-core/SourceChain.cs, s
 
 ## What it is
 
-The walk half of the selection surface: the closure walk and its ordered source universe, and the
-whole-order reverse index behind an unbounded `references=`. The `where=` predicate and containment
-are `docs/architecture/select-and-walk.md`. The walk expands through Mutagen's `EnumerateFormLinks`.
+Selection walks use a closure traversal with an ordered source list. An unbounded
+`references=` query uses a load-order-wide reverse index. The walk expands Mutagen's
+`EnumerateFormLinks`; `docs/architecture/select-and-walk.md` covers `where=` predicates and
+containment.
 
 ## Contracts
 
@@ -40,12 +41,12 @@ are `docs/architecture/select-and-walk.md`. The walk expands through Mutagen's `
 
 ## Pinned by
 
-- `ClosureWalkGraphTests` / `SourceChainTests` — the walk's caps, cycles and refusals, and the chain's
+- `ClosureWalkGraphTests` / `SourceChainTests`: the walk's caps, cycles and refusals, and the chain's
   first-hit-wins, fault-stops and miss-names-every-arm rules.
-- `RecordsWalkCycleTests` / `RecordsWalkCostTests` / `RecordsWalkUnscannableTests` — the walk lanes.
-- `RecordsReverseIndexTests` — the unbounded reverse selection, the orphan sweep and the index's
+- `RecordsWalkCycleTests` / `RecordsWalkCostTests` / `RecordsWalkUnscannableTests`: the walk lanes.
+- `RecordsReverseIndexTests`: the unbounded reverse selection, the orphan sweep and the index's
   in-band accounting line.
-- `ReverseWalkTypesTests` — `walk.through` and `walk.exclusions` on a walk: what it expands through,
+- `ReverseWalkTypesTests`: `walk.through` and `walk.exclusions` on a walk: what it expands through,
   where it stops, what it leaves out, and the refusals.
 
 ## Where

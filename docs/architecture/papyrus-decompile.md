@@ -5,8 +5,10 @@ covers: [src/housecarl-core/PapyrusDecompiler.cs, src/housecarl-mcp/DecompileToo
 # Papyrus: decompile
 
 ## What it is
-What `housecarl_decompile_script` is, the class hierarchy it reads, and the compile lane beside it
-are [`papyrus.md`](papyrus.md); this note is the decompiler's own contracts.
+
+The decompiler reconstructs source under the contracts below.
+[`papyrus.md`](papyrus.md) describes `housecarl_decompile_script`, the class hierarchy it reads,
+and the adjacent compile workflow.
 
 ## Contracts
 
@@ -25,8 +27,8 @@ are [`papyrus.md`](papyrus.md); this note is the decompiler's own contracts.
 - An optimizer hint means the `.pex` came from an optimizing compiler (Caprica class): the source is
   correct, but the CK compiler will not reproduce the original bytes. Detection is best-effort, so
   its absence proves nothing.
-- Casts that are implicit in every Papyrus context — to Bool or String, Int to Float, an identity
-  cast, an upcast — are emitted as the bare operand; re-emitting one explicitly changes codegen.
+- Casts that are implicit in every Papyrus context (to Bool or String, Int to Float, an identity
+  cast, an upcast) are emitted as the bare operand; re-emitting one explicitly changes codegen.
 - A statement carrying a pending value refuses rather than pick an order the source cannot express,
   in either direction (#792). A held-back value that cannot observe the statement's effect is not
   refused.
@@ -43,7 +45,7 @@ are [`papyrus.md`](papyrus.md); this note is the decompiler's own contracts.
   overwritten.
 
 ## Pinned by
-- `DecompileGuardTests` — the golden source for a canonical `.pex`, zero optimizer hints on
+- `DecompileGuardTests`: the golden source for a canonical `.pex`, zero optimizer hints on
   canonical output, the hint firing on a statement-level `JMPT`, the refusal on an existing target
   leaving it byte-untouched, the Hidden flag kept on both objects of a two-object `.pex`, and the upcast
   suppression with and without a class map.
@@ -63,7 +65,7 @@ are [`papyrus.md`](papyrus.md); this note is the decompiler's own contracts.
 - `DecompileOutPathTests.AnObjectNameThatWouldLeaveTheOutputFolderIsRefusedAndNothingIsWritten` and
   `…AnEscapingNameLaterInTheFileStopsTheCallBeforeTheFirstPscIsWritten` — the object-name refusal
   and the up-front check (#783).
-- `DecompileShortCircuitTests` — the short-circuit arm shapes and the promoted condition temp.
+- `DecompileShortCircuitTests`: the short-circuit arm shapes and the promoted condition temp.
 
 ## Where
 - Core: `PapyrusDecompiler` (`DecompileFile`, the `Body` structurer).

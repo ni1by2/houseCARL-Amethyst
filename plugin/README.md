@@ -29,7 +29,7 @@ All 31 tools carry the `housecarl_` prefix.
 | Nexus | `nexus_search` `nexus_mod` `nexus_graphql` `nexus_check_updates` `nexus_identify` |
 | Session | `set_mo2_instance` `set_tool_path` `load_order_status` `update_status` |
 
-Every operation is one call composed from orthogonal axes: select a set of records, project what to read, apply one of a fixed set of write verbs. There is no verb per job and no single/bulk tool pair. The axes, the predicate language, the write verbs and worked examples are in the [repository README](https://github.com/Avick3110/houseCARL#readme).
+Each operation combines independent selection, projection, and write axes: select a set of records, project what to read, apply one of a fixed set of write verbs. There is no verb per job and no single/bulk tool pair. The axes, the predicate language, the write verbs and worked examples are in the [repository README](https://github.com/Avick3110/houseCARL#readme).
 
 ## Skills
 
@@ -50,7 +50,7 @@ Dialogue and facegen are not skills. Their tools carry the bookkeeping: `check f
 ## Requirements
 
 - Windows, x64.
-- .NET Runtime 9.0 and ASP.NET Core Runtime 9.0, from the [.NET 9 download page](https://dotnet.microsoft.com/download/dotnet/9.0). Both are required, both x64, and the ASP.NET Core installer does not include the base runtime. Take the x64 builds: the download page offers arm64 by default on an ARM machine, and an arm64 runtime does not run the x64 server or the x64 setup utility. houseCARL ships framework-dependent — the server and the setup utility both — so setup needs the base runtime to start at all: if its window opens and closes with nothing in it, that is the missing runtime, so install it and run setup again. Running it from an open terminal instead shows the message, which the double-clicked window closes over. Once setup starts it checks the ASP.NET Core one and names it if that is what is missing.
+- .NET Runtime 9.0 and ASP.NET Core Runtime 9.0, from the [.NET 9 download page](https://dotnet.microsoft.com/download/dotnet/9.0). Both are required, both x64, and the ASP.NET Core installer does not include the base runtime. Take the x64 builds: the download page offers arm64 by default on an ARM machine, and an arm64 runtime does not run the x64 server or the x64 setup utility. houseCARL ships framework-dependent (the server and the setup utility both) so setup needs the base runtime to start at all: if its window opens and closes with nothing in it, that is the missing runtime, so install it and run setup again. Running it from an open terminal instead shows the message, which the double-clicked window closes over. Once setup starts it checks the ASP.NET Core one and names it if that is what is missing.
 - [Mod Organizer 2](https://www.modorganizer.org/) with a profile. MO2 does not need to be running.
 - Claude Code v2.1.143 or newer (the terminal CLI, or the Claude desktop app's Code tab), or OpenAI Codex.
 
@@ -126,10 +126,17 @@ Each write lands as its own MO2 mod folder. Refresh MO2, review the plugin, sort
 
 ## Licence
 
-GPL-3.0-only. See [LICENSE](LICENSE). Required by Mutagen (GPL-3.0-only, no linking exception), which houseCARL is built on and bundles. Third-party components and licences are listed in [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) with corresponding-source pointers.
+houseCARL-Amethyst inherits GPL-3.0-only from the [original houseCARL project](https://github.com/Avick3110/houseCARL). Upstream houseCARL uses and bundles Mutagen and other GPL-3.0-only libraries without a linking exception, so the combined program must be distributed under GPL version 3. The bundled Amethyst filegraph is GPL-3.0-or-later and is distributed with this program under version 3. Caprica retains its MIT licence. See [LICENSE](LICENSE) and [THIRD-PARTY-NOTICES.txt](THIRD-PARTY-NOTICES.txt) for the licence texts, component notices, and source links.
+
+If you distribute houseCARL-Amethyst or a modified version, keep the copyright and licence notices, identify your changes, and license the covered combined work under GPL-3.0-only. Distributing binaries also requires providing their Corresponding Source in a form permitted by GPLv3, including modified source and the scripts needed to build and install it. Separate bundled components retain their own licence notices. These obligations are explained in [GPLv3, sections 4 to 6](https://www.gnu.org/licenses/gpl.en.html).
+
+You can run the program and make private changes without publishing your source. Using it does not automatically place your mods or generated patches under the GPL; output is covered only when its contents themselves form a covered work. Any source material used in a patch still carries its own permissions and licence requirements. See the [GNU licence FAQ](https://www.gnu.org/licenses/gpl-faq.en.html#GPLOutput).
 
 ## Credits
 
+- [Amethyst Mod Manager](https://github.com/ChrisDKN/Amethyst-Mod-Manager) by ChrisDKN and contributors, whose manager and native filegraph provide the profile and asset view used by this fork.
+- [Original houseCARL](https://github.com/Avick3110/houseCARL) by Avick3110 and contributors, the project this Amethyst integration builds on.
+- [Caprica](https://github.com/Styyx1/Caprica), originally by Orvid King, with the fork used here maintained by Styyx1. It provides the native Papyrus compiler.
 - [Mutagen](https://github.com/Mutagen-Modding/Mutagen), Noggog. The Bethesda-format library houseCARL is built on.
 - [papyrus-index](https://github.com/BellCubeDev/papyrus-index), BellCube. Source corpus for `papyrus-reference`.
 - Zzyxzz (SkyPatcher) and powerofthree (SPID, KID). Public documentation the distributor grammars were drawn from.

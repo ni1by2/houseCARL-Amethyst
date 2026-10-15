@@ -6,11 +6,11 @@ covers: [src/housecarl-mcp/ToolCallShim.cs, src/housecarl-mcp/Program.cs, src/ho
 
 ## What it is
 
-The shim is a call-tool filter that runs **before** the SDK binds a call's JSON arguments to the tool
-method's parameters. Without it a malformed argument shape throws inside SDK binding and the SDK
-genericizes it to "An error occurred invoking '\<tool\>'." — an opaque dead end a caller cannot
-self-correct from. Every pass is driven off the tool's own published `InputSchema`, so current and future
-parameters are covered without per-tool wiring.
+The call-tool filter checks JSON arguments before the SDK binds them to method parameters.
+Otherwise, a malformed argument shape throws during binding and produces the generic SDK error
+"An error occurred invoking '\<tool\>'." The filter gives callers enough detail to correct the
+request. Each pass uses the tool's published `InputSchema`, covering current and future
+parameters without per-tool mappings.
 
 ## Contracts
 
@@ -67,8 +67,8 @@ cut's floor of 4 — read it there before changing what any pass here reads.
 
 The passes run inside the same `try` as the call, so a throw from coercion or a refusal pass also comes
 back named rather than as the SDK generic. A real request cancellation stays the SDK's, and so does
-`McpException` (the protocol surface); an `OperationCanceledException` with a live request token — an
-internal HttpClient timeout, say — is not a cancellation and is named here. The full stack goes to
+`McpException` (the protocol surface); an `OperationCanceledException` with a live request token (an
+internal HttpClient timeout, say) is not a cancellation and is named here. The full stack goes to
 stderr, the MCP log, never to stdout, which is the protocol channel.
 
 `Guard` is the same rule one layer in: every MCP tool body runs inside `Guard.Tool`, so an unconverted

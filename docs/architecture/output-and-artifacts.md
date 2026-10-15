@@ -6,15 +6,15 @@ covers: [src/housecarl-mcp/OutputLocations.cs, src/housecarl-mcp/PatchStemShadow
 
 ## What it is
 
-Everything houseCARL writes lands in a houseCARL-owned MO2 mod folder, a folder the caller named outright, or a
-result artifact file. These are the contracts those three share, cited from the files above under ADR 0001.
+houseCARL writes to an owned MO2 mod folder, an explicit caller-supplied folder, or a result artifact.
+The files listed above cite the shared contracts below under ADR 0001.
 
 ## Contracts
 
 ### Where output lands
 
-- **A houseCARL-owned mod folder, by default.** Plugins and every non-`.esp` rider — compiled scripts, a packed
-  `.bsa`, extracted loose files, a generated `.seq` — go into `<ModsDir>\houseCARL - <stem>`. Ownership is
+- **A houseCARL-owned mod folder, by default.** Plugins and every non-`.esp` rider (compiled scripts, a packed
+  `.bsa`, extracted loose files, a generated `.seq`) go into `<ModsDir>\houseCARL - <stem>`. Ownership is
   `[houseCARL] generated=true` in the folder's `meta.ini`, the one mod-root file MO2 does not deploy into Data. A
   missing or stripped marker reads as NOT owned.
 - **`into=` extends an owned folder** through one resolver shared by the `.esp`, rider and asset lanes. Four
@@ -51,8 +51,8 @@ result artifact file. These are the contracts those three share, cited from the 
 An auto-spill claims its path by CREATING the file with `FileMode.CreateNew`, not by probing `File.Exists`, and the
 artifact is written through that same exclusive handle.
 
-A caller-named target carries the opposite hazard — it is the CALLER's file and may already hold an artifact they
-want — so it is written through a same-directory temp moved into place. A crash mid-write cannot pass a half
+A caller-named target carries the opposite hazard (it is the CALLER's file and may already hold an artifact they
+want) so it is written through a same-directory temp published through `AtomicFile.Commit`. A crash mid-write cannot pass a half
 artifact off as a whole one: the manifest is line 1 and carries `row_count`, so a short file fails its own manifest.
 An artifact is immutable once written; a re-run writes a new file, or overwrites a caller-named target wholesale.
 
@@ -77,6 +77,10 @@ file into a temp on the SAME volume as the final path, then hands it here: an ex
 `File.Replace`, which keeps the destination's NTFS identity and creation time; an absent one is served by
 `File.Move`, because `File.Replace` cannot create.
 
+On Linux, an existing target's Unix permissions are applied to the staged file before publication.
+Replacing a private file must not broaden its final permissions. Linux creation times are not a
+portable replacement-identity contract; Amethyst mod priority comes from the saved profile, not birth time.
+
 Two contracts hold it. Same-volume staging is the caller's, and the `FileNotFoundException`-ONLY catch is what
 keeps that honest: a cross-volume swap surfaces as `IOException` and an EFS or special-ACL target as a
 metadata-merge error, and both must stay loud with the original byte-intact rather than degrade into a non-atomic
@@ -89,8 +93,8 @@ deliberately do not funnel through it: there is no original to lose.
 ### The freshness stamp: last write plus size
 
 `FileStamp` is one filesystem entry's last-write time AND its length, and it is THE key every houseCARL cache
-stamps against — the plugin read cache, the MO2 profile gate, the BSA and loose-subtree tables, the SkyPatcher INI
-parse cache — so there is one answer to "has this changed" rather than one per cache. Length is in the key because
+stamps against (the plugin read cache, the MO2 profile gate, the BSA and loose-subtree tables, the SkyPatcher INI
+parse cache) so there is one answer to "has this changed" rather than one per cache. Length is in the key because
 an edit inside the filesystem's timestamp granularity, or one whose tool restores the timestamp it found, leaves
 the mtime where it was (#406). Both terms come from ONE stat. `FileStamp.Absent`, with its negative length, is the
 single sentinel for missing, locked and unreadable.
@@ -106,7 +110,7 @@ Standing notices are stateless; relevance, never memory: a call carries what bea
 
 ### The absolute-path rule
 
-Every path a CALLER names — an `out_path=` folder, a `to_file=` artifact, an `@file` list, a draft INI — must be
+Every path a CALLER names (an `out_path=` folder, a `to_file=` artifact, an `@file` list, a draft INI) must be
 FULLY QUALIFIED, not merely rooted: the server's working directory is not the caller's, and `C:work` or `\work`
 resolve against the server's own directory while the response names the path that was typed. One definition,
 `PathArguments.NotAbsolute`, in core because the predicate and draft readers are there, and carrying no `error:`
@@ -153,17 +157,17 @@ prefix so a throwing lane and a returning lane can both use it.
 - *Re-entering an artifact*, error rows: pinned across `RecordsArtifactTests`' re-entry facts —
   `AMixedArtifactReEntersOnItsResolvedRowsWithNoWasItEditedMisdiagnosis` (error rows are skipped) and
   `AnAllErrorArtifactIsRefusedByItsRealCauseNeverByAccusingTheFile` (an all-error artifact refuses by its real cause).
-- *The atomic-write contract*: what `AtomicCommitGuardTests` pins is that the code takes
-  `File.Replace`'s path rather than `File.Move`'s — except on a host whose filesystem tunneling masks creation time,
-  where that test stops at its control — that a fresh target still lands, and that a pre- or mid-swap
-  failure throws with the prior target byte-for-byte intact.
+- *The atomic-write contract*: `AtomicCommitGuardTests` checks byte-exact publication, consumed staging,
+  Unix permission preservation and loud failure with the prior bytes intact. `CommitFault` injects a
+  failure after the actual payload exists, scoped to one async test and one destination. The same
+  boundary is exercised through patch writes, artifact exports, mesh edits, create/upsert and SEQ regeneration;
+  tests retain cleanup and consent assertions rather than relying on Windows rename restrictions.
 - *The freshness stamp: last write plus size*: pinned by `FreshnessKeyTests` — an edit that leaves the mtime alone is
   still stale, the shared stamp separates two files that differ only in length, and one sentinel stands for a path
   that cannot be statted.
-- *The order stamp: epoch plus health*: pinned by `DegradedOrderMarkerTests` —
-  `ADegradedBuildsJsonResponseCarriesTheMarkerAndNamesWhatIsMissing` and
+- *The order stamp: epoch plus health*: pinned by `DegradedOrderMarkerTests` (`ADegradedBuildsJsonResponseCarriesTheMarkerAndNamesWhatIsMissing` and
   `ADegradedBuildsTextHeadCarriesTheClauseBesideTheEpoch` for the marker riding beside the epoch on both transports,
-  `HealthyOrderMarkerTests.AHealthyBuildCarriesNoMarkerOnEitherLane` for the silence on a healthy build — and by
+  `HealthyOrderMarkerTests.AHealthyBuildCarriesNoMarkerOnEitherLane` for the silence on a healthy build) and by
   `AssetStatusSetTests.TheDegradedOrderRosterSurvivesTheArtifactRoundTrip` for the roster travelling with an
   artifact.
 - *The absolute-path rule*: pinned per lane by `AbsolutePathArgumentTests`.

@@ -6,10 +6,10 @@ covers: [src/housecarl-core/SkyPatcherParse.cs, src/housecarl-core/SkyPatcherCat
 
 ## What it is
 
-SkyPatcher is a runtime record patcher: it edits Bethesda records from INI files at load, so a
-plugin read alone does not say what the game sees. houseCARL reads that layer in four tiers, each
-of which only knows its own job — tokenizer, catalog, field map, overlay. The tokenizer is pure
-grammar and cannot drift when the hand-modeled catalog changes.
+SkyPatcher edits Bethesda records from INI files when the game loads. Reading a plugin alone
+therefore cannot show the final runtime state. houseCARL reads the INI layer through a
+tokenizer, catalog, field map, and overlay. The tokenizer handles grammar independently of the
+hand-modeled catalog.
 
 ## Contracts
 
@@ -83,7 +83,7 @@ order across nested subfolders is unverified, and relative-path sort matches fla
 exactly.
 
 A file named `<Plugin>.esp.ini` loads only when that plugin is in the active load order. A
-gated-off file keeps its parsed content — an inactive patch is still inspectable — and carries
+gated-off file keeps its parsed content (an inactive patch is still inspectable) and carries
 `NotApplied` naming the gate. `SkyPatcher.ini`'s `[Patcher]` `iEnable<Type>Patching=0` switches a
 whole type folder off the same way. Both are flags, never a silent drop.
 
@@ -98,8 +98,8 @@ path, which is surfaced per file as `ShadowedProviders`.
 it onto a deep **mutable copy** of the record's load-order winner:
 
 1. Classify every key of the line against the type's catalog. An unknown key poisons the **whole
-   line** — if it was an unrecognized filter, evaluating the rest would mis-scope the line, worst
-   case applying its ops to every record of the type — so the line skips loud as unresolved.
+   line** (if it was an unrecognized filter, evaluating the rest would mis-scope the line, worst
+   case applying its ops to every record of the type) so the line skips loud as unresolved.
 2. Evaluate the filters against this record. Built-in families (primary, `noFilter…`, `hasPlugins`,
    keyword / EditorID / name contains, mod-name and override-aware tokens, attached mgefs,
    alternate textures) need no per-record path; the rest come from the field map's `FilterSpec`s. A
@@ -113,7 +113,7 @@ Mutation rides `WriteEngine.ApplyVerb` and reads ride `ReadEngine.ReadLeaf`, so 
 cannot drift from the read/write surface.
 
 **Tiered honesty.** CLEAN and COLLECTION ops resolve to a post-state value. HARD ops come back as
-`SkyPatcherDirective`s — the directive text plus why it has no static resolution — never a silently
+`SkyPatcherDirective`s (the directive text plus why it has no static resolution) never a silently
 wrong value. Unknown keys, unmapped ops, unevaluable filters and value failures are all named
 warnings. Every CLEAN and COLLECTION op in the catalog has exactly one field-map entry, either a
 mapping or an explicit `Unmapped` with a reason; HARD ops have none, and CI rejects one that

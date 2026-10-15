@@ -7,9 +7,10 @@ covers: [src/housecarl-core/OwnedChildUnion.cs, src/housecarl-core/OwnedChildCon
 ## What it is
 
 A child-bearing field (a cell's `Persistent`/`Temporary`, a topic's `Responses`, a worldspace's `SubCells`) is
-declared per plugin and assembled by the game from every declarer. An override that touches the parent for an
-unrelated reason (occlusion, lighting) carries none and deletes none, so reading it reports an empty collection
-the game fills — the #342 bug.
+declared by individual plugins and assembled by the game from all declaring plugins. An override
+that changes only occlusion or lighting may carry no children and delete none. Reading that
+override alone reports an empty collection even though the game assembles it from other
+providers; this caused #342.
 
 ## Contracts
 
@@ -25,8 +26,8 @@ So a read states two quantities, and they are not the same:
   artifacts through one carrier, and json also carries it structurally as `owned_child_union` (the member
   FormIDs, capped at `JsonWire.ChildUnionMemberCap`).
 
-A SINGULAR owned child (`Cell.Landscape`, `Worldspace.TopCell`) is not a union — its declarers override one
-record — so the note says which plugin's copy is live instead of adding counts that would be a fiction.
+A SINGULAR owned child (`Cell.Landscape`, `Worldspace.TopCell`) is not a union (its declarers override one
+record) so the note says which plugin's copy is live instead of adding counts that would be a fiction.
 
 The field set the read side asks about is `WriteEngine.ChildBearingProperties`, the same reflected walk the write
 surface's child preservation runs on, so the two cannot diverge and a Mutagen bump that adds a child-bearing
@@ -45,11 +46,10 @@ The union costs a body per touching plugin, so it runs only where the CALLER nam
 `batch_record_detail`, and the `records` source pole. Those lanes are handed a formid list, and one
 `RecordReads.ChildUnionMemo` per call assembles each record once however many times it is named.
 
-The SCAN lanes — the `cross_plugin_query` detail rows, the dense grid, and the artifact spill of either —
-discover their row count instead of being handed it, so a body per toucher per row is a cost nobody asked for.
+The SCAN lanes (the `cross_plugin_query` detail rows, the dense grid, and the artifact spill of either) discover their row count instead of being handed it, so a body per toucher per row is a cost nobody asked for.
 They annotate with the index-only note (`ReadSentences.NotRead`): other plugins touch this record and their
 declarations were not read, plus a clause naming the formids lane that does assemble the union. Annotated either
-way — the field is a false-empty on both — but a scan never claims a quantity it did not compute.
+way (the field is a false-empty on both) but a scan never claims a quantity it did not compute.
 
 ### What it costs
 
@@ -93,8 +93,8 @@ session for the call and hand it down. On the synthetic above, the 200-cell `for
 | one per call | 10 | 1.37 s |
 
 The remaining second is the per-toucher body walk itself, which is the thing the caller asked for. Opens scale
-with the ORDER's plugin count now instead of with rows, which is what makes the real-order shape — more
-touchers, bigger plugins — cost more only in the walk.
+with the ORDER's plugin count now instead of with rows, which is what makes the real-order shape (more
+touchers, bigger plugins) cost more only in the walk.
 
 ### The tree form still names WHICH
 
@@ -121,8 +121,8 @@ limit the current model approaches. One case needs stating because Mutagen makes
 containment enumeration Mutagen cannot route yields an EMPTY sequence rather than throwing, so an empty typed
 walk over a container that holds records at all is read as a MISS, not as a negative.
 
-`DeclaresChild` reads a BODY, and reading a body is not free — the resolver fetches one by enumerating a whole
-overlay — so a caller asking it of every plugin touching a record pays per plugin. Only the lane that has already
+`DeclaresChild` reads a BODY, and reading a body is not free (the resolver fetches one by enumerating a whole
+overlay) so a caller asking it of every plugin touching a record pays per plugin. Only the lane that has already
 fetched those bodies (the conflict tree) asks it; the default read answers the cheaper question the index alone
 can settle.
 
@@ -141,7 +141,7 @@ finds nothing and returns without throwing — the silent no-op the survivor che
 finds the SLOT: the parent, the settable property, and, for a collection slot, the live `IList` the child is an
 element of, which may sit below the property rather than being it (a worldspace's cells are under block
 structs). The slot set is the same `ChildBearingProperties` walk, so nothing here names a record type. A detach
-that cannot be made — a property that will not set, a child in no list the engine can drop it from — is
+that cannot be made (a property that will not set, a child in no list the engine can drop it from) is
 surfaced as a sentence and nothing is written. The records the child itself carries are what a detach takes with
 it, which is why a descendant the caller did not name is a refusal rather than a side effect.
 
@@ -165,7 +165,7 @@ owns children, sole-toucher rows included — the block is not a diff and needs 
 ### What it costs, and where it narrows
 
 No extra record fetch: the tier asks its question of each body already open for the diff. The field set is
-`OwnedChildContent.Fields(body)` — reflection over the type, never a hand list — narrowed to the top-level
+`OwnedChildContent.Fields(body)` (reflection over the type, never a hand list) narrowed to the top-level
 field NAMES the caller's own `fields=` requested, not the paths the response actually emitted; a bracketed
 path (`fields=["Temporary[0]"]`) narrows the block away entirely, matching the cheap tier's own narrowing.
 
@@ -186,8 +186,8 @@ writer, never hand-counted. Content lines still overshoot the cap by at most one
 lane's existing tolerance; invariant framing does not.
 
 A cut notice claims only what was cut. The text block's tail is reachable only when every declarer line was
-written, so it says nothing about the declarers: it ends the row, and the caller — which knows whether the
-row had a diff to lose — names the nodes it dropped, or stays silent on a sole-provider row that lost
+written, so it says nothing about the declarers: it ends the row, and the caller (which knows whether the
+row had a diff to lose) names the nodes it dropped, or stays silent on a sole-provider row that lost
 nothing. All five of the lane's cut notices compose through one `RecordsTools.CutNotice`, so the
 grammar guard that harvests one rendered notice covers the wording of all of them.
 

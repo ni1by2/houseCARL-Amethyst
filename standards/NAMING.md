@@ -15,6 +15,6 @@
 
 Tool names are compile-time constants in `src/housecarl-core/ToolNames.cs`; nothing else spells one out. The `housecarl_` prefix carries over from the 1.x build and stays.
 
-Namespaces, classes, and files are named for what they do, not for the brand. The brand string "houseCARL" appears in user-facing text (tool descriptions, messages) and nowhere in an identifier.
+Name namespaces, classes, and files for their purpose. The brand string "houseCARL" appears in user-facing text (tool descriptions, messages) and nowhere in an identifier.
 
 No version numbers in names.

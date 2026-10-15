@@ -6,13 +6,11 @@ covers: [src/housecarl-mcp/ToolSchemas.cs, src/housecarl-mcp/NestedSchemaConstra
 
 ## What it is
 
-houseCARL's MCP tools are discovered by an assembly scan, and the SDK generates each tool's
-`inputSchema` from its C# method signature. Three things that generator cannot get right on its
-own are corrected once, at registration, before anything is served, and a fourth pass cuts the
-result to a configured nesting depth when one is set. All four change only what is
-**published**. The argument-binding shim does read a published schema, but only root members and each
-parameter's own `type` — never the nested part these passes rewrite (the full list is under the depth
-cut below, where it is the premise of the floor) — and the composed payloads are then
+An assembly scan discovers the MCP tools. The SDK generates each tool's `inputSchema` from its
+C# method signature. At registration, three passes correct limitations in that output. A fourth
+limits nesting depth when configured. These passes affect only the published schema. The argument-binding shim does read a published schema, but only root members and each
+parameter's own `type` (never the nested part these passes rewrite (the full list is under the depth
+cut below, where it is the premise of the floor)) and the composed payloads are then
 read by `ListParams.Read<T>`, which consults no schema and is stricter than the SDK binder.
 
 ## Contracts
@@ -55,7 +53,7 @@ duplicate schema. Key the hoist by type if that stops holding.
 ### Pass 1b — the shape union
 
 A parameter declared `JsonElement` so it can **bind** more than one wire shape publishes untyped, and
-`ToolCallShim` — which judges off the published type — then lets every shape through to the binder.
+`ToolCallShim` (which judges off the published type) then lets every shape through to the binder.
 `ToolSchemas.ShapeUnionParams` stamps such a parameter's published `type` with the JSON kinds it accepts,
 plus `null` (every one of them is optional), so a shape the tool means to refuse reaches the tool and is
 refused in the tool's own words rather than by the shim's generic type-mismatch sentence.
@@ -118,16 +116,16 @@ before sending it, and the verb list had two homes — the table the gate reads,
 description text.
 
 So `NestedSchemaConstraints` walks each parameter's CLR type against the schema published for it
-and stamps what the shape declares: `required` for a member marked `[SchemaRequired]` — the ones
-the server refuses a call without — and `enum` for a member marked `[SchemaValues]`, whose values
+and stamps what the shape declares: `required` for a member marked `[SchemaRequired]` (the ones
+the server refuses a call without) and `enum` for a member marked `[SchemaValues]`, whose values
 come from the table the gate itself validates against (`WriteVerbs.All`, and `WriteVerbs.OnCreate`
 for the surface that refuses the transplanting verb by name). The marks live on the member, not in
-a path list, because a shape is reached from several parameters — `compose` from four — and the
+a path list, because a shape is reached from several parameters (`compose` from four) and the
 recursion bound expands some of them twice.
 
 The stamp is **additive**. `required` unions with whatever the generator already published for that
-node — assigning over it would silently stop requiring a non-nullable member the binder still
-requires — and an `enum` on a member the generator typed as nullable carries `null` alongside the
+node (assigning over it would silently stop requiring a non-nullable member the binder still
+requires) and an `enum` on a member the generator typed as nullable carries `null` alongside the
 names, because JSON Schema applies `enum` to every instance and the server reads a null verb as
 "none given" and defaults it to `Set`. Without that entry the published schema would refuse, a hop
 earlier, a call the tool answers. (A blank verb defaults the same way and is not in the enum: an
@@ -135,8 +133,7 @@ enum cannot state "any whitespace-only string", and no description offers that s
 
 The one **narrowing** is a required member's own `type`, which loses its null arm: the generator types
 every `string?` member as `["string","null"]`, and a member the server refuses the call without is not
-one an explicit null satisfies. The drop reads the **document**, in both spellings the generator uses —
-a `type` array and an `anyOf` union whose arms carry their own types — so every marked member loses the
+one an explicit null satisfies. The drop reads the **document**, in both spellings the generator uses (a `type` array and an `anyOf` union whose arms carry their own types) so every marked member loses the
 arm without anything in the pass naming one. A shape that is null and nothing else is left alone, since
 narrowing it would publish a member no value can satisfy. It is ordered before the `enum` stamp so both
 read the same type.
@@ -155,21 +152,20 @@ the same rulebook switch an op is, which accepts all eight — so nothing backs 
 
 ### Pass 4 — the optional depth cut (`HOUSECARL_MAX_SCHEMA_DEPTH`)
 
-**Unset — the default —
-it does nothing, and the published schemas are byte for byte what the three passes above leave.** The
+**Unset (the default) it does nothing, and the published schemas are byte for byte what the three passes above leave.** The
 variable is spelled the way houseCARL's others are (`HOUSECARL_DATA_DIR`, and the installer's
 `HOUSECARL_SETUP_HOME`).
 
 Pass 2 removed the recursion but inlined the compose chain to its full depth, so `housecarl_create` and
-`housecarl_apply` publish at 24 and 21 levels. A provider that enforces a nesting cap — 10, in the
-report — then refuses the **whole server** at `tools/list`, naming no tool: the same user-facing shape
+`housecarl_apply` publish at 24 and 21 levels. A provider that enforces a nesting cap (10, in the
+report) then refuses the **whole server** at `tools/list`, naming no tool: the same user-facing shape
 as the `$ref` case, and the same posture applies (issue #730).
 
 Set the variable to that provider's cap and every published schema is cut there. Depth is **raw JSON
-container nesting** — the schema object is level 1, every object or array below it one more, whatever
-it holds — because that is the measure the refusing providers report and the one the issue measured
+container nesting** (the schema object is level 1, every object or array below it one more, whatever
+it holds) because that is the measure the refusing providers report and the one the issue measured
 with. A branch that cannot be spelled out that shallow is replaced by the node pass 2 already closes a
-recursion with — the node's own `type` and description — under a clause of its own. Nothing is narrowed,
+recursion with (the node's own `type` and description) under a clause of its own. Nothing is narrowed,
 and `tools/call` is untouched at every accepted cap: the binder consults no schema, and the floor below
 keeps the two members the shim does read, so a call nested deeper than the cut is bound and answered
 exactly as before. The schema is less descriptive below the cut, never wrong.
@@ -222,25 +218,24 @@ with deferred tools a session sees only tool names up front, so the instructions
 
 - *The instructions cut*: `ServerInstructionsTests.TheInstructionsFitClaudeCodesCutOf2048Characters`, on the served
   string.
-- *Pass 1 — the `@file` union*: `PublishedSchemaShapeTests.EveryFileListUnionPublishesAnyOfGeneratedArrayOrString`
-  and `EveryFileListUnionsArrayArmCarriesItsGeneratedElementMembers` — the union, with the array arm generated from
+- *Pass 1 (the `@file` union*: `PublishedSchemaShapeTests.EveryFileListUnionPublishesAnyOfGeneratedArrayOrString`
+  and `EveryFileListUnionsArrayArmCarriesItsGeneratedElementMembers`) the union, with the array arm generated from
   the C# element type.
-- *Pass 2 — no `$ref` in a published schema*: `PublishedSchemaShapeTests.NoPublishedToolSchemaCarriesARefMemberInAnySpelling`
-  — the invariant, with a predicate wider than the pass's own gate; `EveryRecursiveSiteExpandsExactlyOneLevelBeforeClosing`
+- *Pass 2 (no `$ref` in a published schema*: `PublishedSchemaShapeTests.NoPublishedToolSchemaCarriesARefMemberInAnySpelling`) the invariant, with a predicate wider than the pass's own gate; `EveryRecursiveSiteExpandsExactlyOneLevelBeforeClosing`
   and `EveryRecursiveSiteClosesOnAnOpenNodeSayingNestingContinues` in the same class — a cycle is expanded a bounded
   number of times and closed with an open node.
 - *Pass 2 — no `$ref` in a published schema*: the emission grammar it depends on is asserted by
   `SchemaRefFlattenTests.TheGeneratorsEmissionStaysInsideTheGrammarTheFlattenPassReads`, so a generator that drifts on
   an SDK bump reddens there rather than at a user's server start. The same class: `$defs` is dropped once nothing refers
   to it; a `$ref` the pass does not handle is left as it is, and a non-string one does not throw.
-- *Pass 3 — `required` and `enum` inside a parameter*:
-  `PublishedNestedConstraintTests.EveryPublishedOccurrenceOfAMarkedShapeCarriesItsRequiredAndEnum` — every expanded
+- *Pass 3 (`required` and `enum` inside a parameter*:
+  `PublishedNestedConstraintTests.EveryPublishedOccurrenceOfAMarkedShapeCarriesItsRequiredAndEnum`) every expanded
   copy of a marked shape carries its `required` and `enum`, and a member whose type admits null carries `null` in its
   `enum`; `EveryMemberWithAClosedValueSetPublishesATypeAdmittingNull` — a closed-set member's published type admits
   null; `NoRequiredMemberPublishesANullableType` — a required member's type loses its null arm (all in the same
   class).
-- *Pass 4 — the optional depth cut*: `src/housecarl-mcp/SchemaDepthCap.cs`, pinned by `PublishedSchemaDepthTests`:
-  `WithTheVariableUnsetTheCutChangesNoPublishedSchemaByAByte` — unset, it does nothing;
+- *Pass 4 (the optional depth cut*: `src/housecarl-mcp/SchemaDepthCap.cs`, pinned by `PublishedSchemaDepthTests`:
+  `WithTheVariableUnsetTheCutChangesNoPublishedSchemaByAByte`) unset, it does nothing;
   `EveryPublishedSchemaFitsTheConfiguredDepth` — every schema is cut to the cap;
   `EveryCutSchemaIsStillAValidSchemaDocument` — a dictionary is never replaced by a terminator;
   `ACutNodeSaysTheShapeIsNotInThisDocumentAndTheBoundsWordingIsGone` — the cut's own clause;

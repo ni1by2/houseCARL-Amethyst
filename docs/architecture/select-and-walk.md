@@ -23,8 +23,8 @@ path walk, and containment comes off Mutagen's context walk.
   name, invariant numeric round-trip, `True`/`False`, `XXXXXX:Plugin.esp`.
 - The operators: `=` and `!=` compare across that whole token vocabulary; `>` `>=` `<` `<=` are
   numeric-only; `contains` and `startswith` are case-insensitive substring and prefix; `has`,
-  `has_any` and `has_none` are BITWISE set-tests over a `[Flags]` enum or plain integer leaf — every
-  bit of the operand set, at least one set, none set — which `=` (exact value) and the range ops
+  `has_any` and `has_none` are BITWISE set-tests over a `[Flags]` enum or plain integer leaf (every
+  bit of the operand set, at least one set, none set) which `=` (exact value) and the range ops
   cannot express, and whose operand is a bit value or a flag name, or several split the way an `in`
   list splits with the flags decode's `|` as a separator too (`[Body, Hands]` = `Body, Hands` =
   `Body | Hands`), and the decode's `slotNN` (biped) or `bitN` token for an unnamed bit; `=` and `!=`
@@ -39,8 +39,8 @@ path walk, and containment comes off Mutagen's context walk.
   plan time with a "did you mean", when every `types=` type carrying the field rejects it; an untyped scan and a `->`
   term's right side are not checked.
 - `editorid` reads the record's EditorID off the early EDID subrecord, never a reflection walk, so it
-  answers on a record whose deep body Mutagen cannot parse. `winner` is the PROVENANCE term — which
-  plugin wins the record, not its content — evaluated through the scan's bound resolution, so naming
+  answers on a record whose deep body Mutagen cannot parse. `winner` is the PROVENANCE term (which
+  plugin wins the record, not its content) evaluated through the scan's bound resolution, so naming
   it forces winner resolution over the whole scanned scope.
 - A membership list separates on commas and newlines ONLY, never a bare space, because a plugin
   filename can legally contain one; brackets and quotes are stripped per token, so a pasted JSON
@@ -81,8 +81,8 @@ path walk, and containment comes off Mutagen's context walk.
   record may exist, instead of "have no record". The text note and json `unmatched` name the first
   `UnmatchedShown`; the note counts the rest ("and N more"), pointing at `to_file=`, or at the manifest
   when one was written. A manifest's `notes` carries the whole list.
-- A predicate set whose every term is header-only — `editorid`, `winner`, `formid` membership, or a
-  side led by a `*parent` hop — must still see DELETED records. A deleted record has no live body for
+- A predicate set whose every term is header-only (`editorid`, `winner`, `formid` membership, or a
+  side led by a `*parent` hop) must still see DELETED records. A deleted record has no live body for
   a content filter, but its EditorID, its winner resolution and its containing record are real facts,
   which is what keeps a patch-deleted placed reference in the results of
   `where=["*parent.EditorID = SomeCell"]`, the crash-log lookup that step exists for.
@@ -125,28 +125,28 @@ path walk, and containment comes off Mutagen's context walk.
 
 ## Pinned by
 
-- `WhereGrammarTests` — the operator, operand and pseudo-path refusals at parse.
-- `WhereQuantifierTests` — the quantified step's folds and its refusals, and its `has` / `has_any` /
+- `WhereGrammarTests`: the operator, operand and pseudo-path refusals at parse.
+- `WhereQuantifierTests`: the quantified step's folds and its refusals, and its `has` / `has_any` /
   `has_none` block pins the bitwise set-test bullet including the zero-mask refusal.
-- `PresentNullLinkRenderTests.PresenceSweepsTellTheTwoShapesApart` — the #697 bullet: a head-marked
+- `PresentNullLinkRenderTests.PresenceSweepsTellTheTwoShapesApart`: the #697 bullet: a head-marked
   INFO answers `exists` and only a plain one answers `missing`.
-- `RecordsContainmentTests.ADeletedPlacedReferenceIsStillFilteredByTheCellThatHoldsIt` — the
+- `RecordsContainmentTests.ADeletedPlacedReferenceIsStillFilteredByTheCellThatHoldsIt`: the
   header-only-set-still-sees-deleted-records bullet, with a body-reading predicate dropping it beside.
-- `ValuePredicateTests.Ge_OnAPathWrongForMoreThanHalfAMixedScanGetsTheSoftNote_NotTheLoudOne` — the loud-versus-soft accounting bullet:
+- `ValuePredicateTests.Ge_OnAPathWrongForMoreThanHalfAMixedScanGetsTheSoftNote_NotTheLoudOne`: the loud-versus-soft accounting bullet:
   a path wrong for more than half a mixed scan gets "had no value on", not the loud line.
-- `RecordsArtifactTests` — `formid in @<artifact>` re-entry, its epoch check, and
+- `RecordsArtifactTests`: `formid in @<artifact>` re-entry, its epoch check, and
   `APlainAtFileListStillEntersWithNoManifestAndNoEpochClaim` for the plain list file beside it.
-- `WhereContainmentTests` / `RecordsContainmentTests` — the `*parent` step and its no-verdict rollups.
-- `WhereContainmentCostTests` — `ParentBodiesHeld` / `ParentBodyHighWater` / `ParentBodyFetches`, the
+- `WhereContainmentTests` / `RecordsContainmentTests`: the `*parent` step and its no-verdict rollups.
+- `WhereContainmentCostTests`: `ParentBodiesHeld` / `ParentBodyHighWater` / `ParentBodyFetches`, the
   #720 invariant that no containing record outlives the candidate that read it.
-- `WhereContainmentBatchTests` / `RecordsContainmentBatchTests` — the #1147 chunk gather: one gather
+- `WhereContainmentBatchTests` / `RecordsContainmentBatchTests`: the #1147 chunk gather: one gather
   per chunk, each parent once, the same answer across a chunk boundary, and on
   the real scan, set lane, projection and walk no lone seek and only typed walks (`CostCounters.TypedSeeks`,
   `TypedCollectPasses`); rows dropped before `where=` gather nothing; a chunk crossing a plugin
   boundary; a projection hop walks only the rows it reads and does not reopen a faulted winner.
-- `LinkStepVerdictTests` — the `->` step judges each target once, holds no target body, and a remembered verdict names its own field (#1158).
-- `WhereAccountingCauseTests` — the per-cause accounting sentences.
-- `RecordsUnmatchedMembersTests` — the unmatched-members bullet: text, json, `@file`, the cap, the manifest,
+- `LinkStepVerdictTests`: the `->` step judges each target once, holds no target body, and a remembered verdict names its own field (#1158).
+- `WhereAccountingCauseTests`: the per-cause accounting sentences.
+- `RecordsUnmatchedMembersTests`: the unmatched-members bullet: text, json, `@file`, the cap, the manifest,
   a member only a lower scoped copy carries, a FormID named as typed; `UnmatchedMembersJudgementTests`,
   `UnmatchedMembersUnreadableTests`, `UnmatchedMembersDegradedOrderTests` and `UnmatchedMembersOffOrderTests`
   the deleted, unscannable, unreadable, load-failure, `where_source=winner` and off-order cases.
@@ -154,9 +154,9 @@ path walk, and containment comes off Mutagen's context walk.
   `AContainsTermGetsNoSentence_TheHintIsForTheExactSpellingOnly` — the near-miss hint's sole-term
   rule. They assert the rendered sentence, so they pin that bullet and not `ExactEditorId` itself,
   which no test names.
-- `ValuePredicateTests` — the by-construction extraction through `ReadEngine.ReadLeaf`, over records built in memory: each operator's matched set against a
+- `ValuePredicateTests`: the by-construction extraction through `ReadEngine.ReadLeaf`, over records built in memory: each operator's matched set against a
   brute-force set from the records' known values.
-- `GenderedArmAccountingTests` / `AbsentStepAccountingTests` — the #1071 bullet: a missing gendered arm,
+- `GenderedArmAccountingTests` / `AbsentStepAccountingTests`: the #1071 bullet: a missing gendered arm,
   absent list or index past the end is unset (and answers `missing`), and a genuine parse failure stays a read fault.
 
 ## Where

@@ -11,7 +11,7 @@ Three lines.
 - One sentence each. What holds, not why.
 
 ## Pinned by
-- `FooTests.TheThing…` — which sentence above it pins.
+- `FooTests.TheThing…`: which sentence above it pins.
 
 ## Where
 Files, entry points, the tool names.

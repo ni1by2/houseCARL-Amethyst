@@ -1,3 +1,3 @@
 # AGENTS.md
 
-For any AI coding agent working in this repository: read [CLAUDE.md](CLAUDE.md). It is short and it is the whole operating manual. For what houseCARL is and how to build it, see [README.md](README.md); for contributing, [CONTRIBUTING.md](CONTRIBUTING.md).
+AI coding agents must read [CLAUDE.md](CLAUDE.md) before working in this repository. It contains the operating instructions. [README.md](README.md) explains houseCARL and its build; [CONTRIBUTING.md](CONTRIBUTING.md) covers contributions.

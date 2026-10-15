@@ -6,17 +6,22 @@ covers: [src/housecarl-core/SksePluginReader.cs, src/housecarl-core/SksePeek.cs,
 
 ## What it is
 
-Everything in this layer is what a FILE DECLARES, never what a DLL DOES. A version manifest, an import table, an
-embedded string and a config token are static facts about bytes on disk; loading, registering and hooking are runtime
-behaviour houseCARL never observes. So a finding is a plausibility verdict to verify, the absence of a token proves
-nothing, and "nothing found" is not a clean bill of health. The ceiling is stated once to the caller, in the tool
-description, because it is the same ceiling for all three families.
+The SKSE layer reads static facts from files: version manifests, import tables, embedded
+strings, and configuration tokens. houseCARL does not observe DLL loading, registration, or
+hooks in a running game. Treat findings as plausibility checks to verify in-game; a missing
+token or an empty result does not establish that everything works. The tool description states
+this limitation once for all three families.
 
-`housecarl_skse` runs ONE family per call — inventory, pairing or config. The three answer different questions over
-different populations, so a merged response would have no honest summary line; every response instead names the family
-it ran and the spelling of the two it did not.
+`housecarl_skse` runs one family per call: inventory, pairing, or config. Each family answers a
+different question about a different population. The response identifies the family used and
+names the other two.
 
 ## Contracts
+
+SKSE asset paths are Bethesda virtual paths. Their filename fields use `BethesdaPath.FileName`,
+including on Linux; host `Path.GetFileName` would return the entire backslash-separated path.
+The native PE import tests use an authored AMD64 image with a known import table, independent of
+Windows system DLL availability. They inspect bytes and never execute the image.
 
 ### The static-load rule
 
@@ -45,12 +50,12 @@ genuine empty, or `null` for a walk that never happened or failed. A null never 
 
 The rule is applied in three shapes, on purpose, and they must agree:
 
-- **the blocker string** — `AssetLayers.LooseDllBlocker` (unreadable, 32-bit, then `SksePluginReader.DebugCrtBlocker`)
+- **the blocker string**: `AssetLayers.LooseDllBlocker` (unreadable, 32-bit, then `SksePluginReader.DebugCrtBlocker`)
   plus the no-provider / BSA-only / subfolder arms in `AssetLayers.cs`, composed into `NativePairedDll.LoadBlocker` /
   `SkseFileEntry.Note`, which the pairing verdict treats as dead;
-- **the inventory render arms** — `SkseInventoryWire`'s diagnostic subsets and per-DLL detail block, which report each
+- **the inventory render arms**: `SkseInventoryWire`'s diagnostic subsets and per-DLL detail block, which report each
   class as its own population with its own count;
-- **the pairing fate ladder** — `NativePairingWire.Verdict` / `Judge`, which adds the loader's era rules and the
+- **the pairing fate ladder**: `NativePairingWire.Verdict` / `Judge`, which adds the loader's era rules and the
   version lock on top of the blocker and reduces a class to the best fate among its candidate DLLs.
 
 Consolidating the three into one helper is issue #415. Until then, a new blocker lands in all three or the tools
@@ -121,13 +126,13 @@ property accessor is counted as `Prop.Get` / `Prop.Set`.
 
 The baseline is honest by construction: a class carried by an official archive is the ENGINE's even when SKSE's loose
 override wins the file, and skse64's own script additions are SKSE CORE, implemented by the game-root loader. Remaining
-classes pair to a DLL their provider mod — or a mod in its conflict chain, the bundling case — ships. A class's verdict
+classes pair to a DLL their provider mod (or a mod in its conflict chain, the bundling case) ships. A class's verdict
 is the BEST fate among its candidates, because which DLL implements it is not statically knowable. UNPAIRED is a verify
 flag, never "broken". A class whose only loading candidate is a debug build is its own finding (#417) rather than a
 line of the healthy roster, which prints class names and would have carried a checkmark over the file that needs
 reporting.
 
-The SKSE-CORE rescue pool — every non-official pairing identity shipping a copy of an ENGINE class — has three known
+The SKSE-CORE rescue pool (every non-official pairing identity shipping a copy of an ENGINE class) has three known
 residual edges, all of them false-flag or missed-flag modes of the audit:
 
 - an INI-injected third-party BSA reads official, so its classes read ENGINE;
@@ -155,8 +160,8 @@ in linear time by construction, and the name rule lives in one place (`IsNameCha
 
 The name rule is three deliberate choices. Apostrophes are ALLOWED, because excluding them truncates real names
 mid-word (`kryptopyr's Trade & Barter.esp`). Brackets and parentheses are allowed only as a CLOSED, balanced group of
-name characters, nested or not — `[Caenarvon] Magecore.esp`, `Asuras Guard [Armor].esp`, `Mod (v2).esp`,
-`Mod [v2 (SE)].esp` are read whole — and a LONE `[` or `(` still bounds the name. A group holding a character a name
+name characters, nested or not (`[Caenarvon] Magecore.esp`, `Asuras Guard [Armor].esp`, `Mod (v2).esp`,
+`Mod [v2 (SE)].esp` are read whole) and a LONE `[` or `(` still bounds the name. A group holding a character a name
 cannot carry is not a group: `[Mod, Inc] Foo.esp|0x800` reads as `Foo.esp`. The lone bracket is what the surrounding
 syntax looks like: prose (`will cast fireball (Skyrim.esm|0x5)`), a JSON array (`["Skyrim.esm|0x800"]`), a
 section-like `[Skyrim.esm|0x5]`; in each the group cannot close before the `|`, so the name starts after the bracket.
@@ -200,7 +205,7 @@ references.
 
 Every family render charges its tail before laying a row: the scope note, the caveats, the filter hint, the family
 footer, each list's own cut notice, and the headings written whatever the rows cost. `cap` stays the caller's own
-`max_chars` — the number every notice quotes — while `budget` is the room content has once that tail is charged. A row
+`max_chars` (the number every notice quotes) while `budget` is the room content has once that tail is charged. A row
 is measured against what it is about to write, not against what the buffer holds, and a row that crossed is taken back
 out whole. The filtered config audit is the exception to "whole": a file that fits is written whole, in the order it
 declares its references; the first file that does not is cut per reference line, its non-OK references (DANGLING,
@@ -208,13 +213,13 @@ PLUGIN MISSING, UNPARSEABLE) first and then the OKs, and ends on `showing N of M
 `(J of K non-OK shown)`, or `(all OK)`. The json twin cuts a row in the same order (`CutOrder`), so both show the same
 references. A partly shown file counts as cut, as do the files after it, so the next page starts on it again; a file
 that cannot show even one reference line is taken back out whole, in both twins. The unfiltered audit keeps its
-file-order cut. The one arm a bounded render can still exceed — a
-cap too small for what the response carries whatever the budget — is named by `RenderCap.Settle`.
+file-order cut. The one arm a bounded render can still exceed (a
+cap too small for what the response carries whatever the budget) is named by `RenderCap.Settle`.
 
 The json twin states the same rows and the same accounting in named fields, and classifies with the SAME judge the text
 render uses, which is why each family's serializer lives beside its text render rather than in `SkseJsonDoc`. Rows are
 dropped from the tail when the document reaches the cap; the serialized string is never cut, which would emit malformed
-json. A census counts the population the document answers over — the filter's matches when there is a filter — so no
+json. A census counts the population the document answers over (the filter's matches when there is a filter) so no
 number describes a wider set than the rows beside it.
 
 ## Pinned by
@@ -231,7 +236,7 @@ number describes a wider set than the rows beside it.
   where garbage never passes.
 - *The PE manifest read*: the map is pinned by `SkseVersionBlobDecodeTests` (`ViExAlone_SetsNoStructsOnly`,
   `ViAlone_SetsAddressLibraryOnly`), which fail the instant email is "fixed" to 256 and both flag fields shift; the
-  rest of that class — the flag decode, the zero-terminated runtime list, the REL::Version unpack — and
+  rest of that class (the flag decode, the zero-terminated runtime list, the REL::Version unpack) and
   `SkseReadFromDiskTests` with `SkseImportWalkTests.ASystemDllIsClassifiedNotSkse`, a non-SKSE or unreadable image
   classified by kind rather than thrown.
 - *The PE manifest read*: `SkseDirectoryReadTests` — a zero directory Size beside a declared RVA: the export walk

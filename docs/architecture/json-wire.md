@@ -6,11 +6,10 @@ covers: [src/housecarl-mcp/JsonWire.cs, src/housecarl-mcp/FieldFold.cs, src/hous
 
 ## What it is
 
-This file is the home of the json transport's own contracts — what a document may say and how it may say it. The
-budget those documents are written against is a different subject and lives in
-`docs/architecture/render-budget.md`: `max_chars` counts characters, `CharCountedStream` is where a json lane takes
-its length from, `JsonTextEncoder` is the one encoder, and `BoundedBody` is the one place a merged check appends
-anything a cap can refuse. Nothing here restates any of that.
+The JSON transport has rules for both response content and serialization. Its length budget
+is covered in `docs/architecture/render-budget.md`: `max_chars` counts characters,
+`CharCountedStream` supplies a JSON response's length, `JsonTextEncoder` handles encoding, and
+`BoundedBody` is the only place a merged check appends content that a cap can refuse.
 
 ## Contracts
 
@@ -51,7 +50,7 @@ Text and dense are untouched by the leaf shape: dense already pivots one row per
 - A whole-call refusal **on the read surface** writes `ok:false` and the message through `WriteRefusal`, so the shape
   cannot be stated one way in one renderer and another in the next. The write lanes write `ok` themselves, on both
   outcomes (below), and must not also call `WriteRefusal` — that would put a second `ok` in the document.
-- A per-ROW `error` — a malformed FormID in a batch, a seed that did not resolve — is **not** a refusal. The call
+- A per-ROW `error` (a malformed FormID in a batch, a seed that did not resolve) is **not** a refusal. The call
   succeeded and rendered a row that failed. Those sites keep a bare `error` and must never gain `ok`.
 - On the **read** surface `ok` marks refusals ONLY: a served read document carries no `ok`, and its absence means the
   call was answered. The **write** surface writes the flag on both outcomes. The asymmetry is deliberate.
@@ -84,8 +83,8 @@ verdicts read off another substrate, which `epoch_uncovered` names.
 
 ### A capped STRING list is an array plus a sibling count
 
-Where a list of plain strings is bounded — the build-level caveat blocks, and `Wire.ContestedHostsShown` on the text
-lane — what did not fit is a sibling `<name>_omitted` number, never a prose marker element inside the array. A marker
+Where a list of plain strings is bounded (the build-level caveat blocks, and `Wire.ContestedHostsShown` on the text
+lane) what did not fit is a sibling `<name>_omitted` number, never a prose marker element inside the array. A marker
 element would be handed to a consumer iterating the array as if it were an entry, and the array length would stop
 matching the count the accounting states.
 
@@ -107,12 +106,12 @@ on its own terms — that is a bigger answer, not a broken remedy. The merged `c
 one-step clearing, because its accounting adds the growth term for every place the response prints the cap back.
 
 **One member, one grammar for the numbers.** The merged `check` document writes the same member from its own
-`CheckAccounting.CapTooSmall`, because it tells the two overruns apart — a `max_chars` too small for the fixed part,
-and a body unit measured after it was written — and adds the cap-print-site growth term to its remedy. Those are
+`CheckAccounting.CapTooSmall`, because it tells the two overruns apart (a `max_chars` too small for the fixed part,
+and a body unit measured after it was written) and adds the cap-print-site growth term to its remedy. Those are
 facts the other documents do not have, so the sentence between the numbers differs; the three NUMBERS are worded
 identically (`response is N chars`, `over the max_chars=C it was given`, `raise max_chars to at least R`), so one
 parser reads the retry number off every document. Any new sentence under this member keeps that wording. The leading
-capital is per document — `check`'s notice opens mid-paragraph — so a reader of this member matches case-insensitively,
+capital is per document (`check`'s notice opens mid-paragraph) so a reader of this member matches case-insensitively,
 which is what `JsonOverrun.Stated` does.
 
 `truncated`/`truncated_note` are a different fact and stay: they say content was CUT to stay inside the cap.
@@ -166,7 +165,7 @@ misses what the writer still holds. Two consequences:
   spaces on every line of every unit inside it, and a cost measured shallower than the write under-measures by more
   the bigger the unit gets. `JsonUnitDepths` states the offsets once, from one anchor, and both the demand pass and
   the write read them from there.
-- The writer's own punctuation — the root open, the root close, the separator — is measured off the writer
+- The writer's own punctuation (the root open, the root close, the separator) is measured off the writer
   (`MeasureFraming`), not kept by hand: an indented writer closes the root with a platform newline and a brace, so
   that close costs three characters on Windows, where the newline is a CR/LF pair, and two where it is not. The
   number is never hand-written for that reason.
@@ -255,5 +254,5 @@ text and json, which is why it is covered here although the epoch stamp it holds
 
 ## Related
 
-- `docs/architecture/render-budget.md` — what `max_chars` counts and how a merged response divides it.
-- `docs/architecture/output-and-artifacts.md` — the spill dispositions a json document carries a marker for.
+- `docs/architecture/render-budget.md`: what `max_chars` counts and how a merged response divides it.
+- `docs/architecture/output-and-artifacts.md`: the spill dispositions a json document carries a marker for.

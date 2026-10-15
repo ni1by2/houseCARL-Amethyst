@@ -80,7 +80,7 @@ also uses the saved inventory and requires a mod when a filename is ambiguous.
 Native paths retain exact source casing. UTF-8, traversal, containment and symlink
 checks precede source reads. Source size and nanosecond modification time must
 match the catalog; observed device/inode/content stamps are rechecked before a
-result is published. These cheap stamps are not cryptographic content attestation.
+result is published. These stamps detect inexpensive identity and freshness changes; they do not attest to content cryptographically.
 
 ## Requests, warnings and artifacts
 

@@ -108,7 +108,7 @@ Internalize this before authoring; most "it doesn't work" reports trace back to 
   priority space** as native OAR integers. `2000030002` and `9007010` are compared directly.
 - At runtime OAR walks that sorted list and takes the **first submod whose `conditions` pass**. If
   none pass, the base-game animation plays.
-- **Higher priority wins.** Equal priorities are ambiguous — there is no tiebreak — so keep them
+- **Higher priority wins.** Equal priorities are ambiguous (there is no tiebreak) so keep them
   unique. Authors spread large integers (`9007010`, `83030317`) to slot between other mods.
 
 To make animation X beat animation Y, X's submod needs a **higher priority** *and* conditions that
@@ -125,8 +125,8 @@ pass in the situation you care about. Priority and winner resolution:
    priority and go above it. Include legacy DAR folder names in the comparison — a Form A folder's
    name is its priority, a Form B `<Plugin.esp>/<FormID>/` folder's priority is 0
    (`references/oar-config-reference.md` §8), so anything positive beats it. Go just above the
-   highest submod that actually **wins the frames** in your situation — the one whose conditions
-   pass there — not above the highest integer in the load order. Parking near int32 max also
+   highest submod that actually **wins the frames** in your situation (the one whose conditions
+   pass there) not above the highest integer in the load order. Parking near int32 max also
    outranks the situational overlays that live up there (Look Around, RaySense and the like), which
    a conversion has no reason to suppress.
 3. **Build the condition set.** Each entry is
@@ -154,8 +154,8 @@ pass in the situation you care about. Priority and winner resolution:
 
 The inverse job. Answer precisely, and say "I can't tell without X" rather than guess.
 
-- **"What does this submod do?"** Translate each condition using the reference — resolve enum values
-  and the `editorID` / FormID forms — then state the priority and what it competes against.
+- **"What does this submod do?"** Translate each condition using the reference (resolve enum values
+  and the `editorID` / FormID forms) then state the priority and what it competes against.
 - **"Which submod wins?"** Compare the priorities of every submod targeting that animation, legacy
   DAR folders included; the highest one whose conditions pass wins. If you cannot see every competing
   submod, say so and name what you would need to see.
@@ -288,7 +288,7 @@ conditions — the run of `OR`-terminated lines plus the next line that yields a
 
 The group reaches one line past the last `OR`, which is the easy thing to get wrong: in the 777000
 chain above, had lines 2 and 3 ended in `OR` instead of `AND`, the group would run to line 4 as well
-and hold **three** members — `IsEquippedType`, `Random` and `NOT IsSneaking` — not the two that ended
+and hold **three** members (`IsEquippedType`, `Random` and `NOT IsSneaking`) not the two that ended
 in `OR`. Reading such a chain flat left-to-right inverts what it gates on.
 
 `Random` takes a state block and a comparison rather than a bare number. Its six keys and its
@@ -330,7 +330,7 @@ failure shows up in game, not in Detected Problems.
   same priority space; leaving a mod legacy is fine.
 - **The in-game editor is the live source of truth** for which conditions a given install has, and it
   writes valid `config.json` / `user.json` for you.
-- **houseCARL cannot introspect OAR configs** — it reads records, not animation files. Read the
+- **houseCARL cannot introspect OAR configs**: it reads records, not animation files. Read the
   configs directly; houseCARL does the two things above, the locate sweep and the form resolution.
 - **This skill is not inherited.** A subagent asked to do OAR work needs it loaded in its own
   context — name it in the task that spawns the subagent, or the subagent works without it.

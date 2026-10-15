@@ -13,7 +13,7 @@ places the file where SkyPatcher will read it. SkyPatcher edits a record's own f
 NPC's included; it does not distribute. Two neighbouring jobs are someone else's: what fields a
 record has at the Mutagen/xEdit level, with their types and writability, is
 `housecarl:mutagen-reference`; distributing a form to NPCs is `housecarl:spid-authoring`, which is
-*best* for groups — faction, race, level, trait — and can also name one NPC, though for a single NPC
+*best* for groups (faction, race, level, trait) and can also name one NPC, though for a single NPC
 SkyPatcher is usually the *better* fit; a keyword onto item records is `housecarl:kid-authoring`. On
 a Codex flat install these siblings are the bare folder names — `mutagen-reference`, `spid-authoring`,
 `kid-authoring`.
@@ -57,7 +57,7 @@ file is authoritative; do not carry one across from another type. Read one recor
 
 Read `references/grammar-core.md` only when the record file leaves a syntax question open — the
 shared patch-string structure, the addressing rules and the operation conventions live there.
-Shared enums — cast types, actor values, soul types, the biped slot index — are in
+Shared enums (cast types, actor values, soul types, the biped slot index) are in
 `references/value-tables.md`; open it when a record file names one.
 
 ## Compose the patch
@@ -115,8 +115,8 @@ Prove the target set, every address, and the draft file itself before anything i
   into its type folder by filename. Drop `subfolder` when the draft already sits in a folder of that
   name. Keep that pole on `source=` and pass the plain post pole,
   `versus={"overlay": "skypatcher", "state": "post"}`, with `project={"form": "delta"}` for the
-  draft's own effect and nothing else. Warnings the replay produces for a draft line — an unknown
-  key, an op with no field mapping, a filter it cannot evaluate — render beside the answer under
+  draft's own effect and nothing else. Warnings the replay produces for a draft line (an unknown
+  key, an op with no field mapping, a filter it cannot evaluate) render beside the answer under
   the draft's path.
 
 Stop when the count is what you meant, every address resolves, the delta is the change you intended,
@@ -140,14 +140,13 @@ Once the INI is installed, three reads prove it landed.
 
 ## Never invent a token
 
-Every filter, operation and value comes from the bundled reference. If a token is not there, say so
-rather than writing a plausible-sounding one: in game SkyPatcher skips a line it cannot parse and
-skips a FormID it cannot resolve, both silently and with no log line, so a fabricated token costs a
-debugging session and produces nothing to debug. The replay warns where the game does not, which is
-a net under a mistake, not a licence to guess. Object Modification (OMOD) is enabled in SkyPatcher
-but has no documented grammar — hand the user the gap and the leads in its row above, never a guess.
+Look up every filter, operation, and value in the bundled reference. Report missing tokens.
+SkyPatcher silently skips unparseable lines and unresolved FormIDs without logging them, so an
+invented token can leave no useful diagnostic. The replay adds warnings, but it does not justify
+guessing. SkyPatcher enables Object Modification (OMOD) without documenting its grammar. Report
+that gap and the leads in its table row.
 
-Two soft spots in the corpus, and how to read them. Where a worked example disagrees with its own
+Two limitations need care. Where a worked example disagrees with its own
 file's filter list, the primary filter in the table above wins and the example is a carried-over
 article typo. A token the corpus marks unverified against the DLL, or names without a grammar, is a
 warn case, not a use case.
@@ -171,7 +170,7 @@ warn case, not a use case.
   documentation at **v6.4.1**, covering 27 record types plus one documented gap (OMOD). On a
   SkyPatcher version bump, re-derive from the updated articles before trusting it for new
   operations.
-- **Conflict model.** SkyPatcher's low-conflict property is real but not magic: same-field set
+- **Conflict model.** SkyPatcher can still have conflicts: same-field set
   operations still resolve by filename order, and only add/remove operations truly accumulate.
   Say so when a user layers several patches on one record.
 - **Lookup without authoring.** The same corpus answers "what filters does this record type

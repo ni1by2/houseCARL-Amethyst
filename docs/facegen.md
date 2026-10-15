@@ -1,14 +1,14 @@
 # Dark faces: what causes them, and what fixes each
 
-A baked NPC face is two preprocessed per-NPC files — a head mesh (`.nif` under `facegeom`) and a face tint
-(`.dds` under `facetint`) — and two independent systems decide who wins them. Plugin load order decides which
+A baked NPC face is two preprocessed per-NPC files (a head mesh (`.nif` under `facegeom`) and a face tint
+(`.dds` under `facetint`)) and two independent systems decide who wins them. Plugin load order decides which
 mod's `NPC_` record wins. The MO2 virtual file system decides which mod's file wins. A dark, grey or black face
 is almost always the **desync** between those two: the file that wins was baked from a different appearance than
 the record that wins, or nothing wins the keyed path at all and the engine regenerates the head from the record
 and drops the tint. That is why xEdit shows no conflict while the face is dark.
 
-`housecarl_check findings=["facegen"]` reports that desync one row per NPC. This page is the reference behind it:
-what each class actually means, what fixes it, and the cases the check deliberately does not claim.
+`housecarl_check findings=["facegen"]` reports the mismatch in one row per NPC. The classes below
+explain each finding, its fix, and the limits of the check.
 
 ## The path is a pure function of the FormID
 
@@ -17,7 +17,7 @@ meshes\actors\character\facegendata\facegeom\<defining master>\00<6-hex local id
 textures\actors\character\facegendata\facetint\<defining master>\00<6-hex local id>.dds
 ```
 
-The folder is the **defining master** — the plugin after the colon in `XXXXXX:Plugin.esp` — never the conflict
+The folder is the **defining master** (the plugin after the colon in `XXXXXX:Plugin.esp`) never the conflict
 winner. For a vanilla NPC an overhaul re-dresses, that is `Skyrim.esm\`, not the overhaul's folder. There is no
 cross-folder fallback: the engine reads that one path and regenerates if nothing wins there. The leading index
 byte is masked to `00` because the file already lives in the defining plugin's own named folder.
@@ -25,8 +25,8 @@ byte is masked to `00` because the file already lives in the defining plugin's o
 Because the path is that transform, the file layer answers for a whole order in one call:
 `housecarl_asset_status` with `formids=` a list of NPCs derives both halves of each bake and resolves them
 together, one row per path, each naming the other half's winner beside its own. The whole-order sweep is two
-calls — `housecarl_records types=["NPC_"] to_file=<file>` for the identity set, then
-`housecarl_asset_status formids=["@<file>"] to_file=<file2>` — and the artifact's `winner_mod`, `pair_winner_mod`,
+calls (`housecarl_records types=["NPC_"] to_file=<file>` for the identity set, then
+`housecarl_asset_status formids=["@<file>"] to_file=<file2>`) and the artifact's `winner_mod`, `pair_winner_mod`,
 `winner_kind` and `pair_differs` columns are the pairing map. Use it when you want the file-layer provenance
 over the order; `housecarl_check findings=["facegen"]` is what adds the record winner and the classes below — and
 what drops the two populations named at the end of this page. `formids=` reads no record, so it applies neither
@@ -37,7 +37,7 @@ artifact's `pair_exists=false` total will not match `check`'s `bake_absent`.
 
 `pair_differs` is decided on the winners' owning **mods** (`winner_mod` / `pair_winner_mod`), not on their
 provider names (`winner` / `pair_winner`, which for a BSA is the archive's own filename). Vanilla ships every
-head in `Skyrim - Meshes0.bsa` and every tint in `Skyrim - Textures0.bsa` — two archives, one product — so
+head in `Skyrim - Meshes0.bsa` and every tint in `Skyrim - Textures0.bsa` (two archives, one product) so
 comparing names calls most of the order split; on the measured order that is 2,719 NPCs against 375.
 
 And `pair_differs` is provenance, not a class: it is true for a cross-product `split_bake` and for a
@@ -94,7 +94,7 @@ verdict: `HairColor`, which is applied at runtime and is not in the baked files,
 in a different order, because the Creation Kit bakes from the values rather than the order a plugin wrote them in.
 
 **A clean pair whose record test could not run is counted apart, never counted clean.** When the facegen owner's mod
-ships no plugin that defines the NPC — a texture-only mod, overwrite, Data — there is no pole, and the header states
+ships no plugin that defines the NPC (a texture-only mod, overwrite, Data) there is no pole, and the header states
 the count. When the owner's folder could not be listed at all, its plugins are unknown: those pairs are counted
 separately and the folder is named with the reason. A test that did not run must not read as a test that passed.
 
@@ -109,7 +109,7 @@ dropped: a `to_file=` artifact carries every class.
 
 **Record winner versus file winner.** The dominant cause. Load order picks record B while the VFS picks mod A's
 file, so the head that renders was built from an appearance the winning record does not carry. Often a
-non-appearance plugin — a bug-fix patch, a behaviour mod — wins the record and reverts head parts toward vanilla
+non-appearance plugin (a bug-fix patch, a behaviour mod) wins the record and reverts head parts toward vanilla
 while the overhaul's file still wins.
 
 **A winner that ships no facegen.** An override changed the appearance but the author shipped only the plugin, so
@@ -169,8 +169,8 @@ rewriting.
 
 **Bring the right appearance onto the record.** When the file is the intended appearance and a non-appearance
 plugin won the record, `housecarl_forward` copies the whole `NPC_` from the appearance plugin into a winning
-override. For a partial mask, `housecarl_apply` with the seven face fields — `HeadParts`, `FaceMorph`,
-`FaceParts`, `TintLayers`, `HairColor`, `HeadTexture`, `TextureLighting` — writes just those.
+override. For a partial mask, `housecarl_apply` with the seven face fields (`HeadParts`, `FaceMorph`,
+`FaceParts`, `TintLayers`, `HairColor`, `HeadTexture`, `TextureLighting`) writes just those.
 
 **Re-bake, when nothing correct exists.** Only the Creation Kit writes new geometry. Open the CK, load the plugin
 and Set as Active File, reach the actors through the Actors tree (Ctrl+F4 does not fire on results found through

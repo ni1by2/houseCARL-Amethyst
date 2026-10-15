@@ -6,10 +6,11 @@ covers: [src/housecarl-core/NifService.cs, src/housecarl-mcp/NifTools.cs]
 
 ## What it is
 
-`NifService` is pure format logic: raw mesh bytes in, the model behind `nif_inspect` out — header and version, block
-census, shapes, node tree, header string table. It knows nothing of MO2, the VFS or which mod won; the service layer
-resolves the winning bytes and hands them here. Geometry, vertices and `.dds` pixels are out of scope: this reads and
-writes DATA VALUES.
+`NifService` accepts raw mesh bytes and produces the model returned by `nif_inspect`: header
+and version, block counts, shapes, node tree, and the header string table. The service layer
+resolves the winning bytes before passing them to this format layer, which has no knowledge of
+MO2, the VFS, or the winning mod. The supported reads and writes concern data values; geometry,
+vertices, and `.dds` pixels are outside its scope.
 
 ## Contracts
 
@@ -36,18 +37,18 @@ block-type table — `GetType().Name` would flatten every one of them to `NiUnkn
 
 The coverage cornerstone applies inside the format layer, and three pieces implement it:
 
-- **`ReallyReads`** — whether a concrete shader block genuinely implements an `INiShader` value accessor, or merely
+- **`ReallyReads`**: whether a concrete shader block genuinely implements an `INiShader` value accessor, or merely
   inherits the interface's DEFAULT IMPLEMENTATION, which returns a CONSTANT whatever the mesh holds. Derived from the
   interface map, so a library bump is self-correcting: the day upstream implements a value houseCARL reports it, and the
   day upstream stubs one that value goes quiet instead of turning into a wrong number. On NiflySharp 1.1.0
   `BSLightingShaderProperty` implements all six and `BSEffectShaderProperty` stubs all six.
-- **`ReallyWrites`** — the write side needs its own check, because `INiShader` declares all six values GET-ONLY: there
+- **`ReallyWrites`**: the write side needs its own check, because `INiShader` declares all six values GET-ONLY: there
   is no `set_` accessor on the interface map to detect, so the setters are reflected off the CONCRETE block class.
   Getter-real and setter-present are independent facts that merely happen to agree today. Component arity is read off
   the property's own type (Single → 1, an R/G/B-bearing struct → 3), so a future widening cannot silently change the
   arity houseCARL enforces. Without this gate a write through the interface is a silent no-op: value discarded,
   success returned, mesh unchanged.
-- **`DecodeFlagWord`** — flag-bit names come from `Enum.GetValues` over nifly's own enum, so coverage is the library's.
+- **`DecodeFlagWord`**: flag-bit names come from `Enum.GetValues` over nifly's own enum, so coverage is the library's.
   The peel is the records one (`ReadEngine.PeelFlagBits`): members largest-first, so a combo member wins over its
   constituent bits. `Names` holds only enum members, in bit order, each with its mask in `NameMasks`; whatever no member
   covers is kept as the `UnknownBits` mask, and `Tokens()` renders it one `bitN` token per bit, merged with the members
@@ -61,7 +62,7 @@ Two layers of nifly dispatch on which game's stream a block was read as, and bot
 than a blank when read wrong:
 
 - a value accessor may be layout-dispatched, reading a field only some games' streams carry. Glossiness is the live
-  case — served before FO4, Smoothness from FO4 on — so on an FO4 layout it returns its `nif.xml` constructor default
+  case (served before FO4, Smoothness from FO4 on) so on an FO4 layout it returns its `nif.xml` constructor default
   (80) whatever the mesh holds. `ReallyReads` keys on block TYPE and structurally cannot see that.
 - the `Has*` / `IsType*` helpers used to name texture slots return `true` UNCONDITIONALLY for a layout where nifly does
   not model the concept. On an FO4-layout block with an all-zero flag word, `HasSoftlight`, `HasBacklight` and
@@ -77,8 +78,8 @@ with no type field of its own reports null and the renderer says so plainly.
 
 So houseCARL's claim is scoped to its own coverage: it interprets a SKYRIM shader. The lighting values and the slot
 semantics are reported only on an SK-layout block, and `nif_inspect` reads non-SE meshes on purpose, so this is
-reachable rather than theoretical. The DECLINE is stated, not just performed — a bare `tex[2]:` is otherwise ambiguous
-between "this Skyrim shader does not determine slot 2" and "this layout is not modelled at all" — and the reason names
+reachable rather than theoretical. The DECLINE is stated, not just performed (a bare `tex[2]:` is otherwise ambiguous
+between "this Skyrim shader does not determine slot 2" and "this layout is not modelled at all") and the reason names
 scope rather than blaming the library, since several of those values would read fine elsewhere. Slot semantics cannot
 be reflected out of the library at all (nifly models slots as a bare path list; the meanings are an engine convention),
 so `SlotName` is a small explicit interpreter, each arm keyed to the flag or type that decides it, returning null

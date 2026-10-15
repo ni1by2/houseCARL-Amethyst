@@ -17,8 +17,8 @@ compatibility: >-
 
 ## Overview
 
-An offline corpus of Papyrus signatures — parameters in order, their types and defaults, return
-types, flags and doc-comments — for vanilla scripts, SKSE's additions, and the SKSE-plugin APIs
+An offline corpus of Papyrus signatures (parameters in order, their types and defaults, return
+types, flags and doc-comments) for vanilla scripts, SKSE's additions, and the SKSE-plugin APIs
 this skill ships. It is generated from BellCube's
 [papyrus-index](https://github.com/BellCubeDev/papyrus-index) and lives under `references/`.
 
@@ -34,11 +34,10 @@ ship, `housecarl_bsa_extract` with `archive=`, `out_path=` and `under=` the scri
 and read the extracted file);
 compiling is `housecarl_compile_script`.
 
-The corpus is the cheap route to a signature, not the only one and not the proof. The deterministic
-check is the compile: `housecarl_compile_script` binds every call against the real sources on the
-import path, so a signature it rejects is wrong whatever a lookup said, and one it accepts that the
-corpus lacks is a corpus hole worth reporting. That is what stands behind "never invent a
-signature" — the corpus gets you there in three greps instead of a build.
+Use the corpus to find a signature in three greps. Confirm it by compiling when needed:
+`housecarl_compile_script` binds calls against the sources on the import path. A rejected signature
+is wrong regardless of the lookup result. An accepted signature absent from the corpus is a
+coverage gap to report. Never invent a signature.
 
 Invoked directly with a name (`/housecarl:papyrus-reference Substring`), treat the argument as the
 function to look up. On Codex the skill is the bare folder name, `papyrus-reference`, and the same
@@ -110,15 +109,16 @@ Grep `"name":"FormListAdd"` in `references/index.jsonl`; the `StorageUtil` row r
 
 Read `references/papyrusutil.md` lines 5163-5175 and the block gives
 `FormListAdd(ObjKey, KeyName, value, allowDuplicate) → Int`, `Native Global`, with
-`allowDuplicate: Bool` defaulting to **`true`**. That default is the payoff: without a
-`FormListClear` first, a re-init silently doubles the list — and it still compiles.
+`allowDuplicate: Bool` defaulting to **`true`**. Without a
+`FormListClear` first, that default causes a re-init to double the list silently even though the
+script compiles.
 
-## Silent biters
+## Runtime pitfalls
 
 Eight traps a correct signature does not reveal. Each compiles clean and then misbehaves:
 
-- `Game.GetForm` returns `None` for any FormID `>= 0x80000000` — the whole ESL range *and* load
-  index `0x80+` — use `Game.GetFormEx`.
+- `Game.GetForm` returns `None` for any FormID `>= 0x80000000` (the whole ESL range *and* load
+  index `0x80+`) use `Game.GetFormEx`.
 - `SendModEvent` sends three arguments; the handler receives **four** (the engine appends the
   sender), and a three-parameter handler silently never runs.
 - Papyrus string `==` is case-**insensitive**, so a case difference is never the cause of a missed
@@ -163,23 +163,23 @@ Then work the checks, in cost order:
    lookup. For a class inside an archive, `housecarl_bsa_extract` with `archive=`, `out_path=` and
    `under=` its `scripts/<name>.pex` path first (a path or glob, as `asset_status` takes), then
    decompile the extracted path with `out_path=` a different, empty folder.
-   **Parameter defaults do not survive a decompile** — they
-   never existed in the `.pex` — so a decompiled declaration answers arity and types and cannot
+   **Parameter defaults do not survive a decompile** (they
+   never existed in the `.pex`) so a decompiled declaration answers arity and types and cannot
    answer a default.
 4. **Compile it.** `housecarl_compile_script` with `script=` is the deterministic answer: it puts
    the enabled mods' own Papyrus sources on the import path and returns per-line errors. A call
    that compiles binds; a call the corpus lacks that compiles is a corpus hole to report.
 
-Never invent a signature, including under pressure to "just guess". A confidently wrong signature
-ships code that compiles and misbehaves at runtime, or turns an authoring error into a filed
-upstream bug — both cost far more than the non-answer.
+Never invent a signature, even when asked to "just guess". An incorrect signature can produce
+code that misbehaves at runtime or an incorrect upstream bug report. Report the missing
+reference and work through the checks above.
 
 ## Tier 2 — the corpus carries more than a modlist installs
 
 The corpus ships two tiers, and the tier is a fact about the corpus, not about the user's machine.
 **Read the tier off `source`, never off the presence of `requires_plugin`.** Tier 1 is `source`
-`vanilla` or `skse`, which any Skyrim + SKSE install has. Everything else is Tier 2 — the
-SKSE-plugin sources, PapyrusUtil, JContainers, MCMHelper, po3, SkyUI and the rest — whether or not
+`vanilla` or `skse`, which any Skyrim + SKSE install has. Everything else is Tier 2 (the
+SKSE-plugin sources, PapyrusUtil, JContainers, MCMHelper, po3, SkyUI and the rest) whether or not
 the row names a DLL. Several Tier-2 sources carry no `requires_plugin` on any row (`clib`,
 `dynamicwetness`, `skyprompt` among them), and reading a missing key as Tier 1 reports a
 third-party function as always present and skips the availability check below.
@@ -212,15 +212,15 @@ and the call will no-op at runtime. Say that, rather than the bundled-or-warn wa
 {"name":"solveObjSetter","qualified":"JDB.solveObjSetter","source":"jcontainers","file":"references/jcontainers.md","kind":"global","requires_plugin":"JContainers64.dll","line_start":1317,"line_end":1328}
 ```
 
-- `name` — unqualified function, event or property name. The lookup key.
-- `qualified` — `Script.Function`, `Script#Method`, `Script.Event`, `Script.Property`. Disambiguates
+- `name`: unqualified function, event or property name. The lookup key.
+- `qualified`: `Script.Function`, `Script#Method`, `Script.Event`, `Script.Property`. Disambiguates
   a `name` that collides across sources.
-- `source` — the source directory the entry came from (`vanilla`, `skse`, `papyrusutil`, …). Also
+- `source`: the source directory the entry came from (`vanilla`, `skse`, `papyrusutil`, …). Also
   the tier discriminator, and the tie-break when `qualified` collides.
-- `file` — the reference file holding the entry, rooted at the skill folder.
-- `kind` — `global`, `instance-method`, `event` or `property`.
-- `line_start` / `line_end` — 1-indexed inclusive block range inside `file`.
-- `requires_plugin` — on some Tier-2 rows only, and indicative (see above). Its absence says
+- `file`: the reference file holding the entry, rooted at the skill folder.
+- `kind`: `global`, `instance-method`, `event` or `property`.
+- `line_start` / `line_end`: 1-indexed inclusive block range inside `file`.
+- `requires_plugin`: on some Tier-2 rows only, and indicative (see above). Its absence says
   nothing about the tier.
 
 **The index is the intended second hop.** Every generated file under `references/` is reached

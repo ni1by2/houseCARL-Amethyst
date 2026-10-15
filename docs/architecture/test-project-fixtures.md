@@ -6,11 +6,12 @@ covers: [src/housecarl-mcp-tests/PexWriter.cs, src/housecarl-mcp-tests/ScriptsWo
 
 ## What it is
 
-Two pieces of machinery the test project did not have before #486 PR 1, each in its own file, plus the
-tests that prove the machinery is what it claims to be. They exist because #486 PR 2 rewrites 200 old
-assertion sites (204 compiler complaints, some lines carrying two) as 60 xUnit facts, and 14 of those are
-script-property arms that need a `.pex` fixture while three are dialogue arms that need a held file.
-Nothing under `src/housecarl-mcp`, `src/housecarl-core` or `src/housecarl-generator` is involved.
+The test project has a Papyrus fixture writer and a file-lock harness, each in its own file.
+They were introduced in #486 PR 1 for the #486 PR 2 migration of 200 assertion sites to 60 xUnit
+facts. Those sites produced 204 compiler complaints because some lines carried two. Fourteen
+script-property cases need a `.pex` fixture, and three dialogue cases need a held file. The
+fixtures and their checks do not involve `src/housecarl-mcp`, `src/housecarl-core` or
+`src/housecarl-generator`.
 
 ## Contracts
 
@@ -55,8 +56,8 @@ weapon, and a quest whose script hangs off an *alias* rather than the quest itse
 
 **What is not the probe's is the world around them.** The probe built a bare temp directory and called
 `LoadOrderResolver.Build` + `AssetResolver.Build` directly, which the shipped tool surface cannot be
-pointed at. `ScriptsWorld` is a real MO2 instance in `RecordsWorld`'s shape — `ModOrganizer.ini`, a
-`profiles/Default/` triple, one mod folder holding both the plugin and its `Scripts\` folder — behind
+pointed at. `ScriptsWorld` is a real MO2 instance in `RecordsWorld`'s shape (`ModOrganizer.ini`, a
+`profiles/Default/` triple, one mod folder holding both the plugin and its `Scripts\` folder) behind
 `LoadOrderService.WithInstance`. That is what lets the same fixture be driven by the service *and* by
 `housecarl_check` off the built server.
 
@@ -65,13 +66,11 @@ care that costs; the script-property sweep reads VMADs and `.pex` tables and nev
 this world generates no corpus and touches no process-global.
 
 It cannot be handed to the core `ScriptPropertyCheck.Run(resolver, assets, …)` directly: `LoadOrderService`'s
-`Resolver` and `Assets` are private and the world does not re-derive them. Nothing needs that seam —
-`ValidateScripts` carries every knob the core sweep takes — so it is not opened speculatively.
+`Resolver` and `Assets` are private and the world does not re-derive them. Nothing needs that seam (`ValidateScripts` carries every knob the core sweep takes) so it is not opened speculatively.
 
 **The world is frozen**, in the sense `BulkRecordsWorld` states: tests take fixture-known totals from it, so
-a later need gets its own world rather than an edit to this one. A test that *mutates* — holding a plugin
-open is a mutation by another name, since a held file is unreadable by anything else in the process —
-builds its own instance instead, or the world's readability would depend on test scheduling. That is why
+a later need gets its own world rather than an edit to this one. A test that *mutates* (holding a plugin
+open is a mutation by another name, since a held file is unreadable by anything else in the process) builds its own instance instead, or the world's readability would depend on test scheduling. That is why
 `HeldOpenTests` builds its own one-plugin world rather than locking this one's `PluginPath`.
 
 #### The `HcSpNoPex` collision, and what the assertions rest on
@@ -138,23 +137,26 @@ a pass. `Hold` makes that branch unreachable by omission.
 Nothing else was ported. The arms' own assertions are on product results (`CheckError`, the rendered
 sentence), which are PR 2's subject.
 
-The proofs use `LoadOrderResolver.OpenOverlay` as "an engine read" — the engine's documented single
-overlay-open choke point — which keeps the harness's proofs about the harness rather than pre-empting PR 2.
+The proofs use `LoadOrderResolver.OpenOverlay` as "an engine read" (the engine's documented single
+overlay-open choke point) which keeps the harness's proofs about the harness rather than pre-empting PR 2.
 A binary overlay is memory-mapped, so an undisposed one keeps a handle on the plugin for the rest of the
 process; the arms dispose it the way every product call site does, and each arm's last line calls
 `AssertNoHandlesLeft()` — a loud `Directory.Delete`, which Windows refuses while any handle is open. That
 runs at the end of the body rather than from `Dispose`, because a throwing `Dispose` replaces a real
-assertion failure with its own.
+assertion failure with its own. On Linux, deleting an open file is permitted, so that cleanup is not
+proof of zero open handles.
 
-The sharing-violation arm asserts the exact exception type and `ERROR_SHARING_VIOLATION` (HResult
-`0x80070020`), not the message text: the BCL composes that message and it is a localizable resource string,
-so a substring of it would pin .NET rather than the harness.
+The retained recovery test asserts `IOException` while the hold is active, then releases it and reads
+the exact expected weapon EditorID. This covers both loud read failure and recovery without requiring
+a Windows error number. The separate control that also pinned `ERROR_SHARING_VIOLATION` was retired
+in the [Linux / Amethyst coverage audit](../testing/linux-amethyst-test-audit-2026-10-14/index.html);
+its full source and assertion mapping remain in the removal ledger.
 
 #### `Read<T>` — `use` must materialise everything it returns
 
 The arms' `Read<T>` helper unmaps the overlay in a `finally`, so the overlay is gone *before* the value
-crosses the return. Every value-returning call site must therefore materialise inside `use` — a string, a
-count, a copy — and the helper refuses a `T` that is an `IModGetter` or an `IMajorRecordGetter` before it
+crosses the return. Every value-returning call site must therefore materialise inside `use` (a string, a
+count, a copy) and the helper refuses a `T` that is an `IModGetter` or an `IMajorRecordGetter` before it
 opens the plugin at all. That refusal exists because the failure is otherwise silent: measured on this
 fixture, `Read(path, mod => Assert.Single(mod.Weapons))` returned a record whose `EditorID` then read back
 correctly off the unmapped view and the arm reported a pass. The documented outcomes are an
@@ -167,21 +169,25 @@ sentence, restated where PR 2's three dialogue lock arms will read it.
 
 ## Pinned by
 
-- *`PexWriter` — ported, not referenced*: both branches are pinned —
-  `ScriptsWorldTests.TheWriterRefusesABakedInitializerOnANonIntScalar` and
+Linux wire regressions reuse the original synthetic records and loose assets through
+`AmethystFixtureConnection`, which saves manifests and profile intent with Amethyst's native producer.
+The helper is for loose-file worlds; archive membership is covered by the existing archive fixture.
+Snapshot tests check explicit stale/busy refusal, manager refresh, pinned roots and Papyrus maps.
+They do not recreate MO2's serve-old-assets fallback. Permission-denial fixtures verify the failure
+really occurs and restore directory modes during cleanup.
+
+- *`PexWriter` (ported, not referenced*: both branches are pinned) `ScriptsWorldTests.TheWriterRefusesABakedInitializerOnANonIntScalar` and
   `TheWriterStillBakesAnIntScalarInitializerAndItRoundTrips`.
-- *`ScriptsWorld` — the probe's records, re-homed as an MO2 instance*:
-  `ScriptsWorldTests.TheServiceSweepsTheInstanceAndExactlyTheVmadCarryingRecordsAreScriptBearing` — the four
+- *`ScriptsWorld` (the probe's records, re-homed as an MO2 instance*:
+  `ScriptsWorldTests.TheServiceSweepsTheInstanceAndExactlyTheVmadCarryingRecordsAreScriptBearing`) the four
   script-bearing records, with the script-free weapon not counted.
 - *Why the arms assert what they assert*: `ScriptsWorldTests.BothPlantedPexFilesResolveThroughTheLooseLayer_SoTheDeclarationsAreRealNotUnverifiable`
   — the declarations are observed through the loose layer, and both finding sets are pinned whole;
   `CheckOverTheWireReportsTheFixtureKnownScriptCountAndNamesTheUnverifiableScript` — the wire-path smoke test on
   its own server.
-- *`HeldOpen` — the file-lock harness*: `HeldOpenTests.WhileHeldTheEngineReadFaultsLoudly_AndReturnsNoQuietlyEmptyPlugin`
-  and `AfterTheHoldIsDisposedTheSameReadSucceeds` — the hold and its release; `HoldingAPathThatDoesNotExistThrowsAndNamesThePath`
+- *`HeldOpen` (the file-lock harness*: `HeldOpenTests.AfterTheHoldIsDisposedTheSameReadSucceeds`) the held read throws, then release restores the expected record; `HoldingAPathThatDoesNotExistThrowsAndNamesThePath`
   — acquisition failure throws (all in the same class).
-- *`Read<T>` — `use` must materialise everything it returns*: `HeldOpenTests.ReadRefusesAValueThatWouldStillBeAViewOnTheUnmappedOverlay`
-  — a `T` that is still a view on the overlay is refused before the plugin is opened.
+- *`Read<T>` (`use` must materialise everything it returns*: `HeldOpenTests.ReadRefusesAValueThatWouldStillBeAViewOnTheUnmappedOverlay`) a `T` that is still a view on the overlay is refused before the plugin is opened.
 
 ## Where
 

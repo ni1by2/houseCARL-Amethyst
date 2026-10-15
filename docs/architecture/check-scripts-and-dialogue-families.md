@@ -15,11 +15,11 @@ axes, the budget and the outcome every family shares are in [`check-families.md`
 
 What counts as a finding is kept high-signal, so that a clean result is trustworthy:
 
-- **UNBOUND OBJECT property** — an `Auto` property of a form/object type declared in the chain but absent from the
+- **UNBOUND OBJECT property**: an `Auto` property of a form/object type declared in the chain but absent from the
   VMAD. Unbound means `None` at runtime: the silent-no-op footgun. HIGH.
-- **UNBOUND SCALAR with no initializer** — defaults to 0 / 0.0 / false / "". MEDIUM. A scalar that DOES carry a
+- **UNBOUND SCALAR with no initializer**: defaults to 0 / 0.0 / false / "". MEDIUM. A scalar that DOES carry a
   baked initializer is not flagged: it has the author's intended default, so leaving it unbound is correct.
-- **BOUND-BUT-NULL object property** — in the VMAD with a null Object link AND not bound to a quest alias instead
+- **BOUND-BUT-NULL object property**: in the VMAD with a null Object link AND not bound to a quest alias instead
   (`Alias < 0`, because an alias-bound property has a null Object by design). Advisory.
 
 And the degraded modes, every one named rather than silent: `Auto` properties only, because full properties with
@@ -43,10 +43,10 @@ has.
 
 Fixed here and nowhere else, so each has exactly one meaning wherever the response says it:
 
-- **named** — how many seeds the caller wrote in `seeds=`.
-- **reached** — how many of those the seed budget let this call actually try.
-- **validated** — how many reached seeds produced a validation report.
-- **unreachable** — how many reached seeds produced a named refusal instead. These are the `[X]` rows.
+- **named**: how many seeds the caller wrote in `seeds=`.
+- **reached**: how many of those the seed budget let this call actually try.
+- **validated**: how many reached seeds produced a validation report.
+- **unreachable**: how many reached seeds produced a named refusal instead. These are the `[X]` rows.
 
 `named ≥ reached`, and the difference is the seed budget's cut — the one subtraction, taken once on
 `DialogueOutcome`. `validated` and `unreachable` are each counted off the reached seeds independently rather than
@@ -74,9 +74,9 @@ out of.
   `conflicts_only`, a `references=` filter, an aggregate, and an explicit plugin scope.
 
 ## Where
-- `src/housecarl-core/ScriptPropertyCheck.cs` — the scripts family: `ScriptPropertyCheck.Run`,
+- `src/housecarl-core/ScriptPropertyCheck.cs`: the scripts family: `ScriptPropertyCheck.Run`,
   `ScriptCheckResult`, `ScriptUnverifiable`.
-- `src/housecarl-core/EditorIdNearMiss.cs` — `EditorIdNearMiss.Sentence`, called from the scan lane in
+- `src/housecarl-core/EditorIdNearMiss.cs`: `EditorIdNearMiss.Sentence`, called from the scan lane in
   `src/housecarl-mcp/RecordQuery.cs`.
 - `DialogueOutcome` in `src/housecarl-mcp/CheckOutcome.cs` (covered by [`check-families.md`](check-families.md))
   — the four seed words as fields.

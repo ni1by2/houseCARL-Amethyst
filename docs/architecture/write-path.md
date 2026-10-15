@@ -44,11 +44,11 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - A localized target is refused by each lane's own pre-flight BEFORE the consent gate, in that lane's words, with the
   file untouched. The unwritable-parent probe answers AFTER the gate and before anything is staged, so a first touch
   of a read-only folder meets the consent prompt first.
-- Side-effect notes after a landed write — consent, the marker, a now-stale `.seq` — are best-effort; none can fail
+- Side-effect notes after a landed write (consent, the marker, a now-stale `.seq`) are best-effort; none can fail
   the write, and the engine's own note is joined first so it survives the merge.
 - One write at a time: `_writeGate` is held from resolve through commit, while argument parsing and op mapping run
   outside it, so a malformed call never queues behind a real write.
-- Every response from the four record lanes — apply, create, remove, forward — decided after a capture carries that
+- Every response from the four record lanes (apply, create, remove, forward) decided after a capture carries that
   build's epoch: success, refusal, dry run and consent prompt alike, and an outcome that consulted no build carries
   none. Only their four outcomes hold a `Stamp`; compact, merge, copy and create_plugin capture a view but render no
   epoch at all.
@@ -71,10 +71,10 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   file was read in, while `WritePatch` goes to UTF-8 when `NewFileIsUtf8` holds, so a non-ASCII string in a patch read
   in the legacy encoding can come back at another length on the real write. That is a re-encode, not a loss; the check
   models the in-place encoding on purpose, since modelling the write's would refuse every such re-encode as a length
-  change, and the `into=` renders claim nothing about the check. The file's bytes and those bytes are walked the same way — per FormKey through each side's
+  change, and the `into=` renders claim nothing about the check. The file's bytes and those bytes are walked the same way (per FormKey through each side's
   own master list, a multiset of (signature, payload length), through Mutagen's record and subrecord framing
   (`MajorRecordFrame.Decompress`, `RecordSpanExtensions.EnumerateSubrecords`, which folds `XXXX` into the length it
-  carries and faults on a truncated subrecord) — and any record whose written side lacks a subrecord the file holds, or keeps it at another
+  carries and faults on a truncated subrecord)) and any record whose written side lacks a subrecord the file holds, or keeps it at another
   length, refuses the whole call in one sentence naming the record and the subrecords, with nothing written. A record
   the op drops whole is not counted: a removed record and everything nested under it, a forwarded record, and a record
   create's upsert replaces. An unedited round trip isolates what the writer cannot keep from what the ops remove, so no
@@ -84,8 +84,8 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   (Aaron, 2026-09-29): an LTEX `INAM` of all zero bytes below form version 43, the `NAME` of a REFR flagged deleted, a
   REFR `XRMR` of all zero bytes, and a RACE `PHWT` every occurrence of which is written back as its own leading bytes
   with only an all-zero tail cut (dev/plans/INPLACE_ROUNDTRIP_MEASURE_2026-09-28.md). An `INAM` with a flag set, or a
-  `PHWT` whose cut tail holds a value, still refuses. When the check cannot run — the file does not
-  parse, cannot be read, or the walk faults — the call is refused in the check's own sentence, never passed. A serialize
+  `PHWT` whose cut tail holds a value, still refuses. When the check cannot run (the file does not
+  parse, cannot be read, or the walk faults) the call is refused in the check's own sentence, never passed. A serialize
   fault on an in-place lane is reported as one the write would meet the same way; on an `into=` lane, whose write goes
   through another chain, it is reported as the check not running.
   A localized target is not walked: the service lanes refuse it before consent and `WriteInPlace` and `WritePatch`
@@ -99,7 +99,7 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - A read-back proves what is in the file, never what wins in the ORDER.
 - A walk's source universe is the caller's pole list in order, resolved first-hit-wins, with no separate single-pole
   path: a length-1 list is the same loop running once.
-- An off-order source — a `CopyFrom` source, a `forward` source, a walk pole — is located by the on-disk locate
+- An off-order source (a `CopyFrom` source, a `forward` source, a walk pole) is located by the on-disk locate
   every other lane uses, and its overlay is handed back OPEN because bodies are deep-copied during the serialize; the
   caller disposes it only after the write returns.
 - A caller's PATH that names the order's own copy of an active plugin is re-spelled to that plugin's name before
@@ -121,7 +121,7 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - `ApplyVerb` is public and runs no rulebook check, so pre-flight is the CALLER's: a direct or CLI caller that skips
   it mutates unvalidated, including record identity, which is settable on every concrete Mutagen record. What
   pre-flight decides, and which recognisers it shares with apply, is [`corpus-rulebook.md`](corpus-rulebook.md)'s.
-- Flat-versus-nested is ONE decision — does a flat `SkyrimGroup<T>` match — off one `EnumerateFlatGroups`
+- Flat-versus-nested is ONE decision (does a flat `SkyrimGroup<T>` match) off one `EnumerateFlatGroups`
   enumeration the override, create, removal-type and seek-type lanes all derive from; a nested record needs the
   source link cache to rebuild its parent chain and fails loud without it.
 - A flat group typed by an abstract base is created by naming a concrete arm, discovered from the runtime hierarchy;
@@ -145,8 +145,8 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   they do not belong to — which is why no arrangement of those tables is rewritten in place.
 - Both write choke points refuse a localized target off the mod in memory and nothing else, before the staging
   directory exists; the re-read of the destination supplies the sentence, never the decision.
-- A serialize-boundary `NullReferenceException` — bare, or wrapped in the parallel writer's aggregate, and only when
-  every leaf's root is one — is re-stamped as a named null-arm refusal; any other serialize error keeps its own type
+- A serialize-boundary `NullReferenceException` (bare, or wrapped in the parallel writer's aggregate, and only when
+  every leaf's root is one) is re-stamped as a named null-arm refusal; any other serialize error keeps its own type
   and message.
 - A forward that replaces a FormKey the destination already carries lifts that record's owned child records off
   before the drop and re-attaches them after the copy, and refuses rather than choosing when the copy arrives
@@ -154,15 +154,15 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - The child-bearing property set is reflected RECURSIVELY and links are cut, so a container two levels down is
   reached; the depth bound is a tripwire rather than a correctness assumption, because a deeper nesting drops the
   property out of the set and the count check refuses.
-- Apply dispatches at the leaf on its RUNTIME shape — whole-coercible, dict, list, scalar — and materializes an
+- Apply dispatches at the leaf on its RUNTIME shape (whole-coercible, dict, list, scalar) and materializes an
   absent intermediate substruct or collection so a first write into it works; a `Remove` on an absent collection
   refuses instead, before anything is materialized.
 - A compose builds from parts through one primitive: the constructor its own fields satisfy is the one invoked, and
   its nested `sets` replay through `ApplyVerb` itself, so a built struct cannot miss a field kind apply handles.
 - A compose given nothing at all is refused, because the object built from nothing serializes to zero bytes and the
   write would otherwise report a change the file does not carry.
-- Each list index verb keeps its OWN bound — overwrite and remove-by-index address an element that exists, insert
-  addresses a gap and admits the append slot — checked against the live length as an expected rejection.
+- Each list index verb keeps its OWN bound (overwrite and remove-by-index address an element that exists, insert
+  addresses a gap and admits the append slot) checked against the live length as an expected rejection.
 - Every `Add` reports whether the list already carried what it appended, and a composed batch counts an element the
   list held before the write apart from a repeat within the batch.
 - A flags-enum `Add` / `Remove` is a bit operation on the leaf's current value, so one flag flips without the caller
@@ -193,9 +193,9 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   itself.
 - `RemapEngine.LocalizedAmong` fails closed on a referencer it could not open, which is what forces the two-class
   split in `SplitBlockedReferencers`.
-- A call's destinations are mutually exclusive — `patch=` / `into=` / `in_place=`, and the `out_path=` of `write_seq`,
+- A call's destinations are mutually exclusive (`patch=` / `into=` / `in_place=`, and the `out_path=` of `write_seq`,
   `compile_script` and `decompile_script`, which supersedes the `patch=`/`into=` pair, says so, and is checked before
-  it — and a named lane is honoured or refused BY NAME rather than accepted-and-ignored. Emptiness is judged one way
+  it) and a named lane is honoured or refused BY NAME rather than accepted-and-ignored. Emptiness is judged one way
   for a lane string, so the exclusivity checks and the write cannot disagree about whether a lane was named.
 - `patch=` beside `into=` is refused by apply, create, forward, copy, write_seq, compile_script, decompile_script,
   nif_set, place and bsa_repack, in one sentence per kind from `LaneSentences` (a patch plugin, or a mod folder naming
@@ -208,7 +208,7 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   refusal below it answers in the requested format with a null epoch.
 - The lane a response reports is the one the CALL named, never one derived from the outcome's flags, which sit at
   their defaults on a refusal.
-- The copy zip is a ZIP and never a product — N assignments × M bundle paths is N*M ops over N sources — and each
+- The copy zip is a ZIP and never a product (N assignments × M bundle paths is N*M ops over N sources) and each
   generated op carries the caller's own spelling, `assignments[i]` × `bundle[j]`, so a refusal names something the
   caller wrote.
 - A record missing from the written file is said ABOVE the rows and outside their budget, so a row cut cannot remove
@@ -235,20 +235,19 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   carried, never on the donor count.
 - A `.seq` write gives "already current" and "replaced" their own headlines and states the absent epoch, the bytes
   being load-order-independent and a skipped write reported as a write reading like a silent failure.
-- Which write verbs work on a collection leaf is derived ONCE from its SHAPE — list or dict, crossed with how an
-  element gets in (a coerced value, built from parts, or an owned child record) — and each site filters that table by
+- Which write verbs work on a collection leaf is derived ONCE from its SHAPE (list or dict, crossed with how an
+  element gets in (a coerced value, built from parts, or an owned child record)) and each site filters that table by
   purpose rather than naming verbs, so a dict caller cannot be offered a list verb and a verb added to the surface
   reaches every message at once.
 - That table is indexed by SHAPE while the gate is indexed by VERB, and the two are held together by measurement
   rather than by copying: every collection field in the corpus is bucketed by shape, and each bucket replays a
   well-formed request through the real `CorpusRulebook.Validate` for every verb the table names (each must be
   ACCEPTED) and every verb it omits (each REFUSED).
-- The two routes to a shape — the corpus `FieldSchema` route and the live-property route the engine's own throws use
-  — must give the same answer for every collection field in the corpus, because the engine keeps its
+- The two routes to a shape (the corpus `FieldSchema` route and the live-property route the engine's own throws use) must give the same answer for every collection field in the corpus, because the engine keeps its
   schema-blindness by never taking the corpus.
 - An owned-child-record collection's menu is `Remove` alone: it has no placing verb, so the how-to-place site prints
-  the record-axis route rather than naming one. The rule itself — an owned child is written on the record axis by its
-  own FormID, never built into a parent by a write verb — and that route's `parent=` / `collection=` remedy are
+  the record-axis route rather than naming one. The rule itself (an owned child is written on the record axis by its
+  own FormID, never built into a parent by a write verb) and that route's `parent=` / `collection=` remedy are
   [`corpus-rulebook.md`](corpus-rulebook.md)'s. `CopyFrom` is absent from every dict shape too, a dict transplant not
   being built.
 - A list's keyed menu leads with `SetAtIndex`, not `InsertAtIndex`: a caller who bracketed an index that already
@@ -262,7 +261,7 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   `BulkOp.verb` glues a gloss straight onto its tail, so appending or reordering a verb moves that gloss onto a
   different verb.
 - Renumbering a record is `record.Duplicate(newKey)` into a FRESH mod followed by `RemapLinks(dict)`. `RemapLinks`
-  repoints outgoing references only, and the record's own FormKey setter — reachable but non-public — leaves the
+  repoints outgoing references only, and the record's own FormKey setter (reachable but non-public) leaves the
   FormKey-keyed group cache stale, so it is never used.
 - The identify pass is one whole-order walk per operation, never a held index, and its coverage is accounted: a
   record whose link walk throws is counted and sampled, and a plugin that could not be read THROUGH is named with
@@ -288,8 +287,8 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - A cross-donor conflict on one FormKey resolves to the LOAD-ORDER WINNER and is reported per losing donor; donors
   walk in reverse load order so the winner places first, and a losing donor's nested children the winner does not
   re-list are GRAFTED into the winner's container. A structural mismatch on the winner's side, or an unrecognized
-  nested block shape, THROWS into the all-or-nothing refusal — any engine fault abandons the renumber or merge with
-  nothing shippable — rather than dropping a child.
+  nested block shape, THROWS into the all-or-nothing refusal (any engine fault abandons the renumber or merge with
+  nothing shippable) rather than dropping a child.
 - A repoint result's entry count is the size of the dict APPLIED, not the number of links rewritten, which Mutagen
   does not report.
 - The in-place repoint opens the single target mutable, resolves the target's OWN declared masters to overlays and
@@ -297,7 +296,7 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   with the file untouched, because this runs only once the compacted plugin is already on disk.
 - Every remap method opens at most one plugin mutable at a time and disposes its master overlays after the write, so
   the load order is never held parsed.
-- An INJECTED record — carried by one donor under another plugin's FormID — originates to no donor, so it is given
+- An INJECTED record (carried by one donor under another plugin's FormID) originates to no donor, so it is given
   to the FIRST donor carrying it and renumbered with that donor's own records; left out of the dict it is copied at
   an identity naming a plugin the merge removes, and the write fails with a raw missing-mod fault after the whole
   merge is built. Which plugin DEFINES it is not decidable from the order, so nothing claims it.
@@ -322,8 +321,8 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - Whether a link may be nulled is judged on the record model's `IFormLinkNullable<T>`, never on whether a
   `SetToNull` method exists: Mutagen's required links expose one too, so deciding by method presence writes a null
   into a required field.
-- The strip is two passes and the first does not mutate — a read-only scan refuses an unclearable shape before
-  anything is removed — so a refusal never leaves a half-stripped record. Nulling a link-bearing substruct takes the
+- The strip is two passes and the first does not mutate (a read-only scan refuses an unclearable shape before
+  anything is removed) so a refusal never leaves a half-stripped record. Nulling a link-bearing substruct takes the
   WHOLE property rather than just the offending link, and the entry is marked so the render says so.
 - The attach lane writes links already mapped rather than fixing them up with a mod-wide pass, so a patch record the
   caller never named is unreachable from it. A target inside the bound universe is refused, and a target in a NESTED
@@ -357,8 +356,8 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   That consults only the named output artifact of the current authoring session, never an arbitrary un-enabled plugin;
   an override the patch merely CARRIES still resolves through the load order, so its definer must be enabled.
 - A dry run stops AT the point of no return: the same resolve, pre-flight and in-memory apply the real write uses have
-  already run, and the one Phase-4 hazard the halt skips — a reference to a plugin outside the serialize's resolution
-  context — is re-checked by the same membership test, so a dry run never says "would apply" about a write that would
+  already run, and the one Phase-4 hazard the halt skips (a reference to a plugin outside the serialize's resolution
+  context) is re-checked by the same membership test, so a dry run never says "would apply" about a write that would
   fail. It is the real path halted, never a parallel validate-lite.
 - A nested create hosts its child in the parent's DEFINING plugin's version, not the load-order winner's: the child
   lives in the parent's child group and survives the parent record losing, so the winner's fields would cost a master
@@ -369,7 +368,7 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   landed.
 - The dry run's unopenable-reference threshold is a MEASURED header rule, not something `set.Count > 1` states on its
   own: a header carrying ONE master writes even when that master is the unopenable plugin, because Mutagen derives the
-  entry from the record's own FormKey, and a header that must be SORTED — two or more — refuses. Dropping the count
+  entry from the record's own FormKey, and a header that must be SORTED (two or more) refuses. Dropping the count
   test so that any unopenable reference refuses turns a legal write into a refusal.
 - BOUND on the dry-run guarantee above: `DryRunMastersPreview` asks `resolver.IsUnopenable`, which reads the resolver's
   CURRENT snapshot, while the write lanes resolve against a pinned `IndexView` — so a rebuild between the prediction
@@ -389,32 +388,32 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   `BsaEmbedded` (including an archive that would not parse), `GameDataOnly` (a write beside the plugin
   would shadow, not replace), `StringsFolderUnreadable`, `ModFolderUnreadable` and `Nowhere`. The last
   three claim what houseCARL could FIND, never that the plugin has no strings.
-- Every folder look has the same three answers the plugin header read has — absent, listed,
-  unlistable — because "enumerated it and found nothing" and "could not enumerate it" are different
+- Every folder look has the same three answers the plugin header read has (absent, listed,
+  unlistable) because "enumerated it and found nothing" and "could not enumerate it" are different
   facts, and collapsing them makes an absence claim nothing checked.
 
 ## Pinned by
-- `InPlaceGuardContractTests` — the `in_place`⇔`target=` contract and the `into=` / `patch=` exclusion on the edit,
+- `InPlaceGuardContractTests`: the `in_place`⇔`target=` contract and the `into=` / `patch=` exclusion on the edit,
   create and remove lanes, and a target that is not an active plugin refused; `ForwardFromPluginTests`'
   `TheInPlaceContractIsRefusedByNameOnTheForwardLane` for the forward lane's three halves.
-- `InPlaceGuardConsentTests` — the handshake refuses, then writes under `acknowledge=true`, does not re-prompt,
+- `InPlaceGuardConsentTests`: the handshake refuses, then writes under `acknowledge=true`, does not re-prompt,
   persists, and one acknowledgement covers the edit and remove lanes; a refused in-place write spends no consent on
   any of the four lanes, one that lands records it, and the prompt states when it stops and keeps its file claim
   direction-neutral.
-- `InPlaceGuardMarkerTests` — the marker is stamped, `generated=true` is not, a later `into=` on that folder is
+- `InPlaceGuardMarkerTests`: the marker is stamped, `generated=true` is not, a later `into=` on that folder is
   still refused, and the create and remove lanes ride the same acknowledgement and marker.
-- `InPlaceGuardLocalizedPreflightTests` — the localized pre-flight answers before consent in each lane's own words,
+- `InPlaceGuardLocalizedPreflightTests`: the localized pre-flight answers before consent in each lane's own words,
   no consent spent, on the real call and the dry run alike; `InPlaceGuardEditTests` / `InPlaceGuardRemoveTests` —
   the write's own refusal of a localized target, file untouched and nothing staged.
-- `ApplyGuardTransportTests` — the APPLY lane's render carries the epoch on both transports, on success, on a json refusal
+- `ApplyGuardTransportTests`: the APPLY lane's render carries the epoch on both transports, on success, on a json refusal
   and on the consent prompt; `DegradedOrderMarkerTests.TheWriteLaneCarriesTheClauseBesideItsStamp` renders a DRY RUN
   and asserts the degraded clause that rides beside the stamp. The other three record lanes are unpinned for it.
 - `WriteEditLineSourceTests.ThePerEditLinePrintsTheFileValueNotTheAppliedOne`,
   `…AnOpTheFileCouldNotAnswerForIsNotCheckedRatherThanTheAppliedValue`,
   `…ARecordMissingFromTheWrittenFileIsSaidOutright` and `…AFailedWalkIsNotCheckedRatherThanAVerdict` — the W0 rule's
   four readings.
-- `OpaqueBytesVerifyTests.TheVerifySentenceNamesTheOpaqueFieldItReReadAsBytesOnly` — the opaque-leaf caveat.
-- `InPlaceRoundTripTests` — the #961 subrecord order refuses the in-place apply and its dry run, create, remove and
+- `OpaqueBytesVerifyTests.TheVerifySentenceNamesTheOpaqueFieldItReReadAsBytesOnly`: the opaque-leaf caveat.
+- `InPlaceRoundTripTests`: the #961 subrecord order refuses the in-place apply and its dry run, create, remove and
   forward, and apply, create, forward and remove on `into=`, each naming `MOD2, MO2T, MOD4, MO4T` with the file
   byte-identical; removing or forwarding over that record itself writes; create's spec error comes before the check;
   the standard order writes, keeps the male models and renders `RoundTripChecked`; a `BODT` record writes (the rename);
@@ -425,75 +424,74 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   `CompactRoundTripTests` — an in-place compact of such a target, and a repoint of such a referencer, refused with
   every file byte-identical; the unacknowledged compact asks for consent without the check; a copy `into=` such a
   patch refused.
-- `WriteSurfaceTwinParityTests` — every `WriteSentences` const decides and still states its declared phrases, every `Twins`
+- `WriteSurfaceTwinParityTests`: every `WriteSentences` const decides and still states its declared phrases, every `Twins`
   member is rendered by both lanes, and every outer `[MustState]` sentence reaches a render.
-- `FormIdFloorWorkflowTests` — the 0x800 floor before an allocation and the in-memory counter persisted verbatim by the
+- `FormIdFloorWorkflowTests`: the 0x800 floor before an allocation and the in-memory counter persisted verbatim by the
   serialize.
-- `AtomicCommitGuardTests` — the staged commit lands a fresh file, replaces an existing one
+- `AtomicCommitGuardTests`: the staged commit lands a fresh file, replaces an existing one
   byte-exact, and throws with the prior target intact when the source is missing or the target is held.
-- `LocalizedWriteShapeTests`, `LocalizedInPlaceRefusalTests` and `LocalizedUnclassifiableDestinationTests` — the
+- `LocalizedWriteShapeTests`, `LocalizedInPlaceRefusalTests` and `LocalizedUnclassifiableDestinationTests`: the
   in-place refusal over every arrangement, each named accurately and ending on no lane clause, the plugin and its
   tables byte-untouched, and a destination that cannot be classified refusing rather than reading as not-localized.
-- `NullArmSerializeTests` — a composed record missing a required arm surfaces as the named null-arm refusal, bare or
+- `NullArmSerializeTests`: a composed record missing a required arm surfaces as the named null-arm refusal, bare or
   aggregate-wrapped, with nothing on disk.
-- `GenderedNavReadTests`, `GenderedNavWriteTests`, `GenderedNavRefusalTests` and `GenderedArmShapeTests` — the
+- `GenderedNavReadTests`, `GenderedNavWriteTests`, `GenderedNavRefusalTests` and `GenderedArmShapeTests`: the
   `[0]` / `[1]` alias navigates and writes an absent pair or arm back through the named-hop setter, off the mapping
   the read render shares.
-- `InsertAtIndexApplyTests` and `InsertAtIndexSerializeTests` — insert's append-inclusive bound, and a tail that
+- `InsertAtIndexApplyTests` and `InsertAtIndexSerializeTests`: insert's append-inclusive bound, and a tail that
   keeps the same objects in the same order through a real serialize and re-read.
-- `FlagsBitVerbGateTests` and `FlagsBitVerbApplyTests` — a flags `Add` / `Remove` flips one bit and preserves every
+- `FlagsBitVerbGateTests` and `FlagsBitVerbApplyTests`: a flags `Add` / `Remove` flips one bit and preserves every
   unlisted one, gate and apply keyed off the same test.
-- `FormLinkRemoveTests` — `Remove` clears a nullable FormLink instead of throwing, and fails loud on a required
+- `FormLinkRemoveTests`: `Remove` clears a nullable FormLink instead of throwing, and fails loud on a required
   one when pre-flight is bypassed.
-- `NullableLinkRemoveTests` — on a written file, a `Remove`d nullable link has no subrecord and a `Set "0"` one has
+- `NullableLinkRemoveTests`: on a written file, a `Remove`d nullable link has no subrecord and a `Set "0"` one has
   a zero subrecord, the apply echo reads each back, `info_order` places them last and first, and a copy keeps the
   source's shape, through `CopyFrom` and through the `copy target=` seed lane, single links and link lists alike.
-- `SubclassRemoveTests` — `RemovalTypeFor` routes the typed remove through the flat group's `T`, so a record whose
+- `SubclassRemoveTests`: `RemovalTypeFor` routes the typed remove through the flat group's `T`, so a record whose
   concrete class is a subclass of it is really removed rather than silently skipped.
 - `UpsertCreateTests` (RERUN / OVERRIDE / CROSS-TYPE / DUP) — the replace at a stable FormKey, every replace surfaced
   on the outcome rather than silently, and the three collisions refused loud with the file untouched.
 - `AbstractGroupCreateTests` (G1 / G2) — a concrete arm of either abstract group creates, keyed off the
   runtime hierarchy rather than a per-type case.
-- `NestedCreateSlotTests`, `CoordCellCreateTests` and `CreateInteriorCellTests` — the modeled-slot nested create,
+- `NestedCreateSlotTests`, `CoordCellCreateTests` and `CreateInteriorCellTests`: the modeled-slot nested create,
   and the coordinate-keyed cell routes. `CoordCellCreateTests` creates through `CreateRecords` and re-opens the
   written file for both the exterior and the interior route; `CreateInteriorCellTests` builds the interior cell in
   memory with `WriteEngine.AddInteriorCell`.
-- `OwnedChildLifecycleTests.EveryChildBearingPropertyIsASlotCreateCanNameOrACoordinateRouteItNames` — every
+- `OwnedChildLifecycleTests.EveryChildBearingPropertyIsASlotCreateCanNameOrACoordinateRouteItNames`: every
   child-bearing property the reflected set answers is a slot create can name or a coordinate route it names.
-- `ApplyGuardVerifyTests.AnEmptyComposeIsRefusedBeforeTheFileIsTouched` — a compose given no fields is refused as
+- `ApplyGuardVerifyTests.AnEmptyComposeIsRefusedBeforeTheFileIsTouched`: a compose given no fields is refused as
   having no serializable content.
-- `CoerceAuditTests` — every writable scalar, enum, value, formlink and coercible-element leaf in the corpus resolves to
+- `CoerceAuditTests`: every writable scalar, enum, value, formlink and coercible-element leaf in the corpus resolves to
   a coercible type; `CoerceSampleTests` — each value-type rule builds an instance assignable to its target.
 - `CompactRepointReferencerTests`, the REPOINT-MIXED tests — both refusals split on the shape `LocalizedAmong`
   returns, rendered on the real renderers. They do not pin the fail-closed half:
   `AHeldReferencerIsDroppedByTheIdentifyPassBeforeThePreflight` shows a held referencer never reaches the
   pre-flight, because the identify pass drops it first, so that half is unpinned.
-- `FreshnessCaptureTests.OneMultiEditWrite_ResolvesEveryEditAgainstOneBuild` — one call's patch carries ONE build's bodies. The two captures agreeing about
+- `FreshnessCaptureTests.OneMultiEditWrite_ResolvesEveryEditAgainstOneBuild`: one call's patch carries ONE build's bodies. The two captures agreeing about
   membership is not separately pinned.
 - `RemedyVerbsAgreementTests` (population / routes / agreement) and `RemedyVerbsSiteTests` (sites) — the shape-indexed verb table: every shape's
   corpus population stated out loud, the schema and runtime routes agreeing on every collection field, the measured
   accept-and-refuse sweep through the real gate in both directions, and each consuming message carrying this
   cardinality's verbs and not the other's.
-- `RemedyVerbsSiteTests.TheBracketRemedyNamesSetAtIndexBeforeInsertAtIndex` — the bracketed-leaf remedy names `SetAtIndex` before
+- `RemedyVerbsSiteTests.TheBracketRemedyNamesSetAtIndexBeforeInsertAtIndex`: the bracketed-leaf remedy names `SetAtIndex` before
   `InsertAtIndex`, asserted as a POSITION comparison so a reorder of the table fails it where membership would not;
   `ElementRefusalRemedyTests.AListElementRemedyNamesOnlyVerbsThatTakeTheKeyItPrinted` asserts the same ordering on
   the rendered remedy, beside the keyless `Add` being withheld.
-- `ApplyGuardZipTests` — the copy zip: a bundle copied BETWEEN records, the zip composing with `ops=` in one call,
+- `ApplyGuardZipTests`: the copy zip: a bundle copied BETWEEN records, the zip composing with `ops=` in one call,
   and a bad FormID in an assignment refused NAMING THE ASSIGNMENT rather than a phantom `ops[2]` the caller never
   wrote, which is the caller's-own-spelling half.
-- `WriteSurfaceTransportTests`, `WriteSurfaceInPlaceTransportTests` and `WriteSurfaceReportRenderTests` — the
+- `WriteSurfaceTransportTests`, `WriteSurfaceInPlaceTransportTests` and `WriteSurfaceReportRenderTests`: the
   `lane` value names the lane the CALL asked for on an `into=` refusal and on an in-place consent prompt as much as
   on a success, and is spelled the same on apply / create / remove / forward; the lane-aware truncation remedy on
   `into=` (the plain re-issue), on the default lane (a SECOND patch mod) and on `in_place=` (a READ, never
   re-serializing the caller's original); `write_seq`'s `patch=`/`into=` pair refused BY NAME on both transports,
   and its absent epoch stated with its reason on both.
-- `WriteReadbackFromFileTests.ThePerEditLineMatchesAFreshReadOfTheFile` and `TheJsonOpCarriesTheFilesOwnReading` —
-  the verify ran and rendered its compact per-op clause with no `full_readback=true` passed; `ApplyGuardVerifyTests`
+- `WriteReadbackFromFileTests.ThePerEditLineMatchesAFreshReadOfTheFile` and `TheJsonOpCarriesTheFilesOwnReading`:   the verify ran and rendered its compact per-op clause with no `full_readback=true` passed; `ApplyGuardVerifyTests`
   drives the same clause off the written file on the in-place lane, which is the forced half.
 - `DryRunGuardPatchLaneTests` and `DryRunGuardForwardTests` (the former `dry-run-guard` RENDER HONESTY arm) — a dry
   outcome leads with DRY RUN and nothing-written and never reads like a write, with the `full_readback` dump labelled
   as the IN-MEMORY preview.
-- `PatchIntoLaneRefusalTests` — compile_script, decompile_script, copy, nif_set and place refuse `patch=` beside
+- `PatchIntoLaneRefusalTests`: compile_script, decompile_script, copy, nif_set and place refuse `patch=` beside
   `into=` with no folder cut (place in both formats), compile and decompile with `out_path=` state the ignored pair
   instead of refusing, a blank `patch=` or `into=` on copy is no name so `new_editorid=` names the patch, and nif_set
   with `in_place=` reports `into=` beside `in_place=`; `PatchArtifactCollisionTests` holds the same refusal on
@@ -517,7 +515,7 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   load-order winner and reported with winner and loser named, and the losing donor's un-relisted INFO grafted into the
   winning topic; `MergeServiceRenameTests` (arm HEADER) — the light, master and header-text notes keyed on what the
   donors carried; `MergeServiceDeclarerTests` (arm DECLARER) — a declarer-only dependent reaching the rendered report.
-- `CompactOverriderDetectTests` — an overrider is a warn that lets the compaction succeed
+- `CompactOverriderDetectTests`: an overrider is a warn that lets the compaction succeed
   while a referencer is refused and named, the contrast that holds the two apart.
 - `MasterDeclarerScanTests.ADeclarerOnlyDependentIsFoundAndNamed`, `AReferencerIsNotAlsoListedAsADeclarer`,
   `APluginThePassCouldNotReadIsNotCalledADeclarer`, `APluginDeclaringAMasterOutsideTheTransformSetIsNotADeclarer` and
@@ -531,24 +529,23 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   `AStaleReferenceALaterDonorAlreadyFixedDoesNotRefuseTheMerge` and
   `ADeletedRecordsStaleReferenceDoesNotRefuseTheMerge` — the unremappable-link refusal and the two links it does not
   ask about.
-- `MergeSitingTests.PositionsComeInZeroBasedAndComeBackOneBased` and `AMasterBelowTheLastDonorIsFlagged` — the
+- `MergeSitingTests.PositionsComeInZeroBasedAndComeBackOneBased` and `AMasterBelowTheLastDonorIsFlagged`: the
   placement derivation itself; `MergePlacementTests.ThePlacementParagraphGivesTheDonorRangeAndTheSlot`,
   `…NamesTheLastMasterAndItsPosition`, `…ClaimsNoWinnerOverARenumberedRecord` (the paragraph names the donors'
   overrides at their masters' FormIDs and no roster) and `ASingleDonorGetsItsOwnPositionAndClaimsNothingAboutAnInterval`
   — the rendered paragraph.
-- `ClosureCopyInternalizeTests`, `ClosureCopyStripTests`, `ClosureCopyLeakTests` and `ClosureCopyAttachTests` —
-  fresh keys off the patch's own counter with an extended patch still counting, the scratch-mod step (a record the
+- `ClosureCopyInternalizeTests`, `ClosureCopyStripTests`, `ClosureCopyLeakTests` and `ClosureCopyAttachTests`:   fresh keys off the patch's own counter with an extended patch still counting, the scratch-mod step (a record the
   caller already put in the patch survives untouched, and the arm fails if the step is removed), nullability judged
   on the record model's interface, the required-link refusal checkable in both directions, a surviving bound link
   being a leak while a pre-existing dangling one is not, the walk's arm attribution surviving into the report, and attach setting the internalized keys and refusing a target inside the source.
-- `CopyServiceLaneTests`, `CopyServiceBoundUniverseTests` and `CopyServiceRefusalTests` — the closure copy wired
+- `CopyServiceLaneTests`, `CopyServiceBoundUniverseTests` and `CopyServiceRefusalTests`: the closure copy wired
   through the service over a disabled donor: attach and clone written and read back, an in-patch target on an
   extended patch, every named arm binding, a base-game donor rendered as a transplant, the off-order refusal split
   by cause, the post-attach leak check, an unset seed cleared on disk, and the asset paths reported.
 - The seam `FreshnessCaptureTests.OneMultiEditWrite_ResolvesEveryEditAgainstOneBuild` parks the write on is `WritePatchBuilder.InsidePhase1ResolveForGuard`,
   which is why that flip is staged rather than timed and no runner can be too fast to land it inside the resolve loop.
   The field has no product caller.
-- `ExcludedMasterWriteTests` — the unopenable-reference threshold, pinned BOTH ways on BOTH lanes: a one-master header
+- `ExcludedMasterWriteTests`: the unopenable-reference threshold, pinned BOTH ways on BOTH lanes: a one-master header
   WRITES and a two-master header REFUSES naming the unopenable plugin and its remedy, on the patch lane and on the
   in-place lane, with the dry run predicting the real call's refusal verbatim and still predicting success for a write
   that does not reference it.
@@ -561,24 +558,24 @@ The writes area is one class, `RecordWrites`, across `RecordWrites.cs`, `RecordC
 `RecordReshape.cs` and `WriteMappers.cs`. The head builds it over itself (`IWriteHost`, declared at the top of
 `RecordWrites.cs`) and the `OutputLocations` instance, and reaches it through one-line delegators
 ([`load-order-service.md`](load-order-service.md)).
-- `src/housecarl-mcp/RecordWrites.cs` — among others: `ApplyEdits`, `RemoveRecords`, `ForwardRecords` and their
+- `src/housecarl-mcp/RecordWrites.cs`: among others: `ApplyEdits`, `RemoveRecords`, `ForwardRecords` and their
   `…InPlace` branches, the shared in-place seams (`ResolveActivePluginPath`, `InPlaceHandshakeText`,
   `MergeEditedInPlaceMarker`, `SeqStaleInPlaceNote`), the
   copy-from and off-order-forward sources (`PrepareCopyFromSources`, `ResolveOffOrderForwardSource`,
   `RespellActiveCopySourcePaths`), `ResolveOutputPath`, and small helpers such as `SoleEspInFolder`,
   `RemoveFolderCreatedThisCall`, `IsUnderModsDir` and `JoinNotes`.
-- `src/housecarl-mcp/RecordCopy.cs` — the closure copy, among others: `BuildSourceChain`, `CopyClosure`.
-- `src/housecarl-mcp/RecordCreates.cs` — among others: `CreateRecordsBatch`, `BuildCreateSpec`, `CommitCreate`,
+- `src/housecarl-mcp/RecordCopy.cs`: the closure copy, among others: `BuildSourceChain`, `CopyClosure`.
+- `src/housecarl-mcp/RecordCreates.cs`: among others: `CreateRecordsBatch`, `BuildCreateSpec`, `CommitCreate`,
   `CommitCreateInPlace`, the post-write `EnrichWith*` checks.
-- `src/housecarl-mcp/RecordReshape.cs` — the plugin-level lanes, among others: `CreatePlugin`, `CompactPlugin`
+- `src/housecarl-mcp/RecordReshape.cs`: the plugin-level lanes, among others: `CreatePlugin`, `CompactPlugin`
   (which overwrites inside its own lane), `MergePlugins`, and the blocked-referencer helpers (`BlockedReferencer*`).
-- `src/housecarl-mcp/InPlaceConsent.cs` — `InPlaceConsent`, the in-place consent the write lanes and `nif_set` share
+- `src/housecarl-mcp/InPlaceConsent.cs`: `InPlaceConsent`, the in-place consent the write lanes and `nif_set` share
   through `ILoadOrderHost`: `IsAcknowledged`, `Persist`, `ParentUnwritable`, `HandshakeLead`.
-- `src/housecarl-mcp/WriteMappers.cs` — the wire mappers, among others: `MapEdit`, `MapCreateEdit`, `MapStruct`,
+- `src/housecarl-mcp/WriteMappers.cs`: the wire mappers, among others: `MapEdit`, `MapCreateEdit`, `MapStruct`,
   `MapComposes`, `MapFromPlugin`, `SplitPath`.
-- `src/housecarl-mcp/WriteSentences.cs` — the catalogue, `WriteSentences.Twins`, and the `[MustState]` /
+- `src/housecarl-mcp/WriteSentences.cs`: the catalogue, `WriteSentences.Twins`, and the `[MustState]` /
   `[NoClaims]` attributes.
-- `src/housecarl-core/WriteEngine.cs` — the reflection-driven engine underneath every lane: the patch-mod lifecycle
+- `src/housecarl-core/WriteEngine.cs`: the reflection-driven engine underneath every lane: the patch-mod lifecycle
   (`GenericGetOrAddAsOverride`, `NestedGetOrAddAsOverride`, `EnumerateFlatGroups`, `RemovalTypeFor`, `SeekTypeFor`),
   create (`CanCreateType`, `GenericAddNew`, `GenericUpsertNew`, `NestedAddNew`, `AddExteriorCell`, `AddInteriorCell`,
   `EnsureFormIdFloor`), the child-group carry (`CaptureChildGroup`, `RestoreChildGroup`, `ChildBearingProperties`),
@@ -590,33 +587,33 @@ The writes area is one class, `RecordWrites`, across `RecordWrites.cs`, `RecordC
   `condition-patch` dev harnesses.
 - Tools: `housecarl_apply`, `housecarl_create`, `housecarl_remove`, `housecarl_forward`, `housecarl_copy`,
   `housecarl_compact_plugin`, `housecarl_merge_plugins`, `housecarl_create_plugin`.
-- `src/housecarl-core/WriteVerbs.cs` — the write-verb vocabulary, `CollectionShape`, `WriteVerbs.On` and the purpose
+- `src/housecarl-core/WriteVerbs.cs`: the write-verb vocabulary, `CollectionShape`, `WriteVerbs.On` and the purpose
   filters (`HowToPlace`, `HowToPlaceOne`, `HowToPlaceOneAt`, `HowToAddress`), plus the two routes to a shape
   (`OfField`, `OfRuntimeType` / `OfElement`).
-- `src/housecarl-core/RemapEngine.cs` — the shared foundation under compact and merge:
+- `src/housecarl-core/RemapEngine.cs`: the shared foundation under compact and merge:
   `IdentifyExternalReferencers`, `BuildSequentialRemap` / `BuildMergeRemap`, `RenumberRecordsInto` /
   `RenumberModInto`, `MergeModsInto` with its graft helpers, `LocalizedAmong` and `RepointInPlace`.
-- `src/housecarl-core/ClosureCopy.cs` — `Internalize`, `StripBoundLinks`, `AttachSeedFields`, `FindBoundLeak` and
+- `src/housecarl-core/ClosureCopy.cs`: `Internalize`, `StripBoundLinks`, `AttachSeedFields`, `FindBoundLeak` and
   `BuildAndWrite`, behind `housecarl_copy`; the walk that feeds it is
   [`walk-and-reverse.md`](walk-and-reverse.md)'s.
 - `src/housecarl-core/MergeInjection.cs` (`Renumberable`, `UnremappableLink`) and
   `src/housecarl-core/MergeLoadPosition.cs` (`Derive`, `MergeSiting`) — the two merge pre-flights.
 - The tool fronts: `src/housecarl-mcp/ApplyTools.cs`, `CreateTools.cs`, `ForwardTools.cs` and `RemoveTools.cs` —
   argument reading and the lane and transport gates.
-- `src/housecarl-mcp/WriteTools.cs` — the three plugin-level tools (`housecarl_create_plugin`,
+- `src/housecarl-mcp/WriteTools.cs`: the three plugin-level tools (`housecarl_create_plugin`,
   `housecarl_compact_plugin`, `housecarl_merge_plugins`), plus the retired 1.x wire DTOs (`BulkOp`, `CreateOp`,
   `StructInput`, `NestedSet`).
-- `src/housecarl-mcp/WriteTextRender.cs` — the other half of `static partial class WriteTools`: every write
+- `src/housecarl-mcp/WriteTextRender.cs`: the other half of `static partial class WriteTools`: every write
   tool's text render (every `Render*`), the readback and report appenders, the remedy and read-back helpers the json
   render in `JsonWire.cs` shares, and `CreateRootFailures`, at the same `WriteTools.` addresses.
-- `src/housecarl-core/WritePatchBuilder.cs` — the core half: `Apply` / `ApplyInPlace`, `CreateRecords` /
+- `src/housecarl-core/WritePatchBuilder.cs`: the core half: `Apply` / `ApplyInPlace`, `CreateRecords` /
   `CreateRecordsInPlace`, `RemoveRecords` / `RemoveRecordsInPlace`, `ForwardRecords` / `ForwardRecordsInPlace`,
-  `CreatePlugin`, `CompactBuild` and `MergeBuild`. The four record lanes — apply, create, remove, forward — are the
+  `CreatePlugin`, `CompactBuild` and `MergeBuild`. The four record lanes (apply, create, remove, forward) are the
   ones that split a `…Core` body, so the one captured build's fingerprint stamps every one of THEIR outcomes from a
   single place; `CreatePlugin`, `CompactBuild` and `MergeBuild` have no such split and their results carry no stamp at
   all. Plus the shared seams: `LinkTypeLookup`, `ResolveForwardSources`,
   `SyncEditedTopicMarkers`, `DryRunMastersPreview`, `MasterGrowNote`, `SerializeFailure`, `ReadBackInFull`,
   `VerifyLandedAgainstFile` and `VerifyCreatedAgainstFile`.
-- `src/housecarl-core/LocalizedStrings.cs` — the strings-shape classifier, whose localized language set is Mutagen's
+- `src/housecarl-core/LocalizedStrings.cs`: the strings-shape classifier, whose localized language set is Mutagen's
   `Language` enum; the write lanes' pre-flights call
   `LocalizedStrings.RefusalFor`.

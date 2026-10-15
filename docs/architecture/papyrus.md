@@ -34,8 +34,8 @@ The decompiler itself is [`papyrus-decompile.md`](papyrus-decompile.md).
 - The path is narrowed to the folders the target script reaches: a folder providing only names this
   script never mentions contributes nothing to this compile.
 - The walk mirrors the compiler: a name indexes to exactly ONE folder, its first (highest-precedence)
-  provider, and the closure is transitive. Seed folders — the script's own folder and the caller's
-  `import_dirs=` — are indexed but never returned, because the caller adds them unconditionally.
+  provider, and the closure is transitive. Seed folders (the script's own folder and the caller's
+  `import_dirs=`) are indexed but never returned, because the caller adds them unconditionally.
 - It is deliberately over-inclusive: every identifier-shaped token is a candidate name.
 - Vanilla is held out of the candidates: it is appended last unconditionally, so indexing it would
   only walk the base game.
@@ -70,10 +70,9 @@ The decompiler itself is [`papyrus-decompile.md`](papyrus-decompile.md).
   `ScriptName X extends Y` headers across the mods tree, and the input `.pex` plus its siblings.
   First edge per child wins.
 - ALL THREE degraded modes are named in the result, one member per source: a missing or unreadable
-  baseline (`ClassParents.BaselineNote`), mods-tree sources that were not all read (`TopUpMissing` —
-  set both for a tree read NOTHING was read from and for a walk that lost some `.psc` files), and
+  baseline (`ClassParents.BaselineNote`), mods-tree sources that were not all read (`TopUpMissing` (set both for a tree read NOTHING was read from and for a walk that lost some `.psc` files), and
   sibling `.pex` files that were not all read (`SiblingPexMissing`), all rendered by
-  `DecompileTools.HierarchySentence` — one clause per thin source, then what the hierarchy IS instead,
+  `DecompileTools.HierarchySentence`) one clause per thin source, then what the hierarchy IS instead,
   then the one cost sentence. `PapyrusClassParents.AddFromPexFolder` counts an unreadable sibling
   rather than swallowing it, and reports an absent folder and a listing that threw part-way as separate
   facts so a partial listing keeps its counts; the decompile lane turns the scan into the reason (the
@@ -84,23 +83,23 @@ The decompiler itself is [`papyrus-decompile.md`](papyrus-decompile.md).
   is all-or-nothing, since a corrupt one loads as an empty map. The input `.pex` is always read, so the
   "is" half is never empty, and the sibling count excludes it, which the clause has already excluded by
   saying "beside this one".
-- Pinned by `ClassHierarchyNoteTests` — the two walks keep the edges of the files around the one they
-  lost, and the sentence credits them — plus
+- Pinned by `ClassHierarchyNoteTests` (the two walks keep the edges of the files around the one they
+  lost, and the sentence credits them) plus
   `DecompileOutPathTests.AnUnreadableSiblingPexIsNamedAndTheHierarchySaysWhatItIsInstead` and
   `.APartialSiblingFailureCountsOnlyTheFileItLost` for the rendered note.
 
 ## Pinned by
-- `PapyrusSourceRootsDiscoverTests` — the two layouts, the `.psc` gate, the precedence order, the
+- `PapyrusSourceRootsDiscoverTests`: the two layouts, the `.psc` gate, the precedence order, the
   dedup and `SplitGameData`'s exact match and blank-data-dir arm; `PapyrusDependencyWalkTests` —
   the transitive walk, first-provider precedence, the unreferenced drop and the unreadable target;
   `CompileRenderImportPathTests` and `CompileRenderBannerTests` — the summary's narrowing count, the
   unresolved-symbol class, and the missing-imports banner's three-diagnostic floor and two-thirds bar.
-- `ImportOrderBuildImportsTests` — the import-path order, vanilla last even when re-passed or
+- `ImportOrderBuildImportsTests`: the import-path order, vanilla last even when re-passed or
   re-found, case-insensitive dedup, and when the modlist is read; `ImportOrderPlanTests` — the
   provenance labels, the caller-outranks-scan rule, and the vanilla-missing claim agreeing with the
   assembled path.
-- `PapyrusCompileParseTests` and `PapyrusCompileEndToEndTests` (the second skips without the compiler) — diagnostic parsing, and that a failed recompile leaves the prior
-  `.pex` intact while a successful one advances its write-time.
+- `PapyrusCompileParseTests`: Creation Kit diagnostics and Caprica's filename/line/column-range diagnostics, retaining the start coordinate and error or warning message.
+- `PapyrusCompileEndToEndTests`: five real Linux Caprica cases using authored sources and flags, without a game installation. They verify valid PEX object/function values, structured syntax errors with no output, separate source imports and missing dependencies, changed-function recompilation into fresh output, and preservation of prior PEX bytes after a failed edit. An absent compiler is an explicit skip; an installed broken compiler fails. See [native build corrections and tool selection](../linux-native-tools.md).
 
 ## Where
 - Core: `PapyrusSourceRoots` (discovery, `SplitGameData`), `PapyrusDependencyFilter` (`Relevant`,

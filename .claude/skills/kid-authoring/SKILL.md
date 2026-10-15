@@ -14,34 +14,33 @@ compatibility: Requires the houseCARL MCP server and a configured Mod Organizer 
 ## Overview
 
 KID (Keyword Item Distributor, by powerofthree) is an SKSE plugin that **adds keywords to item
-records** — weapons, armor, ammo, magic effects, potions, scrolls, books, soul gems, spells,
-enchantments and more (19 item types) — **at game startup**, driven by plain-text `_KID.ini` files.
+records** (weapons, armor, ammo, magic effects, potions, scrolls, books, soul gems, spells,
+enchantments and more (19 item types)) **at game startup**, driven by plain-text `_KID.ini` files.
 It writes nothing to plugins and nothing to saves, and re-applies its keywords from scratch on each
 launch, so a KID mod is trace-free to add or remove.
 
-This skill **composes** a correct line from the bundled v3.5.0 grammar, **grounds** it against the
-live load order so its reach is measured before the file ships, and **places** the file where KID
-will read it. Every type, filter, trait and value comes from `references/`, never from memory — a
-fabricated token fails silently.
+Use the bundled v3.5.0 grammar to compose a line, measure its targets against the load order,
+and place the file where KID reads it. Look up every type, filter, trait, and value in
+`references/`; invented tokens fail silently.
 
 ## This skill's lane
 
 KID's lane is **a keyword onto an item record**. A keyword onto an NPC is SPID: load
 `housecarl:spid-authoring` for that job instead. Sibling skills are written `housecarl:<name>`, the
 Claude Code plugin form; a Codex install sees the same skill under its bare folder name
-(`spid-authoring`). MCP tool names are bare — `housecarl_records` — on every host.
+(`spid-authoring`). MCP tool names are bare (`housecarl_records`) on every host.
 
 ## Which file answers which question
 
 Read `references/grammar-core.md` first — it holds the five-section line, how KID finds and parses
 the file, and what happens to a line it cannot read. When you need the exact type string, or whether
 that type takes traits at all, read `references/types.md`. When the question is *which* items, read
-`references/filters.md`. When the narrowing is a property of the item rather than its name — armor
-rating, animation type, soul size, effect school — read `references/traits.md`. When you need a
-number for a named thing — a spell type, a school, a body slot — read `references/value-tables.md`.
+`references/filters.md`. When the narrowing is a property of the item rather than its name (armor
+rating, animation type, soul size, effect school) read `references/traits.md`. When you need a
+number for a named thing (a spell type, a school, a body slot) read `references/value-tables.md`.
 To jump straight to a section rather than read a file, grep `references/index.jsonl`.
 
-Read what your task needs, not everything.
+Read the sections needed for the task.
 
 ## Workflow — compose, ground, place
 
@@ -94,9 +93,9 @@ Read what your task needs, not everything.
    the channels that filter actually tests (`references/filters.md` §1 and §3), which is more than
    the display name: a bare term is an exact test on the EditorID or the name, and a `*wildcard` is
    a substring test on the EditorID, the name **and** the item's own keyword EditorIDs. So a
-   wildcard census is three scans — `where=["Name contains Dagger"]`,
+   wildcard census is three scans (`where=["Name contains Dagger"]`,
    `where=["editorid contains Dagger"]` and
-   `where=["Keywords[*any]->editorid contains Dagger"]` — and the reach is their **union**, which
+   `where=["Keywords[*any]->editorid contains Dagger"]`) and the reach is their **union**, which
    `where=` cannot express in one call because its terms are ANDed. Get the union by
    inclusion-exclusion over the three counts and their four intersections, or by writing each scan
    to a `to_file` artifact and merging the identity columns. A single `Name contains` count
@@ -105,7 +104,7 @@ Read what your task needs, not everything.
    A `-exclusion` term grounds the same way, with the complement spelled on the operator: `not`
    leads a string operator, so `where=["Name not contains Dagger"]` is the census for `-*Dagger` on
    the name channel. On a **field** path it is the complement over records that field READS A VALUE
-   on — a record with no `Name` is in neither count — so a line whose reach depends on the no-value
+   on (a record with no `Name` is in neither count) so a line whose reach depends on the no-value
    records needs the `missing` term beside it, and `contains` + `not contains` + `missing`
    partitions the scope. The identity term `editorid` is the exception: it always gives a verdict,
    so a record with no EditorID lands on the `not contains` side (where `!=` and `not in` already
@@ -119,8 +118,8 @@ Read what your task needs, not everything.
    surface replays KID's evaluation order or `chance` — that is issue **#614**, not in 2.0, so say
    so rather than implying the whole line was proved.
 
-7. **Place the file** at `Data\<name>_KID.ini`. The `_KID` substring is **mandatory** — a file
-   without it is never read — and the file sits flat in `Data\`, not under
+7. **Place the file** at `Data\<name>_KID.ini`. The `_KID` substring is **mandatory** (a file
+   without it is never read) and the file sits flat in `Data\`, not under
    `Data\SKSE\Plugins\SkyPatcher\<type folder>\` where SkyPatcher's INIs live. KID INIs have **no
    `[Section]` headers**; every line sits at the top level, and `;` starts a comment. (Backslashed
    paths here are the game's own literals; every path into this skill's own files is forward-slashed.)

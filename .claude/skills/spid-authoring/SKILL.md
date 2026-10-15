@@ -16,14 +16,13 @@ compatibility: Requires the houseCARL MCP server and a configured Mod Organizer 
 
 ## Overview
 
-SPID (Spell Perk Item Distributor, by powerofthree) is an SKSE plugin that distributes forms —
-spells, perks, items, shouts, keywords, outfits, factions, AI packages — **to NPCs at runtime**,
+SPID (Spell Perk Item Distributor, by powerofthree) is an SKSE plugin that distributes forms (spells, perks, items, shouts, keywords, outfits, factions, AI packages) **to NPCs at runtime**,
 driven by plain-text `_DISTR.ini` files. It writes nothing to plugins or saves and redistributes
 from scratch each launch, so a SPID mod is trace-free to add or remove. This skill composes and
 reads SPID lines, taking every form type, filter, modifier and value from `references/` — look a
 token up, never invent one, because a wrong token fails silently.
 
-**Scope.** SPID's target is NPCs. It is *best* for groups — faction, race, level, trait — and it can
+**Scope.** SPID's target is NPCs. It is *best* for groups (faction, race, level, trait) and it can
 also name one NPC by EditorID or FormID (`references/filters.md` §1 and §2), so a single-NPC
 distribution is a real SPID line, not a refusal. For one NPC, `housecarl:skypatcher-authoring` is
 usually the *better* fit, and a record's *own fields* are its job outright; a keyword onto *item
@@ -32,22 +31,23 @@ plugin install; a Codex flat install sees the bare folder name (`kid-authoring`)
 
 ## First step — open the grammar reference
 
-The grammar is uniform — one line shape across all 10 form types — so open only what your task
+The grammar is uniform (one line shape across all 10 form types) so open only what your task
 touches:
 
-- **`references/grammar-core.md`** — read first: the seven pipe sections, file discovery and
+- **`references/grammar-core.md`**: read first: the seven pipe sections, file discovery and
   distribution order, the FormID and EditorID forms, and how filters combine. Almost every task
   needs it.
-- **`references/form-types.md`** — read it when you are deciding *what* is being distributed, or
+- **`references/form-types.md`**: read it when you are deciding *what* is being distributed, or
   when `Form =` will not infer the type.
-- **`references/filters.md`** — read it whenever targeting is in question; §3 owns what a Level
+- **`references/filters.md`**: read it whenever targeting is in question; §3 owns what a Level
   Filter does and does not reach.
-- **`references/value-tables.md`** — a lookup, not a read: open it for a skill index, a trait letter
+- **`references/value-tables.md`**: a lookup, not a read: open it for a skill index, a trait letter
   or a package-list type and close it again.
-- **`references/index.jsonl`** — grep it to jump straight to the right section instead of reading a
+- **`references/index.jsonl`**: grep it to jump straight to the right section instead of reading a
   whole file.
 
-Read grammar-core plus the one or two files you need — don't bulk-load everything.
+Read grammar-core and the one or two reference files needed for the task. Do not bulk-load the
+reference set.
 
 ## Workflow — compose a distribution line
 
@@ -56,7 +56,7 @@ Read grammar-core plus the one or two files you need — don't bulk-load everyth
    fly). The generic `Form =` infers the type from the named record — except SleepOutfit and Skin,
    which must be named explicitly (`references/form-types.md`).
 
-2. **Identify the target NPCs** — *to whom* — and pick the filter section(s) in
+2. **Identify the target NPCs** (*to whom*) and pick the filter section(s) in
    `references/filters.md`. The inputs to have from the user before composing: the form, the group
    receiving it, and any level, chance or count bound on it.
    - by **name / EditorID / keyword / race-keyword / template** → **String** filter (position 1)
@@ -75,7 +75,7 @@ Read grammar-core plus the one or two files you need — don't bulk-load everyth
      override that **renames** the record, which is ordinary on a heavily overhauled order. Read the
      winner's EditorID before trusting the name; use the FormID when it has changed
      (`references/grammar-core.md` §6).
-   - **Count the pipes** — each section is positional. Positions are 0-based everywhere in this skill
+   - **Count the pipes**: each section is positional. Positions are 0-based everywhere in this skill
      and in `references/`: `FormOrEditorID` is position 0, String 1, Form 2, Level 3, Trait 4, Count 5,
      Chance 6 (`references/grammar-core.md` §4). So a value meant for Chance sits after six pipes, one
      meant for Count after five. Leave an unused middle section blank (`||`) or `NONE`; a trailing
@@ -127,8 +127,8 @@ A SPID line is written blind unless you measure the population first. Three chec
    faction or keyword test is one quantified step, and it takes either spelling: the link step
    (`Factions[*any].Faction->editorid = BanditFaction`), which resolves the target record's EditorID,
    or the **FormLink wire form** (`Factions[*any].Faction = 01BCC0:Skyrim.esm`), which compares the
-   link itself. Prefer the wire form when you already hold the FormID — it needs no second
-   resolution — and the link step when you only know the EditorID. Either way, resolve the field path
+   link itself. Prefer the wire form when you already hold the FormID (it needs no second
+   resolution) and the link step when you only know the EditorID. Either way, resolve the field path
    with `housecarl:mutagen-reference` rather than guessing it. For a **union** of groups, one call
    does it: a comma list inside the predicate (`Factions[*any].Faction in [01BCC0:Skyrim.esm,
    0267BE:Skyrim.esm]`) censuses both at once, where one predicate per group needs a call each.
@@ -148,8 +148,8 @@ resolved NPC (`references/grammar-core.md` §11), so a templated actor SPID reac
 Say that alongside the number rather than passing it off as the resolved population.
 
 **Stop condition.** Quote the counts you measured and no others; never state a reach you did not
-measure. **What the surface cannot do:** nothing reports the set a *composed line* reaches — SPID's
-own parse of the seven sections, trait letters and chance (issue #614) — and nothing checks that a
+measure. **What the surface cannot do:** nothing reports the set a *composed line* reaches (SPID's
+own parse of the seven sections, trait letters and chance (issue #614)) and nothing checks that a
 drafted `_DISTR.ini` parses offline: `housecarl_skse` says outright that distributor INIs in `Data\`
 root are covered by no family, and no issue is filed for a SPID parse check.
 
@@ -166,7 +166,7 @@ re-derive. **Below 7.3.0 a documented feature may not exist yet**: `references/f
 `Actor [ACHR]` Form filter *(added in 7.3)*, and on an older install that line is skipped silently.
 Read the installed version before relying on a dated feature — but read it from the right place.
 `housecarl_skse` with `findings='inventory'` and `filter=` the SPID DLL name reports what the DLL's
-static version manifest declares — name, author, version — without loading it. For SPID that number
+static version manifest declares (name, author, version) without loading it. For SPID that number
 is a **major-version floor only** (below), so it cannot settle a 7.3 question either way: it says
 7.0.0 on every 7.x install, and reading it as "the version" is what makes a 7.3-only token look
 unavailable on a 7.3.1 install.
@@ -233,8 +233,7 @@ what SPID looked up; only a live actor shows what SPID applied.
   launch and writes nothing into the save, so actors in a pre-existing save do pick up a rule added
   afterwards. The INIs are read **once per game launch**, though: a rule added while the game runs
   needs a restart, and the actor has to load in that new session.
-- **A dynamic keyword IS reachable.** A keyword SPID creates at runtime has no plugin FormID —
-  nothing in xEdit to point at — but it is in the game's keyword array, so `Keyword.GetKeyword()`
+- **A dynamic keyword IS reachable.** A keyword SPID creates at runtime has no plugin FormID (nothing in xEdit to point at) but it is in the game's keyword array, so `Keyword.GetKeyword()`
   finds it by name, which is what makes a no-ESP keyword distribution verifiable from script at all.
   For the signature use `housecarl:papyrus-reference`; the SPID side is in `references/form-types.md`.
 - **Chance skips actors by design.** A `Chance` below 100 is *supposed* to miss some NPCs, so two
@@ -245,7 +244,7 @@ what SPID looked up; only a live actor shows what SPID applied.
   only NPCs on a PC level multiplier and exists to re-evaluate them as the player levels — it does
   not shrink the target set. `references/filters.md` §3 owns this with its source citation; check 2
   under *Check the reach before you write it* counts the difference.
-- **Sample somewhere NPCs must be** — testing practice, not a SPID rule. An interior cell with known
+- **Sample somewhere NPCs must be**: testing practice, not a SPID rule. An interior cell with known
   occupants beats an exterior spawn marker: finding no NPC in scan range there is inconclusive, not
   a failing distribution.
 

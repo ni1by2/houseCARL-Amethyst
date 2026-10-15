@@ -6,8 +6,8 @@ covers: [src/housecarl-core/CorpusRulebook.cs, src/housecarl-core/WriteEngine.cs
 
 ## What it is
 
-The rulebook is the write surface's pre-flight: every write is validated against the generated schema before any
-Mutagen mutation. This file is the home of the contracts that hold it, cited from the code under ADR 0001.
+The rulebook validates every write against the generated schema before Mutagen performs a
+mutation. Code references these contracts under ADR 0001.
 
 ## Contracts
 
@@ -32,8 +32,8 @@ and insert's admission of the append slot (`index == count`).
 
 ### Presence, shape, and range are three different gates
 
-- **PRESENCE** — does the verb have the key, index or value it consumes at all — is `VerbLegality`'s.
-- **SHAPE** — is the present value one the coercion can read — is `ValueLegality`'s.
+- **PRESENCE**: does the verb have the key, index or value it consumes at all — is `VerbLegality`'s.
+- **SHAPE**: is the present value one the coercion can read — is `ValueLegality`'s.
 - **RANGE** is apply's, as above.
 
 A slot the apply path never reads is not over-rejected: the value checks are scoped to the verbs that actually
@@ -55,9 +55,9 @@ verb.** The shape has two forms and three doors, and the doors share predicates 
   singular predicate does not match;
 - the doors are the collection verbs, `composes=`, and `CopyFrom`.
 
-Each door keeps its own remedy because what the caller does next differs — `create` with `parent=` (and
+Each door keeps its own remedy because what the caller does next differs (`create` with `parent=` (and
 `collection=` where the parent holds more than one fitting list) for a child that does not exist, `forward` for one
-that does — but a door that forgets to ask falls through to a label that reads the element kind off `FormLinkTarget`
+that does) but a door that forgets to ask falls through to a label that reads the element kind off `FormLinkTarget`
 and calls an owned child record "coercible", which is the failure the named predicates exist to close.
 
 **`CopyFrom` refuses at any depth.** A leaf-only test would admit a path that merely runs THROUGH an owned child,
@@ -73,11 +73,10 @@ is rejected at both entry points — `StructElementLegality` and `ArmLegality`.
 The recogniser is the corpus's poly-base KIND, **not** `Type.IsAbstract`: a concrete base (`APackageData`) has a
 public parameterless constructor, so an `IsAbstract` check would miss it and apply would silently write a degenerate
 base instance; an abstract base (`Condition`) would instead throw at `Invoke`. A concrete base also lists ITSELF
-among its arms, so it is filtered out of the legal-arms set everywhere — the arm-match test and every message alike
-— and neither path can admit it or advertise it.
+among its arms, so it is filtered out of the legal-arms set everywhere (the arm-match test and every message alike) and neither path can admit it or advertise it.
 
 A concrete base is also the one shape where "no listed arm fits" is real, because the field's live type can BE the
-base. Its refusal therefore names the working lane — dotted-subfield Sets, which pre-flight descends — rather than
+base. Its refusal therefore names the working lane (dotted-subfield Sets, which pre-flight descends) rather than
 dead-ending the caller. That hint is gated on the field's mutable AQ resolving to a concrete class.
 
 ### Over-arms search: agree in shape, or refuse by name
@@ -127,8 +126,8 @@ unchecked. Two consequences follow:
   identical to the checking one, so the caller keeps that verdict and skips the second walk. A write that did
   contribute is re-walked against the resolved lookup.
 - A same-call `@editorid` reference is added to the sink too, although it is not a FormID. The sink COUNT is what
-  says this write's verdict depends on the sibling set — which the create lane offers in full to the harvest and
-  only up to the current spec to the check — so without it a forward reference would be settled by the harvest's
+  says this write's verdict depends on the sibling set (which the create lane offers in full to the harvest and
+  only up to the current spec to the check) so without it a forward reference would be settled by the harvest's
   more permissive answer.
 
 The link-target lookup rides on the rulebook rather than through the recursion, so every value slot sees it without
@@ -136,8 +135,7 @@ a parameter at each hop, and the printed-legal-names memo spans the whole call.
 
 ### `@editorid`: where a same-call reference is legal
 
-An `@editorid` value names a record created earlier in the same `create` call — or the record being created ITSELF —
-and is substituted with the allocated FormKey after allocation. It is legal **only** in create context
+An `@editorid` value names a record created earlier in the same `create` call (or the record being created ITSELF) and is substituted with the allocated FormKey after allocation. It is legal **only** in create context
 (`siblingEditorIds` non-null); on the edit path it is refused loud rather than substituting nothing. Its placements:
 
 - a SINGULAR value: `Set` on a singular FormLink leaf, or `Add` on a FormLink LIST leaf;
@@ -183,6 +181,6 @@ service and hands it to every area as `Types`.
 
 ## Related
 
-- `docs/architecture/records-owned-child-declarers.md` — which fields the schema classifies as owned-child
+- `docs/architecture/records-owned-child-declarers.md`: which fields the schema classifies as owned-child
   declarers.
-- `docs/architecture/tool-schema-publication.md` — how the generated schema reaches the published tool surface.
+- `docs/architecture/tool-schema-publication.md`: how the generated schema reaches the published tool surface.

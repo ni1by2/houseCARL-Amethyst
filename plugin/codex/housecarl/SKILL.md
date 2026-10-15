@@ -17,8 +17,8 @@ compatibility: Requires the houseCARL MCP server and a configured Mod Organizer 
 
 **In:** a live Mod Organizer 2 instance, read through the houseCARL MCP server. **The work:** read the
 record at its true load-order winner, check the schema, then write. **Out:** a patch plugin the user
-reviews and enables in MO2. This file routes a job to the skill that owns its grammar, and gives the read
-order every write depends on. What a tool takes is in that tool's own description.
+reviews and enables in MO2. Use the routing table to choose the grammar skill and follow the read order before writing.
+Each tool description defines its parameters.
 
 The user's instructions take precedence over guidelines provided in a skill.
 
