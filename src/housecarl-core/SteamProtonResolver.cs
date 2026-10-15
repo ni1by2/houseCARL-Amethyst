@@ -80,7 +80,11 @@ public static class SteamProtonResolver
     sealed record VdfValue(string? Text, Dictionary<string, VdfValue>? Children);
 
     /// <summary>Resolve selected app mapping and its installed tool from the selected Amethyst prefix.</summary>
-    public static SteamProtonSelection Resolve(AmethystSavedSnapshot snapshot, string? homeOverride = null)
+    public static SteamProtonSelection Resolve(AmethystSavedSnapshot snapshot, string? homeOverride = null) =>
+        Resolve(snapshot, homeOverride, ["/usr/share/steam/compatibilitytools.d", "/usr/local/share/steam/compatibilitytools.d"]);
+
+    internal static SteamProtonSelection Resolve(AmethystSavedSnapshot snapshot, string? homeOverride,
+        IReadOnlyList<string> systemToolRoots)
     {
         if (!OperatingSystem.IsLinux()) throw new InvalidOperationException("Steam Proton selection is supported only on Linux");
         if (snapshot.PrefixPath is not { Length: > 0 } prefix) throw new InvalidOperationException("Amethyst has no effective prefix_path in the selected schema-v1 manifest/profile settings");
@@ -145,9 +149,11 @@ public static class SteamProtonResolver
                 foreach (var directory in Directory.EnumerateDirectories(common)) AddDescriptorMatch(library, directory, toolName, matches);
             }
         }
-        var customRoot = Path.Combine(steamRoot, "compatibilitytools.d");
-        if (Directory.Exists(customRoot) && new DirectoryInfo(customRoot).LinkTarget is null)
-            foreach (var directory in Directory.EnumerateDirectories(customRoot)) AddDescriptorMatch(steamRoot, directory, toolName, matches);
+        var customRoots = systemToolRoots.Append(Path.Combine(steamRoot, "compatibilitytools.d"));
+        foreach (var customRoot in customRoots)
+            if (Directory.Exists(customRoot) && new DirectoryInfo(customRoot).LinkTarget is null)
+                foreach (var directory in Directory.EnumerateDirectories(customRoot))
+                    AddDescriptorMatch(steamRoot, directory, toolName, matches);
         if (BuiltInToolDirectory(toolName) is { } builtInDirectory)
             foreach (var library in libraries)
             {
@@ -159,9 +165,9 @@ public static class SteamProtonResolver
             }
         var unique = matches.GroupBy(m => CanonicalFile(m.Proton), PathComparer).Select(g => g.First()).ToArray();
         if (unique.Length == 0)
-            throw new InvalidOperationException($"Steam selects '{toolName}' for Skyrim SE, but no matching installed Proton compatibilitytool.vdf/proton executable exists in its listed libraries");
+            throw new InvalidOperationException($"Steam selects '{toolName}' for Skyrim SE, but no matching installed Proton compatibilitytool.vdf/proton executable exists in its listed libraries or user/system compatibility tool directories");
         if (unique.Length > 1)
-            throw new InvalidOperationException($"Steam selects '{toolName}' for Skyrim SE, but multiple installed runners match across libraries; refusing to guess which copy Steam launches");
+            throw new InvalidOperationException($"Steam selects '{toolName}' for Skyrim SE, but multiple installed runners match across library, user or system tool directories; refusing to guess which copy Steam launches");
         return new SteamProtonSelection(steamRoot, unique[0].Library, toolName, unique[0].Directory, unique[0].Proton,
             canonicalPrefix, compatData, SkyrimSeAppId);
     }

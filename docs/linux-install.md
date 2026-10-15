@@ -24,6 +24,8 @@ Use `python3 install-linux.py rollback` to switch back or `python3 install-linux
 
 ## Release limits
 
+Windows utilities such as the Creation Kit compiler and BSArch require Skyrim SE's explicit Steam compatibility-tool selection and the matching Amethyst prefix. Runner discovery includes Steam library installations, the user's `compatibilitytools.d`, and `/usr/share/steam/compatibilitytools.d` and `/usr/local/share/steam/compatibilitytools.d` for distro packages such as Proton CachyOS. Multiple matching runner copies refuse instead of guessing. Discovery reads configuration only; it does not select a tool in Steam, create a prefix or reconfigure an existing prefix.
+
 The package build fetches the pinned Caprica and Champollion source commits, builds them with the pinned vcpkg dependency baseline, smoke-tests a synthetic compile/decompile round trip, and stages source archives and license notices. The [2.0.5 integration record in the source repository](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/testing/upstream-205-integration-2026-10-15.md) records the Linux suite, Ubuntu build, clean installation, candidate upgrade/rollback and archive startup checks.
 
 A real selected-Proton utility run and acceptance against the user's Amethyst installation remain outstanding. The Arch check covers the extracted server and native filegraph module; it does not establish desktop host registration or deployment behaviour. Windows execution is outside this Linux release's supported target. Package verification does not prove which outputs the game currently loads.
