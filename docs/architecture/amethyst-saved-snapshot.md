@@ -7,18 +7,20 @@ producer's native snapshot and exact source paths. It never refreshes,
 migrates, deploys or writes the manager catalog. All Mutagen record coverage stays
 generated; the record index has no plugin-count cap in this mode.
 
-The tested pins are houseCARL main `b77ba4b202456affe30dd51111972529e469c278`
-and Amethyst Testing `e98cf70fe63f6b4a64b39e780ee3ffe02e553c6e`
-(2.5.4), also exercised against installed stable 2.5.4. The catalog contract
-is schema 9, engine 1, rules 13; the native API is 13. Amethyst's
-Python and native filegraph source trees match stable main `edde06e5` and are
-unchanged from the previous Testing `97499673` pin.
+The published Linux 2.0.5 preview is built from houseCARL-Amethyst
+`87e9268dc1052e31343fc8ff5bc014bd53b6c264`, integrating upstream houseCARL
+`4e28505122165a1e210d0fd56d1382b377669421`. Its native filegraph component is
+from stable Amethyst 2.5.4 at `edde06e518c0a3ca5ba47a8bbf065c4ecc4a8f92`.
+The catalog contract is schema 9, engine 1, rules 13; the native API is 13.
+Earlier reader checks used Amethyst Testing `e98cf70fe63f6b4a64b39e780ee3ffe02e553c6e`
+and installed stable 2.5.4. Their Python and native filegraph source trees match
+the stable pin and are unchanged from the previous Testing `97499673` pin.
 The revision check describes the reader's tested range. A changed rules stamp
 alone does not establish a breaking stored-data format change: tags 2.5.1 and
 2.5.3 have the same schema, Python models and filegraph service as this Testing
 pin; the native model changes only its rules constant. Routing/producer behavior
 changed elsewhere, and complete parity with older releases remains untested.
-The target is current Testing. Future contracts require their own evidence.
+The release targets the pinned stable contract. Future contracts require their own evidence.
 
 ## Selection
 

@@ -1,5 +1,13 @@
 # houseCARL Amethyst implementation specification
 
+## Release status — 15 October 2026
+
+[v2.0.5 is published as a Linux preview prerelease](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5) from `87e9268dc1052e31343fc8ff5bc014bd53b6c264`, including upstream 2.0.5. Use the [installation guide](linux-install.md) and [release verification record](testing/upstream-205-integration-2026-10-15.md) for current setup, completed checks and limitations. The adapter refactor remains deferred. Windows execution, the actual manager GUI workflow, live-profile deployment and gameplay were not tested.
+
+The planning snapshot below preserves the earlier pins, proposals, test counts and then-outstanding gates. Its implementation requirements remain design context; its progress statements and candidate version are historical, not the status of the published release.
+
+## Planning snapshot — 14 October 2026
+
 Updated 14 October 2026. Status: Packages 1–5 are committed; later writer, runner, verification and installer work remains in the integration worktree for review. The complete Release Linux/Amethyst suite passes 7,136 tests with zero failures and one Windows handle/deletion skip. All 263 retained failures are resolved, and five formerly skipped compiler cases now exercise actual Caprica with authored sources, source imports, structured errors and byte-level recompilation checks. These real tests exposed and corrected Caprica diagnostic parsing and the pinned native compiler's PEX object-length field; strict Mutagen validation remains intact.
 
 The Python installer/package suite passes 21/21. The pinned Caprica/Champollion build and synthetic compile/decompile smoke test pass, with source archives, licenses and correction recipe staged. Current development-host glibc 2.44 artifacts remain explicitly unsuitable for the Ubuntu 24.04/glibc 2.39 release archive.

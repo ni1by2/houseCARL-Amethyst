@@ -11,15 +11,14 @@ houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders manag
 ### Linux / Amethyst preview
 
 - Linux x64, Python 3.12 or newer, and Amethyst. Version 2.5.4 is the tested stable release. The reader expects filegraph API 13 and database schema 9; other Amethyst versions require compatibility verification even if those numbers match.
-- .NET 9 SDK to build the server and run its tests. The packaged Linux preview bundles the .NET runtime; its required operating-system libraries are listed in the [Linux installation guide](docs/linux-install.md).
-- Rust/C build tools for Amethyst's filegraph; C/C++ build tools are also needed to build the pinned Papyrus utilities.
+- The operating-system runtime libraries listed in the [Linux installation guide](docs/linux-install.md). The package includes the .NET runtime, Amethyst's native filegraph component and native Papyrus utilities.
 - Claude Code or OpenAI Codex to host the MCP server.
 
-Use the [Linux development and build guide](docs/linux-development.md) to build the pinned filegraph, run the Amethyst test suite, or assemble a Linux package candidate. Linux support is in preview. The guide names the tested Amethyst revision and describes the remaining limits.
+Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. See the [Linux development and build guide](docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
 
 ## Install
 
-The Amethyst Linux package is still a preview candidate and has not been publicly released. See [Linux installation and release limits](docs/linux-install.md), or follow the [Linux development guide](docs/linux-development.md) to build from source.
+Download the archive, checksum and standalone installer from [v2.0.5 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5). This is a prerelease. Follow the [Linux installation guide](docs/linux-install.md) to verify the download, install it, and select your Amethyst saved snapshot. Running the package does not require the .NET SDK or build tools.
 
 ## Usage
 
@@ -73,24 +72,27 @@ deployment unchanged. Output stays pending until Amethyst refreshes and deploys 
 verification records whether the expected file won. `update_status` reads cached Nexus metadata;
 explicit update checks use the installed file ID.
 
-The [Linux installation and current limits](docs/linux-install.md) page describes the candidate
-installer and checks that remain before release.
+The [Linux installation and current limits](docs/linux-install.md) page describes the published
+installer. The [2.0.5 verification record](docs/testing/upstream-205-integration-2026-10-15.md)
+distinguishes the final release checks from earlier candidate results.
 
-The tested sources are houseCARL main `b77ba4b2` and Amethyst Testing `e98cf70f`,
-with stable Amethyst 2.5.4 (native API 13; schema 9, engine 1, rules 13). houseCARL
+The release integrates upstream houseCARL 2.0.5 at `4e285051` and bundles the native
+component from stable Amethyst 2.5.4 at `edde06e5` (native API 13; schema 9, engine 1, rules 13). houseCARL
 has read a real installed 2.5.4 profile. The Linux package bundles the .NET runtime and
 Amethyst's native component. **Python 3.12+ must be installed.** The native reader opens
 a private catalog copy and does not write manager files. The [snapshot contract](docs/architecture/amethyst-saved-snapshot.md)
 covers configuration, checks, and limits. Amethyst must close normally before a managed write
 that needs its library lock. The server refuses that write while Amethyst is open. Papyrus and
-BSA tools use the selected native Steam/Proton environment where supported. Flatpak and custom
-Steam layouts, along with a run inside the selected prefix, remain release checks.
+BSA tools use the selected native Steam/Proton environment where supported. An isolated
+BSArch pack/list/extract round trip passed with Proton CachyOS and a copied prefix.
+Flatpak and custom Steam runner layouts remain unsupported. Live-profile deployment,
+the manager GUI workflow and gameplay were not tested.
 
 | | |
 |---|---|
 | Process | C#/.NET 9 MCP over stdio; Linux snapshot reads use a short-lived Python helper |
 | Substrate | Mutagen.Bethesda.Skyrim 0.54.4 |
-| Tools | 32 registered; Linux availability described above |
+| Tools | 34 registered; Linux availability described above |
 | Skills | 7 |
 | Record coverage | 133 record types, 242 sub-structures, 497 polymorphic arms, 280 enums, generated at build time |
 | Licence | GPL-3.0-only |
@@ -119,6 +121,7 @@ All tools carry the `housecarl_` prefix.
 | SKSE | `skse` |
 | Nexus | `nexus_search` `nexus_mod` `nexus_graphql` `nexus_check_updates` `nexus_identify` |
 | Session | `set_amethyst_connection` `set_tool_path` `load_order_status` `update_status` |
+| Transactions | `staging_status` `staging_manage` |
 
 `records` is the read surface for the record plane. A read is composed from four axes:
 

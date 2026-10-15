@@ -2,6 +2,8 @@
 
 The source build and CI target Ubuntu 24.04 x64. Amethyst and its native filegraph must match the tested API 13 / schema 9 contract. CI builds the filegraph from the pinned Amethyst source revision.
 
+For the published 2.0.5 Linux preview, use the [installation guide](linux-install.md). The [release verification record](testing/upstream-205-integration-2026-10-15.md) lists completed checks and distinguishes them from earlier candidate runs. The commands below build a new candidate from your checkout.
+
 ## Requirements
 
 - Linux x64, .NET 9 SDK and Python 3.12 or newer.
