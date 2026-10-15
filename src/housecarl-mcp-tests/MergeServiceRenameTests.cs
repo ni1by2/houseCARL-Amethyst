@@ -79,7 +79,7 @@ public sealed class MergeServiceRenameTests
         var outDir = Path.GetDirectoryName(Ok().OutputPath)!;
         var face = FaceGenPath.Both(R(0xA20)).ToList();
         Assert.Equal(2, face.Count);
-        Assert.All(face, x => Assert.True(File.Exists(Path.Combine(outDir, x.Item2)), x.Item2));
+        Assert.All(face, x => Assert.True(File.Exists(BethesdaPath.Under(outDir, x.Item2)), x.Item2));
         Assert.Equal(2, Ok().AssetRename?.FacegenFilesCarried);
     }
 
@@ -88,7 +88,10 @@ public sealed class MergeServiceRenameTests
     public void TheVoiceFileIsCarriedToTheRenamedFolder()
     {
         var outDir = Path.GetDirectoryName(Ok().OutputPath)!;
-        Assert.True(File.Exists(Path.Combine(outDir, "Sound", "Voice", "HcMgRenamed.esp", "MaleEvenToned", MergeServiceWorld.VoiceFile)));
+        var carried = BethesdaPath.Under(outDir, $"Sound\\Voice\\HcMgRenamed.esp\\MaleEvenToned\\{MergeServiceWorld.VoiceFile}");
+        Assert.Equal(MergeServiceWorld.VoiceBytes, File.ReadAllBytes(carried));
+        Assert.False(File.Exists(BethesdaPath.Under(outDir, $"Sound\\Voice\\HcMgA.esp\\MaleEvenToned\\{MergeServiceWorld.VoiceFile}")));
+        Assert.Equal(MergeServiceWorld.VoiceBytes, File.ReadAllBytes(_w.AVoicePath));
         Assert.Equal(1, Ok().VoiceRename?.FilesCarried);
     }
 

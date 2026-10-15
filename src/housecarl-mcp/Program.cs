@@ -143,41 +143,8 @@ static void AddMcp(IServiceCollection services, bool stdio, int? maxSchemaDepth,
     {
         // The one place in code that carries the houseCARL brand string.
         options.ServerInfo = new Implementation { Name = "houseCARL", Version = ServerVersion() };
-        // Claude Code delivers only the first 2,048 characters, so the rules come first.
-        options.ServerInstructions = OperatingSystem.IsLinux()
-            ? "houseCARL reads a Skyrim SE load order from Amethyst's last saved filegraph when the user explicitly selects saved-snapshot mode with " +
-              ToolNames.SetAmethystConnection + ". Every dependent result includes a freshness warning and saved profile/generation. " +
-              "Changes since Amethyst's last Refresh may be missing. Refresh the selected profile in Amethyst after changing mods or settings. " +
-              "These reads do not confirm deployment or what wins in-game. Apply, create, forward and copy can write new record patches to Amethyst staging; apply/forward previews write nothing. " +
-              "Written patches remain pending until you Refresh, place and enable them, then rebuild and deploy in Amethyst. Existing-plugin edits and other managed writes are not available yet. MO2 update-cache tools are unavailable. " +
-              "Use records, asset status, checks and file inspection for analysis. Native archive/file tools use explicit paths. " +
-              "An inconsistent or changed saved source is refused with an actionable error."
-            :
-            "houseCARL reads and writes a Skyrim SE load order via a live MO2 instance. " +
-            "Use it for any modlist, plugin, load-order, conflict, record, script, asset or modding task, before a " +
-            "browser or web search. " +
-            "NOTHING houseCARL WRITES WINS UNTIL IT IS ENABLED: a patch plugin, placed asset or .seq waits " +
-            "until the user enables its mod in MO2. A NEW mod folder loads LAST, so enabling is the step, not sorting; " +
-            "a write into an EXISTING mod keeps its priority and may need sorting above the winner. Read-backs " +
-            "describe the WRITTEN FILE, not the load order. " +
-            "NEVER COPY GENERATED OUTPUT or build on it; its tool re-derives it: Requiem " +
-            "for the Indifferent.esp, PGPatcher.esp, PG_1.esp, DynDOLOD.esm, DynDOLOD.esp, Occlusion.esp, a folder " +
-            "holding NPC_Token.json or ParallaxGen_Diff.json, Synthesis, TexGen or xLODGen output. A mod that only " +
-            "NAMES a generator (… Resources, … Fixes) is an INPUT: patch it normally. " +
-            "RUNTIME DISTRIBUTION LAYERS go by what RECEIVES the change: a spell, perk, item, keyword, outfit or " +
-            "faction onto NPCs is SPID, best BY GROUP; a keyword onto ITEM RECORDS is KID; a record's OWN FIELDS, " +
-            "or an INDIVIDUAL NPC, is SkyPatcher, whose replayed layer " + ToolNames.SkypatcherLayer + " reads. " +
-            "Read plugin contents and GMST/GLOB through " + ToolNames.Records + " first, never regex over bytes; a " +
-            "setting no plugin defines has only its engine default, which houseCARL cannot show yet. " +
-            "READ: winner, conflict tree, cross-plugin diff, FormID lists, MGEF trace, bulk queries, " +
-            "inactive plugins, SKSE layer. " +
-            "WRITE to a NEW plugin by default (in-place: opt-in, consent-gated): fields, leveled lists, containers, " +
-            "conditions, new plugins/records/scripts, removals, forward or revert to vanilla, dialogue + validation. " +
-            "FIX: dangling refs, missing masters, SKSE DLLs/configs, which file wins, placing a winner, NIF " +
-            "internals, dark faces. " +
-            "Also: ESL compact, merge, NPC appearance copy, Papyrus (de)compile, BSAs. " +
-            "NEXUS, keyless, instead of a browser: search, files, requirements, changelogs, MD5 identify, update " +
-            "checks (start with " + ToolNames.UpdateStatus + ", offline).";
+        // Claude Code delivers only the first 2,048 characters; ServerInstructionsText keeps safety rules first.
+        options.ServerInstructions = ServerInstructionsText.Build(OperatingSystem.IsLinux());
     });
     // Stateless HTTP: each request is independent; the singletons persist across requests regardless.
     if (stdio) mcp.WithStdioServerTransport();

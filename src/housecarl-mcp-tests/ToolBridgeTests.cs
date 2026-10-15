@@ -45,6 +45,19 @@ public sealed class ToolBridgeTests : IDisposable
         Assert.True(ToolBridge.Validate(ToolDependency.Bsarch, Stub("bsarch.test.exe")).ok);
     }
 
+    [Fact]
+    public void NativePapyrusToolsRequireExecutableLinuxPaths()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var caprica = Stub("caprica-test");
+        File.SetUnixFileMode(caprica, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Assert.True(ToolBridge.Validate(ToolDependency.Caprica, caprica).ok);
+        var champollion = Stub("Champollion-test");
+        Assert.False(ToolBridge.Validate(ToolDependency.Champollion, champollion).ok);
+        File.SetUnixFileMode(champollion, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Assert.True(ToolBridge.Validate(ToolDependency.Champollion, champollion).ok);
+    }
+
     // Probe 2: "rejects an exe whose name isn't the expected tool".
     [Fact]
     public void ValidateRejectsAnExeWithTheWrongName()

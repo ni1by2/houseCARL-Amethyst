@@ -102,7 +102,7 @@ public static class BsaTools
      Description(
          "Extract a Bethesda .bsa archive's contents, or with under= only the matching files, to a folder so you can read the files. Reads the archive " +
          "directly, compressed archives included; no external tool needed. Without out_path= it unpacks into a new mod " +
-         "folder under your mods directory, which needs houseCARL pointed at your MO2 instance. The archive is never " +
+         "folder under the selected manager's staging directory, which needs a configured MO2 instance or Amethyst connection. The archive is never " +
          "modified.")]
     public static string BsaExtract(
         LoadOrderService svc,
@@ -189,7 +189,7 @@ public static class BsaTools
             sb.Append("extracted ").Append(Path.GetFileName(archive)).Append(" → ").Append(target).Append('\n');
             sb.Append(matched).Append(r.Raw).Append('\n');   // e.g. "extracted 5826 file(s)."
             sb.Append(managed
-                ? "(a new houseCARL mod folder — read the files you need from it; enable it in MO2 only if you want the loose files in your load order.)"
+                ? ManagerPresentation.NewFolderFiles()
                 : "(read the files you need from that folder.)");
             return sb.ToString();
         }
@@ -205,13 +205,13 @@ public static class BsaTools
         "patch",
         new OutputLocations.StemRefusal(
             "the .bsa (the game auto-loads an archive only under its plugin's exact basename)",
-            "Remove it in MO2, pass patch= a different name, or pass into= to place the archive in an existing houseCARL patch folder."),
+            "Remove the conflicting archive from the selected manager's staging directory, pass patch= a different name, or pass into= to place the archive in an existing houseCARL patch folder."),
         Noun: ".bsa");
 
     [McpServerTool(Name = ToolNames.BsaRepack, Title = "Pack a folder into a .bsa archive"),
      Description(
          "Pack a folder of loose files into a Bethesda .bsa archive with BSArch, written into a new houseCARL mod " +
-         "folder under your mods directory, or with into= an existing houseCARL patch; enable it in MO2 to use it. The " +
+         "folder under the selected manager's staging directory, or with into= an existing houseCARL patch; activate the matching plugin and deploy it through your manager to use it. The " +
          "source folder is untouched. The .bsa takes its mod folder's name without the 'houseCARL - ' prefix.")]
     public static string BsaRepack(
         LoadOrderService svc,
@@ -221,14 +221,14 @@ public static class BsaTools
         [Description("Optional. Name for the new mod folder and the .bsa inside it: patch='MyArchive' writes " +
             "'houseCARL - MyArchive\\MyArchive.bsa'. The game loads an archive only under its plugin's exact basename. " +
             "Default: the source folder's name, which gets a _001-style suffix if that name is already taken (a " +
-            "'houseCARL - <name>' mod folder exists, or <name>.esp is active); a taken name you pass is refused, not " +
+            "'houseCARL - <name>' mod folder exists, or <name>.esp is active in the selected profile); a taken name you pass is refused, not " +
             "suffixed.")]
             string? patch = null,
         [Description("Optional. Archive format: 'sse' (default, Skyrim SE), 'tes5' (Skyrim LE), 'fo4', 'fo4dds', 'sf1', 'sf1dds', 'tes4', 'fo3', 'fnv', 'tes3'.")]
             string? format = null,
         [Description("Optional, default false. Compress the archive. Compression breaks any sounds or voices in it, so leave it false if the folder contains audio.")]
             bool compress = false,
-        [Description("Optional. An existing houseCARL patch to place the .bsa into instead of a new folder; the archive takes that folder's name without the 'houseCARL - ' prefix. Pass the patch's plugin filename (found even if you renamed its MO2 folder), or the mod-folder name when two patches share a filename.")]
+        [Description("Optional. An existing houseCARL patch folder to place the .bsa into instead of a new folder; the archive takes that folder's name without the 'houseCARL - ' prefix. Pass the patch's plugin filename, if present, or the mod-folder name.")]
             string? into = null) => Guard.Tool(ToolNames.BsaRepack, () =>
     {
         if (string.IsNullOrWhiteSpace(source_folder)) return "error: no source_folder given.";
@@ -236,7 +236,6 @@ public static class BsaTools
         if (!Directory.Exists(source_folder)) return $"error: no such folder: '{source_folder}'.";
         if (svc.ConfigPromptOrNull() is { } cfg) return cfg;
         if (bridge.RequireOrPrompt(ToolDependency.Bsarch, out var bsarch) is { } prompt) return prompt;
-
         // patch= names the mod FOLDER and the .bsa inside takes that folder's name. A caller who spells the archive
         // itself means that name, so the extension is stripped rather than doubled on the file.
         OutputLocations.RiderFolder rf;
@@ -269,11 +268,23 @@ public static class BsaTools
         var fmtFlag = HousecarlCore.BsaArchive.TryFormatFlag(format);
         if (fmtFlag is null)
             return Refuse($"error: unknown format '{format}'. Legal tokens: {HousecarlCore.BsaArchive.FormatTokens}.");
+
+        // Validate caller-owned naming, collision, and format errors before reporting that this host cannot run
+        // BSArch. A refusal after folder allocation must use Refuse so a fresh empty folder is removed.
+        HousecarlCore.SteamProtonSelection? proton = null;
+        if (OperatingSystem.IsLinux())
+        {
+            if (AmethystSnapshotContext.Current is not { } saved)
+                return Refuse("error: BSArch is a Windows executable; Linux execution requires the selected Amethyst Skyrim SE prefix and native Steam CompatToolMapping. Run it through an active Amethyst connection.");
+            try { proton = HousecarlCore.SteamProtonResolver.Resolve(saved); }
+            catch (InvalidOperationException ex) { return Refuse("error: cannot resolve the selected Skyrim SE Proton runner: " + ex.Message); }
+            catch (Exception ex) { return Refuse($"error: cannot read the selected Skyrim SE Proton runner configuration ({ex.GetType().Name}: {ex.Message})."); }
+        }
         var scratch = transactional ? AmethystStagingWrite.CreateScratchDirectory("bsa-repack") : null;
         try
         {
             var stagedArchive = scratch is null ? archive : Path.Combine(scratch, name);
-            var r = HousecarlCore.BsaArchive.Pack(bsarch!, source_folder, stagedArchive, fmtFlag, compress);
+            var r = HousecarlCore.BsaArchive.Pack(bsarch!, source_folder, stagedArchive, fmtFlag, compress, proton: proton);
             if (!r.Ran) return Refuse("error: " + r.RunError);
             if (r.CountError is { } mismatch) return Refuse("error: " + mismatch);
             if (!r.Success)
@@ -308,7 +319,7 @@ public static class BsaTools
         if (r.Packed is { } packed) sb.Append(packed).Append(" file(s) into ");
         sb.Append(name)
           .Append(" (").Append(fmtFlag.TrimStart('-')).Append(compress ? ", compressed" : ", uncompressed").Append(") → ").Append(archive).Append('\n');
-        sb.Append("(a new houseCARL mod folder — enable it in MO2 to use the archive.)");
+        sb.Append(ManagerPresentation.NewFolderFiles(requiresPlugin: true));
         // A null count means the format carries no .bsa header, or the header of one that should have been read failed.
         if (r.Packed is null)
             sb.Append(fmtFlag is "-fo4" or "-fo4dds" or "-sf1" or "-sf1dds" or "-tes3"

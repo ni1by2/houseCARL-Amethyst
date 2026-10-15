@@ -37,6 +37,8 @@ public sealed class MergeServiceWorld : IDisposable
 
     public string APath { get; }
     public string BPath { get; }
+    public string AVoicePath { get; }
+    public static readonly byte[] VoiceBytes = { 0xF0, 0x02 };
     public byte[] ABytesBefore { get; }
     public byte[] BBytesBefore { get; }
 
@@ -89,12 +91,12 @@ public sealed class MergeServiceWorld : IDisposable
         }
         foreach (var (_, rel) in FaceGenPath.Both(ANpc))
         {
-            var p = Path.Combine(aDir, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!);
+            var p = BethesdaPath.Under(aDir, rel); Directory.CreateDirectory(Path.GetDirectoryName(p)!);
             File.WriteAllBytes(p, new byte[] { 0xFA, 0xCE });
         }
-        var aVoice = Path.Combine(aDir, "Sound", "Voice", AKey.FileName.String, "MaleEvenToned", VoiceFile);
-        Directory.CreateDirectory(Path.GetDirectoryName(aVoice)!);
-        File.WriteAllBytes(aVoice, new byte[] { 0xF0, 0x02 });
+        AVoicePath = BethesdaPath.Under(aDir, $"Sound\\Voice\\{AKey.FileName.String}\\MaleEvenToned\\{VoiceFile}");
+        Directory.CreateDirectory(Path.GetDirectoryName(AVoicePath)!);
+        File.WriteAllBytes(AVoicePath, VoiceBytes);
         Directory.CreateDirectory(Path.Combine(aDir, "SEQ"));
         File.WriteAllBytes(Path.Combine(aDir, "SEQ", "HcMgA.seq"), new byte[] { 0x30, 0x0A, 0x00, 0x00 });
 

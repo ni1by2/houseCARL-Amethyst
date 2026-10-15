@@ -40,6 +40,7 @@ public sealed class CompactVoiceCarryTests
         var old = new FormKey(inst.Key, 0x811);
         inst.Loose(Voice(old, "HcVoiceTopic", VoiceFile.Fuz), Fuz);
         inst.Loose(Voice(old, "HcVoiceTopic", VoiceFile.Lip), Lip);
+        inst.Loose(VoicePath.For(old, VoiceType, "", "HcVoiceTopic", 2, VoiceFile.Fuz), new byte[] { 0x46, 0x55, 0x5A, 0x02 });
 
         var o = inst.Compact();
         Assert.True(o.Success, o.Error);
@@ -48,10 +49,12 @@ public sealed class CompactVoiceCarryTests
         Assert.NotEqual(old.ID, ik.ID);
         var root = Path.GetDirectoryName(o.OutputPath)!;
         Assert.NotEqual(inst.ModDir, root);
-        Assert.True(CompactCarryInstance.Holds(Path.Combine(root, Voice(ik, "HcVoiceTopic", VoiceFile.Fuz)), Fuz));
-        Assert.True(CompactCarryInstance.Holds(Path.Combine(root, Voice(ik, "HcVoiceTopic", VoiceFile.Lip)), Lip));
-        Assert.Equal(2, o.VoiceRename?.FilesScanned);
-        Assert.Equal(2, o.VoiceRename?.FilesCarried);
+        Assert.True(CompactCarryInstance.Holds(BethesdaPath.Under(root, Voice(ik, "HcVoiceTopic", VoiceFile.Fuz)), Fuz));
+        Assert.True(CompactCarryInstance.Holds(BethesdaPath.Under(root, Voice(ik, "HcVoiceTopic", VoiceFile.Lip)), Lip));
+        Assert.True(CompactCarryInstance.Holds(BethesdaPath.Under(root,
+            VoicePath.For(ik, VoiceType, "", "HcVoiceTopic", 2, VoiceFile.Fuz)), new byte[] { 0x46, 0x55, 0x5A, 0x02 }));
+        Assert.Equal(3, o.VoiceRename?.FilesScanned);
+        Assert.Equal(3, o.VoiceRename?.FilesCarried);
         Assert.Equal(1, o.VoiceRename?.LinesCarried);
         Assert.Empty(o.VoiceRename!.Failures);
     }
@@ -64,7 +67,7 @@ public sealed class CompactVoiceCarryTests
         var oldFuz = Voice(new FormKey(inst.Key, 0x811), "HcVoiceTopic", VoiceFile.Fuz);
         inst.Loose(oldFuz, Fuz);
         Assert.True(inst.Compact().Success);
-        Assert.True(CompactCarryInstance.Holds(Path.Combine(inst.ModDir, oldFuz), Fuz));
+        Assert.True(CompactCarryInstance.Holds(BethesdaPath.Under(inst.ModDir, oldFuz), Fuz));
     }
 
     // IN-PLACE: the voice is carried into the target's OWN folder at the new FormID; the old file stays as a harmless orphan
@@ -80,10 +83,10 @@ public sealed class CompactVoiceCarryTests
         Assert.True(o.InPlace);
         var ik = InfoKey(o.OutputPath, "HcVoiceTopic");
         Assert.NotEqual(0x821u, ik.ID);
-        Assert.True(CompactCarryInstance.Holds(Path.Combine(inst.ModDir, Voice(ik, "HcVoiceTopic", VoiceFile.Fuz)), Fuz));
+        Assert.True(CompactCarryInstance.Holds(BethesdaPath.Under(inst.ModDir, Voice(ik, "HcVoiceTopic", VoiceFile.Fuz)), Fuz));
         Assert.Equal(1, o.VoiceRename?.FilesCarried);
         Assert.Equal(1, o.VoiceRename?.LinesCarried);
-        Assert.True(File.Exists(Path.Combine(inst.ModDir, oldFuz)));
+        Assert.True(File.Exists(BethesdaPath.Under(inst.ModDir, oldFuz)));
     }
 
     // MULTI-LINE: two INFOs with DISTINCT audio each keep their OWN .fuz across the renumber
@@ -102,9 +105,9 @@ public sealed class CompactVoiceCarryTests
         var o = inst.Compact(inPlace: true);
         Assert.True(o.Success, o.Error);
         Assert.True(CompactCarryInstance.Holds(
-            Path.Combine(inst.ModDir, Voice(InfoKey(o.OutputPath, "HcTopicA"), "HcTopicA", VoiceFile.Fuz)), fuzA));
+            BethesdaPath.Under(inst.ModDir, Voice(InfoKey(o.OutputPath, "HcTopicA"), "HcTopicA", VoiceFile.Fuz)), fuzA));
         Assert.True(CompactCarryInstance.Holds(
-            Path.Combine(inst.ModDir, Voice(InfoKey(o.OutputPath, "HcTopicB"), "HcTopicB", VoiceFile.Fuz)), fuzB));
+            BethesdaPath.Under(inst.ModDir, Voice(InfoKey(o.OutputPath, "HcTopicB"), "HcTopicB", VoiceFile.Fuz)), fuzB));
         Assert.Equal(2, o.VoiceRename?.FilesCarried);
         Assert.Equal(2, o.VoiceRename?.LinesCarried);
     }
@@ -120,5 +123,23 @@ public sealed class CompactVoiceCarryTests
         Assert.Equal(0, o.VoiceRename?.FilesCarried);
         Assert.Equal(0, o.VoiceRename?.LinesCarried);
         Assert.Empty(o.VoiceRename!.Failures);
+    }
+
+    [Fact]
+    public void VoiceDestinationRewritesOnlyThePluginDirectoryAndRejectsEscapes()
+    {
+        Assert.True(AssetRenameService.TryRewriteVoicePath(
+            @"sound/voice/Donor.esp/MaleEvenToned/Sub/HcQ_HcT_00000A11_1.fuz",
+            @"Sound\Voice\donor.ESP", @"Sound\Voice\Merged.esp", "HcQ_HcT_00000B22_1.fuz",
+            out var rewritten, out var error), error);
+        Assert.Equal(@"Sound\Voice\Merged.esp\MaleEvenToned\Sub\HcQ_HcT_00000B22_1.fuz", rewritten);
+
+        Assert.False(AssetRenameService.TryRewriteVoicePath(
+            @"Sound\Voice\Donor.esp\..\Other\voice.fuz", @"Sound\Voice\Donor.esp",
+            @"Sound\Voice\Merged.esp", "voice.fuz", out var escaped, out _));
+        Assert.Empty(escaped);
+        Assert.False(AssetRenameService.TryRewriteVoicePath(
+            @"Sound\Voice\Other.esp\MaleEvenToned\voice.fuz", @"Sound\Voice\Donor.esp",
+            @"Sound\Voice\Merged.esp", "voice.fuz", out escaped, out _));
     }
 }

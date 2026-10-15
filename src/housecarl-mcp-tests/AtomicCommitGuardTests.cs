@@ -67,29 +67,19 @@ public sealed class AtomicCommitGuardTests : IDisposable
     // system tunneling keeps the creation time through File.Move too, the two cannot be told apart; the control
     // detects that and the test stops there, as the probe did.
     [Fact]
-    public void AnOverwriteKeepsTheTargetsCreationTime()
+    public void AnOverwritePreservesTheTargetsUnixPermissions()
     {
-        var ctlStaged = At("ctl.tmp");
-        var ctlFinal = At("ctl.dat");
-        File.WriteAllBytes(ctlFinal, new byte[] { 0 });
-        File.SetCreationTimeUtc(ctlFinal, OldCreate);
-        File.WriteAllBytes(ctlStaged, new byte[] { 1 });
-        File.Move(ctlStaged, ctlFinal, overwrite: true);
-        if (File.GetCreationTimeUtc(ctlFinal) == OldCreate)
-        {
-            _out.WriteLine("Skipped: file system tunneling keeps the creation time through File.Move on this host.");
-            return;
-        }
-
-        var staged = At("b2.tmp");
-        var final = At("b2.dat");
-        File.WriteAllBytes(final, new byte[] { 9, 9, 9 });
-        File.SetCreationTimeUtc(final, OldCreate);
-        File.WriteAllBytes(staged, new byte[] { 7, 7 });
-
+        var staged = At("mode.tmp");
+        var final = At("mode.dat");
+        File.WriteAllBytes(final, new byte[] { 9 });
+        var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        File.SetUnixFileMode(final, mode);
+        var bytes = new byte[] { 7, 7 };
+        File.WriteAllBytes(staged, bytes);
         AtomicFile.Commit(staged, final);
-
-        Assert.Equal(OldCreate, File.GetCreationTimeUtc(final));
+        Assert.Equal(mode, File.GetUnixFileMode(final));
+        Assert.Equal(bytes, File.ReadAllBytes(final));
+        Assert.False(File.Exists(staged));
     }
 
     // Probe C: "a missing staged source THROWS" and "prior target survives the failed pre-swap commit byte-for-byte".
@@ -115,7 +105,7 @@ public sealed class AtomicCommitGuardTests : IDisposable
         File.WriteAllBytes(final, prior);
         File.WriteAllBytes(staged, new byte[] { 8, 8 });
 
-        using (new FileStream(final, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (new CommitFault(final))
             Assert.ThrowsAny<IOException>(() => AtomicFile.Commit(staged, final));
 
         Assert.Equal(prior, File.ReadAllBytes(final));

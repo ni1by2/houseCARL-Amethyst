@@ -50,17 +50,21 @@ public sealed class ClassParentsInstanceSwitchTests : IDisposable
     [Fact]
     public void AnInstanceSwitchMidScanDoesNotCacheTheOldTree()
     {
-        // The switch lands after the old mods folder is snapshotted under the gate and before the scan publishes.
-        _svc.BeforeClassParentsPublishForGuard = () => _svc.SetInstance(_newInstance);
-
-        var during = _svc.ClassParentsForDecompile();
-        _svc.BeforeClassParentsPublishForGuard = null;
-
-        Assert.False(during.Edges.ContainsKey("HcOldTreeChild"));
-        Assert.Contains("the MO2 instance changed during this call", during.TopUpMissing);
-
+        var old = new AmethystFixtureConnection(_oldInstance);
+        var next = new AmethystFixtureConnection(_newInstance);
+        _svc.SetAmethystSnapshot(old.Manifest);
+        var captured = _svc.CaptureSavedSnapshot();
+        using (AmethystSnapshotContext.Use(captured))
+        {
+            var before = _svc.ClassParentsForDecompile();
+            Assert.Equal("HcOldTreeHost", before.Edges["HcOldTreeChild"]);
+            _svc.SetAmethystSnapshot(next.Manifest);
+            var during = _svc.ClassParentsForDecompile();
+            Assert.Equal("HcOldTreeHost", during.Edges["HcOldTreeChild"]);
+            Assert.False(during.Edges.ContainsKey("HcNewTreeChild"));
+        }
+        using var newScope = AmethystSnapshotContext.Use(_svc.CaptureSavedSnapshot());
         var after = _svc.ClassParentsForDecompile();
-
         Assert.Equal("HcNewTreeHost", after.Edges["HcNewTreeChild"]);
         Assert.False(after.Edges.ContainsKey("HcOldTreeChild"));
         Assert.Null(after.TopUpMissing);

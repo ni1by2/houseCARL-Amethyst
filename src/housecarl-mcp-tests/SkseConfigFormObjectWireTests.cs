@@ -40,8 +40,9 @@ public sealed class SkseConfigFormObjectWireTests : IDisposable
     public void AOneLineFileShowsThePathAloneAMultiLineFileItsLineBesideItAndTheJsonKeepsTheRealLineAndShape()
     {
         using var server = new ServerFixture();
-        var set = server.Call(ToolNames.SetMo2Instance, $$"""{"path": {{JsonSerializer.Serialize(_instance)}}}""");
-        Assert.Contains("configured houseCARL", set.Text, StringComparison.Ordinal);
+        var set = server.ConfigureFixture(_instance);
+        Assert.False(set.IsError, set.Describe());
+        Assert.Contains("saved-snapshot", set.Text, StringComparison.Ordinal);
 
         var text = server.Call(ToolNames.Skse, """{"findings":"config","filter":"HcFormObj"}""");
         Assert.False(text.IsError, text.Describe());

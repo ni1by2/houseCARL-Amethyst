@@ -17,6 +17,12 @@ public sealed class AmethystSavedSnapshot
     public AmethystSnapshotProvenance Provenance { get; private set; } = null!;
     /// <summary>Canonical profile folder selected by deploy_state.json.</summary>
     public string ProfileDir { get; private set; } = "";
+    /// <summary>Amethyst root containing the selected profile folder tree.</summary>
+    public string ProfileRoot { get; private set; } = "";
+    /// <summary>Whether this profile has an isolated staging library rather than sharing the root mods library.</summary>
+    public bool ProfileSpecificMods { get; private set; }
+    /// <summary>Profile directories that use this transaction's shared library and must each be deployment-checked.</summary>
+    public IReadOnlyList<string> SharedLibraryProfileDirs { get; private set; } = [];
     /// <summary>Schema-v1 manifest used to select this saved profile.</summary>
     public string ManifestPath { get; private set; } = "";
     /// <summary>Effective staging mods root; shared or profile-specific.</summary>
@@ -27,6 +33,8 @@ public sealed class AmethystSavedSnapshot
     public string RootFolderDir { get; private set; } = "";
     /// <summary>Effective game installation root, including a non-default profile's override.</summary>
     public string GameDir { get; private set; } = "";
+    /// <summary>Effective selected Proton prefix from profile settings, falling back to the Amethyst paths manifest.</summary>
+    public string? PrefixPath { get; private set; }
     /// <summary>The validated vanilla Data source selected for the saved deployment mode.</summary>
     public string VanillaDataDir { get; private set; } = "";
     /// <summary>The validated physical or shadow-tree Data destination for this profile.</summary>
@@ -35,6 +43,8 @@ public sealed class AmethystSavedSnapshot
     public bool UsesShadowTreeVfs { get; private set; }
     /// <summary>True only when Amethyst's native committed plan matches this profile generation and saved deployment mode.</summary>
     public bool DeploymentTargetVerified { get; private set; }
+    /// <summary>Whether the selected saved profile currently records a deployment, rather than only an undeployed staging view.</summary>
+    public bool DeploymentIsActive => _deploymentExpected;
     /// <summary>Directory containing the effective Skyrim.ini source, when present.</summary>
     public string? EffectiveIniDir { get; private set; }
     /// <summary>Engine-loaded vanilla archives whose activation is established by Skyrim.ini and saved plugin state.</summary>
@@ -60,6 +70,9 @@ public sealed class AmethystSavedSnapshot
     readonly Dictionary<string, string> _roots = new(StringComparer.Ordinal);
     /// <summary>Directory listings that participated in effective INI and VFS state selection.</summary>
     readonly Dictionary<string, string[]> _inputDirectories = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string[]> _strictDirectoryListings = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string[]> _papyrusSourceDirectories = new(StringComparer.Ordinal);
+    readonly Dictionary<string, string[]> _papyrusTreeListings = new(StringComparer.Ordinal);
     readonly HashSet<string> _protectedRoots = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _effectiveIniPaths = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, string[]> _watchedEntries = new(StringComparer.Ordinal);
@@ -113,21 +126,29 @@ public sealed class AmethystSavedSnapshot
     /// <param name="manifestPath">Explicitly selected schema-v1 connection manifest.</param>
     /// <returns>A complete read-only capture; unknown versions and inconsistent state throw actionable errors.</returns>
     public static AmethystSavedSnapshot Capture(string manifestPath)
+        => CaptureCore(manifestPath, null);
+
+    /// <summary>Test seam for transaction verification against synthetic manager deployment receipts.</summary>
+    internal static AmethystSavedSnapshot CaptureForDeploymentTest(string manifestPath, bool deploymentMatches)
+        => CaptureCore(manifestPath, deploymentMatches);
+
+    static AmethystSavedSnapshot CaptureCore(string manifestPath, bool? deploymentOverride)
     {
         if (!OperatingSystem.IsLinux()) throw new InvalidOperationException("Amethyst saved-snapshot mode requires Linux");
         var snapshot = new AmethystSavedSnapshot();
-        try { snapshot.Read(manifestPath); return snapshot; }
+        try { snapshot.Read(manifestPath, deploymentOverride); return snapshot; }
         catch (Exception ex) when (ex is SqliteException or JsonException or MessagePackSerializationException or DecoderFallbackException)
         { throw new InvalidOperationException($"cannot read Amethyst's saved filegraph: {ex.Message}; refresh the selected profile in Amethyst and retry", ex); }
         finally { snapshot._intent?.Dispose(); }
     }
 
     /// <summary>Read connection roots, one SQLite transaction, and the selected profile's plugin paths.</summary>
-    void Read(string manifestPath)
+    void Read(string manifestPath, bool? deploymentOverride)
     {
         ManifestPath = Path.GetFullPath(manifestPath);
         Input(manifestPath, required: true);
         var connection = AmethystConnection.Open(manifestPath);
+        ProfileRoot = Path.GetFullPath(connection.ProfileRoot);
         Protect(connection.ProfileRoot);
         Protect(connection.GameConfigDir);
         Protect(Path.GetDirectoryName(connection.PathsFile)!);
@@ -151,6 +172,8 @@ public sealed class AmethystSavedSnapshot
         _deployMode = savedMode is "symlink" or "copy" ? "symlink" : "hardlink";
         var specific = settings.ValueKind == JsonValueKind.Object && settings.TryGetProperty("profile_specific_mods", out var specificValue)
             && specificValue.ValueKind == JsonValueKind.True;
+        ProfileSpecificMods = specific;
+        CaptureSharedProfileDirectory(connection.ProfileRoot, profileName);
         var library = Root(specific ? ProfileDir : connection.ProfileRoot);
         ModsDir = Root(Path.Combine(library, "mods"));
         OverwriteDir = Path.Combine(library, "overwrite");
@@ -168,8 +191,17 @@ public sealed class AmethystSavedSnapshot
         Protect(Path.GetDirectoryName(DatabasePath)!);
         Protect(OverwriteDir);
         Protect(RootFolderDir);
-        if (paths.RootElement.TryGetProperty("prefix_path", out var prefixRoot) && prefixRoot.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(prefixRoot.GetString()))
-            Protect(prefixRoot.GetString()!);
+        var prefixValue = settings.ValueKind == JsonValueKind.Object && settings.TryGetProperty("prefix_path", out var profilePrefix)
+            && profilePrefix.ValueKind == JsonValueKind.String && !string.IsNullOrWhiteSpace(profilePrefix.GetString())
+            ? profilePrefix.GetString()
+            : paths.RootElement.TryGetProperty("prefix_path", out var globalPrefix) && globalPrefix.ValueKind == JsonValueKind.String
+                ? globalPrefix.GetString() : null;
+        if (!string.IsNullOrWhiteSpace(prefixValue))
+        {
+            if (!Path.IsPathFullyQualified(prefixValue)) throw new InvalidOperationException("Amethyst selected prefix_path is not absolute; configure a valid Proton prefix before invoking Windows tools");
+            PrefixPath = Path.GetFullPath(prefixValue);
+            Protect(PrefixPath);
+        }
         SelectDeploymentRoots(deployed: deploy.RootElement.TryGetProperty("deploy_active", out var flag) && flag.ValueKind == JsonValueKind.True);
         Protect(VanillaDataDir);
         Protect(DeploymentDataDir);
@@ -191,7 +223,7 @@ public sealed class AmethystSavedSnapshot
                 if (rows.Read()) throw new InvalidOperationException("Amethyst filegraph has broken joins; repair it with Amethyst Refresh");
             ReadProfile(database, inventory);
             ReadCandidates(database);
-            ReadWinners(database);
+            ReadWinners(database, deploymentOverride);
             Execute(database, "ROLLBACK");
         }
         Composition = ReadComposition();
@@ -201,6 +233,38 @@ public sealed class AmethystSavedSnapshot
         Provenance = Provenance with { VanillaArchivesOmitted = _vanillaArchiveCoverageIncomplete };
         DeploymentTargetVerified = !_deploymentExpected || _nativeDeploymentMatches;
         CheckUnchanged();
+    }
+
+    void CaptureSharedProfileDirectory(string profileRoot, string selectedProfile)
+    {
+        var profiles = Path.Combine(profileRoot, "profiles");
+        if (!Directory.Exists(profiles)) throw new InvalidOperationException("Amethyst profile directory is missing; shared-profile verification is unavailable");
+        var dirs = Directory.EnumerateDirectories(profiles).OrderBy(Path.GetFileName, StringComparer.Ordinal).ToArray();
+        _strictDirectoryListings[profiles] = Directory.EnumerateFileSystemEntries(profiles)
+            .Select(Path.GetFileName).Where(name => name is not null).Cast<string>().Order(StringComparer.Ordinal).ToArray();
+        var shared = new List<string>();
+        foreach (var directory in dirs)
+        {
+            if (new DirectoryInfo(directory).LinkTarget is not null)
+                throw new InvalidOperationException($"Amethyst profile directory is a symlink; shared-profile verification is unsafe: '{directory}'");
+            var statePath = Path.Combine(directory, "profile_state.json");
+            var settingsPath = statePath;
+            var bytes = Input(statePath, required: false);
+            if (bytes is null)
+            {
+                settingsPath = Path.Combine(directory, "profile_settings.json");
+                bytes = Input(settingsPath, required: false);
+            }
+            bool profileSpecific = false;
+            if (bytes is not null)
+            {
+                using var state = JsonDocument.Parse(bytes);
+                var settings = state.RootElement.TryGetProperty("profile_settings", out var nested) ? nested : state.RootElement;
+                profileSpecific = settings.TryGetProperty("profile_specific_mods", out var setting) && setting.ValueKind == JsonValueKind.True;
+            }
+            if (!profileSpecific) shared.Add(Path.GetFullPath(directory));
+        }
+        SharedLibraryProfileDirs = ProfileSpecificMods ? [Path.GetFullPath(Path.Combine(profiles, selectedProfile))] : shared;
     }
 
     /// <summary>Select the producer's physical or current shadow-tree roots without treating a merged Data tree as vanilla.</summary>
@@ -289,13 +353,8 @@ public sealed class AmethystSavedSnapshot
         var profileIniEnabled = paths.TryGetProperty("profile_ini_files", out var profileSetting) && profileSetting.ValueKind == JsonValueKind.True;
         var profileIniDir = profileIniEnabled ? Path.Combine(ProfileDir, "ini files") : null;
         string? prefixIniDir = null;
-        if (paths.TryGetProperty("prefix_path", out var prefix) && prefix.ValueKind == JsonValueKind.String &&
-            !string.IsNullOrWhiteSpace(prefix.GetString()))
-        {
-            var prefixPath = prefix.GetString();
-            if (prefixPath is null || !Path.IsPathFullyQualified(prefixPath)) throw new InvalidOperationException("Amethyst paths.json prefix_path is not an absolute path; configure a valid Proton prefix before reading effective INIs");
+        if (PrefixPath is { Length: > 0 } prefixPath)
             prefixIniDir = Path.Combine(prefixPath, "drive_c", "users", "steamuser", "Documents", "My Games", "Skyrim Special Edition");
-        }
 
         var profileFiles = profileIniDir is null ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : CaptureIniDirectory(profileIniDir);
         var prefixFiles = prefixIniDir is null ? new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase) : CaptureIniDirectory(prefixIniDir);
@@ -528,7 +587,7 @@ public sealed class AmethystSavedSnapshot
     }
 
     /// <summary>Use the same native snapshot restoration as Amethyst; its SQL winner projection can omit valid entries.</summary>
-    void ReadWinners(SqliteConnection database)
+    void ReadWinners(SqliteConnection database, bool? deploymentOverride)
     {
         // Testing 2f54fdd derives exclusive identities only for BG3 .pak files, never Skyrim.
         // Refuse an unexpected identity contract rather than emulate another game's suppression rules.
@@ -546,7 +605,7 @@ public sealed class AmethystSavedSnapshot
                 throw new InvalidOperationException("Amethyst native snapshot winner joins are incomplete or inconsistent");
             if (candidate.Target != "game") throw new InvalidOperationException($"unsupported Skyrim filegraph target '{candidate.Target}'");
             if (!_winners.TryAdd((ns, destination), id)) throw new InvalidOperationException("Amethyst native snapshot contains duplicate winners");
-        });
+        }, deploymentOverride);
         foreach (var candidate in _candidates.Values)
         {
             if (!candidate.Enabled || candidate.Target != "game" || (candidate.Kind != 3 && !candidate.Deployable)) continue;
@@ -748,6 +807,31 @@ public sealed class AmethystSavedSnapshot
                 : [];
             if (!actual.SequenceEqual(expected, StringComparer.Ordinal)) throw new InvalidOperationException($"Amethyst VFS or effective INI directory changed during the call: '{directory}'; retry");
         }
+        foreach (var (directory, expected) in _strictDirectoryListings)
+        {
+            var actual = Directory.Exists(directory)
+                ? Directory.EnumerateFileSystemEntries(directory).Select(Path.GetFileName).Where(name => name is not null)
+                    .Cast<string>().Order(StringComparer.Ordinal).ToArray()
+                : [];
+            if (!actual.SequenceEqual(expected, StringComparer.Ordinal))
+                throw new InvalidOperationException($"Amethyst profile set changed during deployment verification: '{directory}'; retry");
+        }
+        foreach (var (directory, expected) in _papyrusSourceDirectories)
+        {
+            var actual = Directory.Exists(directory)
+                ? Directory.EnumerateFiles(directory, "*", SearchOption.TopDirectoryOnly)
+                    .Select(Path.GetFileName).Where(n => n is not null && n.EndsWith(".psc", StringComparison.OrdinalIgnoreCase))
+                    .Cast<string>().OrderBy(n => n, StringComparer.Ordinal).ToArray()
+                : [];
+            if (!actual.SequenceEqual(expected, StringComparer.Ordinal))
+                throw new InvalidOperationException($"Papyrus import source listing changed during the call: '{directory}'; retry");
+        }
+        foreach (var (directory, expected) in _papyrusTreeListings)
+        {
+            var actual = ReadPapyrusDirectoryListing(directory);
+            if (!actual.SequenceEqual(expected, StringComparer.Ordinal))
+                throw new InvalidOperationException($"Papyrus source/PEX directory changed during the call: '{directory}'; retry");
+        }
         foreach (var (directory, expected) in _watchedEntries)
         {
             var actual = Directory.Exists(directory)
@@ -803,6 +887,96 @@ public sealed class AmethystSavedSnapshot
     {
         if (!Path.IsPathFullyQualified(path)) throw new InvalidOperationException("additional transaction inputs must be absolute paths");
         return Input(Path.GetFullPath(path), required: true)!;
+    }
+
+    /// <summary>Capture an exact direct-child listing for user metadata that participates in a read result.</summary>
+    public IReadOnlyList<string> CaptureAdditionalDirectoryListing(string directory)
+    {
+        if (!Path.IsPathFullyQualified(directory) || !Directory.Exists(directory))
+            throw new InvalidOperationException($"additional input directory is missing or not absolute: '{directory}'");
+        var full = Path.GetFullPath(directory);
+        Root(full);
+        var entries = Directory.EnumerateFileSystemEntries(full).Select(Path.GetFileName).Where(name => name is not null)
+            .Cast<string>().Order(StringComparer.Ordinal).ToArray();
+        if (_strictDirectoryListings.TryGetValue(full, out var prior) && !prior.SequenceEqual(entries, StringComparer.Ordinal))
+            throw new InvalidOperationException($"additional input directory changed while capturing: '{full}'");
+        _strictDirectoryListings[full] = entries;
+        return entries;
+    }
+
+    /// <summary>Capture the exact case-sensitive membership of a Papyrus compiler import directory.</summary>
+    public IReadOnlyList<string> CapturePapyrusSourceDirectory(string directory)
+    {
+        if (!Path.IsPathFullyQualified(directory)) throw new InvalidOperationException("Papyrus import directories must be absolute paths");
+        var full = Path.GetFullPath(directory);
+        if (!Directory.Exists(full)) throw new InvalidOperationException($"Papyrus import directory is missing: '{full}'");
+        string[] entries;
+        try
+        {
+            entries = Directory.EnumerateFiles(full, "*", SearchOption.TopDirectoryOnly)
+                .Select(Path.GetFileName).Where(n => n is not null && n.EndsWith(".psc", StringComparison.OrdinalIgnoreCase))
+                .Cast<string>().OrderBy(n => n, StringComparer.Ordinal).ToArray();
+        }
+        catch (Exception ex) { throw new InvalidOperationException($"Papyrus import directory could not be listed completely: '{full}' ({ex.Message})", ex); }
+        if (_papyrusSourceDirectories.TryGetValue(full, out var earlier) && !earlier.SequenceEqual(entries, StringComparer.Ordinal))
+            throw new InvalidOperationException($"Papyrus import source listing changed while capturing: '{full}'; retry");
+        _papyrusSourceDirectories[full] = entries;
+        return entries.Select(name => Path.Combine(full, name)).ToArray();
+    }
+
+    /// <summary>Capture every matching Papyrus input under a tree (or one directory), plus the exact directory-entry
+    /// listings that bound the walk. Symlinks and incomplete walks refuse instead of weakening provenance.</summary>
+    public IReadOnlyList<string> CapturePapyrusTree(string root, string extension, bool recursive = true)
+    {
+        if (!Path.IsPathFullyQualified(root)) throw new InvalidOperationException("Papyrus source roots must be absolute paths");
+        if (extension is not (".psc" or ".pex")) throw new ArgumentException("Papyrus tree extension must be .psc or .pex", nameof(extension));
+        var fullRoot = Path.GetFullPath(root);
+        var pending = new Stack<string>(); pending.Push(fullRoot);
+        var files = new List<string>();
+        while (pending.Count > 0)
+        {
+            var directory = pending.Pop();
+            var listing = ReadPapyrusDirectoryListing(directory);
+            if (_papyrusTreeListings.TryGetValue(directory, out var earlier) && !earlier.SequenceEqual(listing, StringComparer.Ordinal))
+                throw new InvalidOperationException($"Papyrus source/PEX directory changed while capturing: '{directory}'; retry");
+            _papyrusTreeListings[directory] = listing;
+            foreach (var entry in listing)
+            {
+                var path = Path.Combine(directory, entry[2..]);
+                if (entry.StartsWith("D:", StringComparison.Ordinal))
+                {
+                    if (recursive) pending.Push(path);
+                }
+                else if (entry.StartsWith("F:", StringComparison.Ordinal) && path.EndsWith(extension, StringComparison.OrdinalIgnoreCase))
+                {
+                    if (files.Count >= 50_000) throw new InvalidOperationException("Papyrus source/PEX tree exceeded the 50,000-file capture limit; refusing because provenance is incomplete.");
+                    _ = CaptureAdditionalInput(path);
+                    files.Add(path);
+                }
+            }
+        }
+        return files;
+    }
+
+    static string[] ReadPapyrusDirectoryListing(string directory)
+    {
+        if (!Directory.Exists(directory)) throw new InvalidOperationException($"Papyrus source directory disappeared: '{directory}'");
+        try
+        {
+            if ((File.GetAttributes(directory) & FileAttributes.ReparsePoint) != 0)
+                throw new InvalidOperationException($"Papyrus source root is a symbolic/reparse link and cannot be snapshotted safely: '{directory}'");
+            var entries = Directory.EnumerateFileSystemEntries(directory).Select(path =>
+            {
+                var name = Path.GetFileName(path);
+                var attributes = File.GetAttributes(path);
+                if ((attributes & FileAttributes.ReparsePoint) != 0)
+                    throw new InvalidOperationException($"Papyrus source tree contains a symbolic/reparse link that cannot be snapshotted safely: '{path}'");
+                return ((attributes & FileAttributes.Directory) != 0 ? "D:" : "F:") + name;
+            }).OrderBy(name => name, StringComparer.Ordinal).ToArray();
+            return entries;
+        }
+        catch (InvalidOperationException) { throw; }
+        catch (Exception ex) { throw new InvalidOperationException($"Papyrus source directory could not be listed completely: '{directory}' ({ex.Message})", ex); }
     }
 
     /// <summary>Return only bytes captured earlier in this call; a caller must not substitute a later path read.</summary>

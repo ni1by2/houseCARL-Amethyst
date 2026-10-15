@@ -182,12 +182,14 @@ public sealed record UpdateCacheData(
     string? InstanceDir,
     IReadOnlyList<ModUpdateEntry> Entries,
     IReadOnlyList<string> Problems,
-    int UntrackedCount);
+    int UntrackedCount,
+    string Manager = "MO2",
+    string? SnapshotWarning = null);
 
 /// <summary>One Nexus-linked mod's update-cache row. MO2's own "update available" rule is <see cref="Newest"/> set, non-empty and unequal to both <see cref="Installed"/> and <see cref="Ignored"/>; <see cref="InstalledFileIds"/> is the FILE-level join key a live check needs, empty for a FOMOD or manual install.</summary>
 public sealed record ModUpdateEntry(
     string Folder, bool? Enabled, int ModId, string? Installed, string? Newest, string? Ignored, string? LastUpdate,
-    IReadOnlyList<int> InstalledFileIds);
+    IReadOnlyList<int> InstalledFileIds, bool? CachedHasUpdate = null, bool? CachedIgnoreUpdate = null);
 
 /// <summary>The result of <see cref="LoadOrderService.NamedProfileComposition"/> — the affordance behind housecarl_load_order_status' profile= param. <see cref="Composition"/> and <see cref="ResolvedProfileDir"/> are set only when a requested profile was found and read, so a non-null <see cref="RequestedName"/> with a null Composition is the not-found case.</summary>
 public sealed record NamedProfileResult(

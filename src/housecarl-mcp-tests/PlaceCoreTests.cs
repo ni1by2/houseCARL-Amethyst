@@ -89,25 +89,17 @@ public sealed class PlaceCoreTests : IDisposable
     // system tunneling keeps the creation time through File.Move too, the last one cannot be told apart and stops, as
     // the probe did.
     [Fact]
-    public void AnOverwriteWritesTheNewBytesAndKeepsTheCreationTime()
+    public void AnOverwriteWritesNewBytesAndPreservesUnixPermissions()
     {
-        var oldCreate = new DateTime(2020, 1, 1, 0, 0, 0, DateTimeKind.Utc);
-        var over = Path.Combine(_root, "over", "over.dds");
-        Directory.CreateDirectory(Path.GetDirectoryName(over)!);
+        var over = Path.Combine(_root, "over.dds");
         File.WriteAllBytes(over, new byte[] { 9, 9, 9 });
-        File.SetCreationTimeUtc(over, oldCreate);
-        var nb = new byte[] { 7, 7, 7, 7, 7 };
-
-        AtomicFile.WriteAllBytes(over, nb);
-
-        Assert.Equal(nb, File.ReadAllBytes(over));
-        Assert.Equal(new[] { over }, Directory.GetFiles(Path.GetDirectoryName(over)!));
-        if (TunnelingMasksCreationTime(_root, oldCreate))
-        {
-            _out.WriteLine("Skipped the creation-time half: file system tunneling keeps it through File.Move on this host.");
-            return;
-        }
-        Assert.Equal(oldCreate, File.GetCreationTimeUtc(over));
+        var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        File.SetUnixFileMode(over, mode);
+        var bytes = new byte[] { 7, 7, 7, 7, 7 };
+        AtomicFile.WriteAllBytes(over, bytes);
+        Assert.Equal(bytes, File.ReadAllBytes(over));
+        Assert.Equal(new[] { over }, Directory.GetFiles(_root));
+        Assert.Equal(mode, File.GetUnixFileMode(over));
     }
 
     /// <summary>Does a File.Move over an existing file keep that file's creation time on this host? Then the

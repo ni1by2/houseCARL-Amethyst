@@ -1,3 +1,4 @@
+using HousecarlCore;
 using HousecarlMcp;
 using Xunit;
 using Xunit.Abstractions;
@@ -40,7 +41,7 @@ public sealed class PlaceServiceLaneTests
         Assert.NotNull(placed);
         Assert.Equal(correctBytes, File.ReadAllBytes(placed!));
         Assert.Equal(correctBytes, File.ReadAllBytes(correctSrc));
-        Assert.Equal(wrongBytes, File.ReadAllBytes(Path.Combine(wrong, FacegenRel)));
+        Assert.Equal(wrongBytes, File.ReadAllBytes(BethesdaPath.Under(wrong, FacegenRel)));
 
         var placedMod = Path.GetFileName(outcome.ModFolder!);
         p.Profile(new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, new[] { "+" + placedMod, "+WrongFace" });
@@ -170,7 +171,7 @@ public sealed class PlaceServiceLaneTests
         }, "GKeepFolder", null);
 
         Assert.NotNull(partial.ModFolder);
-        Assert.True(File.Exists(Path.Combine(partial.ModFolder!, FacegenRel)));
+        Assert.True(File.Exists(BethesdaPath.Under(partial.ModFolder!, FacegenRel)));
         Assert.False(partial.Results[1].Placed);
     }
 
@@ -187,9 +188,9 @@ public sealed class PlaceServiceLaneTests
         var esc = svc.PlaceAssets(new[] { new PlaceRequest(@"meshes\..\..\evil.nif", FacegenRel) }, null, null).Results[0];
 
         Assert.False(bad.Placed);
-        Assert.Contains("drive-rooted", bad.Error);
+        Assert.Contains("Data-relative", bad.Error);
         Assert.False(esc.Placed);
-        Assert.Contains("parent-escaping", esc.Error);
+        Assert.Contains("Data-relative", esc.Error);
     }
 
     // Probe H: "first place into a fresh folder succeeds", "second place into= the existing folder succeeds",
@@ -197,7 +198,7 @@ public sealed class PlaceServiceLaneTests
     // preserves the dest creation time — routes through AtomicFile (File.Replace), not File.Move" (stops on a
     // tunneling host, as the probe did).
     [Fact]
-    public void ASecondPlaceIntoTheSameFolderWritesTheNewBytesAndKeepsTheCreationTime()
+    public void ASecondPlacePreservesUnixPermissionsAndWritesTheNewBytes()
     {
         using var p = new PlaceInstance();
         p.Profile(Array.Empty<string>(), Array.Empty<string>(), Array.Empty<string>());
@@ -208,20 +209,14 @@ public sealed class PlaceServiceLaneTests
 
         var first = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, srcV1) }, "RouteProv", null);
         Assert.True(first.Results[0].Placed, first.Results[0].Error);
-        var dest = Path.Combine(first.ModFolder!, FacegenRel);
-        var oldCreate = new DateTime(2019, 6, 6, 0, 0, 0, DateTimeKind.Utc);
-        bool tunnelingMasks = PlaceCoreTests.TunnelingMasksCreationTime(first.ModFolder!, oldCreate);
-        File.SetCreationTimeUtc(dest, oldCreate);
+        var dest = BethesdaPath.Under(first.ModFolder!, FacegenRel);
+        var mode = UnixFileMode.UserRead | UnixFileMode.UserWrite;
+        File.SetUnixFileMode(dest, mode);
 
         var second = svc.PlaceAssets(new[] { new PlaceRequest(FacegenRel, srcV2) }, null, "RouteProv");
 
         Assert.True(second.Results[0].Placed, second.Results[0].Error);
         Assert.Equal(v2, File.ReadAllBytes(dest));
-        if (tunnelingMasks)
-        {
-            _out.WriteLine("Skipped the creation-time half: file system tunneling keeps it through File.Move on this host.");
-            return;
-        }
-        Assert.Equal(oldCreate, File.GetCreationTimeUtc(dest));
+        Assert.Equal(mode, File.GetUnixFileMode(dest));
     }
 }

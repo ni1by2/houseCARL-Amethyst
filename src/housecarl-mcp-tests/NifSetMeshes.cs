@@ -186,7 +186,7 @@ sealed class NifSetInstance : IDisposable
 
     public string Root { get; } = Path.Combine(Path.GetTempPath(), "hc-nifset-" + Guid.NewGuid().ToString("N"));
     public string ModDir => Path.Combine(Root, "inst", "mods", "FaceMod");
-    public string LoosePath => Path.Combine(ModDir, MeshRel);
+    public string LoosePath => HousecarlCore.BethesdaPath.Under(ModDir, MeshRel);
     public string StorePath => Path.Combine(Root, "houseCARL.user.json");
     public HousecarlMcp.LoadOrderService Svc { get; }
 

@@ -413,8 +413,11 @@ public sealed class Utf8NameTests : IDisposable
         return lo;
     }
 
-    static bool Truncated(string json) =>
-        JsonDocument.Parse(json).RootElement.TryGetProperty("truncated", out var t) && t.GetBoolean();
+    static bool Truncated(string json)
+    {
+        var root = JsonDocument.Parse(json).RootElement;
+        return root.TryGetProperty("spilled", out _) || root.TryGetProperty("truncated", out var t) && t.GetBoolean();
+    }
 
     /// <summary>The records lane's json cap counts CHARACTERS, the unit max_chars is stated in — not the UTF-8 bytes
     /// the document takes. Three rows of the Japanese-named weapon put the name in front of the cap test twice, so
@@ -432,7 +435,19 @@ public sealed class Utf8NameTests : IDisposable
                     "the document is all ASCII — it cannot tell the units apart");
 
         int boundary = SmallestWholeCap(Render, whole.Length);
-        Assert.Equal(859, boundary);
+        var rows = JsonDocument.Parse(whole).RootElement.GetProperty("records");
+        Assert.Equal(3, rows.GetArrayLength());
+        var first = rows[0].GetRawText();
+        var second = rows[1].GetRawText();
+        var firstAt = whole.IndexOf(first, StringComparison.Ordinal);
+        var secondAt = whole.IndexOf(second, firstAt + first.Length, StringComparison.Ordinal);
+        Assert.True(firstAt >= 0 && secondAt > firstAt);
+        // The next row is admitted only when the already-written prefix is smaller than the cap.
+        // Measure that prefix from the real JSON, independently of the renderer's stream counter.
+        var prefixEnd = secondAt + second.Length;
+        Assert.Equal(prefixEnd + 1, boundary);
+        Assert.True(Encoding.UTF8.GetByteCount(whole[..prefixEnd]) > prefixEnd,
+            "the admission prefix must distinguish UTF-8 bytes from characters");
         Assert.True(Truncated(Render(boundary - 1)), "one character below the boundary the rows still all fit");
     }
 

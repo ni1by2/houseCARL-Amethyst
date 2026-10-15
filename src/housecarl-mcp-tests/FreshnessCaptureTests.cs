@@ -124,13 +124,15 @@ public sealed class FreshnessCaptureTests : IDisposable
         var inst = NewInstance("inst-f7");
         MasterOnly(Path.Combine(inst, "profiles", "Default"));
         MasterAndExtra(Path.Combine(inst, "profiles", "Second"));
-        using var svc = NewService(inst, "f7");
-        svc.SetInstance(inst);                                // this path stamps the ini baseline
+        var first = new AmethystFixtureConnection(inst);
+        using var svc = LoadOrderService.WithAmethystSnapshot(first.Manifest, new UserConfigStore(Path.Combine(_root, "saved-user.json")));
         Assert.Equal(1, svc.Stats().plugins);
-        Assert.Equal("Default", svc.ProfileName);
-
+        var state = Path.Combine(inst, ".fixture-manager", "deploy_state.json");
+        File.WriteAllText(state, "{\"last_active_profile\":\"Second\",\"deploy_active\":false}");
+        File.SetLastWriteTimeUtc(state, DateTime.UtcNow.AddHours(-2));
+        Assert.Throws<InvalidOperationException>(() => svc.Stats());
         WriteIni(inst, "Second");
-        File.SetLastWriteTimeUtc(Path.Combine(inst, "ModOrganizer.ini"), DateTime.UtcNow.AddHours(-2));
+        first = new AmethystFixtureConnection(inst);
         Assert.Equal(2, svc.Stats().plugins);
         Assert.Equal("Second", svc.ProfileName);
     }

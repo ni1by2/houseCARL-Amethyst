@@ -13,7 +13,7 @@ namespace HousecarlMcpTests;
 [Trait("tier", "unit")]
 public sealed class SkseImportWalkTests
 {
-    static readonly string Kernel32 = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.System), "kernel32.dll");
+    static SksePluginReader.SksePluginInfo NativeInfo() => SksePluginReader.ReadBytes("fixture.dll", NativePeFixture.Bytes());
 
     static SksePluginReader.SksePluginInfo Info(IReadOnlyList<string>? imports) =>
         new("x.dll", SksePluginReader.SksePluginKind.Modern, true,
@@ -37,17 +37,16 @@ public sealed class SkseImportWalkTests
     [Fact]
     public void ARealNativePesImportDirectoryWalksToANonEmptyList()
     {
-        Assert.True(File.Exists(Kernel32), Kernel32);
-        var info = SksePluginReader.Read(Kernel32);
+        var info = NativeInfo();
         Assert.NotNull(info.Imports);
-        Assert.NotEmpty(info.Imports);
+        Assert.Equal(new[] { "kernel32.dll" }, info.Imports);
     }
 
     // probe E: "import names are normalized lower-case for comparison"
     [Fact]
     public void ImportNamesAreLowerCase()
     {
-        var info = SksePluginReader.Read(Kernel32);
+        var info = NativeInfo();
         Assert.NotNull(info.Imports);
         Assert.All(info.Imports, i => Assert.Equal(i.ToLowerInvariant(), i));
     }
@@ -56,14 +55,14 @@ public sealed class SkseImportWalkTests
     [Fact]
     public void ASystemDllIsClassifiedNotSkse()
     {
-        Assert.Equal(SksePluginReader.SksePluginKind.NotSkse, SksePluginReader.Read(Kernel32).Kind);
+        Assert.Equal(SksePluginReader.SksePluginKind.NotSkse, NativeInfo().Kind);
     }
 
     // probe E2: "an unresolvable import-name RVA fails the WHOLE walk → null (UNKNOWN), never a silent short list"
     [Fact]
     public void AnUnresolvableImportNameFailsTheWholeWalk()
     {
-        var raw = File.ReadAllBytes(Kernel32);
+        var raw = NativePeFixture.Bytes();
         int nameOff = FirstImportNameOffset(raw);
         Assert.True(nameOff > 0, "no import descriptor found in kernel32.dll");
         // control: "the unpatched image walks"

@@ -72,7 +72,7 @@ public sealed class ArchiveDiscoveryTests : IDisposable
         int aRank = arc.Where(x => x.OwningPlugin == "PluginA.esp").Min(x => x.PluginRank);
         int bRank = arc.Single(x => x.OwningPlugin == "PluginB.esp").PluginRank;
 
-        Assert.StartsWith(_data, baseArc.Path.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(_data, baseArc.Path, StringComparison.OrdinalIgnoreCase);
         Assert.True(baseArc.PluginRank < aRank, $"{baseArc.PluginRank} vs {aRank}");
         Assert.True(aRank < bRank, $"{aRank} vs {bRank}");
     }
@@ -89,7 +89,7 @@ public sealed class ArchiveDiscoveryTests : IDisposable
 
         var pa = Discover().Archives.Single(x => x.OwningPlugin == "PluginA.esp");
 
-        Assert.StartsWith(hi, pa.Path.Replace('/', '\\'), StringComparison.OrdinalIgnoreCase);
+        Assert.StartsWith(hi, pa.Path, StringComparison.OrdinalIgnoreCase);
     }
 
     // Probe: "a missing Skyrim.ini base list is a LOUD warning" and "no base archive is invented, but plugin co-name

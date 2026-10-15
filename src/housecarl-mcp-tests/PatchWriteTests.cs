@@ -138,7 +138,7 @@ public sealed class PatchWriteTests : IDisposable
         var patch = Mod("HcStageLockedPatch");
         patch.Keywords.AddNew("HcStageLockedKw");
 
-        using (new FileStream(target, FileMode.Open, FileAccess.Read, FileShare.None))
+        using (new CommitFault(target))
             Assert.ThrowsAny<Exception>(() => WriteEngine.WritePatch(patch, Array.Empty<ISkyrimModGetter>(), target));
 
         Assert.False(Directory.Exists(StagingDir));

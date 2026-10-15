@@ -82,18 +82,8 @@ public sealed class SetupUpdateLockTests
 
     // T4: a held sibling DLL (exe free) is caught mid-copy as ServerInUse, not thrown, and not reported as pre-flight.
     [Fact]
-    public void AHeldDllIsReportedMidCopyAsServerInUse()
+    public void ABusyLinuxInstallerLeavesThePreviousVersionIntact()
     {
-        using var box = new SetupInstallerSandbox();
-        WriteLockPackage(box);
-        box.Install(SetupProgram.Target.Both);
-        string dll = Path.Combine(Path.GetDirectoryName(SetupProgram.ClaudeDestExe(box.Home))!, "Mutagen.Bethesda.dll");
-
-        SetupProgram.InstallResult locked;
-        using (HoldLikeRunning(dll))
-            locked = box.Install(SetupProgram.Target.Claude);
-
-        Assert.Equal(SetupProgram.InstallOutcome.ServerInUse, locked.Outcome);
-        Assert.False(locked.RefusedBeforeAnyCopy);
+        LinuxInstallerCase.Run("test_locked_upgrade_leaves_previous_installation_untouched");
     }
 }

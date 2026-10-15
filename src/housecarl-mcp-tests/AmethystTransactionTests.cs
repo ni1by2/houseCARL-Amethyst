@@ -3,6 +3,8 @@ using System.Security.Cryptography;
 using System.Text;
 using System.Text.Json;
 using HousecarlMcp;
+using HousecarlCore;
+using Microsoft.Data.Sqlite;
 using ModelContextProtocol.Protocol;
 using Xunit;
 
@@ -83,6 +85,32 @@ public sealed class AmethystTransactionTests
     }
 
     [Fact]
+    public void RecoverKeepsRollbackConflictInRecoveryRequiredState()
+    {
+        using var fixture = new TransactionFixture();
+        File.WriteAllText(fixture.Destination, "original");
+        var coordinator = new AmethystTransactionCoordinator(fixture.State);
+        var journal = coordinator.Begin(fixture.Request());
+        using (var locks = coordinator.AcquireWriteLocks(fixture.Library, fixture.ManagerLock))
+        using (var content = new MemoryStream(Encoding.UTF8.GetBytes("prepared output")))
+        {
+            var artifact = coordinator.PrepareArtifact(journal.Id, "unit-1", fixture.Destination, "plugin", content, fixture.Library);
+            coordinator.Publish(journal.Id, artifact.Id, locks);
+        }
+
+        File.WriteAllText(fixture.Destination, "user edit after commit");
+        var rollback = coordinator.Manage(journal.Id, AmethystTransactionAction.Rollback, confirmAmethystRedeploy: true);
+        Assert.Equal("external_conflict", rollback.Code);
+        Assert.Equal("recovery_required", rollback.State);
+
+        var recover = coordinator.Manage(journal.Id, AmethystTransactionAction.Recover);
+        Assert.False(recover.Success);
+        Assert.Equal("manual_resolution_required", recover.Code);
+        Assert.Equal("recovery_required", recover.State);
+        Assert.Equal("user edit after commit", File.ReadAllText(fixture.Destination));
+    }
+
+    [Fact]
     public void ManagerLockMustExistAndBusyLockReturnsTypedCloseRequired()
     {
         using var fixture = new TransactionFixture();
@@ -127,6 +155,117 @@ public sealed class AmethystTransactionTests
         var required = manageSchema.GetProperty("required").EnumerateArray().Select(x => x.GetString()).ToArray();
         Assert.Contains("transaction_id", required);
         Assert.Contains("action", required);
+    }
+
+    [Fact]
+    public void VerifyRefusesToMarkAnUndeployedAmethystOutputVerified()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Directory.CreateDirectory(snapshot.ModsDir);
+        File.WriteAllText(snapshot.ManagerLockPath, "");
+        var coordinator = new AmethystTransactionCoordinator(Path.Combine(world.Root, "state"));
+        var request = new AmethystTransactionRequest("test", "skyrim_se", snapshot.ProfileDir, snapshot.ManifestPath,
+            snapshot.ModsDir, snapshot.ManagerLockPath, snapshot.Provenance.Generation, snapshot.Provenance.InventoryGeneration,
+            "test-contract", new string('0', 64), [new AmethystTransactionUnit("output")],
+            InputSha256: snapshot.InputSha256);
+        var journal = coordinator.Begin(request);
+        var destination = Path.Combine(snapshot.ModsDir, "HouseCARL Test", "Patch.esp");
+        using (var locks = coordinator.AcquireWriteLocks(snapshot.ModsDir, snapshot.ManagerLockPath))
+        {
+            using var payload = new MemoryStream("plugin"u8.ToArray());
+            var artifact = coordinator.PrepareArtifact(journal.Id, "output", destination, "plugin", payload, snapshot.ModsDir);
+            coordinator.Publish(journal.Id, artifact.Id, locks);
+            locks.ReleaseAndSeal(coordinator, journal.Id);
+        }
+
+        var outcome = coordinator.Manage(journal.Id, AmethystTransactionAction.Verify);
+
+        Assert.False(outcome.Success);
+        Assert.Equal("deployment_pending", outcome.Code);
+        Assert.Equal("pending_deployment", outcome.State);
+        Assert.False(coordinator.ReadJournal(journal.Id).Visibility.Any(item => item.Verified));
+    }
+
+    [Theory]
+    [InlineData(false, false, "verified")]
+    [InlineData(true, false, "deployment_verification_failed")]
+    [InlineData(false, true, "shared_profile_verification_pending")]
+    public void VerifyAcceptsOnlyTheCapturedWinnerAndExpectedDeployedHash(bool wrongDeployedHash, bool sharedProfile, string expectedCode)
+    {
+        using var world = new AmethystSnapshotWorld();
+        if (sharedProfile) Directory.CreateDirectory(Path.Combine(world.Root, "profiles", "other-profile"));
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Directory.CreateDirectory(snapshot.ModsDir);
+        File.WriteAllText(snapshot.ManagerLockPath, "");
+        var destination = Path.Combine(snapshot.ModsDir, "Beta", "Meshes", "example.nif");
+        var coordinator = new AmethystTransactionCoordinator(Path.Combine(world.Root, "state"));
+        var request = new AmethystTransactionRequest("test", "skyrim_se", snapshot.ProfileDir, snapshot.ManifestPath,
+            snapshot.ModsDir, snapshot.ManagerLockPath, snapshot.Provenance.Generation, snapshot.Provenance.InventoryGeneration,
+            "test-contract", new string('0', 64), [new AmethystTransactionUnit("output")], InputSha256: snapshot.InputSha256);
+        var journal = coordinator.Begin(request);
+        const string staged = "published asset bytes";
+        using (var locks = coordinator.AcquireWriteLocks(snapshot.ModsDir, snapshot.ManagerLockPath))
+        {
+            using var payload = new MemoryStream(Encoding.UTF8.GetBytes(staged));
+            var artifact = coordinator.PrepareArtifact(journal.Id, "output", destination, "asset", payload, snapshot.ModsDir);
+            coordinator.Publish(journal.Id, artifact.Id, locks);
+            locks.ReleaseAndSeal(coordinator, journal.Id);
+        }
+
+        RefreshCatalogStamp(world, destination);
+        File.WriteAllText(Path.Combine(world.Root, "manager-config", "deploy_state.json"),
+            "{\"last_active_profile\":\"default\",\"deploy_active\":true}");
+        Directory.CreateDirectory(Path.Combine(world.Root, "game", "Data_Core"));
+        var deployed = Path.Combine(world.Root, "game", "Data", "Meshes", "example.nif");
+        Directory.CreateDirectory(Path.GetDirectoryName(deployed)!);
+        File.WriteAllText(deployed, wrongDeployedHash ? "foreign bytes" : staged);
+        var verifying = new AmethystTransactionCoordinator(Path.Combine(world.Root, "state"), null,
+            manifest => AmethystSavedSnapshot.CaptureForDeploymentTest(manifest, deploymentMatches: true));
+
+        var outcome = verifying.Manage(journal.Id, AmethystTransactionAction.Verify);
+
+        Assert.True(outcome.Code == expectedCode, outcome.Code + ": " + string.Join(" | ", outcome.Diagnostics));
+        if (expectedCode == "verified")
+        {
+            Assert.Equal("verified", outcome.State);
+            Assert.Single(verifying.ReadJournal(journal.Id).Visibility, entry => entry.Verified && entry.LinkMode == "copy");
+        }
+        else if (expectedCode == "shared_profile_verification_pending")
+        {
+            Assert.Equal("pending_deployment", outcome.State);
+            var pending = verifying.ReadJournal(journal.Id);
+            Assert.Contains(Path.Combine(world.Root, "profiles", "other-profile"), pending.RequiredProfileIds!);
+            Assert.DoesNotContain(Path.Combine(world.Root, "profiles", "other-profile"), pending.VerifiedProfileIds!);
+        }
+        else if (wrongDeployedHash)
+        {
+            Assert.Equal("pending_deployment", outcome.State);
+            Assert.Equal("foreign bytes", File.ReadAllText(deployed));
+        }
+    }
+
+    static void RefreshCatalogStamp(AmethystSnapshotWorld world, string path)
+    {
+        using var database = world.Open();
+        using var select = database.CreateCommand();
+        select.CommandText = "SELECT rf.file_id, rf.source_rel FROM raw_files rf JOIN mods m USING(mod_id) WHERE m.name_display='Beta'";
+        using var rows = select.ExecuteReader();
+        long fileId = 0;
+        while (rows.Read())
+        {
+            var candidate = Path.Combine(world.Library, "mods", "Beta", System.Text.Encoding.UTF8.GetString(rows.GetFieldValue<byte[]>(1)));
+            if (Path.GetFullPath(candidate) == Path.GetFullPath(path)) { fileId = rows.GetInt64(0); break; }
+        }
+        rows.Close();
+        Assert.NotEqual(0, fileId);
+        var stamp = LinuxFileIdentity.Of(path);
+        using var update = database.CreateCommand();
+        update.CommandText = "UPDATE raw_files SET size=$size,mtime_ns=$mtime WHERE file_id=$id";
+        update.Parameters.AddWithValue("$size", checked((long)stamp.Size));
+        update.Parameters.AddWithValue("$mtime", stamp.MtimeNs);
+        update.Parameters.AddWithValue("$id", fileId);
+        Assert.Equal(1, update.ExecuteNonQuery());
     }
 
     [Theory]

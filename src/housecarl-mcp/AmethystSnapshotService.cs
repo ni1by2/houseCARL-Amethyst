@@ -12,7 +12,7 @@ public sealed partial class LoadOrderService
     /// <summary>Whether the user explicitly enabled the warned saved-snapshot lane.</summary>
     public bool UsesSavedSnapshot => _snapshotManifest is not null;
     /// <summary>Named refusal shared by managed output paths and the MCP write guard.</summary>
-    public const string SnapshotWriteRefusal = "Amethyst transaction routing supports staged create_plugin/apply/create/forward/remove/copy plus compact_plugin and merge_plugins with their generated plugin, owner metadata and dependent riders enrolled together. Existing-target edits require both per-call redeployment consents. Standalone asset, placement, SEQ and Papyrus writers remain unavailable until their transaction paths are implemented.";
+    public const string SnapshotWriteRefusal = "Amethyst transaction routing supports record writes, asset/placement/SEQ writes, and Papyrus compile/decompile through staged transaction output. Existing-target edits require both per-call redeployment consents.";
 
     /// <summary>Select a valid connection at startup; its graph is captured lazily for each tool call.</summary>
     public static LoadOrderService WithAmethystSnapshot(string manifest, UserConfigStore store)

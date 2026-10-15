@@ -123,7 +123,7 @@ static class NifSourceLaneInstance
 
     public static void Loose(string modDir, string rel, byte[] bytes)
     {
-        var p = Path.Combine(modDir, rel);
+        var p = HousecarlCore.BethesdaPath.Under(modDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }
@@ -131,5 +131,5 @@ static class NifSourceLaneInstance
     /// <summary>A one-entry uncompressed SE archive carrying <paramref name="rel"/>.</summary>
     public static byte[] Archive(string rel, byte[] bytes) => BsaBuilder.Build(105,
         BsaBuilder.HasFolderNames | BsaBuilder.HasFileNames,
-        new[] { (Path.GetDirectoryName(rel)!, new[] { (Path.GetFileName(rel), bytes) }) });
+        new[] { (HousecarlCore.BethesdaPath.DirectoryName(rel)!, new[] { (HousecarlCore.BethesdaPath.FileName(rel), bytes) }) });
 }

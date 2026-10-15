@@ -181,7 +181,7 @@ public static class BsaArchive
     /// the pack goes to a houseCARL scratch and the target is touched only after a clean run whose header count
     /// agrees with the source scan — the provenance rule in docs/architecture/assets.md. The caller must surface
     /// BSArch's caveat that a COMPRESSED archive breaks any sounds or voices in it.</summary>
-    public static BsaPackResult Pack(string bsarchExe, string srcFolder, string archive, string formatFlag, bool compress, int timeoutMs = 600_000, BsaPacker? packer = null)
+    public static BsaPackResult Pack(string bsarchExe, string srcFolder, string archive, string formatFlag, bool compress, int timeoutMs = 600_000, BsaPacker? packer = null, SteamProtonSelection? proton = null)
     {
         var nothing = Array.Empty<string>();
         // Pack to a scratch sibling (keeps the .bsa extension so BSArch is happy); the real target is touched only on success.
@@ -201,7 +201,9 @@ public static class BsaArchive
         try { scan = ScanPackSource(srcFolder); }
         catch { scan = null; }
 
-        var run = (packer ?? ShellBsArch)(bsarchExe, srcFolder, tmp, formatFlag, compress, timeoutMs);
+        var run = packer is null
+            ? ShellBsArch(bsarchExe, srcFolder, tmp, formatFlag, compress, timeoutMs, proton)
+            : packer(bsarchExe, srcFolder, tmp, formatFlag, compress, timeoutMs);
 
         // A non-zero exit is a failed pack whatever it left behind, including a scratch whose count happens to agree.
         if (run.runError is null && run.exit != 0)
@@ -281,17 +283,26 @@ public static class BsaArchive
     };
 
     static (int exit, string stdout, string stderr, string? runError) ShellBsArch(
-        string bsarchExe, string srcFolder, string tmpArchive, string formatFlag, bool compress, int timeoutMs)
+        string bsarchExe, string srcFolder, string tmpArchive, string formatFlag, bool compress, int timeoutMs, SteamProtonSelection? proton)
     {
         var args = new List<string> { "pack", srcFolder, tmpArchive, formatFlag, "-mt" };
         if (compress) args.Add("-z");
-        var run = Run(bsarchExe, args, timeoutMs);
+        var executable = bsarchExe;
+        if (proton is not null)
+        {
+            executable = proton.TranslatePath(bsarchExe);
+            args[1] = proton.TranslatePath(srcFolder);
+            args[2] = proton.TranslatePath(tmpArchive);
+        }
+        var run = Run(executable, args, timeoutMs, proton);
         return (run.exit, run.stdout, run.stderr, run.runError);
     }
 
-    static (bool ran, int exit, string stdout, string stderr, string? runError) Run(string exe, IReadOnlyList<string> args, int timeoutMs)
+    static (bool ran, int exit, string stdout, string stderr, string? runError) Run(string exe, IReadOnlyList<string> args, int timeoutMs, SteamProtonSelection? proton)
     {
-        if (WindowsProgramGuard.Refusal(exe, "BSArch.exe") is { } refusal)
+        if (OperatingSystem.IsLinux() && proton is null)
+            return (false, -1, "", "", WindowsProgramGuard.Refusal(exe, "BSArch.exe") ?? "BSArch execution on Linux requires a selected Proton runner.");
+        if (OperatingSystem.IsWindows() && WindowsProgramGuard.Refusal(exe, "BSArch.exe") is { } refusal)
             return (false, -1, "", "", refusal);
         var psi = new ProcessStartInfo
         {
@@ -300,6 +311,7 @@ public static class BsaArchive
             RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false, CreateNoWindow = true,
         };
         foreach (var a in args) psi.ArgumentList.Add(a);   // one arg each; .NET quotes spaces/semicolons
+        if (proton is not null) proton.Configure(psi);
 
         Process p;
         try { p = Process.Start(psi)!; }

@@ -64,7 +64,7 @@ public sealed class AssetStatusServiceTests : IDisposable
 
         Assert.False(d.Results[0].Hit!.Exists);
         Assert.Null(d.Results[1].Hit);
-        Assert.Contains("drive-rooted", d.Results[1].Error);
+        Assert.Contains("Data-relative", d.Results[1].Error);
         Assert.Empty(d.BsaFailures);
         Assert.False(d.ReadIncomplete);
     }
@@ -148,10 +148,12 @@ public sealed class AssetStatusServiceTests : IDisposable
         }
         var one = Make(withAsset: true);
         var two = Make(withAsset: false);
-        var svc = one.Open();
+        var first = new AmethystFixtureConnection(one.Inst);
+        var second = new AmethystFixtureConnection(two.Inst);
+        using var svc = LoadOrderService.WithAmethystSnapshot(first.Manifest, new UserConfigStore(Path.Combine(one.Root, "saved-user.json")));
         Assert.True(svc.AssetStatus(new[] { switchRel }).Results[0].Hit!.Exists);
 
-        svc.SetInstance(two.Inst);
+        svc.SetAmethystSnapshot(second.Manifest);
 
         Assert.False(svc.AssetStatus(new[] { switchRel }).Results[0].Hit!.Exists);
     }

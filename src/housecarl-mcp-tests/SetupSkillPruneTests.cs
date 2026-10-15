@@ -69,36 +69,9 @@ public sealed class SetupSkillPruneTests
     // T5: a read-only leftover cannot be deleted; the install still finishes and registers both hosts, the run
     // names the folder, and the Codex record keeps it so the next upgrade tries again.
     [Fact]
-    public void AReadOnlyLeftoverDoesNotStopMcpRegistration()
+    public void AReadOnlyUnrelatedSkillDoesNotStopLinuxMcpRegistration()
     {
-        using var box = new SetupInstallerSandbox();
-        UpgradeDroppingOne(box);
-        string record = Record(box);
-        Assert.Contains("housecarl", File.ReadAllLines(record));
-
-        foreach (string skillRoot in new[] { ClaudeSkills(box), CodexSkills(box) })
-        {
-            string file = Path.Combine(skillRoot, "stuck-skill", "SKILL.md");
-            SetupInstallerSandbox.WriteFile(file, "left behind");
-            File.SetAttributes(file, FileAttributes.ReadOnly);
-        }
-        File.WriteAllLines(record, File.ReadAllLines(record).Append("stuck-skill"));
-        string claudeJson = SetupProgram.ClaudeJson(box.Home);
-        string codexToml = SetupProgram.CodexConfigToml(box.Home);
-        File.Delete(claudeJson);
-        File.Delete(codexToml);
-
-        SetupProgram.InstallResult stuck = null!;
-        string said = SetupInstallerSandbox.Capture(() => stuck = box.Install(SetupProgram.Target.Both));
-
-        Assert.Equal(SetupProgram.InstallOutcome.Installed, stuck.Outcome);
-        Assert.Contains("housecarl", File.ReadAllText(claudeJson));
-        Assert.Contains("housecarl", File.ReadAllText(codexToml));
-        Assert.True(Directory.Exists(Path.Combine(ClaudeSkills(box), "stuck-skill")));
-        Assert.Contains("could not be deleted", said);
-        Assert.Contains(Path.Combine(ClaudeSkills(box), "stuck-skill"), said);
-        Assert.Contains("stuck-skill", File.ReadAllLines(record));
-        Assert.True(Directory.Exists(Path.Combine(ClaudeSkills(box), "kept-one")));
+        LinuxInstallerCase.Run("test_readonly_unrelated_skill_survives_host_registration");
     }
 
     // T6: a package with no skills folder is a broken package, so it prunes nothing and keeps the record.

@@ -40,7 +40,9 @@ internal static class CheckArtifact
                     total++;
                     writer.WriteRow((w, _) => Row(w, "errors", "missing_master", plugin: p.Plugin, target: m,
                                                   fix: p.InstalledButInactiveMasters?.Contains(m, StringComparer.OrdinalIgnoreCase) == true
-                                                       ? "Installed but not active — enable it in MO2."
+                                                       ? AmethystSnapshotContext.Current is not null
+                                                           ? "Installed but not active in Amethyst's selected profile — activate it, then Refresh and Deploy."
+                                                           : "Installed but not active — enable it in MO2."
                                                        : "Not in the active order — install it, or remove the plugin that declares it."));
                 }
                 if (p.ScanError is { } se)

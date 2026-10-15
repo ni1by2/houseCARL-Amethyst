@@ -442,8 +442,15 @@ public sealed class AssetResolver : IDisposable
         foreach (var (rootName, rootDir) in _looseRoots)
         {
             if (_savedSnapshot is not null && rootDir != _dataDir) continue;
-            var baseDir = pre.Length == 0 ? rootDir
-                : BethesdaPath.TryResolveExisting(rootDir, pre, out var actualDir) ? actualDir : BethesdaPath.Under(rootDir, pre);
+            var baseDir = pre.Length == 0 ? rootDir : BethesdaPath.Under(rootDir, pre);
+            try
+            {
+                if (pre.Length > 0 && BethesdaPath.TryResolveExisting(rootDir, pre, out var actualDir)) baseDir = actualDir;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                RecordRootFailure(rootName, pre, "resolve", ex, snap);
+            }
             // A "not there" is only an absence when it can be proved one; unreadable is named inside.
             if (!Directory.Exists(baseDir)) { AbsenceIsReal(rootName, rootDir, pre, baseDir, snap); continue; }
             try
@@ -599,8 +606,15 @@ public sealed class AssetResolver : IDisposable
         var present = new List<(int, string, HashSet<string>)>();
         for (int i = 0; i < roots.Count; i++)
         {
-            var dir = subtreeDir.Length == 0 ? roots[i].Dir
-                : BethesdaPath.TryResolveExisting(roots[i].Dir, subtreeDir, out var actualDir) ? actualDir : BethesdaPath.Under(roots[i].Dir, subtreeDir);
+            var dir = subtreeDir.Length == 0 ? roots[i].Dir : BethesdaPath.Under(roots[i].Dir, subtreeDir);
+            try
+            {
+                if (subtreeDir.Length > 0 && BethesdaPath.TryResolveExisting(roots[i].Dir, subtreeDir, out var actualDir)) dir = actualDir;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                RecordRootFailure(roots[i].Name, subtreeDir, "resolve", ex, snap);
+            }
             // Reuse the current pass's listings while keeping the real host spelling on Linux.
             var segments = subtreeDir.Length == 0 ? Array.Empty<string>()
                 : Path.GetRelativePath(roots[i].Dir, dir).Split(Path.DirectorySeparatorChar);

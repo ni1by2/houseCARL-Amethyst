@@ -1364,7 +1364,8 @@ public sealed class RecordsOwnedChildTests : IClassFixture<OwnedChildFixture>
     [Fact]
     public void Json_ANoChildrenRowsNodesCutStillSetsTruncated_NotCoveredByTheDeclarersLeadCheck()
     {
-        using var doc = JsonDocument.Parse(Tree(_w.Weapon, format: "json", maxChars: 1080));
+        int boundary = JsonRenderBoundary.First(cap => !JsonDocument.Parse(Tree(_w.Weapon, format: "json", maxChars: cap)).RootElement.GetProperty("truncated").GetBoolean());
+        using var doc = JsonDocument.Parse(Tree(_w.Weapon, format: "json", maxChars: boundary - 1));
         Assert.True(doc.RootElement.GetProperty("truncated").GetBoolean());
         Assert.True(doc.RootElement.TryGetProperty("spilled", out _));
     }
@@ -1515,7 +1516,8 @@ public sealed class RecordsOwnedChildTests : IClassFixture<OwnedChildFixture>
     [Fact]
     public void Json_TheResponseLevelLeadIsDroppedRatherThanOverrunningCap_AndTruncatedIsSet()
     {
-        using var doc = JsonDocument.Parse(Tree(_w.CellC, format: "json", maxChars: 1904));
+        int boundary = JsonRenderBoundary.First(cap => JsonDocument.Parse(Tree(_w.CellC, format: "json", maxChars: cap)).RootElement.TryGetProperty("child_declarers_note", out _));
+        using var doc = JsonDocument.Parse(Tree(_w.CellC, format: "json", maxChars: boundary - 1));
         Assert.False(doc.RootElement.TryGetProperty("child_declarers_note", out _));
         Assert.True(doc.RootElement.GetProperty("truncated").GetBoolean());
         Assert.True(doc.RootElement.TryGetProperty("spilled", out _));
@@ -1539,7 +1541,8 @@ public sealed class RecordsOwnedChildTests : IClassFixture<OwnedChildFixture>
     public void Json_WhereverTheResponseLevelLeadIsPresent_TheDocumentIsWithinCap()
     {
         int seenWith = 0, seenWithout = 0;
-        for (int cap = 1864; cap <= 1945; cap++)      // the measured boundary (1904/1905) +/- 40
+        int boundary = JsonRenderBoundary.First(cap => JsonDocument.Parse(Tree(_w.CellC, format: "json", maxChars: cap)).RootElement.TryGetProperty("child_declarers_note", out _));
+        for (int cap = boundary - 40; cap <= boundary + 40; cap++)      // the measured boundary (1904/1905) +/- 40
         {
             var r = Tree(_w.CellC, format: "json", maxChars: cap);
             using var doc = JsonDocument.Parse(r);

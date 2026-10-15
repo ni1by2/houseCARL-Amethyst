@@ -196,6 +196,13 @@ public sealed class PlaceSourcePoleTests : IClassFixture<PlaceSourcePoleWorld>
         };
 
         var o = Place(FacegenRel, spelling, _w.LoserName);
+        if (shape == "slash" && OperatingSystem.IsLinux())
+        {
+            Assert.False(o.Results[0].Placed);
+            Assert.Contains(WriteSentences.PlaceSourceProviderNeedsRelPath, o.Results[0].Error);
+            Assert.Null(PlacedAt(o, FacegenRel));
+            return;
+        }
 
         Assert.True(o.Results[0].Placed, o.Results[0].Error);
         Assert.Equal(_w.LoserBytes, Bytes(o, FacegenRel));

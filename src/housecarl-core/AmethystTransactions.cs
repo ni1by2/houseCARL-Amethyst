@@ -121,7 +121,9 @@ public sealed record AmethystTransactionJournal(
     bool ImmediateVisibility,
     bool SafeToRestartAmethyst,
     string? RecoveryAction,
-    bool Managed = true);
+    bool Managed = true,
+    IReadOnlyList<string>? RequiredProfileIds = null,
+    IReadOnlyList<string>? VerifiedProfileIds = null);
 
 /// <summary>One status entry. Corrupt/unknown journals remain visible and are never deleted by listing.</summary>
 public sealed record AmethystTransactionStatus(
@@ -157,6 +159,7 @@ public sealed class AmethystTransactionCoordinator
     static readonly JsonSerializerOptions Json = CreateJsonOptions();
     readonly string _root;
     readonly Action<string>? _fault;
+    readonly Func<string, AmethystSavedSnapshot> _snapshotCapture;
 
     static JsonSerializerOptions CreateJsonOptions()
     {
@@ -168,9 +171,15 @@ public sealed class AmethystTransactionCoordinator
 
     /// <summary>Create a coordinator at an explicit state root; the default uses XDG_STATE_HOME.</summary>
     public AmethystTransactionCoordinator(string? stateRoot = null, Action<string>? faultInjector = null)
+        : this(stateRoot, faultInjector, AmethystSavedSnapshot.Capture)
+    { }
+
+    internal AmethystTransactionCoordinator(string? stateRoot, Action<string>? faultInjector,
+        Func<string, AmethystSavedSnapshot> snapshotCapture)
     {
         _root = Path.GetFullPath(stateRoot ?? DefaultStateRoot());
         _fault = faultInjector;
+        _snapshotCapture = snapshotCapture;
     }
 
     /// <summary>State directory used for journals and receipts.</summary>
@@ -520,8 +529,10 @@ public sealed class AmethystTransactionCoordinator
                 artifact.OriginalSha256 is not null && !IsSha256(artifact.OriginalSha256) ||
                 artifact.CommittedSha256 is not null && !IsSha256(artifact.CommittedSha256))
                 throw new InvalidOperationException("transaction artifact contains a malformed SHA-256 digest");
+            var verifiedBackupReleased = journal.State == AmethystTransactionState.Verified && artifact.BackupRelativePath is null;
             if (artifact.OriginalExisted != (artifact.OriginalIdentity is not null && artifact.OriginalSha256 is not null) ||
-                artifact.OriginalExisted != (artifact.BackupRelativePath is not null))
+                artifact.OriginalExisted && artifact.BackupRelativePath is null && !verifiedBackupReleased ||
+                !artifact.OriginalExisted && artifact.BackupRelativePath is not null)
                 throw new InvalidOperationException("transaction artifact original and recovery-copy metadata disagree");
         }
     }
@@ -661,8 +672,13 @@ public sealed class AmethystTransactionCoordinator
         if (!Enum.IsDefined(action) || !AllowedActions(journal).Contains(requested, StringComparer.Ordinal))
             return Outcome(false, "invalid_transition", journal, [$"Action '{requested}' is not valid for state '{StateName(journal.State)}'."], AllowedActions(journal));
         if (action == AmethystTransactionAction.Verify)
-            return Outcome(false, "verification_unavailable", journal,
-                ["Deployment verification requires the refreshed native evidence adapter; no deployment state was changed."], ["verify"]);
+        {
+            // Verification changes only the private journal, so it can run while Amethyst is open;
+            // the shared houseCARL library lock still serializes it with another houseCARL call.
+            using var verifyLock = AcquireExternalWriteLock(journal.LibraryPath);
+            journal = ReadJournal(transactionId);
+            return VerifyDeployment(journal);
+        }
         using var locks = journal.Managed ? AcquireWriteLocks(journal.LibraryPath, journal.ManagerLockPath)
             : AcquireExternalWriteLock(journal.LibraryPath);
         journal = ReadJournal(transactionId);
@@ -680,7 +696,6 @@ public sealed class AmethystTransactionCoordinator
             AmethystTransactionAction.Resume => Resume(journal, locks),
             _ => Outcome(false, "invalid_action", journal, ["Unsupported transaction action."], AllowedActions(journal))
         };
-        locks.Dispose();
         if (outcome.Success && outcome.State is not "recovery_required")
         {
             var completed = ReadJournal(journal.Id) with { SafeToRestartAmethyst = true, UpdatedUtc = DateTimeOffset.UtcNow };
@@ -688,6 +703,277 @@ public sealed class AmethystTransactionCoordinator
             return Outcome(true, outcome.Code, completed, outcome.Diagnostics, outcome.NextActions);
         }
         return outcome;
+    }
+
+    /// <summary>Verify committed outputs against a fresh Amethyst snapshot and the actual deployed winners.</summary>
+    AmethystTransactionOutcome VerifyDeployment(AmethystTransactionJournal journal)
+    {
+        if (!journal.Managed)
+            return Outcome(false, "external_output", journal,
+                ["External exports are outside Amethyst deployment and cannot be marked deployed or verified."], ["inspect_external_output"]);
+        if (journal.State is not (AmethystTransactionState.PendingDeployment or AmethystTransactionState.Completed))
+            return Outcome(false, "invalid_transition", journal, ["Only a fully completed transaction can be deployment-verified."], AllowedActions(journal));
+        try
+        {
+            var snapshot = _snapshotCapture(journal.ManifestPath);
+            if (!string.Equals(Path.GetFullPath(snapshot.ModsDir), Path.GetFullPath(journal.LibraryPath), StringComparison.Ordinal))
+                return Outcome(false, "profile_changed", journal,
+                    ["Amethyst's selected profile uses a different staging library from this transaction; verification was not recorded."], ["select_transaction_profile", "refresh_amethyst"]);
+            if (!snapshot.DeploymentIsActive)
+                return Outcome(false, "deployment_pending", journal,
+                    ["The selected Amethyst profile is not deployed. Refresh, enable and deploy it before verification."], ["refresh_amethyst", "deploy_amethyst"]);
+            if (!snapshot.DeploymentTargetVerified)
+                return Outcome(false, "deployment_not_current", journal,
+                    ["Amethyst's native committed deployment evidence does not match the selected saved generation."], ["refresh_amethyst", "deploy_amethyst"]);
+            var requiredProfiles = snapshot.SharedLibraryProfileDirs.Order(StringComparer.Ordinal).ToArray();
+            if (!requiredProfiles.Contains(Path.GetFullPath(snapshot.ProfileDir), StringComparer.Ordinal))
+                return Outcome(false, "profile_changed", journal,
+                    ["The selected profile does not belong to the saved set of profiles that use this staging library."], ["select_profile_using_library"]);
+            var priorRequired = journal.RequiredProfileIds ?? [];
+            var priorVerified = journal.VerifiedProfileIds ?? [];
+            if (priorRequired.Count > 0 && priorRequired.Except(requiredProfiles, StringComparer.Ordinal).Any())
+                return Outcome(false, "shared_profile_set_changed", journal,
+                    ["A profile previously covered by this transaction no longer exists or no longer uses the shared library. Retained recovery data requires manual review before changing the verification set."], ["inspect_shared_profiles", "keep_recovery_data"]);
+            var verifiedProfiles = priorVerified.Intersect(requiredProfiles, StringComparer.Ordinal).Append(Path.GetFullPath(snapshot.ProfileDir))
+                .Distinct(StringComparer.Ordinal).Order(StringComparer.Ordinal).ToArray();
+
+            var evidence = new List<AmethystTransactionVisibility>();
+            var verifiedFiles = new List<(string Source, string Destination, LinuxFileIdentity SourceStamp,
+                LinuxFileIdentity DestinationStamp, string ExpectedHash)>();
+            var failures = new List<string>();
+            var owningProfile = string.Equals(Path.GetFullPath(snapshot.ProfileDir), Path.GetFullPath(journal.ProfileId), StringComparison.Ordinal);
+            foreach (var artifact in journal.Artifacts.Where(a => a.State == "committed"))
+            {
+                if (artifact.Role.Equals("owner_metadata", StringComparison.OrdinalIgnoreCase)) continue;
+                var source = Path.GetFullPath(artifact.Destination);
+                var modRoot = Path.GetDirectoryName(source);
+                while (modRoot is not null && !string.Equals(Path.GetDirectoryName(modRoot), snapshot.ModsDir, StringComparison.Ordinal))
+                    modRoot = Path.GetDirectoryName(modRoot);
+                if (modRoot is null)
+                {
+                    failures.Add($"'{source}' is not inside the selected staging library, so no Amethyst deployed winner can be established.");
+                    continue;
+                }
+                var relative = Path.GetRelativePath(modRoot, source).Replace(Path.DirectorySeparatorChar, '/');
+                if (relative.StartsWith("Data/", StringComparison.OrdinalIgnoreCase)) relative = relative[5..];
+                if (relative.Contains('/') && relative.Split('/').Any(part => part is "" or "." or ".."))
+                {
+                    failures.Add($"'{source}' does not map to a safe game-relative deployment path.");
+                    continue;
+                }
+
+                var deployedPath = Path.Combine(snapshot.DeploymentDataDir, relative.Replace('/', Path.DirectorySeparatorChar));
+                if (Path.GetExtension(relative).Equals(".esp", StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetExtension(relative).Equals(".esm", StringComparison.OrdinalIgnoreCase) ||
+                    Path.GetExtension(relative).Equals(".esl", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!snapshot.OrderedPluginPaths.Any(path => SameCanonicalFile(path, source)))
+                    {
+                        if (owningProfile) failures.Add($"plugin '{source}' is not an active saved winner in the transaction's profile.");
+                        else evidence.Add(new(deployedPath, null, false, false, true,
+                            $"profile={snapshot.ProfileDir}; generation={snapshot.Provenance.Generation}; plugin is not active in this shared profile"));
+                        continue;
+                    }
+                }
+                else if (artifact.Role.Equals("new_archive", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (!snapshot.SavedArchives().Any(archive => SameCanonicalFile(archive.Path, source)))
+                    {
+                        if (owningProfile) failures.Add($"archive '{source}' is not active in the transaction's profile.");
+                        else evidence.Add(new(deployedPath, null, false, false, true,
+                            $"profile={snapshot.ProfileDir}; generation={snapshot.Provenance.Generation}; archive is not active in this shared profile"));
+                        continue;
+                    }
+                }
+                else
+                {
+                    var winner = snapshot.ResolveAssets(relative).FirstOrDefault();
+                    if (winner?.LooseFilePath is null || !SameCanonicalFile(winner.LooseFilePath, source))
+                    {
+                        if (owningProfile) failures.Add($"'{relative}' is not won by this staged output in the transaction's profile.");
+                        else evidence.Add(new(deployedPath, null, false, false, true,
+                            $"profile={snapshot.ProfileDir}; generation={snapshot.Provenance.Generation}; another provider wins '{relative}'"));
+                        continue;
+                    }
+                }
+
+                if (!File.Exists(source) || !File.Exists(deployedPath))
+                {
+                    failures.Add($"deployed output is missing for '{relative}'.");
+                    continue;
+                }
+                var sourceStamp = LinuxFileIdentity.Of(source);
+                var deployedStamp = LinuxFileIdentity.Of(deployedPath);
+                var expectedHash = artifact.CommittedSha256;
+                if (expectedHash is null || HashFile(source) != expectedHash || HashFile(deployedPath) != expectedHash)
+                {
+                    failures.Add($"staged or deployed bytes for '{relative}' do not match the committed transaction hash.");
+                    continue;
+                }
+                if (LinuxFileIdentity.Of(source) != sourceStamp || LinuxFileIdentity.Of(deployedPath) != deployedStamp)
+                {
+                    failures.Add($"staged or deployed file identity changed while verifying '{relative}'.");
+                    continue;
+                }
+                var deployedInfo = new FileInfo(deployedPath);
+                string mode;
+                if (deployedInfo.LinkTarget is not null)
+                {
+                    if (!SameCanonicalFile(deployedPath, source))
+                    {
+                        failures.Add($"deployed symlink for '{relative}' points to a different source.");
+                        continue;
+                    }
+                    mode = "symlink";
+                }
+                else if (sourceStamp.DeviceMajor == deployedStamp.DeviceMajor && sourceStamp.DeviceMinor == deployedStamp.DeviceMinor && sourceStamp.Inode == deployedStamp.Inode)
+                    mode = "hardlink";
+                else mode = "copy";
+                evidence.Add(new(deployedPath, mode, journal.ImmediateVisibility, false, true,
+                    $"profile={snapshot.ProfileDir}; generation={snapshot.Provenance.Generation}; saved winner source hash matches transaction"));
+                verifiedFiles.Add((source, deployedPath, sourceStamp, deployedStamp, expectedHash));
+            }
+            if (failures.Count > 0)
+                return Outcome(false, "deployment_verification_failed", journal, failures, ["inspect_winners", "refresh_amethyst", "deploy_amethyst"]);
+            if (evidence.Count == 0)
+                return Outcome(false, "no_deployable_outputs", journal,
+                    ["The transaction has no committed game-deployable artifact to verify."], ["inspect_transaction"]);
+
+            foreach (var file in verifiedFiles)
+                if (LinuxFileIdentity.Of(file.Source) != file.SourceStamp || LinuxFileIdentity.Of(file.Destination) != file.DestinationStamp ||
+                    HashFile(file.Source) != file.ExpectedHash || HashFile(file.Destination) != file.ExpectedHash)
+                    return Outcome(false, "deployment_changed_during_verification", journal,
+                        [$"Staged or deployed bytes changed during verification for '{file.Destination}'."], ["retry_verify"]);
+            snapshot.CheckUnchanged();
+
+            var accumulatedEvidence = (journal.Visibility ?? []).Where(item =>
+                item.Evidence is null || !item.Evidence.StartsWith($"profile={snapshot.ProfileDir};", StringComparison.Ordinal))
+                .Concat(evidence).ToArray();
+            var allProfilesVerified = requiredProfiles.All(verifiedProfiles.Contains);
+            if (!allProfilesVerified)
+            {
+                var waiting = journal with
+                {
+                    RequiredProfileIds = requiredProfiles,
+                    VerifiedProfileIds = verifiedProfiles,
+                    Visibility = accumulatedEvidence,
+                    State = AmethystTransactionState.PendingDeployment,
+                    PendingDeployment = true,
+                    UpdatedUtc = DateTimeOffset.UtcNow,
+                    SafeToRestartAmethyst = true,
+                    Diagnostics = journal.Diagnostics.Append($"Profile {snapshot.ProfileDir} verified; shared-library verification remains for {string.Join(", ", requiredProfiles.Except(verifiedProfiles, StringComparer.Ordinal))}.").ToArray()
+                };
+                WriteJournal(waiting);
+                WriteReceipt(waiting);
+                return Outcome(false, "shared_profile_verification_pending", waiting,
+                    ["This profile's deployed outputs match, but the staging library is shared. Select each remaining profile in Amethyst, Refresh and Deploy it, then run verify again before recovery data is eligible for cleanup."],
+                    ["switch_to_remaining_profile", "refresh_amethyst", "deploy_amethyst", "verify"]);
+            }
+
+            var verified = journal with
+            {
+                RequiredProfileIds = requiredProfiles,
+                VerifiedProfileIds = verifiedProfiles,
+                Visibility = accumulatedEvidence,
+                State = AmethystTransactionState.Verified,
+                PendingDeployment = false,
+                UpdatedUtc = DateTimeOffset.UtcNow,
+                SafeToRestartAmethyst = true,
+                RecoveryAction = null,
+                Diagnostics = journal.Diagnostics.Append($"Verified against Amethyst generation {snapshot.Provenance.Generation}.").ToArray()
+            };
+            WriteJournal(verified);
+            WriteReceipt(verified);
+            var chainOpen = HasUnresolvedDestinationChain(verified);
+            var retained = chainOpen
+                ? verified.Artifacts.Where(a => a.BackupRelativePath is not null)
+                    .Select(a => $"{a.BackupRelativePath}: retained because another transaction for this destination is unresolved").ToArray()
+                : DeleteRecoveryCopies(verified);
+            verified = ReadJournal(verified.Id);
+            if (retained.Count > 0)
+            {
+                verified = verified with
+                { Diagnostics = verified.Diagnostics.Append("Some eligible recovery copies could not be cleaned up and remain retained: " + string.Join("; ", retained)).ToArray(), UpdatedUtc = DateTimeOffset.UtcNow };
+                WriteJournal(verified); WriteReceipt(verified);
+            }
+            return Outcome(true, "verified", verified, [], AllowedActions(verified));
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException or System.Text.Json.JsonException)
+        {
+            return Outcome(false, "verification_unavailable", journal,
+                [$"Fresh Amethyst deployment evidence could not be established: {ex.Message}"], ["refresh_amethyst", "retry_verify"]);
+        }
+    }
+
+    IReadOnlyList<string> DeleteRecoveryCopies(AmethystTransactionJournal journal)
+    {
+        var retained = new List<string>();
+        var deleted = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var artifact in journal.Artifacts.Where(a => a.BackupRelativePath is not null))
+        {
+            try
+            {
+                DeletePrivateArtifact(journal.Id, artifact.BackupRelativePath!);
+                deleted.Add(artifact.Id);
+            }
+            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
+            { retained.Add($"{artifact.BackupRelativePath}: {ex.Message}"); }
+        }
+        if (deleted.Count > 0)
+        {
+            var updated = ReadJournal(journal.Id) with
+            {
+                Artifacts = ReadJournal(journal.Id).Artifacts.Select(a => deleted.Contains(a.Id) ? a with { BackupRelativePath = null } : a).ToArray(),
+                UpdatedUtc = DateTimeOffset.UtcNow
+            };
+            WriteJournal(updated);
+            WriteReceipt(updated);
+        }
+        return retained;
+    }
+
+    bool HasUnresolvedDestinationChain(AmethystTransactionJournal journal)
+    {
+        var destinations = journal.Artifacts.Where(a => a.State == "committed")
+            .Select(a => Path.GetFullPath(a.Destination)).ToHashSet(StringComparer.Ordinal);
+        if (destinations.Count == 0) return true;
+        var directory = Path.Combine(_root, "transactions");
+        if (!Directory.Exists(directory)) return true;
+        foreach (var path in Directory.EnumerateDirectories(directory))
+        {
+            var id = Path.GetFileName(path);
+            if (id == journal.Id) continue;
+            AmethystTransactionJournal other;
+            try { other = ReadJournal(id); }
+            catch { return true; } // an unreadable receipt could refer to an overlapping destination
+            if (other.Artifacts.Any(a => destinations.Contains(Path.GetFullPath(a.Destination))) &&
+                other.State is not (AmethystTransactionState.Verified or AmethystTransactionState.RolledBack or AmethystTransactionState.Aborted))
+                return true;
+        }
+        return false;
+    }
+
+    void DeletePrivateArtifact(string transactionId, string relativePath)
+    {
+        ValidatePrivateRelativePath(relativePath, "backups/");
+        using var root = LinuxAnchoredFileSystem.OpenAbsoluteDirectory(_root);
+        using var tx = LinuxAnchoredFileSystem.OpenRelativeDirectory(root, $"transactions/{ParseId(transactionId)}");
+        var parts = relativePath.Split('/');
+        using var parent = LinuxAnchoredFileSystem.OpenRelativeDirectory(tx, parts[0]);
+        LinuxAnchoredFileSystem.Unlink(parent, parts[1]);
+        LinuxAnchoredFileSystem.Sync(parent);
+    }
+
+    static bool SameCanonicalFile(string left, string right)
+    {
+        try { return LinuxFileIdentity.Canonical(left) == LinuxFileIdentity.Canonical(right); }
+        catch (IOException) { return false; }
+    }
+
+    static string HashFile(string path)
+    {
+        using var stream = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 128 * 1024, FileOptions.SequentialScan);
+        return Convert.ToHexString(SHA256.HashData(stream)).ToLowerInvariant();
     }
 
     internal AmethystTransactionJournal MarkLocksReleased(string transactionId)
@@ -726,6 +1012,30 @@ public sealed class AmethystTransactionCoordinator
         var interruptedUnitIds = journal.Artifacts.Where(a => a.State == "committing").Select(a => a.UnitId)
             .Concat(journal.Units.Where(u => u.State == AmethystUnitState.Committing).Select(u => u.Id))
             .ToHashSet(StringComparer.Ordinal);
+        if (interruptedUnitIds.Count == 0)
+        {
+            if (journal.State == AmethystTransactionState.RecoveryRequired)
+                return Outcome(false, "manual_resolution_required", journal,
+                    ["No interrupted publication remains to restore. The recorded destination conflict is preserved; resolve it manually, then inspect the transaction again."],
+                    ["manual_resolution"]);
+            if (journal.State == AmethystTransactionState.Preparing && journal.Artifacts.Count == 0)
+            {
+                journal = journal with
+                {
+                    State = AmethystTransactionState.Aborted,
+                    PendingDeployment = false,
+                    SafeToRestartAmethyst = true,
+                    RecoveryAction = null,
+                    UpdatedUtc = DateTimeOffset.UtcNow,
+                    Diagnostics = journal.Diagnostics.Append("The transaction stopped before it enrolled any output; no filesystem publication needed recovery.").ToArray()
+                };
+                WriteJournal(journal);
+                WriteReceipt(journal);
+                return Outcome(true, "recovered_no_publication", journal, [], AllowedActions(journal));
+            }
+            return Outcome(true, "nothing_to_recover", journal,
+                ["No interrupted publication was found. Prepared and completed units remain unchanged."], AllowedActions(journal));
+        }
         foreach (var artifact in journal.Artifacts.Where(a => interruptedUnitIds.Contains(a.UnitId) && (a.State is "committing" or "committed")).Reverse())
         {
             var (current, currentIdentity) = DestinationFingerprint(journal, artifact);

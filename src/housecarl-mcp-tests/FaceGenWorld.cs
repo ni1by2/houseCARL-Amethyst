@@ -55,11 +55,10 @@ public class FaceGenWorld : IDisposable
     public const string VanillaName = "Skyrim.esm";
     public const string VanillaMod = "FgVanilla";
 
-    /// <summary>Whether the listing deny on <see cref="UnlistedMod"/> bit on this host; false off Windows.</summary>
+    /// <summary>Whether the listing deny on <see cref="UnlistedMod"/> bit on this host; false if this account bypasses permissions.</summary>
     public bool UnlistedStaged { get; }
 
     readonly string _unlistedDir;
-    FileSystemAccessRule? _unlistedDeny;
     Exception? _cleanupFailure;
 
     /// <summary>A plugin the order does not load, whose orphaned facegen folder is one of the inert rows.</summary>
@@ -212,18 +211,7 @@ public class FaceGenWorld : IDisposable
                     File.WriteAllBytes(Path.Combine(bsaDir, bsa), new byte[] { 0xDE, 0xAD, 0xBE, 0xEF });
 
             // Deny listing only, not inherited (as LocalizedModFolderUnreadableTests does), so the bake still resolves by traverse.
-            if (OperatingSystem.IsWindows())
-            {
-                var dir = new DirectoryInfo(_unlistedDir);
-                var acl = dir.GetAccessControl();
-                _unlistedDeny = new FileSystemAccessRule(WindowsIdentity.GetCurrent().Name, FileSystemRights.ListDirectory,
-                                                         AccessControlType.Deny);
-                acl.AddAccessRule(_unlistedDeny);
-                dir.SetAccessControl(acl);
-                try { Directory.EnumerateFiles(_unlistedDir).ToList(); }
-                catch (UnauthorizedAccessException) { UnlistedStaged = true; }
-                catch (IOException) { UnlistedStaged = true; }
-            }
+            UnlistedStaged = DenyAce.TryDeny(_unlistedDir, listingOnly: true);
 
             Svc = LoadOrderService.WithInstance(instance, 0, new UserConfigStore(Path.Combine(Root, "houseCARL.user.json")));
         }
@@ -241,7 +229,7 @@ public class FaceGenWorld : IDisposable
 
     static void Loose(string modDir, string rel)
     {
-        var p = Path.Combine(modDir, rel);
+        var p = HousecarlCore.BethesdaPath.Under(modDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllText(p, "x");
     }
@@ -251,14 +239,7 @@ public class FaceGenWorld : IDisposable
     {
         try
         {
-            if (_unlistedDeny is not null && OperatingSystem.IsWindows())
-            {
-                var dir = new DirectoryInfo(_unlistedDir);
-                var acl = dir.GetAccessControl();
-                acl.RemoveAccessRule(_unlistedDeny);
-                dir.SetAccessControl(acl);
-                _unlistedDeny = null;
-            }
+            DenyAce.Undeny(_unlistedDir);
             if (Directory.Exists(Root)) Directory.Delete(Root, recursive: true);
             _cleanupFailure = null;
         }

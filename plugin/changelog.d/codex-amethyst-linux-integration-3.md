@@ -1,0 +1,1 @@
+- **Linux asset reads now report inaccessible roots, SKSE results show filenames correctly, and existing-file overwrites preserve Unix permissions.** Check the returned root warnings and filenames, and the permissions of an overwritten output file.

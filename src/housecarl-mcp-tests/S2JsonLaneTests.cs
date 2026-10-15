@@ -268,7 +268,7 @@ public class PlaceJsonRenderTests
             .Concat(Enumerable.Range(0, failed)
                 .Select(i => new PlaceResult($"meshes/hc/bad{i}.nif", false, 0, null, null, "nothing supplies this path")))
             .ToList(),
-        @"C:\mods\houseCARL - MyFixes", Array.Empty<string>(), null, null);
+        NativeTestPath.Of(@"C:\mods\houseCARL - MyFixes"), Array.Empty<string>(), null, null);
 
     static JsonElement Parse(string s) => JsonDocument.Parse(s).RootElement;
 
@@ -343,7 +343,7 @@ public class PlaceJsonRenderTests
         var results = new List<PlaceResult> { new("meshes/hc/first.nif", true, 42, "SomeMod (loose)", null, null) };
         for (int i = 0; i < 40; i++)
             results.Add(new PlaceResult($"meshes/hc/ok{i}.nif", true, 42, "SomeMod (loose)", "OtherMod (loose)", null));
-        var o = new PlaceOutcome(results, @"C:\mods\houseCARL - MyFixes", Array.Empty<string>(), null, null);
+        var o = new PlaceOutcome(results, NativeTestPath.Of(@"C:\mods\houseCARL - MyFixes"), Array.Empty<string>(), null, null);
 
         var root = Parse(JsonWire.RenderPlaceOutcome(o, 1));
 

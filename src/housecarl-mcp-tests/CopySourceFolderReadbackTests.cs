@@ -86,7 +86,7 @@ public sealed class TwoDisabledDonorsWorld : IDisposable
             Write(collide, ReservedNameFolder, baseMod, donor);
             // A copy of the FaceGen inside that folder, so a placement handed the name "Data" and reaching the mod
             // folder would SUCCEED. It must not: the name means the layer, and the failure is the proof.
-            var collideFace = Path.Combine(ModsDir, ReservedNameFolder, FaceGenPath.For(DonorNpc, FaceGenSlot.Mesh));
+            var collideFace = BethesdaPath.Under(Path.Combine(ModsDir, ReservedNameFolder), FaceGenPath.For(DonorNpc, FaceGenSlot.Mesh));
             Directory.CreateDirectory(Path.GetDirectoryName(collideFace)!);
             File.WriteAllBytes(collideFace, Encoding.ASCII.GetBytes("FACEGEN-IN-THE-RESERVED-NAME-FOLDER"));
         }
@@ -102,7 +102,7 @@ public sealed class TwoDisabledDonorsWorld : IDisposable
 
         // The ONLY copy of the FaceGen, beside the DEFINING plugin — the second arm's folder.
         FaceRel = FaceGenPath.For(DonorNpc, FaceGenSlot.Mesh);
-        var loose = Path.Combine(ModsDir, DefiningFolder, FaceRel);
+        var loose = BethesdaPath.Under(Path.Combine(ModsDir, DefiningFolder), FaceRel);
         Directory.CreateDirectory(Path.GetDirectoryName(loose)!);
         File.WriteAllBytes(loose, FaceBytes);
 
@@ -205,7 +205,7 @@ public sealed class CopySourceFolderReadbackTests : IDisposable
         var r = Copy("HcTwoCarry");
         var folder = FolderNamedFor(r, "Donor.esp");
         Assert.NotNull(folder);
-        Assert.True(File.Exists(Path.Combine(_w.ModsDir, folder!, _w.FaceRel)),
+        Assert.True(File.Exists(BethesdaPath.Under(Path.Combine(_w.ModsDir, folder!), _w.FaceRel)),
                     $"the readback named '{folder}', which does not hold {_w.FaceRel}");
 
         var patchPath = Directory.EnumerateDirectories(_w.ModsDir, "houseCARL - HcTwoCarry*")
@@ -289,7 +289,7 @@ public sealed class CopyEnabledDonorFolderTests : IDisposable
         var m = Regex.Match(r, "Donor\\.esp \\(from the active load order, MO2 mod folder \"([^\"]+)\"\\)");
 
         Assert.True(m.Success, r);
-        Assert.True(File.Exists(Path.Combine(_w.ModsDir, m.Groups[1].Value, _w.FaceRel)),
+        Assert.True(File.Exists(BethesdaPath.Under(Path.Combine(_w.ModsDir, m.Groups[1].Value), _w.FaceRel)),
                     $"the readback named '{m.Groups[1].Value}', which does not hold {_w.FaceRel}");
     }
 
@@ -369,7 +369,7 @@ public sealed class CopyReservedFolderNameTests : IDisposable
     public void ThePlacementLaneRefusesThatNameAsAProvider()
     {
         Assert.True(AssetResolver.IsReservedLayerName(TwoDisabledDonorsWorld.ReservedNameFolder));
-        Assert.True(File.Exists(Path.Combine(_w.ModsDir, TwoDisabledDonorsWorld.ReservedNameFolder, _w.FaceRel)));
+        Assert.True(File.Exists(BethesdaPath.Under(Path.Combine(_w.ModsDir, TwoDisabledDonorsWorld.ReservedNameFolder), _w.FaceRel)));
 
         var placed = PlaceTools.Place(_w.Svc, new[]
         {

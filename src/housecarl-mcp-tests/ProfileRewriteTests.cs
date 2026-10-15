@@ -24,6 +24,7 @@ public sealed class ProfileRewriteTests
         public string Root { get; }
         public string ProfileDir { get; }
         public LoadOrderService Svc { get; }
+        public AmethystFixtureConnection Connection { get; }
 
         public const string Contested = @"textures\hc\contested.dds";
         public const string Higher = "HcRwHigher";
@@ -59,7 +60,8 @@ public sealed class ProfileRewriteTests
             WriteModlist(Higher, Lower);
             File.WriteAllText(Path.Combine(ProfileDir, "Skyrim.ini"), "[Archive]\r\nsResourceArchiveList=\r\n");
 
-            Svc = LoadOrderService.WithInstance(instance, 0, new UserConfigStore(Path.Combine(Root, "houseCARL.user.json")));
+            Connection = new AmethystFixtureConnection(instance);
+            Svc = LoadOrderService.WithAmethystSnapshot(Connection.Manifest, new UserConfigStore(Path.Combine(Root, "houseCARL.user.json")));
         }
 
         /// <summary>Rewrite modlist.txt with <paramref name="first"/> at the top — MO2's own priority order, so the
@@ -82,7 +84,7 @@ public sealed class ProfileRewriteTests
 
         static void Loose(string modDir, string rel)
         {
-            var p = Path.Combine(modDir, rel);
+            var p = BethesdaPath.Under(modDir, rel);
             Directory.CreateDirectory(Path.GetDirectoryName(p)!);
             File.WriteAllText(p, "x");
         }
@@ -100,12 +102,12 @@ public sealed class ProfileRewriteTests
     public void AColdAssetCallOnAHeldProfileNamesTheHoldInsteadOfAnInternalFailure()
     {
         using var w = new RewriteWorld();
-        using var hold = HeldOpen.Hold(w.LoadOrderPath);
-
-        var response = AssetTools.AssetStatus(w.Svc, new[] { RewriteWorld.Contested });
-
-        Assert.Contains("held open by another process", response, StringComparison.Ordinal);
-        Assert.DoesNotContain("internal houseCARL failure", response, StringComparison.Ordinal);
+        using var server = new ServerFixture(w.Connection.Environment);
+        using var held = new CatalogHold(w.Connection.Database);
+        var result = server.Call(ToolNames.AssetStatus, System.Text.Json.JsonSerializer.Serialize(new { asset_paths = new[] { RewriteWorld.Contested } }));
+        Assert.True(result.IsError, result.Describe());
+        Assert.Contains("locked", result.Text);
+        Assert.DoesNotContain("internal houseCARL failure", result.Text);
     }
 
     /// <summary>The kept build, both halves: while the profile cannot be re-read the asset answer is the one the old
@@ -116,23 +118,10 @@ public sealed class ProfileRewriteTests
     {
         using var w = new RewriteWorld();
         Assert.Equal(RewriteWorld.Higher, w.Contest().Results.Single().Hit!.Winner!.Source);
-
-        // The flip changes both the stamp (so a refresh is attempted) and the winner (so a kept build is visible).
         w.WriteModlist(RewriteWorld.Lower, RewriteWorld.Higher);
-        var hold = HeldOpen.Hold(w.LoadOrderPath);
-        try
-        {
-            var during = w.Contest();
-
-            Assert.Equal(RewriteWorld.Higher, during.Results.Single().Hit!.Winner!.Source);
-            Assert.Contains(during.Warnings, s => s.Contains("could not be re-read", StringComparison.Ordinal));
-        }
-        finally { hold.Dispose(); }
-
-        var after = w.Contest();
-
-        Assert.Equal(RewriteWorld.Lower, after.Results.Single().Hit!.Winner!.Source);
-        Assert.DoesNotContain(after.Warnings, s => s.Contains("could not be re-read", StringComparison.Ordinal));
+        Assert.Contains("intent changed", Assert.Throws<InvalidOperationException>(() => w.Contest()).Message);
+        w.Connection.Refresh();
+        Assert.Equal(RewriteWorld.Lower, w.Contest().Results.Single().Hit!.Winner!.Source);
     }
 
     /// <summary>The first record call after the hold is released reads the profile for itself, and that read is a
@@ -143,18 +132,11 @@ public sealed class ProfileRewriteTests
     {
         using var w = new RewriteWorld();
         Assert.Equal(RewriteWorld.Higher, w.Contest().Results.Single().Hit!.Winner!.Source);
-
         w.WriteModlist(RewriteWorld.Lower, RewriteWorld.Higher);
-        var hold = HeldOpen.Hold(w.LoadOrderPath);
-        try { Assert.Equal(RewriteWorld.Higher, w.Contest().Results.Single().Hit!.Winner!.Source); }
-        finally { hold.Dispose(); }
-
-        w.Svc.CaptureView();               // the first record call: builds the index off the NEW profile
-
-        var after = w.Contest();
-
-        Assert.Equal(RewriteWorld.Lower, after.Results.Single().Hit!.Winner!.Source);
-        Assert.DoesNotContain(after.Warnings, s => s.Contains("could not be re-read", StringComparison.Ordinal));
+        Assert.Throws<InvalidOperationException>(() => w.Svc.CaptureView());
+        w.Connection.Refresh();
+        Assert.NotNull(w.Svc.CaptureView().Epoch);
+        Assert.Equal(RewriteWorld.Lower, w.Contest().Results.Single().Hit!.Winner!.Source);
     }
 
     /// <summary>The record lane has no channel to say a refresh is pending and its answer IS the order, so it refuses
@@ -166,15 +148,15 @@ public sealed class ProfileRewriteTests
     public void TheRecordIndexRefusesRatherThanAnswerOffASupersededBuild()
     {
         using var w = new RewriteWorld();
-        var built = w.Svc.CaptureView();           // the warm build, taken before anything holds the profile
-        Assert.NotNull(built.Epoch);
-
+        var before = w.Svc.CaptureSavedSnapshot();
+        Assert.NotNull(w.Svc.CaptureView().Epoch);
         w.WriteModlist(RewriteWorld.Lower, RewriteWorld.Higher);
-        using var hold = HeldOpen.Hold(w.LoadOrderPath);
-
-        var ex = Assert.Throws<ProfileUnreadableException>(() => w.Svc.CaptureView());
-
-        Assert.Equal(w.LoadOrderPath, ex.ProfilePath);
+        Assert.Contains("intent changed", Assert.Throws<InvalidOperationException>(() => w.Svc.CaptureView()).Message);
+        w.Connection.Refresh();
+        Assert.Throws<InvalidOperationException>(before.CheckUnchanged);
+        var after = w.Svc.CaptureSavedSnapshot();
+        Assert.NotEqual(before.Provenance, after.Provenance);
+        Assert.Equal(RewriteWorld.Lower, w.Contest().Results.Single().Hit!.Winner!.Source);
     }
 
     /// <summary>The vacuity check on the tests above: with the hold released the same cold call resolves normally, so
@@ -183,10 +165,8 @@ public sealed class ProfileRewriteTests
     public void OnceTheHoldIsReleasedTheSameColdCallResolvesNormally()
     {
         using var w = new RewriteWorld();
-        using (HeldOpen.Hold(w.LoadOrderPath))
-            Assert.Contains("held open by another process",
-                            AssetTools.AssetStatus(w.Svc, new[] { RewriteWorld.Contested }), StringComparison.Ordinal);
-
+        using (new CatalogHold(w.Connection.Database))
+            Assert.Contains("locked", Assert.Throws<InvalidOperationException>(() => w.Contest()).Message);
         Assert.Equal(RewriteWorld.Higher, w.Contest().Results.Single().Hit!.Winner!.Source);
     }
 
@@ -209,10 +189,8 @@ public sealed class ProfileRewriteTests
     public void ReadingAProfileWhoseFileIsHeldThrowsTheNamedTransient()
     {
         using var w = new RewriteWorld();
-        using var hold = HeldOpen.Hold(w.LoadOrderPath);
-
-        var ex = Assert.Throws<ProfileUnreadableException>(() => Mo2LoadOrder.ReadComposition(w.ProfileDir));
-
-        Assert.Equal(w.LoadOrderPath, ex.ProfilePath);
+        using (new CatalogHold(w.Connection.Database))
+            Assert.Contains("locked", Assert.Throws<InvalidOperationException>(() => AmethystSavedSnapshot.Capture(w.Connection.Manifest)).Message);
+        AmethystSavedSnapshot.Capture(w.Connection.Manifest).CheckUnchanged();
     }
 }

@@ -29,7 +29,7 @@ public class PlaceRenderTests
             .Concat(Enumerable.Range(0, failed)
                 .Select(i => new PlaceResult($"meshes/hc/bad{i}.nif", false, 0, null, null, "nothing supplies this path")))
             .ToList(),
-        @"C:\mods\houseCARL - MyFixes", Array.Empty<string>(), null, null) { FreshFolder = fresh };
+        NativeTestPath.Of(@"C:\mods\houseCARL - MyFixes"), Array.Empty<string>(), null, null) { FreshFolder = fresh };
 
     [Fact]
     public void EveryResponseCarriesTheAccountingInBand()
@@ -188,7 +188,7 @@ public class PlaceRenderTests
             .Append(new PlaceResult("meshes/hc/last.nif", true, 42, "SomeMod (loose)", "overwrite (loose)", null)
                     { WinnerIsOverwrite = true })
             .ToList();
-        var o = new PlaceOutcome(rows, @"C:\mods\houseCARL - MyFixes", Array.Empty<string>(), null, null)
+        var o = new PlaceOutcome(rows, NativeTestPath.Of(@"C:\mods\houseCARL - MyFixes"), Array.Empty<string>(), null, null)
                 { FreshFolder = true };
 
         var text = PlaceWire.Render(o, 1_600);

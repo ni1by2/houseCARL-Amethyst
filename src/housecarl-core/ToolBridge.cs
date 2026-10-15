@@ -5,6 +5,10 @@ public enum ToolDependency
 {
     /// <summary>The Creation Kit's PapyrusCompiler.exe, which compiles .psc to .pex.</summary>
     PapyrusCompiler,
+    /// <summary>Native Linux Caprica Papyrus compiler.</summary>
+    Caprica,
+    /// <summary>Native Linux Champollion Papyrus decompiler.</summary>
+    Champollion,
     /// <summary>BSArch.exe — repacks .bsa archives (housecarl_bsa_repack only); no canonical home, so it always prompts.</summary>
     Bsarch,
     PapyrusLogs,
@@ -17,7 +21,8 @@ public enum ToolPathSource { Saved, AutoDetected, Unset }
 
 /// <summary>Per-dependency metadata: wire key, display name, directory-or-exe, expected exe stem, purpose, and source.</summary>
 public sealed record ToolInfo(
-    ToolDependency Dep, string Key, string Display, bool IsDirectory, string? ExeStem, string Need, string WhereToGet);
+    ToolDependency Dep, string Key, string Display, bool IsDirectory, string? ExeStem, string Need, string WhereToGet,
+    bool NativeLinuxExecutable = false);
 
 /// <summary>The external-tool catalog and the bridge's pure logic: parse a wire name, validate a candidate path, render
 /// the missing-dependency prompt, auto-detect canonical homes; <see cref="ToolPathResolver"/> adds persistence.</summary>
@@ -29,6 +34,10 @@ public static class ToolBridge
             "compiling .psc scripts to .pex",
             "it ships with the Creation Kit (Bethesda's free modding tool, on Steam); it lives in your REAL Steam Skyrim SE install " +
             "at <Skyrim SE>\\Papyrus Compiler\\PapyrusCompiler.exe — NOT a Wabbajack/MO2 'Stock Game' copy (that's the data dir; the CK and the vanilla script sources are in the Steam install)"),
+        new(ToolDependency.Caprica, "caprica", "the native Caprica Papyrus compiler", false, "caprica",
+            "compiling .psc scripts to Skyrim .pex on Linux", "the pinned Caprica release bundled with houseCARL or its extracted executable", NativeLinuxExecutable: true),
+        new(ToolDependency.Champollion, "champollion", "the native Champollion Papyrus decompiler", false, "champollion",
+            "decompiling Skyrim .pex scripts on Linux", "the pinned Champollion release bundled with houseCARL or its extracted executable", NativeLinuxExecutable: true),
         new(ToolDependency.Bsarch, "bsarch", "BSArch (BSArch.exe)", false, "bsarch",
             "packing a folder into a .bsa archive with " + ToolNames.BsaRepack,
             "BSArch is a standalone tool on Nexus Mods (also bundled with 'Cathedral Assets Optimizer' / 'BSA Browser')"),
@@ -68,6 +77,19 @@ public static class ToolBridge
         if (!File.Exists(path))
             return (false, $"no such file: '{path}'. Give the full path to {info.Display}.");
         var name = Path.GetFileName(path);
+        if (info.NativeLinuxExecutable)
+        {
+            if (!OperatingSystem.IsLinux()) return (false, $"{info.Display} is supported only on Linux.");
+            if (!name.Contains(info.ExeStem!, StringComparison.OrdinalIgnoreCase))
+                return (false, $"'{name}' doesn't look like {info.Display} (expected a filename containing '{info.ExeStem}').");
+            try
+            {
+                if ((File.GetUnixFileMode(path) & (UnixFileMode.UserExecute | UnixFileMode.GroupExecute | UnixFileMode.OtherExecute)) == 0)
+                    return (false, $"'{name}' is not executable; set its executable permission or choose the extracted executable.");
+            }
+            catch (Exception ex) { return (false, $"could not check the executable permission on '{path}' ({ex.Message})."); }
+            return (true, null);
+        }
         if (!name.EndsWith(".exe", StringComparison.OrdinalIgnoreCase))
             return (false, $"'{name}' is not an .exe — give the {info.Display}.");
         if (info.ExeStem is not null && name.IndexOf(info.ExeStem, StringComparison.OrdinalIgnoreCase) < 0)

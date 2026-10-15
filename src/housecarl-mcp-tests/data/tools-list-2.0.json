@@ -39,6 +39,9 @@
     "housecarl_skse",
     "housecarl_skypatcher_layer",
     "housecarl_update_status",
-    "housecarl_write_seq"
+    "housecarl_write_seq",
+    "housecarl_set_amethyst_connection",
+    "housecarl_staging_status",
+    "housecarl_staging_manage"
   ]
 }

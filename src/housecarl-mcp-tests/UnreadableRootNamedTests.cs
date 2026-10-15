@@ -158,7 +158,7 @@ sealed class BlockedModWorld : IDisposable
 
     static void Write(string modDir, string rel, string text)
     {
-        var path = Path.Combine(modDir, rel);
+        var path = HousecarlCore.BethesdaPath.Under(modDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllText(path, text);
     }

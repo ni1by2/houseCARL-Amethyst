@@ -30,7 +30,9 @@ public sealed class ServerFixture : IDisposable
     internal TimeSpan RpcTimeout { get; set; } = TimeSpan.FromSeconds(60);
 
     /// <summary>The trained prompt an unconfigured server gives once a tool BODY runs.</summary>
-    public const string ConfigPrompt = "no Mod Organizer 2 instance configured";
+    public static string ConfigPrompt => OperatingSystem.IsLinux()
+        ? "select an Amethyst connection and explicitly enable warned reads"
+        : "no Mod Organizer 2 instance configured";
 
     /// <summary>The SDK's generic bind failure — the answer a caller gets when the body never ran.</summary>
     public const string GenericError = "An error occurred invoking";
@@ -126,13 +128,24 @@ public sealed class ServerFixture : IDisposable
         return new CallResult(isError, blocks, blockType, text ?? "", result);
     }
 
+    /// <summary>Use the test world's original records/assets in a real saved Amethyst catalog.</summary>
+    public CallResult ConfigureFixture(string instance)
+    {
+        var connection = new AmethystFixtureConnection(instance);
+        return Call(ToolNames.SetAmethystConnection, JsonSerializer.Serialize(new
+        { manifest_path = connection.Manifest, filegraph_mode = "saved-snapshot" }));
+    }
+
     /// <summary>A tools/call response, decomposed into the values a test can assert on.</summary>
     public readonly record struct CallResult(bool IsError, int ContentBlocks, string? FirstBlockType,
                                              string Text, JsonElement Raw)
     {
         /// <summary>True when the tool BODY ran: the unconfigured server's own prompt came back.</summary>
         public bool BodyRan => !Text.Contains(GenericError, StringComparison.Ordinal)
-                            && Text.Contains(ConfigPrompt, StringComparison.Ordinal);
+                            && (Text.Contains(ConfigPrompt, StringComparison.Ordinal)
+                                || Raw.TryGetProperty("structuredContent", out var structured)
+                                   && structured.ValueKind == JsonValueKind.Object
+                                   && structured.TryGetProperty("amethyst_snapshot", out _));
 
         public string Describe() => $"isError={IsError} blocks={ContentBlocks} type={FirstBlockType} " +
                                     $"text=\"{(Text.Length > 200 ? Text[..200] + "…" : Text)}\"";

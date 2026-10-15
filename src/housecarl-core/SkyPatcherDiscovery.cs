@@ -136,7 +136,7 @@ public static class SkyPatcherDiscovery
     /// <summary>The plugin a filename gates on: 'Skyrim.esm.ini' to "Skyrim.esm", 'myEdits.ini' to null, off the shared <see cref="PluginFile.Extensions"/> list.</summary>
     public static string? GatePluginOf(string relPath)
     {
-        var stem = Path.GetFileNameWithoutExtension(relPath);   // strips the '.ini'
+        var stem = Path.GetFileNameWithoutExtension(BethesdaPath.FileName(relPath));   // strips the '.ini' from the virtual-path leaf
         var ext = Path.GetExtension(stem);
         return PluginFile.Extensions.Any(e => ext.Equals(e, StringComparison.OrdinalIgnoreCase)) ? stem : null;
     }

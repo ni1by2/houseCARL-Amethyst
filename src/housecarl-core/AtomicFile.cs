@@ -3,6 +3,7 @@ namespace HousecarlCore;
 /// <summary>Atomic file commit — the <c>File.Replace</c> swap every houseCARL write's FINAL step funnels through; contract in docs/architecture/output-and-artifacts.md.</summary>
 public static class AtomicFile
 {
+    internal static readonly AsyncLocal<Action<string, string>?> BeforeCommitForTest = new();
     /// <summary>Atomically write <paramref name="bytes"/> to <paramref name="finalPath"/> via a sibling temp; throws on any failure, leaving the prior file byte-intact.</summary>
     public static void WriteAllBytes(string finalPath, byte[] bytes)
     {
@@ -23,6 +24,9 @@ public static class AtomicFile
     /// <summary>Commit a fully-written <paramref name="stagedPath"/> onto <paramref name="finalPath"/>, which must be on the same volume; throws rather than degrading.</summary>
     public static void Commit(string stagedPath, string finalPath)
     {
+        if (OperatingSystem.IsLinux() && File.Exists(finalPath))
+            File.SetUnixFileMode(stagedPath, File.GetUnixFileMode(finalPath));
+        BeforeCommitForTest.Value?.Invoke(stagedPath, finalPath);
         try
         {
             File.Replace(stagedPath, finalPath, destinationBackupFileName: null);

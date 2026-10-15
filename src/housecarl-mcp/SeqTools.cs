@@ -1,5 +1,6 @@
 using System.ComponentModel;
 using System.Text;
+using HousecarlCore;
 using ModelContextProtocol.Server;
 
 namespace HousecarlMcp;
@@ -30,7 +31,7 @@ public static class SeqTools
             string? patch = null,
         [Description("Filename of an existing houseCARL patch mod to write the .seq into (e.g. the patch holding the .esp). Not with patch=.")]
             string? into = null,
-        [Description("Absolute path to a mod-folder root of your choosing, typically the plugin's own mod after an in-place edit; houseCARL appends SEQ\\ unless the path already ends in it. patch= and into= are then ignored. An existing .seq there is overwritten with no backup (the reply says 'replaced'). The game reads .seq files only from <mods>\\<YourMod>\\SEQ, the MO2 overwrite folder or <Data>\\SEQ; anywhere else, including a nested folder under a mod, the file is still written with a warning that it will not be read.")]
+        [Description("Absolute path to a mod-folder root of your choosing, typically the plugin's own mod after an in-place edit; houseCARL appends SEQ\\ unless the path already ends in it. patch= and into= are then ignored. An existing .seq there is overwritten with no backup (the reply says 'replaced'). The game reads .seq files only from a mod's SEQ\\ folder, the selected manager's overwrite folder or <Data>\\SEQ; elsewhere, the file is still written with a warning that it will not be read.")]
             string? out_path = null,
         [Description("'text' (default) or 'json' (the same data, machine-readable).")]
             string? format = null,
@@ -108,11 +109,17 @@ public static class SeqTools
               .Append(o.PluginPath is { Length: > 0 } p ? $" ({p})" : "").Append('\n');
         sb.Append("path: ").Append(o.SeqPath).Append('\n');
         // Where the file landed decides the next step, so the three destinations get three different sentences.
-        sb.Append(o.UserChoseOutput
-            ? "the .seq is in the folder you named (out_path) — no houseCARL mod folder was created; make sure that mod is enabled in MO2 so the game reads Data\\SEQ\\."
-            : o.WroteIntoPluginFolder
-                ? "the .seq is in the plugin's OWN houseCARL folder — enabling that one mod in MO2 deploys both the .esp and its .seq."
-                : "the .seq is in a houseCARL mod folder — enable it in MO2 (AND make sure the plugin itself is enabled) so the game reads Data\\SEQ\\.");
+        sb.Append(AmethystSnapshotContext.Current is not null
+            ? o.UserChoseOutput
+                ? "the .seq is in the folder you named (out_path) — no houseCARL mod folder was created; activate its mod and plugin in Amethyst's selected profile, then Refresh and Deploy."
+                : o.WroteIntoPluginFolder
+                    ? "the .seq is in the plugin's OWN houseCARL folder — activate that plugin and folder in Amethyst's selected profile, then Refresh and Deploy."
+                    : "the .seq is in a houseCARL staging folder — activate it and the plugin in Amethyst's selected profile, then Refresh and Deploy."
+            : o.UserChoseOutput
+                ? "the .seq is in the folder you named (out_path) — no houseCARL mod folder was created; make sure that mod is enabled in MO2 so the game reads Data\\SEQ\\."
+                : o.WroteIntoPluginFolder
+                    ? "the .seq is in the plugin's OWN houseCARL folder — enabling that one mod in MO2 deploys both the .esp and its .seq."
+                    : "the .seq is in a houseCARL mod folder — enable it in MO2 (AND make sure the plugin itself is enabled) so the game reads Data\\SEQ\\.");
         // A skipped write still refreshes the timestamp, keeping the SEQ lint in agreement with this call.
         if (o.TimestampRefreshed)
             // The claim is only that THIS file is now newer than the plugin, not what the VFS serves the lint.

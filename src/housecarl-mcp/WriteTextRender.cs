@@ -385,7 +385,7 @@ static partial class WriteTools
         var sb = new StringBuilder();
         sb.Append("wrote ").Append(file).Append(o.Esl ? " (header-only, ESL-flagged; " : " (header-only; ")
           .Append(o.Bytes).Append(" bytes, ").Append(o.RecordCount).Append(o.RecordCount == 1 ? " record)\n" : " records)\n");
-        sb.Append("mod folder: ").Append(modFolder).Append("  — enable it in MO2 to use it\n");
+        sb.Append(ManagerPresentation.NewPluginFolder(modFolder));
         sb.Append(WriteSentences.Masters(o.Masters));
         sb.Append("this is a trigger/placeholder plugin: it carries no records, so it changes nothing in game by itself — ")
           .Append("its only job is to make the basename '").Append(Path.GetFileNameWithoutExtension(file))
@@ -607,7 +607,7 @@ static partial class WriteTools
         else
             sb.Append("wrote merged ").Append(file).Append(" (new plugin; ").Append(o.Bytes).Append(" bytes) from ")
               .Append(o.Donors.Count).Append(" donors: ").Append(string.Join(", ", o.Donors)).Append('\n');
-        sb.Append("mod folder: ").Append(modFolder).Append("  — review in xEdit, then enable it in MO2 (MO2 adds a newly activated plugin at the END of the load order).\n");
+        sb.Append(ManagerPresentation.MergedPluginFolder(modFolder));
         AppendPlacement(sb, o);
         // The swap is PLUGIN-level, not mod-level; contract in docs/architecture/write-path.md.
         sb.Append("the swap: deactivate the donor PLUGINS (right pane) — their files are untouched — but KEEP the donor mod ")

@@ -22,7 +22,7 @@ public sealed class BsaPackContractTests : IDisposable
         _root = Path.Combine(Path.GetTempPath(), "hc-bsa-contract-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(_root);
         _stub = Path.Combine(_root, "bsarch.exe");
-        File.Copy(Path.Combine(Environment.SystemDirectory, "where.exe"), _stub);
+        File.WriteAllText(_stub, "controlled packer placeholder");
         _packDir = Path.Combine(_root, "pack");
         Directory.CreateDirectory(_packDir);
         _target = Path.Combine(_packDir, "Out.bsa");
@@ -38,8 +38,8 @@ public sealed class BsaPackContractTests : IDisposable
     public void AStuckStaleScratchRefusesBeforeRunningAndLeavesThePriorArchive()
     {
         BsaPackResult rp;
-        using (File.Open(_stale, FileMode.Open, FileAccess.Read, FileShare.None))
-            rp = BsaArchive.Pack(_stub, _packDir, _target, "-sse", compress: false, timeoutMs: 30_000);
+        using (new WriteBlock(_stale))
+            rp = BsaArchive.Pack(_stub, _packDir, _target, "-sse", compress: false, timeoutMs: 30_000, packer: (_, _, _, _, _, _) => (exit: 17, stdout: "", stderr: "controlled pack failure", runError: null));
 
         Assert.False(rp.Success);
         Assert.False(rp.Ran);
@@ -52,7 +52,7 @@ public sealed class BsaPackContractTests : IDisposable
     [Fact]
     public void AFailingPackerAfterADeletableStaleScratchRefusesNamingTheExitCode()
     {
-        var rp = BsaArchive.Pack(_stub, _packDir, _target, "-sse", compress: false, timeoutMs: 30_000);
+        var rp = BsaArchive.Pack(_stub, _packDir, _target, "-sse", compress: false, timeoutMs: 30_000, packer: (_, _, _, _, _, _) => (exit: 17, stdout: "", stderr: "controlled pack failure", runError: null));
 
         Assert.False(rp.Success);
         Assert.Contains("exited with code", rp.RunError);

@@ -70,6 +70,31 @@ public static class PapyrusClassParents
         return new PscHeaderScan(added, seen, failed, rootsUnreadable);
     }
 
+    /// <summary>Build hierarchy edges from bytes already captured by an Amethyst snapshot.</summary>
+    public static PscHeaderScan AddFromCapturedPscHeaders(Dictionary<string, string> edges, IEnumerable<(string Path, byte[] Bytes)> files)
+    {
+        int added = 0, seen = 0, failed = 0;
+        foreach (var (path, bytes) in files)
+        {
+            seen++;
+            try
+            {
+                using var reader = new StringReader(System.Text.Encoding.UTF8.GetString(bytes));
+                for (var i = 0; i < 20; i++)
+                {
+                    var line = reader.ReadLine();
+                    if (line is null) break;
+                    var m = ExtendsRx.Match(line);
+                    if (!m.Success) continue;
+                    if (edges.TryAdd(m.Groups[1].Value, m.Groups[2].Value)) added++;
+                    break;
+                }
+            }
+            catch { failed++; }
+        }
+        return new PscHeaderScan(added, seen, failed, 0);
+    }
+
     /// <summary>Top up from a parsed pex's own object→parent declarations.</summary>
     public static int AddFromPex(Dictionary<string, string> edges, PexFile pex)
     {
@@ -105,5 +130,21 @@ public static class PapyrusClassParents
         }
         catch { return new PexFolderScan(added, seen, failed, false, true); }
         return new PexFolderScan(added, seen, failed, false, false);
+    }
+
+    /// <summary>Build sibling PEX hierarchy edges from bytes already captured by an Amethyst snapshot.</summary>
+    public static PexFolderScan AddFromCapturedPexFolder(Dictionary<string, string> edges, IReadOnlyList<(string Path, byte[] Bytes)> files)
+    {
+        int added = 0, failed = 0;
+        foreach (var (_, bytes) in files)
+        {
+            try
+            {
+                using var stream = new MemoryStream(bytes, writable: false);
+                added += AddFromPex(edges, PexFile.CreateFromStream(stream, GameCategory.Skyrim));
+            }
+            catch { failed++; }
+        }
+        return new PexFolderScan(added, files.Count, failed, false, false);
     }
 }

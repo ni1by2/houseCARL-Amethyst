@@ -75,7 +75,7 @@ public sealed class SkyPatcherConflictsTests
         Cross.Conflicts.FirstOrDefault(c => c.Field == field);
 
     static SkyPatcherConflicts.SkyPatcherItm? Itm(string field, string file) =>
-        Itms.FirstOrDefault(m => m.Field == field && Path.GetFileName(m.File) == file);
+        Itms.FirstOrDefault(m => m.Field == field && BethesdaPath.FileName(m.File) == file);
 
     // ---- cross-file conflicts and duplicates ----
 
@@ -118,7 +118,7 @@ public sealed class SkyPatcherConflictsTests
     {
         var dup = Cross.Duplicates.FirstOrDefault(x => x.Field == "BasicStats.Weight");
         Assert.NotNull(dup);
-        Assert.Equal(new[] { "a.ini", "m.ini" }, dup!.Entries.Select(e => Path.GetFileName(e.File)));
+        Assert.Equal(new[] { "a.ini", "m.ini" }, dup!.Entries.Select(e => BethesdaPath.FileName(e.File)));
     }
 
     // a value-MIXED group stays a conflict only, never double-reported as a duplicate
@@ -205,7 +205,7 @@ public sealed class SkyPatcherConflictsTests
     [Fact]
     public void BroadVsBroadInOneFileIsDead()
     {
-        var g = Assert.Single(Itms, m => Path.GetFileName(m.File) == "g.ini");
+        var g = Assert.Single(Itms, m => BethesdaPath.FileName(m.File) == "g.ini");
         Assert.Equal("BasicStats.Damage", g.Field);
         var e = Assert.Single(g.Entries);
         Assert.Equal(1, e.Line);

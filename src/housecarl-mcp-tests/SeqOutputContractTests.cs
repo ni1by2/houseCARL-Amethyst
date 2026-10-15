@@ -14,14 +14,14 @@ public sealed class SeqOutputContractTests
     const string Mods = @"C:\MO2\mods", Data = @"C:\Game\Skyrim Special Edition\Data", Over = @"C:\MO2\overwrite";
 
     static (string seqDir, bool appendedSeq, string? deployWarning) Contract(string outDir, string overwrite = "")
-        => OutputLocations.SeqOutputContract(outDir, Mods, Data, overwrite);
+        => OutputLocations.SeqOutputContract(NativeTestPath.Of(outDir), NativeTestPath.Of(Mods), NativeTestPath.Of(Data), NativeTestPath.Of(overwrite));
 
     // Probe PURE-SEQ-CONTRACT: "SEQ\ appended once" (a bare root).
     [Fact]
     public void ABareRootGetsSeqAppended()
     {
         var c = Contract(@"C:\MyMod");
-        Assert.Equal(@"C:\MyMod\SEQ", c.seqDir);
+        Assert.Equal(NativeTestPath.Of(@"C:\MyMod\SEQ"), c.seqDir);
         Assert.True(c.appendedSeq);
     }
 
@@ -32,7 +32,7 @@ public sealed class SeqOutputContractTests
     public void ARootAlreadyEndingInSeqIsNotDoubled(string given, string want)
     {
         var c = Contract(given);
-        Assert.Equal(want, c.seqDir);
+        Assert.Equal(NativeTestPath.Of(want), c.seqDir);
         Assert.False(c.appendedSeq);
     }
 
@@ -48,7 +48,7 @@ public sealed class SeqOutputContractTests
     [Fact]
     public void ADriveRootKeepsItsSeparator()
     {
-        Assert.Equal(@"C:\SEQ", Contract(@"C:\").seqDir);
+        Assert.Equal(NativeTestPath.Of(@"C:\SEQ"), Contract(@"C:\").seqDir);
     }
 
     // Probe PURE-SEQ-DEPLOY: "<mods>\<mod>\SEQ and <data>\SEQ deploy".

@@ -19,7 +19,7 @@ public static class StagingTools
             new { transactions = new AmethystTransactionCoordinator().Status(transaction_id).Take(20) }, Json));
 
     [McpServerTool(Name = ToolNames.StagingManage, Title = "Manage one staging transaction"),
-     Description("Recover, resume, roll back or verify exactly one transaction. This never starts or stops Amethyst or the game. Managed mutations require Amethyst's existing filegraph lock and can return manager_close_required. Verification remains unavailable until the refreshed native evidence adapter is connected.")]
+     Description("Recover, resume, roll back or verify exactly one transaction. Verification checks a fresh saved Amethyst snapshot and actual deployed winners/hashes. For a shared staging library, select, Refresh and Deploy each listed profile, then run verify again until all are checked; recovery copies remain until then. This never starts or stops Amethyst or the game. Managed mutations require Amethyst's existing filegraph lock and can return manager_close_required.")]
     public static string StagingManage(
         [Description("Exact 32-character transaction UUID. Wildcard management is not supported.")] string transaction_id,
         [Description("One of: verify, recover, resume, rollback.")] string action,

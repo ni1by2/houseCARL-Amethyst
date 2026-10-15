@@ -22,7 +22,7 @@ public sealed class NifSetServiceLaneTests
         using var w = new NifSetInstance(Mesh);
         var res = w.Svc.NifSet(MeshRel, Flags(), null, "FaceFix", null, inPlace: false, acknowledge: false);
         Assert.Null(res.Error);
-        var placed = Path.Combine(res.OutputModFolder!, MeshRel);
+        var placed = HousecarlCore.BethesdaPath.Under(res.OutputModFolder!, MeshRel);
         Assert.Equal(0x800000Eu, ShapeOf(File.ReadAllBytes(placed), "GuardShape")!.Flags);
     }
 
@@ -117,9 +117,10 @@ public sealed class NifSetServiceLaneTests
     /// <summary>Runs the #378 arm: with the loose mesh held open for reading, one call without acknowledge and one with.</summary>
     static (bool GateFirst, NifSetResult Blocked, bool Spent, bool Untouched) HeldTarget(NifSetInstance w)
     {
-        using var hold = new FileStream(w.LoosePath, FileMode.Open, FileAccess.Read, FileShare.Read);
+        using var hold = new CommitFault(w.LoosePath);
         var gateFirst = w.Svc.NifSet(MeshRel, Flags(), null, null, null, inPlace: true, acknowledge: false).NeedsAcknowledge;
         var blocked = w.Svc.NifSet(MeshRel, Flags(), null, null, null, inPlace: true, acknowledge: true);
+        Assert.True(hold.Reached, "the failure must occur after the edited mesh is staged");
         var spent = new UserConfigStore(w.StorePath).IsInPlaceAcknowledged(w.LoosePath);
         return (gateFirst, blocked, spent, File.ReadAllBytes(w.LoosePath).SequenceEqual(Mesh));
     }

@@ -130,18 +130,23 @@ public sealed class NativePairingProvenanceTests
         Assert.Equal(NativePairingRung.Unpaired, c.Rung);
     }
 
+    static readonly string LayerRoot = Path.Combine(Path.GetTempPath(), "hc-native-pairing-" + Guid.NewGuid().ToString("N"));
+    static readonly string LayerData = Path.Combine(LayerRoot, "game", "Data");
+    static readonly string LayerMods = Path.Combine(LayerRoot, "mods");
+    static readonly string LayerOverwrite = Path.Combine(LayerRoot, "overwrite");
+
     static string? Layer(string archivePath) =>
-        PluginPaths.LayerOfInstallPath(archivePath, new Mo2Roots(ProfileDir: "", DataDir: @"D:\g\Data", ModsDir: @"E:\mo2\mods", OverwriteDir: @"E:\mo2\overwrite"));
+        PluginPaths.LayerOfInstallPath(archivePath, new Mo2Roots(ProfileDir: "", DataDir: LayerData, ModsDir: LayerMods, OverwriteDir: LayerOverwrite));
 
     [Fact] // probe: "archive under mods\<mod>\ → that mod"
-    public void AnArchiveUnderAModFolderIsThatMod() => Assert.Equal("moreHUD SE", Layer(@"E:\mo2\mods\moreHUD SE\AHZmoreHUD.bsa"));
+    public void AnArchiveUnderAModFolderIsThatMod() => Assert.Equal("moreHUD SE", Layer(Path.Combine(LayerMods, "moreHUD SE", "AHZmoreHUD.bsa")));
 
     [Fact] // probe: "archive in the overwrite layer → 'overwrite'"
-    public void AnArchiveInOverwriteIsOverwrite() => Assert.Equal("overwrite", Layer(@"E:\mo2\overwrite\X.bsa"));
+    public void AnArchiveInOverwriteIsOverwrite() => Assert.Equal("overwrite", Layer(Path.Combine(LayerOverwrite, "X.bsa")));
 
     [Fact] // probe: "archive in game Data → 'Data'"
-    public void AnArchiveInGameDataIsData() => Assert.Equal("Data", Layer(@"D:\g\Data\Skyrim - Misc.bsa"));
+    public void AnArchiveInGameDataIsData() => Assert.Equal("Data", Layer(Path.Combine(LayerData, "Skyrim - Misc.bsa")));
 
     [Fact] // probe: "archive nowhere under the roots → null (no translation)"
-    public void AnArchiveOutsideEveryRootHasNoLayer() => Assert.Null(Layer(@"C:\elsewhere\X.bsa"));
+    public void AnArchiveOutsideEveryRootHasNoLayer() => Assert.Null(Layer(Path.Combine(LayerRoot, "elsewhere", "X.bsa")));
 }

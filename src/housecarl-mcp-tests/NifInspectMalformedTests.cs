@@ -96,8 +96,9 @@ public sealed class MalformedMeshWorld : IDisposable
             {
                 RpcTimeout = TimeSpan.FromSeconds(30),
             };
-            var set = server.Call(ToolNames.SetMo2Instance, $$"""{"path": {{JsonSerializer.Serialize(instance)}}}""");
-            Assert.Contains("configured houseCARL -> MO2 instance", set.Text, StringComparison.Ordinal);
+            var set = server.ConfigureFixture(instance);
+        Assert.False(set.IsError, set.Describe());
+        Assert.Contains("saved-snapshot", set.Text, StringComparison.Ordinal);
             _server = server;
         }
         catch
@@ -189,7 +190,7 @@ public sealed class MalformedMeshWorld : IDisposable
 
     static void WriteMesh(string mod, string rel, byte[] bytes)
     {
-        var path = Path.Combine(mod, rel);
+        var path = BethesdaPath.Under(mod, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, bytes);
     }

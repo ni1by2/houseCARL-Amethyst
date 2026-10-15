@@ -106,7 +106,23 @@ public sealed class SkyPatcherDiscoveryTests : IDisposable
         var gated = Assert.Single(Folder(Scan(), "weapon").Files, f => f.SortKey == "Gated.esp.ini");
         Assert.Null(gated.NotApplied);
         Assert.Equal("Gated.esp", gated.GatePlugin);
+        Assert.Contains(SkyPatcherDiscovery.OrderedLines(Folder(Scan(), "weapon")),
+            line => line.File.EndsWith("Gated.esp.ini", StringComparison.OrdinalIgnoreCase));
     }
+
+    [Theory]
+    [InlineData(@"SKSE\Plugins\SkyPatcher\weapon\Gated.esp.ini", "Gated.esp")]
+    [InlineData("SKSE/Plugins/SkyPatcher/weapon/nested/Gated.Release.esl.ini", "Gated.Release.esl")]
+    [InlineData(@"SKSE\Plugins\SkyPatcher\weapon\Core.esm.ini", "Core.esm")]
+    [InlineData(@"SKSE\Plugins\SkyPatcher\weapon\UPPER.ESP.INI", "UPPER.ESP")]
+    public void PluginGateComesFromTheVirtualPathLeaf(string path, string expected) =>
+        Assert.Equal(expected, SkyPatcherDiscovery.GatePluginOf(path));
+
+    [Theory]
+    [InlineData(@"SKSE\Plugins\SkyPatcher\weapon\ordinary.ini")]
+    [InlineData(@"folder.named.esp\SKSE\Plugins\SkyPatcher\weapon\ordinary.ini")]
+    public void OrdinaryIniAndPluginNamedDirectoriesAreNotGated(string path) =>
+        Assert.Null(SkyPatcherDiscovery.GatePluginOf(path));
 
     // Absent.esp.ini is NotApplied, reason names the gate; …but its content is still inspectable (parsed lines kept)
     [Fact]
@@ -124,6 +140,7 @@ public sealed class SkyPatcherDiscoveryTests : IDisposable
         var lines = SkyPatcherDiscovery.OrderedLines(Folder(Scan(), "weapon"));
 
         Assert.DoesNotContain(lines, l => l.File.EndsWith("Absent.esp.ini", StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(lines, l => l.File.EndsWith("Gated.esp.ini", StringComparison.OrdinalIgnoreCase));
         Assert.EndsWith("a.ini", lines[0].File, StringComparison.OrdinalIgnoreCase);
         Assert.Equal(1, lines[0].LineNumber);
     }

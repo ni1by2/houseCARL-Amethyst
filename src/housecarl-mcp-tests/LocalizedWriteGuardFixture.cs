@@ -232,18 +232,8 @@ public sealed class LocalizedWriteGuardFixture : IDisposable
     /// <summary>Deny LISTING (not traverse) on <paramref name="dir"/> until disposed; false when the deny did not bite on this host.</summary>
     public bool DenyListing(string dir)
     {
-        if (!OperatingSystem.IsWindows()) return false;
-        var di = new DirectoryInfo(dir);
-        var sec = di.GetAccessControl();
-        sec.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().Name, FileSystemRights.ListDirectory,
-                                                   AccessControlType.Deny));
-        di.SetAccessControl(sec);
         _denied.Add(dir);
-        if (!Directory.Exists(dir)) return false;
-        try { Directory.EnumerateFiles(dir).ToList(); }
-        catch (UnauthorizedAccessException) { return true; }
-        catch (IOException) { return true; }
-        return false;
+        return DenyAce.TryDeny(dir, listingOnly: true);
     }
 
     /// <summary>Lift a deny <see cref="DenyListing"/> added.</summary>
@@ -255,11 +245,6 @@ public sealed class LocalizedWriteGuardFixture : IDisposable
 
     static void Undeny(string dir)
     {
-        if (!OperatingSystem.IsWindows()) return;
-        var di = new DirectoryInfo(dir);
-        var sec = di.GetAccessControl();
-        sec.RemoveAccessRuleAll(new FileSystemAccessRule(WindowsIdentity.GetCurrent().Name, FileSystemRights.ListDirectory,
-                                                         AccessControlType.Deny));
-        di.SetAccessControl(sec);
+        DenyAce.Undeny(dir);
     }
 }

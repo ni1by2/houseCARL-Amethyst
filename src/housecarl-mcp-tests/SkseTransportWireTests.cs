@@ -57,9 +57,9 @@ public sealed class SkseTransportWireTests : IDisposable
     ServerFixture Configured()
     {
         var server = new ServerFixture();
-        var set = server.Call(ToolNames.SetMo2Instance,
-            $$"""{"path": {{JsonSerializer.Serialize(_instance)}}}""");
-        Assert.Contains($"configured houseCARL -> MO2 instance '{_instance}'", set.Text, StringComparison.Ordinal);
+        var set = server.ConfigureFixture(_instance);
+        Assert.False(set.IsError, set.Describe());
+        Assert.Contains("saved-snapshot", set.Text, StringComparison.Ordinal);
         return server;
     }
 

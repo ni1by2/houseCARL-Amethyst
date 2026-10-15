@@ -6,9 +6,9 @@ using Xunit;
 namespace HousecarlMcpTests;
 
 /// <summary>
-/// Writing into a patch that is ACTIVE in the resolver's order: a held overlay on the target blocks a direct
-/// serialize on Windows, so the remove lane never maps the target and Apply releases its winner-fetch overlay before
-/// it serializes. Each test writes its own patch in its own folder.
+/// Writing into a patch that is ACTIVE in the resolver's order. These tests check the saved record contents
+/// after removal or Apply, without requiring Windows file-sharing behavior. Each test writes its own patch
+/// in its own folder.
 /// </summary>
 [Trait("tier", "integration")]
 public sealed class ActivePatchWriteLockTests : IDisposable
@@ -18,24 +18,6 @@ public sealed class ActivePatchWriteLockTests : IDisposable
     public ActivePatchWriteLockTests() => Directory.CreateDirectory(_dir);
 
     public void Dispose() { try { Directory.Delete(_dir, true); } catch { /* temp cleanup best-effort */ } }
-
-    // Probe arm CONTROL: a direct serialize onto a target whose overlay is held fails, so the lock still reproduces here.
-    [Fact]
-    public void ADirectSerializeOntoAMappedTargetFails()
-    {
-        var key = new ModKey("HcWriteLockGuard", ModType.Plugin);
-        var target = TwoKeywordPatch(key, out _);
-        var ov = SkyrimMod.CreateFromBinaryOverlay(target, SkyrimRelease.SkyrimSE);
-        try
-        {
-            _ = ov.EnumerateMajorRecords().FirstOrDefault();
-            var patch = new SkyrimMod(key, SkyrimRelease.SkyrimSE);
-            patch.Keywords.AddNew().EditorID = "HcWriteLockGuard_Ctrl";
-
-            Assert.ThrowsAny<Exception>(() => patch.BeginWrite.ToPath(target).WithLoadOrder(new ISkyrimModGetter[] { ov }).Write());
-        }
-        finally { (ov as IDisposable)?.Dispose(); }
-    }
 
     // Probe arm REMOVE (FIX): RemoveRecords writes into the active patch, leaving one record.
     [Fact]

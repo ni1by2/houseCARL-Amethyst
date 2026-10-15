@@ -248,21 +248,33 @@ public sealed class AmethystSnapshotWireTests
     [Fact]
     public void MergeBuildsNewPluginAndMetadataInsideOneTransactionGroup()
     {
-        using var world = new AmethystSnapshotWorld();
+        using var world = new AmethystSnapshotWorld(voiceLine: true);
         File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.False(snapshot.Provenance.VanillaArchivesOmitted,
+            $"voice-carry fixture must provide complete archive coverage; effective INI directory: {snapshot.EffectiveIniDir ?? "<missing>"}");
         var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
+        var voice = Path.Combine(world.Root, "mods", "Beta", "Sound", "Voice", "Fixture.esp", "MaleEvenToned", "HcQ_HcT_00000A11_1.fuz");
         var original = File.ReadAllBytes(source);
+        var originalVoice = File.ReadAllBytes(voice);
         using var server = new ServerFixture(EnvironmentFor(world, true));
         var result = server.Call(ToolNames.MergePlugins, "{\"plugins\":[\"Fixture.esp\"],\"patch\":\"TxnMerge\"}");
         Assert.False(result.IsError, result.Text);
         var output = Path.Combine(world.Root, "mods", "houseCARL - TxnMerge", "TxnMerge.esp");
         Assert.True(File.Exists(output));
-        Assert.Equal(original, File.ReadAllBytes(source));
         var meta = File.ReadAllText(Path.Combine(Path.GetDirectoryName(output)!, "meta.ini"));
         Assert.Contains("pendingDeployment=true", meta);
         Assert.Contains("patchSha256=", meta);
         Assert.True(result.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging")
             .GetProperty("transaction_id").GetString() is { Length: 32 });
+        var staged = SkyrimMod.CreateFromBinary(output, SkyrimRelease.SkyrimSE);
+        var info = Assert.Single(Assert.Single(staged.DialogTopics).Responses);
+        var relativeVoice = VoicePath.For(info.FormKey, "MaleEvenToned", "HcQ", "HcT", 1, VoiceFile.Fuz);
+        Assert.True(BethesdaPath.TryResolveExisting(Path.GetDirectoryName(output)!, relativeVoice, out var destinationVoice),
+            $"expected merged voice at '{relativeVoice}' using Skyrim's case-insensitive path semantics");
+        Assert.Equal(originalVoice, File.ReadAllBytes(destinationVoice));
+        Assert.Equal(original, File.ReadAllBytes(source));
+        Assert.Equal(originalVoice, File.ReadAllBytes(voice));
     }
 
     [Fact]

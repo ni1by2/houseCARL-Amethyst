@@ -1,5 +1,6 @@
 using Xunit;
 using Xunit.Abstractions;
+using HousecarlMcp;
 
 namespace HousecarlMcpTests;
 
@@ -47,15 +48,45 @@ public sealed class ServerInstructionsTests
 
     [Theory]
     [InlineData("RUNTIME DISTRIBUTION LAYERS")]
-    [InlineData("NOTHING houseCARL WRITES WINS UNTIL IT IS ENABLED")]
     [InlineData("NEVER COPY GENERATED OUTPUT")]
-    public void EachFoldedFactIsStatedOnce(string lead)
+    public void BothPlatformVariantsFitAndStateSharedRulesOnce(string lead)
     {
-        var text = _s.PublishedInstructions;
-        var occurrences = text.Split(lead).Length - 1;
+        foreach (var amethyst in new[] { false, true })
+        {
+            var text = ServerInstructionsText.Build(amethyst);
+            Assert.True(text.Length <= PublishedDescriptionBoundTests.Bound,
+                $"The {(amethyst ? "Amethyst" : "MO2")} instructions contain {text.Length} characters.");
+            Assert.Equal(1, text.Split(lead).Length - 1);
+        }
+    }
 
-        Assert.True(occurrences == 1,
-            $"'{lead}' appears {occurrences} time(s) in the published instructions; it is one of the three " +
-            "cross-skill facts the standing context carries, and it belongs there exactly once.");
+    [Fact]
+    public void ServedInstructionsUseTheCurrentPlatformText()
+    {
+        Assert.Equal(ServerInstructionsText.Build(OperatingSystem.IsLinux()), _s.PublishedInstructions);
+    }
+
+    [Fact]
+    public void AmethystGuidanceDescribesFreshnessStagingAndConsentAccurately()
+    {
+        var text = ServerInstructionsText.Build(amethyst: true);
+
+        Assert.Contains("freshness warning", text);
+        Assert.Contains("saved profile/generation", text);
+        Assert.Contains("new staging mod", text);
+        Assert.Contains("per-plugin and per-call consent", text);
+        Assert.Contains("may be immediately visible", text);
+        Assert.Contains("does not prove what the game has loaded", text);
+        Assert.DoesNotContain("not available yet", text);
+    }
+
+    [Fact]
+    public void LiveMo2GuidanceExplainsNewAndExistingModPlacement()
+    {
+        var text = ServerInstructionsText.Build(amethyst: false);
+
+        Assert.Contains("A new mod folder loads last", text);
+        Assert.Contains("existing-folder write keeps its priority", text);
+        Assert.Contains("only when their mod is enabled in MO2", text);
     }
 }

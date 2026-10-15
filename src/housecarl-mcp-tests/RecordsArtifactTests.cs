@@ -161,7 +161,7 @@ public sealed class RecordsArtifactTests : ArtifactTestBase, IClassFixture<Artif
         File.WriteAllText(art, mine);
 
         // Held without share-delete: the temp writes fine and the move onto this file is what fails.
-        using (new FileStream(art, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (new CommitFault(art))
         {
             var r = RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: art);
             Assert.Contains("could not write the result artifact", r);

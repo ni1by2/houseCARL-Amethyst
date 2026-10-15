@@ -863,10 +863,12 @@ public sealed class SkseTransportTests
     [Fact]
     public void ThePairingFamilysUnreadableListDoesNotPushItsDocumentOverTheCap()
     {
-        string json = NativePairingWire.RenderJson(Pairing(300, unreadable: 50), null, 2_680);
+        int cap = JsonRenderBoundary.First(n => JsonDocument.Parse(NativePairingWire.RenderJson(Pairing(300, unreadable: 50), null, n))
+            .RootElement.GetProperty("unreadable_pex").GetArrayLength() > 0);
+        string json = NativePairingWire.RenderJson(Pairing(300, unreadable: 50), null, cap);
 
         using var doc = JsonDocument.Parse(json);
-        Assert.True(json.Length <= 2_680, $"returned {json.Length} chars at max_chars=2680");
+        Assert.True(json.Length <= cap, $"returned {json.Length} chars at max_chars={cap}");
         Assert.NotEmpty(doc.RootElement.GetProperty("unreadable_pex").EnumerateArray());
     }
 

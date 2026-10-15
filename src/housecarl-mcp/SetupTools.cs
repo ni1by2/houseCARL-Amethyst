@@ -34,17 +34,18 @@ public static class SetupTools
 
     [McpServerTool(Name = ToolNames.SetToolPath, Title = "Tell houseCARL where an external tool is"),
      Description(
-         "Give houseCARL the path to an external tool or log folder it uses: the Creation Kit's PapyrusCompiler.exe " +
+         "Give houseCARL the path to an external tool or log folder it uses: the Creation Kit's PapyrusCompiler.exe, " +
+         "native Linux Caprica or Champollion, " +
          "(compiling .psc to .pex), BSArch.exe (packing .bsa archives with " + ToolNames.BsaRepack + "), or the Papyrus " +
          "script-log or SKSE crash-log folder. The compiler and the log folders are auto-detected in their usual " +
-         "homes, so this is mostly needed for BSArch or a non-standard install. The path is checked (the .exe exists " +
+         "homes, so this is mostly needed for native Papyrus tools, BSArch or a non-standard install. The path is checked (the executable exists " +
          "and its name contains the tool's name; a log folder exists) and nothing is saved on failure; on success " +
          "it is saved to houseCARL.user.json for later sessions (a failed save is reported).")]
     public static string SetToolPath(
         ToolPathResolver bridge,
-        [Description("Which tool: 'papyrus_compiler' (CK PapyrusCompiler.exe), 'bsarch' (BSArch.exe), 'papyrus_logs' (script-log folder), or 'crash_logs' (SKSE crash-log folder).")]
+        [Description("Which tool: 'papyrus_compiler' (CK compiler), 'caprica' (native Linux compiler), 'champollion' (native Linux decompiler), 'bsarch', 'papyrus_logs', or 'crash_logs'.")]
             string tool,
-        [Description("Full path to the tool: the .exe FILE for papyrus_compiler/bsarch, or the log DIRECTORY for papyrus_logs/crash_logs.")]
+        [Description("Full path to the executable for papyrus_compiler/caprica/champollion/bsarch, or the log DIRECTORY for papyrus_logs/crash_logs.")]
             string path) => Guard.Tool(ToolNames.SetToolPath, () =>
     {
         if (string.IsNullOrWhiteSpace(tool))

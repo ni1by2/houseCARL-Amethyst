@@ -166,7 +166,7 @@ internal sealed class AmethystStagingWrite : IDisposable
         var verified = new Dictionary<string, LinuxFileIdentity>();
         var committedArtifacts = _transaction.Journal.Artifacts.Where(a => a.State == "committed").ToArray();
         var outputPaths = _publishedOutputs.Select(p => p.Path).Concat(_transaction.PublishedPlugins.Select(p => p.Path))
-            .Concat(committedArtifacts.Select(a => a.Destination))
+            .Concat(committedArtifacts.Where(a => !a.Role.Equals("owner_metadata", StringComparison.OrdinalIgnoreCase)).Select(a => a.Destination))
             .Distinct(StringComparer.Ordinal).Where(File.Exists).ToArray();
         foreach (var path in outputPaths)
         {
@@ -285,7 +285,8 @@ internal sealed class AmethystStagingWrite : IDisposable
         AmethystTransactionOutcome outcome, string profile, bool managed)
     {
         var outputs = new JsonArray();
-        foreach (var artifact in journal.Artifacts.Where(a => a.State == "committed"))
+        foreach (var artifact in journal.Artifacts.Where(a => a.State == "committed" &&
+                     !a.Role.Equals("owner_metadata", StringComparison.OrdinalIgnoreCase)))
             outputs.Add(new JsonObject { ["path"] = artifact.Destination, ["sha256"] = artifact.CommittedSha256, ["role"] = artifact.Role });
         var diagnostics = journal.Diagnostics.Concat(outcome.Diagnostics).Distinct(StringComparer.Ordinal).ToArray();
         var state = journal.State switch

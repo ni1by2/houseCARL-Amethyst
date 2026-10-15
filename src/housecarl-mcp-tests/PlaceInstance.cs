@@ -124,31 +124,12 @@ public sealed class PlaceInstance : IDisposable
     /// as absent while the folder's own enumeration fails. False means the deny did not bite and was taken back off.</summary>
     public static bool TryDenyList(string dir)
     {
-        try
-        {
-            var di = new DirectoryInfo(dir);
-            var sec = di.GetAccessControl();
-            sec.AddAccessRule(new FileSystemAccessRule(WindowsIdentity.GetCurrent().Name, FileSystemRights.ListDirectory,
-                InheritanceFlags.None, PropagationFlags.None, AccessControlType.Deny));
-            di.SetAccessControl(sec);
-            try { Directory.EnumerateFiles(dir, "*.bsa").ToList(); } catch (UnauthorizedAccessException) { return true; } catch { }
-            UndenyList(dir);
-            return false;
-        }
-        catch { return false; }
+        return DenyAce.TryDeny(dir, listingOnly: true);
     }
 
     public static void UndenyList(string dir)
     {
-        try
-        {
-            var di = new DirectoryInfo(dir);
-            var sec = di.GetAccessControl();
-            sec.RemoveAccessRuleAll(new FileSystemAccessRule(WindowsIdentity.GetCurrent().Name, FileSystemRights.ListDirectory,
-                AccessControlType.Deny));
-            di.SetAccessControl(sec);
-        }
-        catch { /* best effort; the temp tree goes either way */ }
+        DenyAce.Undeny(dir);
     }
 
     public void Dispose()

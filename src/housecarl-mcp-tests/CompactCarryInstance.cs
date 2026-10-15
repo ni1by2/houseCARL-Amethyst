@@ -43,7 +43,7 @@ public sealed class CompactCarryInstance : IDisposable
     /// <summary>Drops a loose file into the plugin's own mod folder.</summary>
     public void Loose(string rel, byte[] bytes)
     {
-        var p = Path.Combine(ModDir, rel);
+        var p = BethesdaPath.Under(ModDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }

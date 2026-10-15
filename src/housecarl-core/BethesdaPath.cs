@@ -148,6 +148,7 @@ public static class BethesdaPath
                 .ToArray();
         }
         catch (DirectoryNotFoundException) { return; }
+        catch (UnauthorizedAccessException) { throw; }
         catch (Exception ex) { throw new IOException($"could not inspect Bethesda path beneath '{current}'", ex); }
 
         foreach (var match in matches)

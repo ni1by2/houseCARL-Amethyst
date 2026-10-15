@@ -590,6 +590,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>The Papyrus source folders this modlist ships, in MO2's own VFS precedence off <see cref="AssetResolver.LooseRoots"/>; best-effort, and a read that threw sets <c>Failed</c>.</summary>
     public (IReadOnlyList<PapyrusSourceRoot> Roots, string? GameDataSources, string? Warning, bool Failed) PapyrusSourceImportDirs()
     {
+        var managerName = AmethystSnapshotContext.Current is not null || UsesSavedSnapshot ? "Amethyst" : "MO2";
         IReadOnlyList<(string Name, string Dir)> roots;
         string dataDir;
         try { lock (_gate) { roots = Assets.LooseRoots; dataDir = _dataDir; } }
@@ -597,8 +598,8 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         {
             // Says what failed and what it costs, and nothing about vanilla — this method cannot check the vanilla sources.
             return (Array.Empty<PapyrusSourceRoot>(), null,
-                    "modlist scan: could not read the MO2 modlist to discover Papyrus source folders " +
-                    $"({ex.Message}) — none of your installed mods' source folders are on the import path for this compile.",
+                    $"modlist scan: could not read the {managerName} profile to discover Papyrus source folders " +
+                    $"({ex.Message}) — installed mod source folders are not on the import path for this compile.",
                     true);
         }
         // The game's own Data root is split out here, where the data dir is known: a compiler-relative check would miss a Stock Game setup.
@@ -610,7 +611,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         catch (Exception ex)
         {
             return (Array.Empty<PapyrusSourceRoot>(), null,
-                    $"modlist scan: scanning the modlist for Papyrus source folders failed ({ex.Message}) — " +
+                    $"modlist scan: scanning the {managerName} profile for Papyrus source folders failed ({ex.Message}) — " +
                     "pass the dependency source folders via import_dirs=/import_set= for this compile.",
                     true);
         }
@@ -642,6 +643,23 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>The decompiler's child-to-parent class map: the cached vanilla baseline beside the exe, plus loose .psc headers across the MO2 mods tree. The top-up is RETRIED every call until it runs, so a baseline-only map is never cached as complete, and both degraded modes come back named with their cause. A published map is never mutated. Lock order is _gate then _classParentsLock.</summary>
     public ClassParents ClassParentsForDecompile()
     {
+        if (AmethystSnapshotContext.Current is { } savedSnapshot)
+        {
+            var baselinePath = Path.Combine(AppContext.BaseDirectory, "vanilla-class-parents.json");
+            if (File.Exists(baselinePath)) _ = savedSnapshot.CaptureAdditionalInput(baselinePath);
+            var (savedEdges, baselineNote) = HousecarlCore.PapyrusClassParents.LoadBaseline(baselinePath);
+            string? topUpMissing = null;
+            if (Directory.Exists(savedSnapshot.ModsDir))
+            {
+                var files = savedSnapshot.CapturePapyrusTree(savedSnapshot.ModsDir, ".psc");
+                var captured = files.Select(path => (path, savedSnapshot.CapturedInput(path)!)).ToArray();
+                var scan = HousecarlCore.PapyrusClassParents.AddFromCapturedPscHeaders(savedEdges, captured);
+                if (scan.RootsUnreadable > 0) topUpMissing = $"the Amethyst mods folder '{savedSnapshot.ModsDir}' could not be listed";
+                else if (scan.FilesFailed > 0) topUpMissing = $"{scan.FilesFailed} of {scan.FilesSeen} .psc file(s) under Amethyst's mods folder could not be read";
+            }
+            else topUpMissing = $"the Amethyst mods folder '{savedSnapshot.ModsDir}' does not exist";
+            return new ClassParents(savedEdges, baselineNote, topUpMissing);
+        }
         bool configured;
         string? deriveError = null;
         string modsDir;
@@ -755,6 +773,12 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>Read MO2's OWN local Nexus update cache — every managed mod's meta.ini Nexus fields — with NO network; only Nexus-linked mods become entries, and a missing mods folder is named.</summary>
     public UpdateCacheData UpdateCache()
     {
+        if (UsesSavedSnapshot)
+        {
+            AmethystSavedSnapshot snapshot;
+            lock (_gate) snapshot = CurrentSavedSnapshot();
+            return AmethystUpdateCache(snapshot);
+        }
         string modsDir, profileDir; string? instanceDir;
         lock (_gate)
         {
@@ -797,6 +821,43 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         }
         entries.Sort((a, b) => string.Compare(a.Folder, b.Folder, StringComparison.OrdinalIgnoreCase));
         return new UpdateCacheData(modsDir, instanceDir, entries, Array.Empty<string>(), untracked);
+    }
+
+    /// <summary>Read Amethyst's own cached Nexus fields and singular installed file id from captured meta.ini bytes.</summary>
+    static UpdateCacheData AmethystUpdateCache(AmethystSavedSnapshot snapshot)
+    {
+        var problems = new List<string>();
+        var entries = new List<ModUpdateEntry>();
+        var enabled = new HashSet<string>(snapshot.Composition.EnabledMods, StringComparer.OrdinalIgnoreCase);
+        var disabled = new HashSet<string>(snapshot.Composition.DisabledMods, StringComparer.OrdinalIgnoreCase);
+        var modsDir = snapshot.ModsDir;
+        int untracked = 0;
+        try
+        {
+            foreach (var name in snapshot.CaptureAdditionalDirectoryListing(modsDir))
+            {
+                var folder = Path.Combine(modsDir, name);
+                if (!Directory.Exists(folder)) continue;
+                var metadataPath = Path.Combine(folder, "meta.ini");
+                if (!File.Exists(metadataPath)) { untracked++; continue; }
+                try
+                {
+                    var metadata = AmethystNexusMetaReader.ReadFromBytes(snapshot.CaptureAdditionalInput(metadataPath));
+                    if (metadata is null || metadata.ModId <= 0) { untracked++; continue; }
+                    bool? state = enabled.Contains(name) ? true : disabled.Contains(name) ? false : (bool?)null;
+                    entries.Add(new(name, state, metadata.ModId, metadata.Version, metadata.LatestVersion,
+                        metadata.IgnoredVersion, null, metadata.FileId > 0 ? [metadata.FileId] : [],
+                        metadata.HasUpdate, metadata.IgnoreUpdate));
+                }
+                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+                { problems.Add($"cannot read Amethyst Nexus metadata for '{name}': {ex.Message}"); }
+            }
+        }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        { problems.Add($"cannot list Amethyst's shared mods library '{modsDir}': {ex.Message}"); }
+        snapshot.CheckUnchanged();
+        entries.Sort((a, b) => string.Compare(a.Folder, b.Folder, StringComparison.OrdinalIgnoreCase));
+        return new UpdateCacheData(modsDir, null, entries, problems, untracked, "Amethyst", AmethystSnapshotProvenance.Warning);
     }
 
     /// <summary>Inspect a named profile's composition without switching to it, off the cheap text-only <see cref="Mo2LoadOrder.ReadComposition"/>. Instance mode only; an unmatched name is reported with the available ones.</summary>

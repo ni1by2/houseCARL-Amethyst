@@ -85,13 +85,12 @@ internal static class WriteSentences
         "an all-zero LTEX INAM below form version 43, a deleted REFR's NAME, an all-zero REFR XRMR, a RACE PHWT cut to its " +
         "own leading bytes with an all-zero tail; values not compared)\n";
 
-    internal static string InPlaceModFolder(string modFolder) =>
-        $"mod folder: {modFolder}  — already active in your load order; re-sort only if a winner changed\n";
+    internal static string InPlaceModFolder(string modFolder) => ManagerPresentation.ExistingPluginFolder(modFolder);
 
     internal static string UnscannablePlugin(RemapEngine.UnscannablePlugin p) => p.Cause switch
     {
         RemapEngine.UnscannableCause.Unopenable =>
-            $"{p.Plugin} — could not be OPENED, probably held open by another program; close xEdit, MO2 or Skyrim and run this again ({p.Reason})",
+            $"{p.Plugin} — could not be OPENED, probably held open by another program; close xEdit, {ManagerPresentation.ManagerName} or Skyrim and run this again ({p.Reason})",
         _ => $"could not fully read {p.Plugin}: {p.Reason}",
     };
 
@@ -99,7 +98,7 @@ internal static class WriteSentences
         (extended ? $"extended {file} (existing patch grown; {bytes} bytes)\n"
                   : $"wrote {file} (new patch; {bytes} bytes)\n")
       + (extended ? $"mod folder: {modFolder}\n"
-                  : $"mod folder: {modFolder}  — enable it in MO2 to use the patch; MO2 adds a newly activated plugin at the END of the load order, so it overrides what is already there\n");
+                  : ManagerPresentation.NewPluginFolder(modFolder));
 
     internal static string Masters(IReadOnlyList<string> masters) =>
         $"masters: {(masters.Count == 0 ? "(none)" : string.Join(", ", masters))}\n";

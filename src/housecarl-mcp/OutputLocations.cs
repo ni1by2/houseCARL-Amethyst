@@ -67,7 +67,7 @@ internal sealed class OutputLocations
     {
         var f = ResolvePatchModFolder(patchName, into, "houseCARL_Scripts", new RiderNaming("patch", Noun: ".pex"));
         var scripts = Path.Combine(f.ModFolder, "Scripts");
-        Directory.CreateDirectory(scripts);
+        if (!AmethystStagingWrite.IsActive) Directory.CreateDirectory(scripts);
         return f with { OutputDir = scripts };
     }
 
@@ -127,10 +127,13 @@ internal sealed class OutputLocations
         string outputDir, string modsDir, string dataDir, string overwriteDir = "")
     {
         var (scriptsDir, appended, deployable) = SubfolderOutputContract(outputDir, "Scripts", modsDir, dataDir, overwriteDir);
-        string? warn = deployable ? null :
-            $"note: '{scriptsDir}' isn't a folder MO2 (or the game) auto-loads scripts from, so the compiled .pex won't " +
-            "deploy on its own — it compiled fine, but you must place it where the game loads scripts yourself: a mod's " +
-            "own Scripts\\ folder (<mods>\\<YourMod>\\Scripts), the MO2 overwrite folder, or the game's <Data>\\Scripts.";
+        string? warn = deployable ? null : AmethystSnapshotContext.Current is not null
+            ? $"note: '{scriptsDir}' isn't a folder the selected Amethyst profile (or the game) loads scripts from, so the compiled .pex won't " +
+              "deploy on its own — it compiled fine, but place it where the game loads scripts: a mod's own Scripts\\ folder, " +
+              "Amethyst's overwrite folder, or the game's <Data>\\Scripts."
+            : $"note: '{scriptsDir}' isn't a folder MO2 (or the game) auto-loads scripts from, so the compiled .pex won't " +
+              "deploy on its own — it compiled fine, but you must place it where the game loads scripts yourself: a mod's " +
+              "own Scripts\\ folder (<mods>\\<YourMod>\\Scripts), the MO2 overwrite folder, or the game's <Data>\\Scripts.";
         return (scriptsDir, appended, warn);
     }
 
@@ -139,10 +142,13 @@ internal sealed class OutputLocations
         string outputDir, string modsDir, string dataDir, string overwriteDir = "")
     {
         var (seqDir, appended, deployable) = SubfolderOutputContract(outputDir, "SEQ", modsDir, dataDir, overwriteDir);
-        string? warn = deployable ? null :
-            $"note: '{seqDir}' isn't a folder MO2 (or the game) reads SEQ files from, so the game will NOT see this .seq — " +
-            "the file is correct, but until it sits somewhere loaded the plugin's start-game-enabled quests stay silently " +
-            "dead. Put it in a mod's own SEQ\\ folder (<mods>\\<YourMod>\\SEQ — enabled in MO2), the MO2 overwrite folder, or the game's <Data>\\SEQ.";
+        string? warn = deployable ? null : AmethystSnapshotContext.Current is not null
+            ? $"note: '{seqDir}' isn't a folder the selected Amethyst profile (or the game) reads SEQ files from, so the game will NOT see this .seq — " +
+              "the file is correct, but until it sits somewhere loaded the plugin's start-game-enabled quests stay silently " +
+              "dead. Put it in an active mod's own SEQ\\ folder, Amethyst's overwrite folder, or the game's <Data>\\SEQ."
+            : $"note: '{seqDir}' isn't a folder MO2 (or the game) reads SEQ files from, so the game will NOT see this .seq — " +
+              "the file is correct, but until it sits somewhere loaded the plugin's start-game-enabled quests stay silently " +
+              "dead. Put it in a mod's own SEQ\\ folder (<mods>\\<YourMod>\\SEQ — enabled in MO2), the MO2 overwrite folder, or the game's <Data>\\SEQ.";
         return (seqDir, appended, warn);
     }
 
@@ -192,7 +198,7 @@ internal sealed class OutputLocations
     {
         var f = ResolvePatchModFolder(patchName, into, "houseCARL_Scripts", new RiderNaming("patch", Noun: ".psc"));
         var src = Path.Combine(f.ModFolder, "Source", "Scripts");
-        Directory.CreateDirectory(src);
+        if (!AmethystStagingWrite.IsActive) Directory.CreateDirectory(src);
         return f with { OutputDir = src };
     }
 
@@ -207,7 +213,7 @@ internal sealed class OutputLocations
         catch (Exception ex) { throw new InvalidOperationException($"out_path '{outPath}' is not a usable path ({ex.Message})."); }
         if (File.Exists(root))
             throw new InvalidOperationException($"out_path '{root}' is a file, not a folder. Give the folder the .psc should land in.");
-        try { Directory.CreateDirectory(root); }
+        try { if (!AmethystStagingWrite.IsActive) Directory.CreateDirectory(root); }
         catch (Exception ex) when (ex is IOException or UnauthorizedAccessException)
         { throw new InvalidOperationException($"out_path: couldn't create the output folder '{root}' ({ex.Message}). Check the path and that it's writable."); }
         return new RiderFolder(root, root, CreatedFresh: false, FolderStem(root));   // caller-owned: cleanup never touches it

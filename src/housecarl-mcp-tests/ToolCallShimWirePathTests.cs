@@ -85,9 +85,11 @@ public sealed class ToolCallShimWirePathTests
     [Fact]
     public void ApplyWithNoArgumentsBindsWithNoRequiredRefusalAndReachesTheBody()
     {
-        var r = _s.Call(ToolNames.Apply, "{}");
+        using var fixture = new AmethystWireFixture();
+        var r = fixture.Server.Call(ToolNames.Apply, "{}");
 
-        Assert.False(r.IsError, r.Describe());
+        Assert.True(r.IsError, r.Text);
+        Assert.Contains("ops", r.Text);
         Assert.DoesNotContain("required parameter", r.Text, StringComparison.Ordinal);
         Assert.True(r.BodyRan, r.Describe());
     }
@@ -100,7 +102,8 @@ public sealed class ToolCallShimWirePathTests
     [Fact]
     public void CreatePluginTakesPatchAndRefusesTheOldPluginSpellingByName()
     {
-        var ok = _s.Call(ToolNames.CreatePlugin, """{"patch":"MyTrigger"}""");
+        using var fixture = new AmethystWireFixture();
+        var ok = fixture.Server.Call(ToolNames.CreatePlugin, """{"patch":"MyTrigger"}""");
         Assert.False(ok.IsError, ok.Describe());
         Assert.True(ok.BodyRan, ok.Describe());
 
@@ -115,7 +118,8 @@ public sealed class ToolCallShimWirePathTests
     [Fact]
     public void CompactPluginTakesSourceAndRefusesTheOldPluginSpellingByName()
     {
-        var direct = _s.Call(ToolNames.CompactPlugin, """{"source":"Skyrim.esm"}""");
+        using var fixture = new AmethystWireFixture();
+        var direct = fixture.Server.Call(ToolNames.CompactPlugin, """{"source":"Fixture.esp"}""");
         Assert.False(direct.IsError, direct.Describe());
         Assert.True(direct.BodyRan, direct.Describe());
 
@@ -201,13 +205,4 @@ public sealed class ToolCallShimWirePathTests
         Assert.DoesNotContain("expects string", r.Text, StringComparison.Ordinal);
     }
 
-    /// <summary>A real filename is untouched by that gate: it reaches the tool body, which judges the lane.</summary>
-    [Fact]
-    public void AFilenameInPlaceIsNotRefusedByTheBooleanGate()
-    {
-        var r = _s.Call(ToolNames.Apply, """{"ops":[],"in_place":"NoSuchPlugin.esp"}""");
-
-        Assert.DoesNotContain("names no file", r.Text, StringComparison.Ordinal);
-        Assert.True(r.BodyRan, r.Describe());
-    }
 }

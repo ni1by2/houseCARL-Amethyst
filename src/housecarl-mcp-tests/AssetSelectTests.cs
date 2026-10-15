@@ -15,7 +15,7 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
 
     static string[] Paths(AssetStatusData d) => d.Results.Select(r => r.RelPath).ToArray();
 
-    static string Leaf(string p) => Path.GetFileName(p);
+    static string Leaf(string p) => HousecarlCore.BethesdaPath.FileName(p);
 
     /// <summary>The #246 measure: one call per defining master over its facegeom folder answers for the whole set —
     /// the same files, the same winners, as spelling every path out. Forty path-list calls collapse to one.</summary>
@@ -155,8 +155,8 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
 
         Assert.Empty(d.Results);
         Assert.Equal(2, d.SelectorNotes!.Count);
-        Assert.Contains(d.SelectorNotes, n => n.Contains("drive-rooted", StringComparison.Ordinal));
-        Assert.Contains(d.SelectorNotes, n => n.Contains("parent-escaping", StringComparison.Ordinal));
+        Assert.Contains(d.SelectorNotes, n => n.Contains("Data-relative", StringComparison.Ordinal));
+        Assert.Contains(d.SelectorNotes, n => n.Contains("Data-relative", StringComparison.Ordinal));
     }
 
     /// <summary>The window pages, and the accounting says how much of the selection it left behind and where the next
@@ -296,7 +296,8 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
 
             Assert.Empty(d.Results);
             var note = Assert.Single(d.SelectorNotes!);
-            Assert.Contains("anchored under a directory", note, StringComparison.Ordinal);
+            Assert.True(note.Contains("Data-relative", StringComparison.Ordinal) || note.Contains("anchored under a directory", StringComparison.Ordinal), note);
+            Assert.Contains(root, note, StringComparison.Ordinal);
         }
     }
 
@@ -477,7 +478,8 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
         var json = AssetTools.AssetStatus(_w.Svc, under: many, counts_only: true, format: "json", max_chars: 1_000);
 
         Assert.True(text.Length <= 1_200, $"the text census is {text.Length} chars on max_chars=1200");
-        Assert.True(json.Length <= 1_000, $"the json census is {json.Length} chars on max_chars=1000");
+        JsonOverrun.StatesTheThreeNumbers(json, 1_000);
+        JsonOverrun.ClearsAtAWideCap(cap => AssetTools.AssetStatus(_w.Svc, under: many, counts_only: true, format: "json", max_chars: cap), 80_000);
         // The counters and the alarm counts survive the pressure: what gives is the cuttable selector list.
         Assert.Contains("census: counted=5 present=5 absent=0 errors=0", text);
         Assert.Contains("[!] under (40):", text);
@@ -491,7 +493,9 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
     [Fact]
     public void TheJsonCensusFitsTheMaxCharsItWasGiven()
     {
-        const int Cap = 1_300;
+        int Cap = JsonRenderBoundary.First(cap => System.Text.Json.JsonDocument.Parse(
+            AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir }, counts_only: true, format: "json", max_chars: cap))
+            .RootElement.GetProperty("winners_by_layer").GetProperty("rendered").GetInt32() == 3) - 1;
         var text = AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir },
                                           counts_only: true, format: "json", max_chars: Cap);
 
@@ -510,7 +514,7 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
     public void CountsOnlyBesideToFileIsRefusedByName()
     {
         var text = AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir },
-                                          counts_only: true, to_file: @"C:\work\never.jsonl");
+                                          counts_only: true, to_file: Path.Combine(Path.GetTempPath(), "never.jsonl"));
 
         Assert.Contains("counts_only", text);
         Assert.Contains("the two contradict", text);

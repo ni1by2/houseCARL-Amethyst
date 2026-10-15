@@ -147,7 +147,7 @@ public sealed class UpsertCreateTests : IDisposable
         var path = FreshPatch(out _);
         var before = File.ReadAllBytes(path);
         WritePatchBuilder.CreateOutcome o;
-        using (new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read))
+        using (new CommitFault(path))
             o = Create(path, true, Bare("Keyword", "HcUpsGdKwLocked"));
         Assert.False(o.Success);
         Assert.Contains("writing the patch after create failed", o.Error, StringComparison.OrdinalIgnoreCase);

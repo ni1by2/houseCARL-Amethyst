@@ -173,13 +173,15 @@ public sealed class PublishedSchemaDepthTests : IClassFixture<CappedSchemaServer
     [Fact]
     public void ACallNestedDeeperThanTheCutStillReachesTheToolBody()
     {
-        var r = _capped.Call(ToolNames.Apply, """
+        using var fixture = new AmethystWireFixture(Cap);
+        var r = fixture.Server.Call(ToolNames.Apply, """
             {"ops":[{"formid":"013989:Skyrim.esm","field_path":"Conditions","op":"Add",
               "compose":{"type":"Condition","sets":[{"path":"Data","compose":{"type":"FunctionConditionData",
                 "sets":[{"path":"Function","value":"GetItemCount"}]}}]}}]}
             """);
 
-        Assert.False(r.IsError, r.Describe());
+        Assert.DoesNotContain(ServerFixture.GenericError, r.Text);
+        Assert.Contains("013989:Skyrim.esm", r.Text);
         Assert.True(r.BodyRan, r.Describe());
     }
 
@@ -271,10 +273,14 @@ public sealed class PublishedSchemaDepthTests : IClassFixture<CappedSchemaServer
     [Fact]
     public void AtTheShallowestCapABareStringIsStillCoercedIntoADeclaredArray()
     {
-        var r = _shallowest.Call(ToolNames.Forward, """{"formids":"013989:Skyrim.esm"}""");
+        using var fixture = new AmethystWireFixture(SchemaDepthCap.Minimum);
+        var r = fixture.Server.Call(ToolNames.Forward, """{"formids":"000800:Fixture.esp","source":"Fixture.esp","patch":"DepthForward"}""");
 
         Assert.DoesNotContain(ServerFixture.GenericError, r.Text, StringComparison.Ordinal);
         Assert.True(r.BodyRan, r.Describe());
+        Assert.False(r.IsError, r.Describe());
+        var path = r.Raw.GetProperty("structuredContent").GetProperty("amethyst_staging").GetProperty("outputs")[0].GetProperty("path").GetString()!;
+        Assert.Single(Mutagen.Bethesda.Skyrim.SkyrimMod.CreateFromBinary(path, Mutagen.Bethesda.Skyrim.SkyrimRelease.SkyrimSE).Weapons);
     }
 
     /// <summary>Every tool declaring a required parameter, off the pre-flatten surface — the same population the
@@ -318,7 +324,7 @@ public sealed class PublishedSchemaDepthTests : IClassFixture<CappedSchemaServer
     static (int Exit, string Stderr) Boot(string value)
     {
         var exe = Path.Combine(HarnessPaths.RepoRoot, "src", "housecarl-mcp", "bin",
-                               HarnessPaths.Configuration, "net9.0", "housecarl-mcp.exe");
+                               HarnessPaths.Configuration, "net9.0", OperatingSystem.IsWindows() ? "housecarl-mcp.exe" : "housecarl-mcp");
         var psi = new ProcessStartInfo(exe)
         {
             RedirectStandardInput = true,

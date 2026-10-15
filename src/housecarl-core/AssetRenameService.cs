@@ -130,9 +130,17 @@ public static class AssetRenameService
         // Each voice file whose embedded id was renumbered, to its new-id name. A file with no '_<8hex>_<num>.<ext>'
         // tail, or whose id was not renumbered, is left alone.
         var items = new List<CarryItem>();
+        var failuresForInvalidPath = new List<string>();
         foreach (var oldRel in files)
         {
-            var fname = Path.GetFileName(oldRel);
+            string canonical;
+            try { canonical = BethesdaPath.Normalize(oldRel); }
+            catch (Exception ex)
+            {
+                failuresForInvalidPath.Add($"could not interpret voice path '{oldRel}' ({ex.Message}) — verify voiced lines in-game.");
+                continue;
+            }
+            var fname = BethesdaPath.FileName(canonical);
             var m = VoiceIdRx.Match(fname);
             if (!m.Success) continue;                                      // not an INFO-keyed voice file — nothing to remap
             uint full;
@@ -142,16 +150,57 @@ public static class AssetRenameService
 
             var newId = "00" + newLocal.ToString("X6");
             var newFname = fname.Substring(0, m.Groups[1].Index) + newId + fname.Substring(m.Groups[1].Index + m.Groups[1].Length);
-            var dir = Path.GetDirectoryName(oldRel) ?? "";                 // same voice-type folder; the PLUGIN segment swaps on a merge
-            var newDir = dir.Length >= srcPrefix.Length ? tgtPrefix + dir.Substring(srcPrefix.Length) : dir;
-            var newRel = newDir.Length == 0 ? newFname : Path.Combine(newDir, newFname);
+            if (!TryRewriteVoicePath(canonical, srcPrefix, tgtPrefix, newFname, out var newRel, out var pathError))
+            {
+                failuresForInvalidPath.Add($"{pathError} — verify voiced lines in-game.");
+                continue;
+            }
             items.Add(new CarryItem(oldRel, newRel, new FormKey(modKey, newLocal), $"{oldLocal:X6}→{newLocal:X6} {fname}"));
         }
 
-        var failures = new List<string>();
+        var failures = failuresForInvalidPath;
         var (carriedFiles, carriedLines) = CarryItems(items, assets, outDir, failures);
         return new VoiceCarryOutcome(files.Count, carriedFiles, carriedLines.Count, failures, assets.ReadIncomplete)
                { RootFailures = assets.RootFailures };
+    }
+
+    internal static bool TryRewriteVoicePath(string oldRel, string sourcePrefix, string targetPrefix,
+        string newFileName, out string newRel, out string? error)
+    {
+        newRel = "";
+        error = null;
+        try
+        {
+            var canonical = BethesdaPath.Normalize(oldRel);
+            var source = BethesdaPath.Normalize(sourcePrefix) + "\\";
+            var target = BethesdaPath.Normalize(targetPrefix);
+            var directory = BethesdaPath.DirectoryName(canonical);
+            if (!directory.StartsWith(source, StringComparison.OrdinalIgnoreCase))
+            {
+                error = $"voice path '{oldRel}' is outside the expected plugin folder '{sourcePrefix}'";
+                return false;
+            }
+
+            var suffix = directory[source.Length..];
+            if (suffix.Length == 0)
+            {
+                error = $"voice path '{oldRel}' has no voice-type directory";
+                return false;
+            }
+            var leaf = BethesdaPath.Normalize(newFileName);
+            if (leaf.Contains('\\'))
+            {
+                error = "the rewritten voice filename contains a directory";
+                return false;
+            }
+            newRel = BethesdaPath.Normalize(target + "\\" + suffix + "\\" + leaf);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"could not rewrite voice path '{oldRel}' ({ex.Message})";
+            return false;
+        }
     }
 
     /// <summary>REFRESH the start-game-enabled-quest <c>.seq</c> of the renumbered plugin when the source SHIPPED

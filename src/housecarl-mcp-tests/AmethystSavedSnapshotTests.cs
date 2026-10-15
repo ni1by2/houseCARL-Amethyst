@@ -59,7 +59,7 @@ public sealed class AmethystSavedSnapshotTests
         using var world = new AmethystSnapshotWorld();
         using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
         using var scope = AmethystSnapshotContext.Use(service.CaptureSavedSnapshot());
-        Assert.Contains("remain unavailable", Assert.Throws<InvalidOperationException>(() => service.ConfiguredRoots()).Message);
+        Assert.Contains("transaction routing supports", Assert.Throws<InvalidOperationException>(() => service.ConfiguredRoots()).Message);
     }
 
     [Fact]
@@ -185,6 +185,74 @@ public sealed class AmethystSavedSnapshotTests
     }
 
     [NativeFilegraphFact]
+    public void QuotedPapyrusInputIsCapturedIntoSnapshotProvenance()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var path = Path.Combine(world.Root, "source with spaces.psc");
+        File.WriteAllText(path, "Scriptname QuotedProbe\n");
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        using var argument = JsonDocument.Parse(JsonSerializer.Serialize($"  \"{path}\"  "));
+
+        Assert.Equal(Path.GetFullPath(path), AmethystSnapshotFilter.CapturePapyrusInput(snapshot, argument.RootElement));
+        Assert.Contains(Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(path))).ToLowerInvariant(), snapshot.InputSha256);
+        File.AppendAllText(path, "; changed\n");
+        Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [NativeFilegraphFact]
+    public void PapyrusImportProvidersCompilerAndFlagsEnterSnapshotProvenance()
+    {
+        using var world = new AmethystSnapshotWorld();
+        var compilerDir = Path.Combine(world.Root, "compiler"); Directory.CreateDirectory(compilerDir);
+        var compiler = Path.Combine(compilerDir, "PapyrusCompiler.exe"); File.WriteAllText(compiler, "compiler-fixture");
+        File.WriteAllText(Path.Combine(compilerDir, "TESV_Papyrus_Flags.flg"), "flags-fixture");
+        var imports = Path.Combine(world.Root, "provider"); Directory.CreateDirectory(imports);
+        var provider = Path.Combine(imports, "Dependency.PSC"); File.WriteAllText(provider, "Scriptname Dependency\n");
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        var priorInputs = snapshot.InputSha256.Count;
+
+        var flags = Path.Combine(compilerDir, "TESV_Papyrus_Flags.flg");
+        Assert.Equal(1, AmethystSnapshotFilter.CapturePapyrusImportInputs(snapshot, new[] { imports }, compiler, flags));
+        Assert.Equal(priorInputs + 3, snapshot.InputSha256.Count);
+        File.WriteAllText(Path.Combine(imports, "AppearedAfterCapture.psc"), "Scriptname AppearedAfterCapture\n");
+        Assert.Contains("source listing changed", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+
+        var second = AmethystSavedSnapshot.Capture(world.Manifest);
+        _ = AmethystSnapshotFilter.CapturePapyrusImportInputs(second, new[] { imports }, compiler, flags);
+        File.AppendAllText(provider, "; changed\n");
+        Assert.Contains("configuration or profile changed", Assert.Throws<InvalidOperationException>(second.CheckUnchanged).Message);
+    }
+
+    [NativeFilegraphFact]
+    public void ChampollionConsumesTheCapturedPexBytesRatherThanReopeningTheInputPath()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        using var world = new AmethystSnapshotWorld();
+        using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
+        var pexPath = Path.Combine(world.Root, "captured-input.pex");
+        PexWriter.WritePex(pexPath, "CapturedBeforeMutation", null);
+        var snapshot = service.CaptureSavedSnapshot();
+        _ = snapshot.CaptureAdditionalInput(pexPath);
+        PexWriter.WritePex(pexPath, "LiveAfterMutation", null);
+
+        var champollion = Path.Combine(world.Root, "Champollion-test");
+        File.WriteAllText(champollion, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Champollion PEX decompiler v1.3.2'; exit 0; fi\n[ \"$1\" = --psc ] || exit 7\nprintf 'Scriptname CapturedBeforeMutation\\n' > \"$2/CapturedBeforeMutation.psc\"\nexit 0\n");
+        File.SetUnixFileMode(champollion, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var tools = new ToolPathResolver(world.Store);
+        Assert.True(tools.Save(ToolDependency.Champollion, champollion).ok);
+        var output = Path.Combine(world.Root, "captured-decompile-output");
+        try
+        {
+            using var scope = AmethystSnapshotContext.Use(snapshot);
+            var reply = DecompileTools.DecompileScript(service, pexPath, out_path: output, decompiler_backend: "champollion", bridge: tools);
+
+            Assert.True(File.Exists(Path.Combine(output, "CapturedBeforeMutation.psc")), reply);
+            Assert.False(File.Exists(Path.Combine(output, "LiveAfterMutation.psc")), reply);
+        }
+        finally { if (Directory.Exists(output)) Directory.Delete(output, recursive: true); }
+    }
+
+    [NativeFilegraphFact]
     public void InPlaceNifAssetOutputIsExcludedFromCapturedSourceDriftAfterJournaledCommit()
     {
         using var world = new AmethystSnapshotWorld();
@@ -198,7 +266,7 @@ public sealed class AmethystSavedSnapshotTests
         var edited = original.Concat(new byte[] { 1, 2, 3 }).ToArray();
         File.WriteAllBytes(staged, edited);
         AmethystStagingWrite.RegisterOutputPath(source);
-        AmethystStagingWrite.PublishManagedArtifact(staged, source, "asset");
+        AmethystStagingWrite.PublishActiveArtifact(staged, source, "asset");
 
         scope.ValidateSnapshotInputs();
         Assert.Equal(edited, File.ReadAllBytes(source));
@@ -354,6 +422,12 @@ public sealed class AmethystSavedSnapshotTests
         Assert.DoesNotContain("SnapshotAlpha", result);
         Assert.DoesNotContain("SnapshotGamma", result);
         Assert.Contains("SnapshotGamma", RecordsTools.Records(service, source: JsonSerializer.SerializeToElement("Dormant.esp"), types: ["WEAP"], format: "json"));
+
+        var (layer, error) = service.WriteArea.WithSourceChainForGuard(["Fixture.esp"], "from_source",
+            (chain, failure) => (chain?.Arms.Single().Layer, failure));
+        Assert.Null(error);
+        Assert.Equal(SourceLayerKind.ModFolder, layer?.Kind);
+        Assert.Equal("Beta", layer?.Name);
     }
 
     [Fact]

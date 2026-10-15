@@ -209,20 +209,20 @@ sealed class UnreadableRootWorld : IDisposable
                .WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
         }
 
-        var readable = Path.Combine(assetMod, SweepDir);
+        var readable = BethesdaPath.Under(assetMod, SweepDir);
         Directory.CreateDirectory(readable);
         File.WriteAllText(Path.Combine(readable, "ok.nif"), "x");
 
         // The blocked mod's two subtrees are written BEFORE any deny, so no failure below can leave an ACE behind.
-        TopSweepDir = Path.Combine(_topDir, SweepDir);
-        TopTextureDir = Path.Combine(_topDir, TextureDir);
+        TopSweepDir = BethesdaPath.Under(_topDir, SweepDir);
+        TopTextureDir = BethesdaPath.Under(_topDir, TextureDir);
         Directory.CreateDirectory(TopSweepDir);
         Directory.CreateDirectory(TopTextureDir);
         File.WriteAllText(Path.Combine(TopSweepDir, "top.nif"), "x");
         File.WriteAllText(Path.Combine(TopTextureDir, "top.dds"), "x");
 
         // One mod blocks a subdirectory of its own copy: the recursive walk starts and throws part way through.
-        _lockedDir = Path.Combine(mods, SubBlockedMod, SweepDir, "locked");
+        _lockedDir = Path.Combine(BethesdaPath.Under(Path.Combine(mods, SubBlockedMod), SweepDir), "locked");
         Directory.CreateDirectory(_lockedDir);
         File.WriteAllText(Path.Combine(_lockedDir, "hidden.nif"), "x");
 

@@ -117,6 +117,24 @@ public sealed class CompileRenderImportPathTests
         Assert.Equal(at.OrderBy(i => i), at);
     }
 
+    [Fact]
+    public void AmethystCompileOutputNamesItsManagerAndDeploymentStep()
+    {
+        var plan = new CompileTools.ImportPlan(
+            [(@"/work/source", CompileTools.ImportPlan.OwnFolder),
+             (@"/amethyst/mods/PapyrusUtil/Source/Scripts", "Amethyst: PapyrusUtil"),
+             (@"/game/Data/Source/Scripts", CompileTools.ImportPlan.Vanilla)],
+            AutoEnabled: true, ImportSetName: null, Warning: null, AutoScanned: 1,
+            ReferencedProviders: ["PapyrusUtil"], ManagerName: "Amethyst");
+
+        var success = Render(Ok, plan);
+        var failure = Render(SyntaxFail, plan);
+
+        Assert.Contains("Refresh and Deploy", success);
+        Assert.Contains("[Amethyst: PapyrusUtil]", failure);
+        Assert.Contains("PapyrusUtil", CompileTools.ImportSummary(plan));
+    }
+
     // Probe E5: "auto_imports ON: the banner names what the scan found AND kept, plus the causes it cannot fix".
     [Fact]
     public void WithTheScanOnTheBannerNamesWhatItFoundAndWhatItCannotFix()
@@ -254,5 +272,93 @@ public sealed class CompileRenderImportPathTests
             Assert.DoesNotContain("REFERENCES BY NAME", Render(MissingImports, plan));
         }
         else Assert.Contains(Conclusion, ok);
+    }
+}
+
+[Trait("tier", "unit")]
+public sealed class PapyrusImportMaterializationTests
+{
+    [Fact]
+    public void MaterializationUsesCapturedStableCopiesAndPreservesImportPrecedence()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hc-papyrus-materialize-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var high = Directory.CreateDirectory(Path.Combine(root, "high")).FullName;
+            var low = Directory.CreateDirectory(Path.Combine(root, "low")).FullName;
+            var main = Path.Combine(high, "MainProbe.PSC");
+            File.WriteAllText(main, "Scriptname MainProbe extends Dependency\n");
+            File.WriteAllText(Path.Combine(high, "Dependency.psc"), "Scriptname Dependency\n; high\n");
+            File.WriteAllText(Path.Combine(low, "Dependency.PSC"), "Scriptname Dependency\n; low\n");
+            var scratch = Path.Combine(root, "scratch"); Directory.CreateDirectory(scratch);
+
+            var (source, imports) = CompileTools.MaterializeImports(main, new[] { high, low }, scratch, snapshot: null);
+
+            Assert.Equal("MainProbe.PSC", Path.GetFileName(source));
+            Assert.Equal(2, imports.Count);
+            Assert.Contains("; high", File.ReadAllText(Path.Combine(imports[0], "Dependency.psc")));
+            Assert.Empty(Directory.EnumerateFiles(imports[1]));
+            File.AppendAllText(Path.Combine(high, "Dependency.psc"), "changed source\n");
+            Assert.DoesNotContain("changed source", File.ReadAllText(Path.Combine(imports[0], "Dependency.psc")));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void MaterializationResolvesAndRenamesProvidersByDeclaredScriptName()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hc-papyrus-declared-name-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var dir = Directory.CreateDirectory(Path.Combine(root, "provider")).FullName;
+            var main = Path.Combine(dir, "Main.psc"); File.WriteAllText(main, "Scriptname Main extends DeclaredDependency\n");
+            File.WriteAllText(Path.Combine(dir, "different-file-name.psc"), "Scriptname DeclaredDependency\n");
+            var scratch = Path.Combine(root, "scratch"); Directory.CreateDirectory(scratch);
+
+            var (_, imports) = CompileTools.MaterializeImports(main, new[] { dir }, scratch, snapshot: null);
+
+            Assert.True(File.Exists(Path.Combine(imports[0], "DeclaredDependency.psc")));
+            Assert.False(File.Exists(Path.Combine(imports[0], "different-file-name.psc")));
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void AmbiguousSameTierScriptProvidersRefuseMaterialization()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hc-papyrus-ambiguous-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var dir = Directory.CreateDirectory(Path.Combine(root, "provider")).FullName;
+            var main = Path.Combine(dir, "Main.psc"); File.WriteAllText(main, "Scriptname Main\n");
+            File.WriteAllText(Path.Combine(dir, "one.psc"), "Scriptname SameName\n");
+            File.WriteAllText(Path.Combine(dir, "two.PSC"), "Scriptname samenAME\n");
+            Assert.Contains("ambiguous same-precedence", Assert.Throws<InvalidOperationException>(() =>
+                CompileTools.MaterializeImports(main, new[] { dir }, Path.Combine(root, "scratch"), snapshot: null)).Message);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
+    }
+
+    [Fact]
+    public void CaseFoldedFilenameCollisionRefusesEvenWhenDeclaredNamesDiffer()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "hc-papyrus-filename-collision-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(root);
+        try
+        {
+            var dir = Directory.CreateDirectory(Path.Combine(root, "provider")).FullName;
+            var main = Path.Combine(dir, "Main.psc"); File.WriteAllText(main, "Scriptname Main\n");
+            File.WriteAllText(Path.Combine(dir, "A.psc"), "Scriptname FirstIdentity\n");
+            File.WriteAllText(Path.Combine(dir, "a.PSC"), "Scriptname SecondIdentity\n");
+
+            var error = Assert.Throws<InvalidOperationException>(() =>
+                CompileTools.MaterializeImports(main, new[] { dir }, Path.Combine(root, "scratch"), snapshot: null));
+
+            Assert.Contains("collide case-insensitively", error.Message);
+        }
+        finally { if (Directory.Exists(root)) Directory.Delete(root, recursive: true); }
     }
 }

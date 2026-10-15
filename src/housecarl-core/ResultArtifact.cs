@@ -327,7 +327,7 @@ public sealed class ArtifactTarget : IDisposable
         try
         {
             using (var fs = new FileStream(tmp, FileMode.Create, FileAccess.Write, FileShare.None)) writeInto(fs);
-            File.Move(tmp, Path, overwrite: true);
+            AtomicFile.Commit(tmp, Path);
             _wrote = true;
         }
         catch (Exception)

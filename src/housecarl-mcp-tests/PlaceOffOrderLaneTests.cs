@@ -441,7 +441,7 @@ public sealed class PlaceOffOrderGuardTests
         const string folderOnly = @"meshes\hcprobe\data-folder-only.nif";
         Loose(Path.Combine(p.Mods, PlaceOffOrderWorld.DataName), folderOnly, new byte[] { 0x5C, 0x5C });
         p.TouchModlist();
-        Assert.True(File.Exists(Path.Combine(p.Mods, PlaceOffOrderWorld.DataName, folderOnly)));
+        Assert.True(File.Exists(BethesdaPath.Under(Path.Combine(p.Mods, PlaceOffOrderWorld.DataName), folderOnly)));
 
         var r = svc.PlaceAssets(new[] { new PlaceRequest(folderOnly, folderOnly, PlaceOffOrderWorld.DataName) }, null, null).Results[0];
 

@@ -53,18 +53,19 @@ public sealed class OutputRootsSnapshotTests : IDisposable
     [Fact]
     public void AnInstanceSwitchAfterTheCaptureDoesNotChangeWhichPluginsTakeAStem()
     {
-        _ = ((ILoadOrderHost)_svc).Resolver;                      // instance A's order built, so the capture carries its names
-        var snapshotA = _svc.ConfiguredRoots();
-        Assert.Contains(TakenStem + ".esp", snapshotA.BuiltPluginNames!);
-
-        // The switch lands between the capture and the stem check, and B's order is built too.
-        _svc.SetInstance(_instanceB);
-        _ = ((ILoadOrderHost)_svc).Resolver;
-
-        var folder = _svc.OutputArea.ResolvePatchModFolder(snapshotA, TakenStem, null, "HcSnapDefault", null);
-
-        // TakenStem.esp is active in A, whose mods folder the new folder lands in, so the stem is suffixed.
+        var first = new AmethystFixtureConnection(_instanceA);
+        var second = new AmethystFixtureConnection(_instanceB);
+        _svc.SetAmethystSnapshot(first.Manifest);
+        var saved = _svc.CaptureSavedSnapshot();
+        using var scope = AmethystSnapshotContext.Use(saved);
+        using var staging = new AmethystStagingWrite(saved, ToolNames.CompileScript, "captured output roots");
+        _ = _svc.CaptureView();
+        var roots = _svc.ConfiguredRoots();
+        Assert.Contains(TakenStem + ".esp", roots.BuiltPluginNames!);
+        _svc.SetAmethystSnapshot(second.Manifest);
+        var folder = _svc.OutputArea.ResolvePatchModFolder(roots, TakenStem, null, "HcSnapDefault", null);
         Assert.Equal(TakenStem + "_001", folder.Stem);
         Assert.Equal(Path.Combine(_instanceA, "mods"), Path.GetDirectoryName(folder.ModFolder));
+        Assert.False(Directory.Exists(Path.Combine(_instanceB, "mods", "houseCARL - " + folder.Stem)));
     }
 }

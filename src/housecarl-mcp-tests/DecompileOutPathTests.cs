@@ -35,6 +35,53 @@ public sealed class DecompileOutPathTests
     }
 
     [Fact]
+    public void ChampollionBackendWritesOnlyValidatedPrivateOutputAndMarksItUnverified()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var dest = FreshDir();
+        var executable = Path.Combine(W.Root, "Champollion-test");
+        File.WriteAllText(executable, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Champollion PEX decompiler v1.3.2'; exit 0; fi\n[ \"$1\" = --psc ] || exit 7\nprintf 'Scriptname HcSpBase\\n' > \"$2/HcSpBase.psc\"\nexit 0\n");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        Assert.Equal("1.3.2", HousecarlCore.PapyrusCompile.ProbeChampollionVersion(executable));
+        var tools = new ToolPathResolver(new UserConfigStore(Path.Combine(W.Root, "user.json")));
+        Assert.True(tools.Save(ToolDependency.Champollion, executable).ok);
+        try
+        {
+            var r = DecompileTools.DecompileScript(W.Svc, Pex, out_path: dest, decompiler_backend: "champollion", bridge: tools);
+
+            Assert.True(File.Exists(Path.Combine(dest, "HcSpBase.psc")), r);
+            Assert.Contains("Champollion reconstruction is unverified", r);
+            Assert.Contains("v1.3.2", r);
+        }
+        finally { try { Directory.Delete(dest, true); } catch { /* temp cleanup */ } }
+    }
+
+    [Fact]
+    public void ChampollionMultiObjectCollisionIsPreflightedBeforeAnyFileIsPublished()
+    {
+        if (!OperatingSystem.IsLinux()) return;
+        var dir = FreshDir(); Directory.CreateDirectory(dir);
+        var pex = Path.Combine(dir, "Multi.pex"); PexWriter.WriteMultiObjectPex(pex, "FirstObject", "SecondObject");
+        var dest = Path.Combine(dir, "output"); Directory.CreateDirectory(dest);
+        var existing = Path.Combine(dest, "SecondObject.psc"); File.WriteAllText(existing, "keep me");
+        var executable = Path.Combine(W.Root, "Champollion-multi-test");
+        File.WriteAllText(executable, "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'Champollion PEX decompiler v1.3.2'; exit 0; fi\n[ \"$1\" = --psc ] || exit 7\nprintf 'Scriptname FirstObject\\n' > \"$2/FirstObject.psc\"\nprintf 'Scriptname SecondObject\\n' > \"$2/SecondObject.psc\"\nexit 0\n");
+        File.SetUnixFileMode(executable, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+        var tools = new ToolPathResolver(new UserConfigStore(Path.Combine(W.Root, "user-champollion-multi.json")));
+        Assert.True(tools.Save(ToolDependency.Champollion, executable).ok);
+        try
+        {
+            var reply = DecompileTools.DecompileScript(W.Svc, pex, out_path: dest, decompiler_backend: "champollion", bridge: tools);
+
+            Assert.StartsWith("error:", reply);
+            Assert.Contains("no Champollion output was published", reply);
+            Assert.False(File.Exists(Path.Combine(dest, "FirstObject.psc")));
+            Assert.Equal("keep me", File.ReadAllText(existing));
+        }
+        finally { try { Directory.Delete(dir, true); } catch { /* temp cleanup */ } }
+    }
+
+    [Fact]
     public void OutPathCutsNoModFolder()
     {
         var dest = FreshDir();

@@ -139,7 +139,7 @@ public sealed class CompactSeqRegenTests : IDisposable
         var (mods, inst) = Instance("warn", "SeqWarn", m => AddQuest(m, 0x900, "HcSeqQ", Quest.Flag.StartGameEnabled));
         var (seq, _) = PlantSourceSeq(mods, "SeqWarn", 0x900);
 
-        using (new FileStream(seq, FileMode.Open, FileAccess.ReadWrite, FileShare.None))
+        using (new CommitFault(seq))
         {
             using var svc = Service(inst);
             var o = svc.CompactPlugin("SeqWarn.esp", inPlace: true, acknowledge: true);
@@ -149,7 +149,7 @@ public sealed class CompactSeqRegenTests : IDisposable
             Assert.NotEmpty(o.SeqRegen.Failures);
             var rendered = WriteTools.RenderCompact(o);
             Assert.Contains("SEQ WARN", rendered);
-            Assert.Contains("could not write", rendered);
+            Assert.Contains("injected commit failure after staging", rendered);
             Assert.DoesNotContain("error:", rendered);
         }
     }

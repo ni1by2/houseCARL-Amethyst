@@ -10,6 +10,9 @@ from pathlib import Path
 import struct
 import sys
 
+NATIVE_API = 13
+NATIVE_SCHEMA = 9
+
 
 def frame(payload):
     """Send one length-prefixed payload without mixing logging into stdout."""
@@ -30,7 +33,7 @@ def read_snapshot(copy_root, profile_id, extension, deploy_mode):
         raise RuntimeError('cannot load the packaged Amethyst filegraph component')
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
-    if native.api_version() != 13 or native.schema_version() != 9:
+    if native.api_version() != NATIVE_API or native.schema_version() != NATIVE_SCHEMA:
         raise RuntimeError('unsupported Amethyst native component; this preview requires API 13 and schema 9')
     library = native.LibrarySession.open(root)
     profile = library.open_profile(profile_id)

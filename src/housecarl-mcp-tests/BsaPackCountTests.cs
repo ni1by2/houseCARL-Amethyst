@@ -173,7 +173,7 @@ public sealed class BsaPackCountTests : IDisposable
         var archive = Path.Combine(_root, "Out.bsa");
         var scratch = Path.Combine(_root, "Out.houseCARL-tmp.bsa");
         File.WriteAllText(scratch, "stale");
-        using var held = new FileStream(scratch, FileMode.Open, FileAccess.Read, FileShare.None);   // undeletable, so the pack refuses up front
+        using var held = new WriteBlock(scratch);   // undeletable, so the pack refuses up front
 
         var r = BsaArchive.Pack(Path.Combine(_root, "no-such-bsarch.exe"), src, archive, "-sse", compress: false, timeoutMs: 5_000);
 

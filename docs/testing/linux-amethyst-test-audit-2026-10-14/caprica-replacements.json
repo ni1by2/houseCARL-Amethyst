@@ -1,0 +1,132 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-14",
+  "scope": "Replace five existing Windows compiler skips with real Linux Caprica tests. No live profile changes or publication.",
+  "cases": [
+    {
+      "original_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.GoodScript_Runs_WritesPex_NoDiagnostics",
+      "current_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.GoodScript_Runs_WritesPex_NoDiagnostics",
+      "previous_outcome": "NotExecuted",
+      "current_outcome": "Passed",
+      "reason": "Replace the Windows process invocation with native Caprica and authored standalone Skyrim source.",
+      "assertions": "The compiler ran and exited zero. Mutagen reads the exact script object and Foo returning integer 17, with no diagnostics.",
+      "source": {
+        "path": "src/housecarl-mcp-tests/PapyrusCompileTests.cs",
+        "line": 261
+      }
+    },
+    {
+      "original_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.BadScript_Runs_Fails_NoPex_WithDiagnostics",
+      "current_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.BadScript_Runs_Fails_NoPex_WithDiagnostics",
+      "previous_outcome": "NotExecuted",
+      "current_outcome": "Passed",
+      "reason": "Exercise a real syntax error and parse Caprica location ranges instead of relying on Creation Kit stderr.",
+      "assertions": "Nonzero compiler exit, a diagnostic naming HCBad.psc and its offending line, and no PEX in any output directory.",
+      "source": {
+        "path": "src/housecarl-mcp-tests/PapyrusCompileTests.cs",
+        "line": 270
+      }
+    },
+    {
+      "original_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.VanillaSources_DerivedFromCompilerDir_Exist",
+      "current_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.SeparateImportSources_AreUsed_AndMissingDependencyIsDiagnosed",
+      "previous_outcome": "NotExecuted",
+      "current_outcome": "Passed",
+      "reason": "Native Caprica placement does not determine Skyrim Data/Source/Scripts. Retire that Windows installation-layout assumption and replace directory existence with actual import compilation.",
+      "assertions": "A separate authored HCParent.psc resolves and the child PEX names HCParent. Removing the import causes an explicit dependency diagnostic and no new PEX; all prior output bytes survive.",
+      "source": {
+        "path": "src/housecarl-mcp-tests/PapyrusCompileTests.cs",
+        "line": 242
+      }
+    },
+    {
+      "original_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.RecompileStillValid_Succeeds_AndRewritesThePex",
+      "current_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.RecompileStillValid_Succeeds_AndRewritesThePex",
+      "previous_outcome": "NotExecuted",
+      "current_outcome": "Passed",
+      "reason": "Retain fresh output directories and strengthen output-existence checks to verify the changed function.",
+      "assertions": "Mutagen decodes Foo returning 17 before and 29 after the edit. Output paths differ and the entire prior PEX remains byte-for-byte intact.",
+      "source": {
+        "path": "src/housecarl-mcp-tests/PapyrusCompileTests.cs",
+        "line": 284
+      }
+    },
+    {
+      "original_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.RecompileNowBroken_ReportsFailure_AndLeavesThePriorPex",
+      "current_test": "HousecarlMcpTests.PapyrusCompileEndToEndTests.RecompileNowBroken_ReportsFailure_AndLeavesThePriorPex",
+      "previous_outcome": "NotExecuted",
+      "current_outcome": "Passed",
+      "reason": "Retain the successful-then-broken edit scenario with actual Caprica and byte-level protection.",
+      "assertions": "The initial PEX decodes correctly. A broken edit fails with nonzero exit and a named source-line diagnostic, creates no new PEX, and preserves every prior output byte.",
+      "source": {
+        "path": "src/housecarl-mcp-tests/PapyrusCompileTests.cs",
+        "line": 298
+      }
+    }
+  ],
+  "archived_original_fixture": {
+    "source": "/// <summary>A fact that reports as skipped, not passed, when the Papyrus compiler is not on this machine.</summary>\npublic sealed class PapyrusCompilerFactAttribute : FactAttribute\n{\n    /// <summary>The compiler the end-to-end tests drive: <c>HOUSECARL_PAPYRUS_COMPILER</c> if set, else the probe's default.</summary>\n    public static string Compiler =>\n        Environment.GetEnvironmentVariable(\"HOUSECARL_PAPYRUS_COMPILER\") is { Length: > 0 } set\n            ? set\n            : @\"E:\\SteamLibrary\\steamapps\\common\\Skyrim Special Edition\\Papyrus Compiler\\PapyrusCompiler.exe\";\n\n    public PapyrusCompilerFactAttribute()\n    {\n        if (!File.Exists(Compiler))\n            Skip = $\"No Papyrus compiler at '{Compiler}'; set HOUSECARL_PAPYRUS_COMPILER to run this.\";\n    }\n}\n\n/// <summary><see cref=\"PapyrusCompile.CompileObject\"/> against the real PapyrusCompiler.exe on a good and a broken\n/// script, and a recompile over a prior .pex. Migrated from the <c>compile-probe</c> generator probe, layer 2. Skips\n/// where the compiler is absent, which includes CI.</summary>\n[Trait(\"tier\", \"integration\")]\npublic sealed class PapyrusCompileEndToEndTests : IDisposable\n{\n    const string Good = \"Scriptname HCGood extends Quest\\n\\nFunction Foo()\\n    Debug.Trace(\\\"ok from houseCARL\\\")\\nEndFunction\\n\";\n    const string Bad = \"Scriptname HCBad extends Quest\\n\\nFunction Foo()\\n    @@@ not valid papyrus\\nEndFunction\\n\";\n\n    readonly string _work = Path.Combine(Path.GetTempPath(), \"hc-compile-\" + Guid.NewGuid().ToString(\"N\"));\n    readonly string _out;\n    int _run;\n\n    public PapyrusCompileEndToEndTests()\n    {\n        _out = Path.Combine(_work, \"out\");\n        Directory.CreateDirectory(_out);\n        File.WriteAllText(Path.Combine(_work, \"HCGood.psc\"), Good);\n        File.WriteAllText(Path.Combine(_work, \"HCBad.psc\"), Bad);\n    }\n\n    public void Dispose()\n    {\n        try { Directory.Delete(_work, recursive: true); } catch { /* temp scratch */ }\n    }\n\n    static string Vanilla =>\n        Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(PapyrusCompilerFactAttribute.Compiler))!, \"Data\", \"Source\", \"Scripts\");\n\n    CompileResult Compile(string name)\n    {\n        var fresh = Path.Combine(_out, \"run-\" + (++_run).ToString(\"D3\"));\n        Directory.CreateDirectory(fresh);\n        return PapyrusCompile.CompileObject(PapyrusCompilerFactAttribute.Compiler, name, new[] { _work, Vanilla }, fresh);\n    }\n\n    // probe: \"vanilla sources derived from compiler dir exist\"\n    [PapyrusCompilerFact]\n    public void VanillaSources_DerivedFromCompilerDir_Exist() => Assert.True(Directory.Exists(Vanilla), Vanilla);\n\n    // probe: \"good: compiler ran\", \"good: Success + .pex written\", \"good: no diagnostics\"\n    [PapyrusCompilerFact]\n    public void GoodScript_Runs_WritesPex_NoDiagnostics()\n    {\n        var good = Compile(\"HCGood\");\n        Assert.True(good.Ran, good.RunError);\n        Assert.True(good.Success && good.PexPath is not null && File.Exists(good.PexPath), good.Stderr);\n        Assert.Empty(good.Diagnostics);\n    }\n\n    // probe: \"bad: compiler ran\", \"bad: Success=false + no .pex\", \"bad: structured diagnostics produced\"\n    [PapyrusCompilerFact]\n    public void BadScript_Runs_Fails_NoPex_WithDiagnostics()\n    {\n        var bad = Compile(\"HCBad\");\n        Assert.True(bad.Ran, bad.RunError);\n        Assert.False(bad.Success);\n        Assert.Null(bad.PexPath);\n        Assert.NotEmpty(bad.Diagnostics);\n    }\n\n    // Each invocation has a fresh output directory so stale PEX cannot be reported as fresh.\n    [PapyrusCompilerFact]\n    public void RecompileStillValid_Succeeds_AndRewritesThePex()\n    {\n        var pex = Compile(\"HCGood\").PexPath;\n        Assert.NotNull(pex);\n        var again = Compile(\"HCGood\");\n        Assert.True(again.Success && File.Exists(pex));\n        Assert.NotEqual(pex, again.PexPath);\n        Assert.True(File.Exists(again.PexPath));\n    }\n\n    // probe: \"recompile (now broken): reports failure, no new .pex\", \"the PRIOR .pex is LEFT INTACT (non-destructive)\"\n    [PapyrusCompilerFact]\n    public void RecompileNowBroken_ReportsFailure_AndLeavesThePriorPex()\n    {\n        var pex = Compile(\"HCGood\").PexPath;\n        Assert.NotNull(pex);\n\n        File.WriteAllText(Path.Combine(_work, \"HCGood.psc\"), Good.Replace(\"Debug.Trace(\\\"ok from houseCARL\\\")\", \"@@@ broken edit\"));\n        var broken = Compile(\"HCGood\");\n        Assert.False(broken.Success);\n        Assert.Null(broken.PexPath);\n        Assert.True(File.Exists(pex));\n    }\n}\n",
+    "sha256": "e27b3ee3f8134a5a77ddded3572bd1df16b3bd4edd41aacd0c4a2a1199bec2d1"
+  },
+  "additional_regression": "PapyrusCompileParseTests.CapricaDiagnosticRangesPreserveFilenameStartAndMessage preserves filename, starting coordinates and severity/message; includes parenthesized filenames and the actual unsigned lexer end-column.",
+  "product_changes": [
+    {
+      "area": "Caprica diagnostics",
+      "path": "src/housecarl-core/PapyrusCompile.cs",
+      "reason": "The pinned compiler emits filename (line, start:end): severity: message. The previous Creation Kit-only matcher discarded these diagnostics. Preserve the starting location and message within the existing schema."
+    },
+    {
+      "area": "Pinned native compiler",
+      "path": "scripts/build-linux-tools.py",
+      "reason": "PexWriter.h wrote object length in host byte order and excluded its own field. Correct the pinned source before building: lengths include that four-byte field and follow output endianness. Retain strict Mutagen validation, original source archives and the exact shipped correction recipe."
+    }
+  ],
+  "verification": {
+    "before_original_tests_with_explicit_caprica_path": {
+      "Failed": 5
+    },
+    "adapted_tests_before_product_corrections": {
+      "Passed": 11,
+      "Failed": 5
+    },
+    "focused_compiler_family": {
+      "Passed": 17
+    },
+    "full_suite": {
+      "Passed": 7136,
+      "NotExecuted": 1
+    },
+    "total": 7137,
+    "all_previous_passes_remain_passing": true,
+    "python_tests_passed": 21,
+    "build": "Release build succeeded with 0 errors; existing analyzer warnings remain.",
+    "before_trx_sha256": "d7b924a1dd41ae5ba24157fff5afca66310a7cddfa5a54931f7cfddb79a91efb",
+    "adapted_before_fixes_trx_sha256": "3f12579134ee767ac9b1bb06e3d704e210bca8ccbacaddb7e7b422b59026fc79",
+    "focused_trx_sha256": "70cc78a69431eaf6f70aa8edc8086bd171c8484c6d03da5c7fb2f5a714da2a66",
+    "full_trx_sha256": "c6f7609f396ce1ac267adfe78e3eb1f02f78be5ad357ee2d4892c50242f89e8c",
+    "python_log_sha256": "a8a076e39fe7c53feb443d86a00f8fa77384aa2c39319a65854d061f1fadfb87",
+    "native_build_log_sha256": "126715a1eaca0b2e68e518e6d3c295825820e8150a4b9913379d36e019400ffb"
+  },
+  "native_build": {
+    "caprica_commit": "e03d73bf39b7cd0c3db925d8ec8bcef27754fba6",
+    "caprica_binary_sha256": "5bb44ded7f17feb9cda57f9894ec3c623957a6411f34d7698b4f6d987173e3ad",
+    "recipe_sha256": "eab4fc4e8705d28caca6c89da3a71e85e159e2ad8eef1f59ad0d6cc1a8226ab5",
+    "correction": "temporary Caprica -> caprica CMake symlink; PexWriter.h object length includes its own field and follows output endianness",
+    "libc": {
+      "name": "glibc",
+      "version": "2.44"
+    },
+    "all_artifact_hashes_verified": true,
+    "source_archive_unchanged": true
+  },
+  "remaining_skip": "FaceGenWorldDisposeTests.AFileHeldOpenFailsTheAssertNamingTheFolderAndTheWorldIsDeletedOnceReleased remains Windows-only. Its open-file handle must prevent deletion, whereas Linux permits deletion. This task does not claim equivalent Linux cleanup-failure coverage.",
+  "missing_tool_policy": "CapricaFact explicitly skips non-Linux hosts or an absent selected compiler. A present but broken, unexecutable or uncorrected binary fails. Use HOUSECARL_TEST_CAPRICA or this checkout\u2019s dist/linux-tools/caprica.",
+  "limits": [
+    "Real native compilation and Mutagen bytecode readback were exercised; no gameplay or live Skyrim profile changes occurred.",
+    "Authored source imports replace the obsolete compiler-relative vanilla-source assumption. They do not prove completeness of vanilla or mod-specific source dependencies.",
+    "All previous passing tests remain passing, including the 263 repaired failures. One Windows handle/deletion case remains skipped.",
+    "The current native build uses glibc 2.44. Ubuntu 24.04 package acceptance, selected-Proton execution, isolated deployment acceptance and independent review remain separate release work.",
+    "Windows execution was not performed and is outside the selected Linux/Amethyst repair scope.",
+    "Public evidence contains hashes and repository-relative source links. Raw logs, TRX and generated PEX files remain private because they can contain machine paths."
+  ]
+}

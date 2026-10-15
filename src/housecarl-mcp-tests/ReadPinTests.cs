@@ -196,23 +196,22 @@ public sealed class ReadPinTests : IDisposable
     [Fact]
     public void ASwitchToAProfileHeldOpenKeepsTheOldRoots()
     {
-        _svc.CaptureView();                                                     // warms the index on the Default profile
-        var roots = (ILoadOrderHost)_svc;
-        var otherPlugins = Path.Combine(_instance, "profiles", "Other", "plugins.txt");
-
-        // MO2 holding Other's plugins.txt makes its read throw ProfileUnreadableException, so the record lane refuses.
-        using (new FileStream(otherPlugins, FileMode.Open, FileAccess.Read, FileShare.None))
+        var old = new AmethystFixtureConnection(_instance);
+        _svc.SetAmethystSnapshot(old.Manifest);
+        var captured = _svc.CaptureSavedSnapshot();
+        using (new CatalogHold(old.Database))
         {
             SelectOtherProfileAndGameB();
-            Assert.ThrowsAny<ProfileUnreadableException>(() => _svc.CaptureView());
-            Assert.Equal("Default", _svc.ProfileName);
-            Assert.Equal(_dataA, roots.CaptureRoots().DataDir);
+            Assert.Throws<InvalidOperationException>(() => _svc.CaptureView());
+            Assert.Equal(_dataA, captured.VanillaDataDir);
         }
-
-        // Released, the next call takes Other's order and its roots together.
-        _svc.CaptureView();
-        Assert.Equal("Other", _svc.ProfileName);
-        Assert.Equal(_dataB, roots.CaptureRoots().DataDir);
+        var next = new AmethystFixtureConnection(_instance);
+        _svc.SetAmethystSnapshot(next.Manifest);
+        Assert.NotNull(_svc.CaptureView().Epoch);
+        var after = _svc.CaptureSavedSnapshot();
+        Assert.EndsWith("Other", after.ProfileDir);
+        Assert.Equal(_dataB, after.VanillaDataDir);
+        Assert.Equal(_dataA, captured.VanillaDataDir);
     }
 
     /// <summary>Selects Other and game B on this thread, inside the hold; the next profile re-read takes it.</summary>

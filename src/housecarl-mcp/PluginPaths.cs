@@ -36,23 +36,34 @@ internal static class PluginPaths
     /// <summary>The MO2 layer a physical file path belongs to, as the BRANCH that answered plus the name it produced.</summary>
     internal static SourceLayer? InstallLayerOfPath(string path, Mo2Roots roots)
     {
-        // Full-path-normalize both sides, or a trailing separator or '..' from config makes this test disagree with the rest of the plumbing.
-        static string Norm(string p) { try { return Path.GetFullPath(p); } catch { return p; } }
-        path = Norm(path);
-        static bool Under(string path, string root, out string remainder)
+        static bool Under(string candidate, string root, out string remainder)
         {
             remainder = "";
-            if (root.Length == 0) return false;
-            var r = Norm(root).TrimEnd('\\', '/') + "\\";
-            if (!path.StartsWith(r, StringComparison.OrdinalIgnoreCase)) return false;
-            remainder = path.Substring(r.Length);
+            if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root)) return false;
+            string fullPath, fullRoot;
+            try
+            {
+                fullPath = Path.GetFullPath(candidate);
+                fullRoot = Path.GetFullPath(root);
+            }
+            catch { return false; }
+
+            string relative;
+            try { relative = Path.GetRelativePath(fullRoot, fullPath); }
+            catch { return false; }
+            if (relative == "." || Path.IsPathRooted(relative) || relative == ".." ||
+                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                (Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar &&
+                 relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)))
+                return false;
+            remainder = relative;
             return true;
         }
         if (Under(path, roots.OverwriteDir, out _))
             return new SourceLayer(SourceLayerKind.Overwrite, AssetResolver.OverwriteLayerName);
         if (Under(path, roots.ModsDir, out var rest))
         {
-            int slash = rest.IndexOfAny(new[] { '\\', '/' });
+            int slash = rest.IndexOfAny(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }.Distinct().ToArray());
             // a .bsa directly in mods\ belongs to no mod — no translation
             return slash > 0 ? new SourceLayer(SourceLayerKind.ModFolder, rest[..slash]) : null;
         }

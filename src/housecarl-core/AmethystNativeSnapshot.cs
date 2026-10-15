@@ -15,7 +15,8 @@ internal static class AmethystNativeSnapshot
     /// <param name="generation">Expected saved profile generation.</param>
     /// <param name="inventory">Expected catalog inventory generation.</param>
     /// <param name="accept">Validate and retain one native winner against the captured candidates.</param>
-    internal static bool Read(SqliteConnection database, string profile, long generation, ulong inventory, string deployMode, Action<JsonElement> accept)
+    internal static bool Read(SqliteConnection database, string profile, long generation, ulong inventory, string deployMode,
+        Action<JsonElement> accept, bool? deploymentOverride = null)
     {
         var extension = Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_EXTENSION")
             ?? Path.Combine(AppContext.BaseDirectory, "amethyst_filegraph.abi3.so");
@@ -71,7 +72,7 @@ internal static class AmethystNativeSnapshot
                 process.StandardInput.Close();
                 process.WaitForExitAsync(deadline.Token).GetAwaiter().GetResult();
                 if (process.ExitCode != 0) throw new InvalidOperationException("Amethyst's native snapshot reader failed: " + errors.GetAwaiter().GetResult().Trim());
-                return deployment.RootElement.GetBoolean();
+                return deploymentOverride ?? deployment.RootElement.GetBoolean();
             }
             catch (Exception ex) when (ex is EndOfStreamException or OperationCanceledException)
             {
