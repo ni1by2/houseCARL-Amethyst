@@ -1,4 +1,7 @@
 using System.Text.Json;
+using System.ComponentModel;
+using System.Runtime.InteropServices;
+using Microsoft.Win32.SafeHandles;
 
 namespace HousecarlCore;
 
@@ -291,33 +294,37 @@ public static class ResultArtifact
     }
 }
 
-/// <summary>Where one artifact is written: a caller-named <c>to_file=</c> path, or a RESERVED auto-spill path whose exclusive handle this owns; contract in docs/architecture/output-and-artifacts.md.</summary>
+/// <summary>A caller-named replacement or a new auto-spill, published only after its bytes are complete.</summary>
 public sealed class ArtifactTarget : IDisposable
 {
-    readonly FileStream? _reserved;
+    readonly bool _reserved;
+    string? _scratch;
     bool _wrote;
+    bool _disposed;
 
-    ArtifactTarget(string path, FileStream? reserved) { Path = path; _reserved = reserved; }
+    ArtifactTarget(string path, bool reserved) { Path = path; _reserved = reserved; }
+
+    internal static readonly AsyncLocal<Action<string, string>?> BeforePublishForTest = new();
 
     /// <summary>The file this artifact is written to — what the response names.</summary>
     public string Path { get; }
 
-    /// <summary>A reserved target is a new, exclusively held spill file; it has no caller-owned predecessor to back up.</summary>
-    internal bool IsReserved => _reserved is not null;
+    /// <summary>A generated target has no predecessor and must never overwrite another file.</summary>
+    internal bool IsReserved => _reserved;
 
     /// <summary>A caller-named target: no reservation, written through a temp moved into place.</summary>
-    public static ArtifactTarget Named(string path) => new(path, null);
+    public static ArtifactTarget Named(string path) => new(path, false);
 
-    /// <summary>A reserved target: the open, exclusive handle that holds the name.</summary>
-    public static ArtifactTarget Reserved(string path, FileStream held) => new(path, held);
+    /// <summary>A fresh target whose eventual publication refuses any existing destination.</summary>
+    public static ArtifactTarget Reserved(string path) => new(path, true);
 
-    /// <summary>Put the artifact on disk: a reservation writes through the handle that claimed the name, a named target through a same-directory temp moved into place — one path per kind, because the hazards are opposite.</summary>
+    /// <summary>Stage complete bytes, then publish; generated targets never replace an existing file.</summary>
     internal void Write(Action<Stream> writeInto)
     {
-        if (_reserved is not null)
+        EnsureUnwritten();
+        if (_reserved)
         {
-            using (_reserved) writeInto(_reserved);
-            _wrote = true;
+            WriteNew(writeInto);
             return;
         }
 
@@ -338,17 +345,65 @@ public sealed class ArtifactTarget : IDisposable
         }
     }
 
-    /// <summary>A target is written once; a second write would fail against the reservation's closed stream and take the landed artifact with it.</summary>
+    void WriteNew(Action<Stream> writeInto)
+    {
+        var dir = System.IO.Path.GetDirectoryName(Path);
+        if (!string.IsNullOrEmpty(dir)) Directory.CreateDirectory(dir);
+        var tmp = Path + ".tmp-" + Guid.NewGuid().ToString("N");
+        try
+        {
+            using (var stream = OpenScratch(tmp))
+            {
+                writeInto(stream);
+                stream.Flush(flushToDisk: true);
+            }
+            BeforePublishForTest.Value?.Invoke(tmp, Path);
+            File.Move(tmp, Path, overwrite: false);
+            _scratch = null;
+            _wrote = true;
+        }
+        finally { RemoveScratch(); }
+    }
+
+    /// <summary>Own the new scratch inode before wrapping it; Linux advisory locks are unnecessary before publication.</summary>
+    FileStream OpenScratch(string path)
+    {
+        if (!OperatingSystem.IsLinux())
+        {
+            var stream = new FileStream(path, FileMode.CreateNew, FileAccess.Write, FileShare.ReadWrite | FileShare.Delete);
+            _scratch = path;
+            return stream;
+        }
+        // O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW | O_CLOEXEC, mode 0600; open creates atomically without a later flock.
+        int fd = OpenNew(path, 1 | 0x40 | 0x80 | 0x20000 | 0x80000, 0x180);
+        if (fd < 0) throw new IOException($"could not create report scratch '{path}'", new Win32Exception(Marshal.GetLastPInvokeError()));
+        _scratch = path;
+        var handle = new SafeFileHandle(new IntPtr(fd), ownsHandle: true);
+        try { return new FileStream(handle, FileAccess.Write); }
+        catch { handle.Dispose(); throw; }
+    }
+
+    [DllImport("libc", EntryPoint = "open", SetLastError = true)]
+    static extern int OpenNew([MarshalAs(UnmanagedType.LPUTF8Str)] string path, int flags, uint mode);
+
+    void RemoveScratch()
+    {
+        if (_scratch is not { } path) return;
+        File.Delete(path);
+        _scratch = null;
+    }
+
+    /// <summary>A target is single-use, and cannot be written after disposal.</summary>
     internal void EnsureUnwritten()
     {
+        ObjectDisposedException.ThrowIf(_disposed, this);
         if (_wrote) throw new InvalidOperationException($"the artifact target '{Path}' has already been written");
     }
 
     public void Dispose()
     {
-        if (_reserved is null) return;   // a named target owns no handle and no file of its own
-        _reserved.Dispose();
-        if (!_wrote) try { File.Delete(Path); } catch (Exception) { }
+        RemoveScratch();
+        _disposed = true;
     }
 }
 

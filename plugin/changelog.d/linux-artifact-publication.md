@@ -1,0 +1,1 @@
+- **Generated query reports now appear only after they are complete.** Background file scanners no longer cause abandoned report files or intermittent publication failures; auto-spills preserve existing files.

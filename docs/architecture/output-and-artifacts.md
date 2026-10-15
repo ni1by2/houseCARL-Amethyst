@@ -46,10 +46,11 @@ The files listed above cite the shared contracts below under ADR 0001.
   the `ceiling` auto-spill, because the inline render hit `max_chars`, which renders the prefix it managed and claims
   the complete result only when the file holds every match, naming where the missing matches are when it cannot.
 
-### The reservation is the file
+### Generated reports publish after completion
 
-An auto-spill claims its path by CREATING the file with `FileMode.CreateNew`, not by probing `File.Exists`, and the
-artifact is written through that same exclusive handle.
+An auto-spill chooses a timestamped path with a random suffix. Choosing the path creates no file. The writer creates a unique sibling temporary file, writes and flushes all bytes, then moves it to the final path without replacement. A competing destination, including a symlink, causes a named failure and remains untouched. Failed writes remove their own temporary file.
+
+On Linux the temporary file is created with native `open(O_CREAT | O_EXCL | O_NOFOLLOW)` and mode 0600, then wrapped in a managed stream. This avoids the interval between .NET creating a file and acquiring its advisory lock. An indexer can hold a read handle on the temporary inode while the completed report is published. The final `.jsonl` path is never an empty reservation or a partially written report.
 
 A caller-named target carries the opposite hazard (it is the CALLER's file and may already hold an artifact they
 want) so it is written through a same-directory temp published through `AtomicFile.Commit`. A crash mid-write cannot pass a half
@@ -139,15 +140,16 @@ prefix so a throwing lane and a returning lane can both use it.
   with `RecordsArtifactTests.ToFileJson_TheRowsAreOmittedWhileTheTrueTotalStaysIntact` for the json twin; and
   `RecordsArtifactTests.AnAutoSpillAnnouncesTheCompleteResultWithItsRowCountNotTheRenderedPrefix` and
   `…AWindowedAutoSpillSaysWindowAndNeverClaimsTheCompleteResult` for the `ceiling` auto-spill.
-- *The reservation is the file*: the claims and their pins, three in `RecordsArtifactResultsStoreTests` and two in
-  `RecordsArtifactTests`:
+- *Generated reports publish after completion*: the publication and cleanup contracts are checked directly:
 
 | contract | pinned by |
 |---|---|
-| two same-second reservations get distinct paths, because reserving creates the file | `RecordsArtifactResultsStoreTests.SameSecondReservationsGetDistinctNamesBecauseReservingCreatesTheFile` |
-| the exclusive handle stays open across the write | `RecordsArtifactResultsStoreTests.NothingElseCanOpenAReservedFileWhileTheSpillIsBeingWritten` |
-| disposing a reservation nothing wrote deletes the file it owns | `RecordsArtifactResultsStoreTests.AReservationNoSpillWroteIsDeletedWhenItIsDisposed` |
-| a spill still lands while a scanner holds every new file without share-delete (#766) | `RecordsArtifactTests.AnAutoSpillLandsWhileAScannerGrabsEveryFileTheResultsDirectoryGains` |
+| same-second writers choose distinct names and preserve both byte sequences | `RecordsArtifactResultsStoreTests.SameSecondReservationsChooseDistinctUnpublishedPaths` |
+| the final report is absent during writing and complete when published | `ArtifactPublicationTests.AReportHasNoPublishedPathUntilAllItsBytesAreWritten` |
+| a scanner holds the temporary inode across publication | `ArtifactPublicationTests.AScannerCanHoldTheTemporaryFileAcrossPublication` and `RecordsArtifactTests.AnAutoSpillLandsWhileAScannerGrabsEveryFileTheResultsDirectoryGains` |
+| errors during writing or immediately before publication remove owned scratch files | `ArtifactPublicationTests.AFailedWriteLeavesNoPublishedReportOrTemporaryFile` and `…AFailureImmediatelyBeforePublicationRemovesOnlyOurScratch` |
+| competing files and symlinks at the final path are preserved | `ArtifactPublicationTests.AnEntryAppearingAtTheFinalPathIsNeverReplacedOrDeleted` |
+| concurrent writers retain distinct complete reports without leftover temporary files | `ArtifactPublicationTests.ConcurrentWritersPublishDistinctCompleteReports` |
 | a failed write to a caller-named target leaves that file as it was | `RecordsArtifactTests.ToFile_AWriteThatFailsAfterItStartedLeavesTheCallersFileAsItWas` |
 
 - *Re-entering an artifact*: `RecordsArtifactEpochTests.StaleReEntry_TheBodyLaneRefusalNamesBothEpochsAndTheNoOverridePosture`

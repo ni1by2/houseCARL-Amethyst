@@ -494,31 +494,36 @@ public sealed class RecordsArtifactTests : ArtifactTestBase, IClassFixture<Artif
         Assert.True(File.Exists(doc.GetProperty("spilled").GetProperty("path").GetString()!));
     }
 
-    /// <summary>A scanner that opens every file the results directory gains and holds it WITHOUT share-delete —
-    /// how an indexer opens a file it just saw appear — cannot stop a spill landing: the reservation holds its own
-    /// file open until the artifact is written, so there is no moment for a foreign handle to take (#766).</summary>
+    /// <summary>A scanner holding newly created files cannot prevent a complete report from being published.</summary>
     [Fact]
     public void AnAutoSpillLandsWhileAScannerGrabsEveryFileTheResultsDirectoryGains()
     {
         var d = OwnResults();
         using (var scanner = new GrabbingScanner(d))
         {
-            var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, max_chars: TinyScan);
-            Assert.Contains("spilled:", r);
-            Assert.DoesNotContain("could NOT be written", r);
-            // Without this the test goes vacuous when the watcher is slow: nothing held the file, so nothing was
-            // proved. On the pre-fix code this same grab is what made the spill's replace-move fail.
-            Assert.True(scanner.WaitForGrab(TimeSpan.FromSeconds(10)), "the scanner never got a handle on the spill");
+            try
+            {
+                ArtifactTarget.BeforePublishForTest.Value = (_, final) =>
+                {
+                    Assert.False(File.Exists(final));
+                    Assert.True(scanner.WaitForGrab(TimeSpan.FromSeconds(10)), "the scanner never got a handle before publication");
+                };
+                var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, max_chars: TinyScan);
+                Assert.Contains("spilled:", r);
+                Assert.DoesNotContain("could NOT be written", r);
+                Assert.True(scanner.WaitForGrab(TimeSpan.FromSeconds(10)), "the scanner never got a handle on the spill");
+            }
+            finally { ArtifactTarget.BeforePublishForTest.Value = null; }
         }
         Assert.Equal(WeaponTotal, ManifestOf(TheSpill(d)).RowCount);
     }
 
-    /// <summary>Holds a read handle on every file appearing in a directory, sharing everything BUT delete — the
-    /// handle a replace-move onto the file fails against.</summary>
+    /// <summary>Holds read handles on created and renamed files, including the temporary file before publication.</summary>
     sealed class GrabbingScanner : IDisposable
     {
         readonly FileSystemWatcher _watcher;
         readonly List<FileStream> _held = new();
+        bool _stopping;
 
         /// <summary>Wait until the scanner is holding at least one handle, so a slow watcher fails the test rather
         /// than passing it for nothing.</summary>
@@ -535,28 +540,43 @@ public sealed class RecordsArtifactTests : ArtifactTestBase, IClassFixture<Artif
 
         public GrabbingScanner(string dir)
         {
-            _watcher = new FileSystemWatcher(dir) { EnableRaisingEvents = true };
-            _watcher.Created += (_, e) =>
+            _watcher = new FileSystemWatcher(dir);
+            _watcher.Created += (_, e) => Grab(e.FullPath);
+            _watcher.Renamed += (_, e) => Grab(e.FullPath);
+            _watcher.EnableRaisingEvents = true;
+        }
+
+        void Grab(string path)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline)
             {
-                var deadline = DateTime.UtcNow.AddSeconds(5);
-                while (DateTime.UtcNow < deadline)
+                lock (_held) if (_stopping) return;
+                try
                 {
-                    try
+                    var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    lock (_held)
                     {
-                        var fs = new FileStream(e.FullPath, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
-                        lock (_held) _held.Add(fs);
-                        return;
+                        if (_stopping) fs.Dispose();
+                        else _held.Add(fs);
                     }
-                    catch (IOException) { /* held exclusively — keep trying, which is the scanner's own behaviour */ }
-                    catch (UnauthorizedAccessException) { return; }
+                    return;
                 }
-            };
+                catch (FileNotFoundException) { return; }
+                catch (IOException) { Thread.Sleep(1); }
+                catch (UnauthorizedAccessException) { return; }
+            }
         }
 
         public void Dispose()
         {
             _watcher.Dispose();
-            lock (_held) foreach (var f in _held) f.Dispose();
+            lock (_held)
+            {
+                _stopping = true;
+                foreach (var f in _held) f.Dispose();
+                _held.Clear();
+            }
         }
     }
 
@@ -1103,13 +1123,18 @@ public sealed class RecordsArtifactResultsStoreTests : IDisposable
     }
 
     [Fact]
-    public void SameSecondReservationsGetDistinctNamesBecauseReservingCreatesTheFile()
+    public void SameSecondReservationsChooseDistinctUnpublishedPaths()
     {
         using var r1 = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
         using var r2 = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
         Assert.NotEqual(r1.Path, r2.Path);
-        Assert.True(File.Exists(r1.Path));
-        Assert.True(File.Exists(r2.Path));
+        Assert.False(File.Exists(r1.Path));
+        Assert.False(File.Exists(r2.Path));
+        r1.Write(s => s.WriteByte(1));
+        r2.Write(s => s.WriteByte(2));
+        Assert.Equal(new byte[] { 1 }, File.ReadAllBytes(r1.Path));
+        Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(r2.Path));
+        Assert.Equal(2, Directory.GetFiles(_dir).Length);
     }
 
     [Fact]
@@ -1121,20 +1146,24 @@ public sealed class RecordsArtifactResultsStoreTests : IDisposable
     }
 
     [Fact]
-    public void AReservationNoSpillWroteIsDeletedWhenItIsDisposed()
+    public void AnUnwrittenReservationCreatesNoFileToDelete()
     {
         string p;
-        using (var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef")) p = r.Path;
+        using (var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef"))
+        {
+            p = r.Path;
+            Assert.False(File.Exists(p));
+        }
         Assert.False(File.Exists(p));
+        Assert.Empty(Directory.GetFiles(_dir));
     }
 
-    /// <summary>The reservation holds its file exclusively until the write lands, so no scanner or indexer can be
-    /// holding a handle on it when the artifact is written — the race #766 was.</summary>
+    /// <summary>The final path cannot be opened until its manifest and all rows have been written.</summary>
     [Fact]
-    public void NothingElseCanOpenAReservedFileWhileTheSpillIsBeingWritten()
+    public void ReadersCannotOpenTheFinalReportBeforePublication()
     {
         using var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
-        Assert.Throws<IOException>(() => new FileStream(r.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+        Assert.Throws<FileNotFoundException>(() => new FileStream(r.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
 
         using var w = new ResultArtifact.Writer();
         w.WriteRow((jw, _) => { jw.WriteStartObject(); jw.WriteString("formid", "000001:A.esp"); jw.WriteEndObject(); });
