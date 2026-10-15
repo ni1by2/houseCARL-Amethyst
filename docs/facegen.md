@@ -1,0 +1,191 @@
+# Dark faces: what causes them, and what fixes each
+
+A baked NPC face is two preprocessed per-NPC files (a head mesh (`.nif` under `facegeom`) and a face tint
+(`.dds` under `facetint`)) and two independent systems decide who wins them. Plugin load order decides which
+mod's `NPC_` record wins. The MO2 virtual file system decides which mod's file wins. A dark, grey or black face
+is almost always the **desync** between those two: the file that wins was baked from a different appearance than
+the record that wins, or nothing wins the keyed path at all and the engine regenerates the head from the record
+and drops the tint. That is why xEdit shows no conflict while the face is dark.
+
+`housecarl_check findings=["facegen"]` reports the mismatch in one row per NPC. The classes below
+explain each finding, its fix, and the limits of the check.
+
+## The path is a pure function of the FormID
+
+```
+meshes\actors\character\facegendata\facegeom\<defining master>\00<6-hex local id>.nif
+textures\actors\character\facegendata\facetint\<defining master>\00<6-hex local id>.dds
+```
+
+The folder is the **defining master** (the plugin after the colon in `XXXXXX:Plugin.esp`) never the conflict
+winner. For a vanilla NPC an overhaul re-dresses, that is `Skyrim.esm\`, not the overhaul's folder. There is no
+cross-folder fallback: the engine reads that one path and regenerates if nothing wins there. The leading index
+byte is masked to `00` because the file already lives in the defining plugin's own named folder.
+
+Because the path is that transform, the file layer answers for a whole order in one call:
+`housecarl_asset_status` with `formids=` a list of NPCs derives both halves of each bake and resolves them
+together, one row per path, each naming the other half's winner beside its own. The whole-order sweep is two
+calls (`housecarl_records types=["NPC_"] to_file=<file>` for the identity set, then
+`housecarl_asset_status formids=["@<file>"] to_file=<file2>`) and the artifact's `winner_mod`, `pair_winner_mod`,
+`winner_kind` and `pair_differs` columns are the pairing map. Use it when you want the file-layer provenance
+over the order; `housecarl_check findings=["facegen"]` is what adds the record winner and the classes below — and
+what drops the two populations named at the end of this page. `formids=` reads no record, so it applies neither
+exclusion: every templated follower and every horse, dragon and draugr shell in the list comes back as two rows
+with no provider. Nor does it know the two kinds `check` puts in `never_baked` rather than `bake_absent` (the
+Player and CharGen presets; below). A row count off the artifact is therefore not a finding count, and the
+artifact's `pair_exists=false` total will not match `check`'s `bake_absent`.
+
+`pair_differs` is decided on the winners' owning **mods** (`winner_mod` / `pair_winner_mod`), not on their
+provider names (`winner` / `pair_winner`, which for a BSA is the archive's own filename). Vanilla ships every
+head in `Skyrim - Meshes0.bsa` and every tint in `Skyrim - Textures0.bsa` (two archives, one product) so
+comparing names calls most of the order split; on the measured order that is 2,719 NPCs against 375.
+
+And `pair_differs` is provenance, not a class: it is true for a cross-product `split_bake` and for a
+`family_split` alike — on that same order the 375 include 220 NPCs whose head is Additional Dremora Faces and
+whose tint is its own texture pack, which is the benign one. Separating them is `housecarl_check
+findings=["facegen"]`'s job, using the table below.
+
+## The check's classes, and the fix for each
+
+| Class | What it means | Fix |
+|---|---|---|
+| `tint_absent` | The mesh wins; the `.dds` has no provider anywhere. | Place the pair from the mesh's source. If the tint exists nowhere, re-bake (Ctrl+F4). |
+| `mesh_absent` | The tint wins; the `.nif` has no provider. | Place the pair from the tint's source. |
+| `bake_absent` | The NPC needs a bake and has neither half anywhere. | Nothing to place — re-bake in the Creation Kit. |
+| `split_bake` | Both halves win, from different products: the head from one mod, the tint from another. | Re-place both halves from one source. |
+| `stale_bake` | A clean same-source pair whose winning record disagrees with the facegen owner's plugin on the face fields. | Forward the appearance from the facegen owner, or re-bake. |
+| `family_split` | Both halves win, from two mods of one product or a repack of its own archive. Benign by default; a few carry real risk. | Usually nothing. Verify only if that NPC renders wrong. |
+| `foreign_index` | A same-local-id file in the same folder carrying a different load-order index byte — a bake keyed to somebody else's order. | Rename it to the canonical `00`-prefixed name, or re-bake. |
+| `inert` | The key resolves to a placed reference, to no record at all, to a plugin not in the order, or the filename is malformed. | Nothing. No actor reads that path. |
+| `never_baked` | Neither half anywhere, for the Player or a CharGen preset, which the Creation Kit never bakes. Counted, listed only under its own token. | Usually nothing. If it is placed and renders dark, bake it (Ctrl+F4). |
+
+Two exclusions the check applies silently in the counts and never as a fault. An NPC whose `Template` is set with
+the `Traits` flag inherits its appearance and has no bake of its own — recompute the path against the template's
+FormID if you need it. An NPC whose race lacks the `FaceGenHead` flag (a horse, a dragon, a draugr shell) has no
+baked head at all.
+
+The Creation Kit does not bake four kinds of NPC (measured on the vanilla masters, 2026-09-26): a Traits-templated
+NPC (2 of 2,464 baked), one on a race without `FaceGenHead` (1 of 1,940), a CharGen face preset (the
+`IsCharGenFacePreset` flag in `ACBS`; 0 of 201), and the Player (`000007:Skyrim.esm`). The first two are the exclusions above. A preset or the Player with
+neither half on disk is `never_baked`, not `bake_absent`: counted in the header, listed only when named, like
+`family_split`, and carried in every `to_file=` artifact. A preset duplicated into a placed follower and never baked
+lands there too, so list the class when auditing followers. An NPC with no head parts (`PNAM`) is not on that list:
+the CK bakes it from the race's default head (146 of the 178 untemplated vanilla ones on a race that bakes, with no
+face data either, are baked), and a placed one without a bake shows dark. It reports `bake_absent`. When it also has no `FaceMorph`, `FaceParts` or
+`TintLayers`, the row says so and asks whether it is placed, because the unbaked vanilla ones are voice and dummy
+actors (`InvisibleNPC`, the `VoiceType*` speakers). Any NPC of these kinds with a half on disk classifies like every
+other NPC.
+
+## What the sweep covers, and what it will not claim
+
+**The population is a union.** Every `NPC_` in scope that needs a bake, plus every facegen file on disk whose key
+resolves to nothing. Enumerating from the records alone misses an orphaned folder; enumerating from the files alone
+misses an NPC that has no facegen at all. Neither half is the answer on its own.
+
+**The file half is reported only on an unscoped sweep.** Under `plugins=`, `exclude=` or a record scope
+(`formids=`, `editorid_contains=`), a file for an NPC outside the narrowing is not inert — it is out of scope, and
+calling it inert would be a claim about records the call never read. The response says so rather than leaving the
+absence to silence.
+
+**`stale_bake` compares against the bake's own plugin, not the runner-up.** The pole is a plugin that both ships in
+the winning half's MO2 layer and actually touches the record, because the bake was made from it; the plugin one step
+below the winner is a different question and was ~25% false on the measured order. Two deltas are excluded from the
+verdict: `HairColor`, which is applied at runtime and is not in the baked files, and a list whose items are the same
+in a different order, because the Creation Kit bakes from the values rather than the order a plugin wrote them in.
+
+**A clean pair whose record test could not run is counted apart, never counted clean.** When the facegen owner's mod
+ships no plugin that defines the NPC (a texture-only mod, overwrite, Data) there is no pole, and the header states
+the count. When the owner's folder could not be listed at all, its plugins are unknown: those pairs are counted
+separately and the folder is named with the reason. A test that did not run must not read as a test that passed.
+
+**`family_split` is a name-based inference, not a verdict.** Two layers are called one product when one name is a
+boundary prefix of the other (at least six characters, and the next character is not alphanumeric), which is all the
+data layer has: an update folder beside its base folder is structurally identical to a genuine cross-bake. It is
+counted in the header and listed only when the caller names the class — on the measured order 268 of 408 pair
+mismatches were one product's two halves, and listing them by default buries the 126 that are real. Withheld, not
+dropped: a `to_file=` artifact carries every class.
+
+## The causes behind the classes
+
+**Record winner versus file winner.** The dominant cause. Load order picks record B while the VFS picks mod A's
+file, so the head that renders was built from an appearance the winning record does not carry. Often a
+non-appearance plugin (a bug-fix patch, a behaviour mod) wins the record and reverts head parts toward vanilla
+while the overhaul's file still wins.
+
+**A winner that ships no facegen.** An override changed the appearance but the author shipped only the plugin, so
+the record points at a bake that exists nowhere.
+
+**Precedence traps in the files themselves.** A correct bake sitting in a BSA that loses the VFS race; a leftover
+loose file from an old, disabled or uninstalled mod winning over the correct archive — loose beats BSA even when
+the mod providing it is disabled.
+
+**ESL compaction and merges.** Compacting FormIDs renumbers local ids but does not rename the facegen files, so
+the engine looks up the new id and finds nothing. A merge changes the defining master too, so both the folder and
+the filename move. There is a second half to this one: each head `.nif` embeds the FaceTint `.dds` path in
+texture slot 6, and a rename alone leaves that path pointing at the old FormID. `housecarl_nif_set` rewrites it
+(`op="set_path"`, `texture_slot=6`); FaceGenEslify and its siblings automate the rename but leave that as a manual
+step.
+
+**Head parts and dependencies.** A record referencing a head part whose mesh is absent or replaced, or a required
+appearance framework (High Poly Head, KS Hairdos) disabled while the record still references it, gives partial
+darkness, clipping, or floating geometry rather than a flat dark face.
+
+**Baked against the wrong order.** Facegen generated in the Creation Kit while a different override resolved
+produces the right filename with the wrong content — a wrong face, not a dark one.
+
+**A missing master or an orphan override.** The record cannot resolve at all. The tell is a dark actor whose
+*correct* file wins — a file fix will not cure it.
+
+## What is not this
+
+These are real dark-face reports that the check cannot see, and reaching for a file placement on one changes
+nothing the user can observe.
+
+- **A purple or bright-white face** is a missing texture file, a different lane entirely. A dark face has a file;
+  it is the wrong one.
+- **Player-only grey**, with NPCs fine, after a reload, crash or game update, is RaceMenu/SKEE co-save state. If
+  every RaceMenu slider and overlay is gone game-wide, `skee64.dll` did not load: match SKSE, the runtime and
+  RaceMenu, and read `skse64.log`.
+- **A brown face matching nothing** is weight baked into the save. Re-issue `setnpcweight`; if it is save-baked, a
+  new game or ReSaver.
+- **Grey that clears on save-and-reload** with a matched record and file is texture memory — oversized or
+  uncompressed `.dds` files. Compress them with Cathedral Assets Optimizer or Ordenator.
+- **An appearance distributed at runtime** by SPID, or an `FFxxxxxx` base id on a dynamically spawned actor, is
+  not in the plugin records houseCARL reads. SkyPatcher *is* readable: `housecarl_records` with
+  `source={"overlay":"skypatcher","state":"post"}` returns the record after that layer replays.
+- **A face built from a RaceMenu `.jslot` preset** with no exported head is not facegen at all. Sculpt → Export
+  Head, or Ctrl+F4, and then the files can be placed.
+- **A neck seam with a correctly coloured face** is a skin-path problem, not a tint one: the head `.nif` hardcodes
+  the vanilla skin while a per-race body framework gives a different body. `housecarl_nif_inspect` reads the
+  slot-0/1 skin paths and `housecarl_nif_set` rewrites them.
+
+## Fixing it
+
+**Make the right files win.** `housecarl_place` with a `formid` member and no `kind` places both halves at once,
+into a new MO2 mod folder the user then enables. Place both halves from the same source — one alone re-creates the
+mismatch. A same-FormID, same-defining-master placement needs no mesh edit: the `.nif` already embeds the path
+that resolves to the destination's `.dds`. Only a renumber or a re-home breaks that, and then slot 6 needs
+rewriting.
+
+**Bring the right appearance onto the record.** When the file is the intended appearance and a non-appearance
+plugin won the record, `housecarl_forward` copies the whole `NPC_` from the appearance plugin into a winning
+override. For a partial mask, `housecarl_apply` with the seven face fields (`HeadParts`, `FaceMorph`,
+`FaceParts`, `TintLayers`, `HairColor`, `HeadTexture`, `TextureLighting`) writes just those.
+
+**Re-bake, when nothing correct exists.** Only the Creation Kit writes new geometry. Open the CK, load the plugin
+and Set as Active File, reach the actors through the Actors tree (Ctrl+F4 does not fire on results found through
+the `*All` search), select them and press Ctrl+F4. Do not include child actors — a unique child TRI gives the
+"shiny potato" result. houseCARL has no CK automation; this is a procedure to hand over, never a claim to have
+done it.
+
+**Face Discoloration Fix** is a runtime safety net, not a fix: it regenerates tint from the record so a missing
+bake renders in the right colour rather than black. It does not restore a custom sculpt that lived only in the
+baked mesh, and it masks the on-disk desync — so "looks fine in game" with FDF installed does not mean the
+diagnosis is clean.
+
+## What a green result does not prove
+
+The check reports provenance: which mod wins each half, and which plugin wins the record. It cannot read a
+`.dds`'s pixels, cannot bake geometry, and cannot judge a render. Verification past that point is not
+houseCARL's: reload the actor's head in game with `setnpcweight`, check the face with FDF disabled, and confirm on
+a save where the NPC never loaded — residue baked into a save is ReSaver's job, not this tool's.

@@ -5,8 +5,9 @@ CommonLibSSE-NG, a scaffold that wires the library in correctly, and a build→d
 enough that "does it load?" is answered in seconds, not by guesswork. This reference walks that path.
 
 Everything here is the C++ / build-system / SKSE-loader surface. The moment a plugin registers Papyrus
-native functions, the `.psc` signatures on the other side of that boundary belong to houseCARL's
-`papyrus-reference` skill — this reference names the C++ registration call and stops. See
+native functions, the `.psc` signatures on the other side of that boundary are a
+`housecarl:papyrus-reference` lookup where the function already exists, and the skill body's declaration
+grammar where you are inventing it — this reference names the C++ registration call and stops. See
 `native-papyrus-functions.md` for the marshalling layer.
 
 ## Contents
@@ -227,8 +228,25 @@ target_compile_options(${PROJECT_NAME} PRIVATE /Zc:preprocessor)           # req
 target_precompile_headers(${PROJECT_NAME} PRIVATE PCH.h)                   # required (above)
 ```
 
-Your `vcpkg.json` must carry `spdlog`, `fmt`, `directxtk`, `directxmath`, `rapidcsv` (rapidcsv because VR
-defaults on). One pairing hazard: the bare `<SKSE/Impl/PCH.h>`-only PCH is **incompatible** with an
+Your `vcpkg.json` must carry the dependency set from **Consumer obligations** above — here `spdlog`, `fmt`,
+`directxtk`, `directxmath`, `rapidcsv` (rapidcsv because VR defaults on), plus `xbyak` on the field note
+there rather than as a requirement — **and a `builtin-baseline`**, the commit sha of the
+vcpkg checkout the manifest pins its package versions to (`git -C %VCPKG_ROOT% rev-parse HEAD`). The field
+is only *required* once the manifest uses versioning — a `version>=` constraint, an `overrides` block, or a
+registry — and a manifest that omits it and uses none of those resolves against the ports in the current
+checkout and configures fine. Carry it anyway: the failure when it is needed names versioning rather than
+the missing field, and without it a build is pinned to whatever the checkout happens to be at:
+
+```json
+{
+  "name": "myplugin",
+  "version-string": "1.0.0",
+  "builtin-baseline": "<sha of your vcpkg checkout>",
+  "dependencies": ["spdlog", "fmt", "directxtk", "directxmath", "rapidcsv", "xbyak"]
+}
+```
+
+One pairing hazard: the bare `<SKSE/Impl/PCH.h>`-only PCH is **incompatible** with an
 include-free `plugin.cpp` — `Impl/PCH.h` supplies no `RE`/`SKSE` API, so `SKSEPluginLoad`,
 `SKSE::GetMessagingInterface`, `RE::ConsoleLog` would be undeclared. Either make the PCH hello-world-shaped
 (as shown above) or give `plugin.cpp` explicit includes.
@@ -455,3 +473,6 @@ proven fact:
   a runtime claim awaiting a real VR log.
 - **The libxse lineage's runtime coverage** (does its non-NG fork do AE/VR at all?) is unknown; treat any
   libxse `commonlibsse-template` multi-runtime story as unproven.
+- **The `builtin-baseline` requirement** is vcpkg behaviour, not a CommonLibSSE-NG one, so it carries no
+  `path:line` here: which manifests vcpkg rejects for a missing baseline has been read from its
+  versioning docs, not observed failing on this machine.

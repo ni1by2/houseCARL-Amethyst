@@ -9,7 +9,7 @@ The bundled grammar reference for the `kid-authoring` skill (part of the 5-skill
 distributor-framework cluster — sibling to `spid-authoring` / `skypatcher-authoring`). It documents
 KID's `_KID.ini` grammar — the line shape, all 19 item types, every filter and modifier, the per-type
 traits, the value tables, and the `ExclusiveGroup` feature — reconstructed into a consistent,
-lookup-friendly form. The `SKILL.md` (Layer 2, not yet authored) drives lookups against it.
+lookup-friendly form. The `SKILL.md` drives lookups against it.
 
 KID has **one line grammar** across all types (like SPID), so the corpus is shaped as: `grammar-core`
 (the line + mechanics) + `types` (what you tag) + `filters` (which items) + `traits` (per-type
@@ -28,12 +28,11 @@ so the corpus draws on two complementary sources:
   filter dispatch, file discovery, and `ExclusiveGroup`.
 - **User-facing docs + worked examples — the Nexus #55728 description.** Authoritative for the value
   tables (enum numbers), the per-type Form-filter list, and the copy-paste examples.
-- **Raw captures live at `dev/references/KID/`:**
-  - `_extracted/kid-description-55728.txt` — the **verbatim Nexus description**, captured 2026-06-04
-    via Claude in Chrome with all **18 `bbc_spoiler` blocks force-revealed** (every value table + the
-    9 worked examples). See `dev/references/KID/source-notes.md` for the capture method (incl. the
-    sanitizer-bypass via in-page blob download).
-  - `source-notes.md` — provenance, the MIT-source file list, and the findings reconciled here.
+- **Raw captures are dev-side and not distributed.** The verbatim Nexus description was captured
+  2026-06-04 with all 18 `bbc_spoiler` blocks force-revealed (every value table + the 9 worked
+  examples), and the capture method, the MIT-source file list and the reconciled findings were
+  written up beside it. That working directory is gitignored: it resolves in neither a clone nor the
+  plugin, so no file here points at it.
 
 ## Coverage
 
@@ -61,10 +60,14 @@ so the corpus draws on two complementary sources:
     (30 = Head, not Head/Hair; 31 = Hair, not LongHair) and completed slots 44–61.
   - **Resistance `R(value)` numbers (39–45)** — now printed (same AV enum), replacing the earlier
     "read it from xEdit" punt.
+- **Two filter questions closed from source 2026-09-09** (`src/LookupFilters.cpp` +
+  `include/KeywordData.h`, read at tag `v3.5.0.rc1`, commit `a7a5589`):
+  - A **plugin-name Form filter is by the defining plugin**, not the winning one — the filter becomes
+    an `RE::TESFile*` and the test is `IsFormInMod` on the item's own FormID (`filters.md` §2).
+  - A **`*wildcard` tests three channels only** — EditorID, display name, and the item's own keyword
+    EditorIDs, all case-insensitive; a `.nif` term tests the model path instead. Archetype and
+    actor-value names are exact-match channels and a wildcard never reaches them (`filters.md` §3).
 - **Minor residuals to confirm at the §8 review (or if a test line fails):**
-  - The exact **Matches-vs-Wildcards** boolean: documented per the shared powerof3 `Filters<T>` model
-    (the same ALL/NOT/MATCH/ANY struct SPID uses, confirmed in `Defs.h`) + the description's
-    "progressively restricts" — `LookupFilters.cpp` was not deep-read field-by-field.
   - The **per-type Form-filter** table (Location→music type, etc.) is from the description's own list;
     not each entry was cross-checked against `LookupFilters.cpp`.
 
@@ -75,7 +78,12 @@ so the corpus draws on two complementary sources:
 consulted: `include/Defs.h` (line comment + `Filters<T>`), `include/Traits.h` (all 10 trait classes),
 `include/Cache.h` (`itemTypes`, archetype map, ActorValue map, FormType set), `include/LookupConfigs.h`
 (section enum, `Data` defaults), `src/LookupConfigs.cpp` (the parser — split, modifier dispatch, type
-switch, chance), `include/ExclusiveGroups.h` + `src/ExclusiveGroups.cpp` (the `ExclusiveGroup` feature).
+switch, chance), `include/ExclusiveGroups.h` + `src/ExclusiveGroups.cpp` (the `ExclusiveGroup` feature), and — added
+2026-09-09 at tag `v3.5.0.rc1`, commit `a7a5589` — `src/LookupFilters.cpp` (`PassedFilters`,
+`HasFormOrStringFilter`, `HasFormFilter`, `HasStringFilter`, `ContainsStringFilter`) and
+`include/KeywordData.h` (`detail::formID_to_form`, where a plugin name becomes a `TESFile*` and a
+`.nif` wildcard is sanitized). `TESFile::IsFormInMod` and `BSFixedString::contains` were read in
+CommonLibSSE-NG (`src/RE/T/TESFile.cpp`, `include/RE/B/BSFixedString.h`).
 
 The numeric enums KID forwards but doesn't define were confirmed against **`powerof3/CommonLibSSE@dev`**
 (the library KID builds on): `RE/M/MagicSystem.h` (Delivery, CastingType, SpellType), `RE/A/ActorValues.h`
@@ -102,13 +110,13 @@ references/
 - **Layer 1 (this corpus) — DONE pending Aaron's review.** The five reference files above. Built only
   after the complete reference was in hand (description captured + MIT source cross-checked) — the
   project's no-guesswork gate.
-- **Layer 2 — DONE pending review.** `SKILL.md` (procedural + bundled-or-warn, modeled on
-  `spid-authoring`; carries `name: kid-authoring` per the **revised 2026-06-04 standard** — `name:` =
-  folder, required for Codex + Claude dual-host), `index.jsonl` (router, consistent with the siblings),
-  and `evals/eval_set.json` (`HOUSECARL_SKILL_AUTHORING.md` §6.5 fan-out — 20 fresh-context Sonnet
-  agents, anonymized routing menu: **recall 10/10, specificity 10/10**, both gates passed). §8 shipping
-  checklist walked — all **19** items pass (SKILL.md 133 lines; description 1029 chars; `name:` = folder
-  per item 2; added to `$Skills` in `scripts/build-plugin.ps1` per item 19; skill-creator invoked).
+- **Layer 2 — DONE, rewritten 2026-09-08.** `SKILL.md` (procedural + bundled-or-warn; frontmatter is
+  `name` / `description` / `compatibility`), `index.jsonl` (router, consistent with the siblings), and
+  `evals/evals.json` (the published eval shape: 26 trigger cases — 14 positive, 12 negative — plus one
+  output-quality case, each run in a with-skill and a without-skill arm from the packaged tree).
+  Measured after the rewrite: `SKILL.md` **181 lines**, body **171 lines / 10,664 bytes**, `description`
+  **441 characters**. The pre-rewrite file was 135 lines with a 383-character description; the
+  "133 lines; 1029 chars" figures this row used to carry were wrong in both columns.
 
 ## Cluster note
 
@@ -116,6 +124,7 @@ references/
 skill + SKILL.md: KID's FormID is **suffix-tilde** `0x123~Plugin.esp` (shared with SPID/CID; SkyPatcher
 uses prefix-pipe). KID files are **flat `Data\*_KID*.ini`** with **no `[Section]` headers** (SPID is
 flat `Data/*_DISTR.ini`; SkyPatcher uses `SKSE\Plugins\` per-type subfolders). The deciding question
-across the family is **what receives the change**: an **item** record → KID; an **NPC** → SPID; a
-**container** → CID; a record's **own fields** → SkyPatcher. KID and SPID share the author and the
+across the family is **what receives the change**: an **item** record → KID; **NPCs** → SPID, best by
+group, with one named NPC usually SkyPatcher's; a **container**, and a record's **own fields** →
+SkyPatcher. KID and SPID share the author and the
 `+`/`-`/`*` modifier idioms — keep idiom wording aligned with `spid-authoring`.

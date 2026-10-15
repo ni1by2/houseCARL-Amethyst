@@ -1,39 +1,10 @@
 namespace HousecarlCore;
 
-/// <summary>
-/// Crash-atomic file commit — the one primitive every houseCARL write funnels its FINAL swap through.
-///
-/// A complete file is first STAGED into a temp on the SAME volume as its final path (the caller's job), then handed
-/// here. <see cref="Commit"/> swaps it into place with NO unlink-then-rename window:
-///
-///  • target EXISTS  → <c>File.Replace</c>: an atomic content swap. A crash mid-commit leaves either the OLD
-///    complete file or the NEW complete file — never a missing or half-written one. Linux installs the staged inode;
-///    existing handles and Amethyst hardlinks continue to reference the old inode until they are reopened or
-///    redeployed.
-///  • target ABSENT  → <c>File.Move</c> (an atomic rename onto a free name): <c>File.Replace</c> cannot create — it
-///    requires an existing target — so the fresh-file case it throws on is served by a rename, itself atomic.
-///
-/// This replaces the former product-wide <c>File.Move(overwrite: true)</c>. Same-volume staging is the caller's
-/// invariant — <c>File.Replace</c> THROWS across volumes (a loud, correct refusal) rather than silently degrading to a
-/// non-atomic copy. Platform-specific permission or metadata failures also surface instead of silently degrading.
-///
-/// Holds no handle at rest. The atomic-commit guard verifies Linux open-inode semantics, byte-exact output, consumed
-/// staging, and loud pre-swap failure.
-/// </summary>
-// PUBLIC (facegen-diagnostics Phase 3): place_asset writes from the MCP layer (not a core friend), so the primitive is
-// public. <see cref="Commit"/> is the low-level swap (caller stages same-volume); <see cref="WriteAllBytes"/> is the
-// high-level convenience that does the same-volume staging for you (it materializes the bytes into a sibling temp, so a
-// cross-volume SOURCE never reaches Commit). The .esp/BSA/config writers keep calling Commit directly with their own staging.
+/// <summary>Atomic file commit — the <c>File.Replace</c> swap every houseCARL write's FINAL step funnels through; contract in docs/architecture/output-and-artifacts.md.</summary>
 public static class AtomicFile
 {
-    /// <summary>Crash-atomically write <paramref name="bytes"/> to <paramref name="finalPath"/>: stage them into a SIBLING
-    /// temp (same volume as the target, so the swap is never cross-volume — the place tool may read its source from another
-    /// volume or a BSA, but the bytes are in hand by here) and <see cref="Commit"/> it into place. The caller must have
-    /// created the destination directory. THROWS (Q3, never a silent partial write) on any failure, deleting the temp first
-    /// so no scratch is left; on a throw the prior <paramref name="finalPath"/>, if any, is byte-intact (Commit's guarantee).</summary>
-    /// <param name="finalPath">Native destination path whose parent directory already exists.</param>
-    /// <param name="bytes">Complete replacement content to stage before the atomic swap.</param>
-    /// <exception cref="Exception">Staging or committing failed; the original destination remains byte-intact.</exception>
+    internal static readonly AsyncLocal<Action<string, string>?> BeforeCommitForTest = new();
+    /// <summary>Atomically write <paramref name="bytes"/> to <paramref name="finalPath"/> via a sibling temp; throws on any failure, leaving the prior file byte-intact.</summary>
     public static void WriteAllBytes(string finalPath, byte[] bytes)
     {
         var staged = finalPath + ".houseCARL-tmp";                 // sibling of the target ⇒ same volume ⇒ Commit's invariant holds
@@ -50,29 +21,20 @@ public static class AtomicFile
         }
     }
 
-    /// <summary>Commit a fully-written <paramref name="stagedPath"/> onto <paramref name="finalPath"/> crash-atomically.
-    /// Both MUST be on the same volume. THROWS (never a silent no-op) if the staged file is missing or the swap fails —
-    /// the caller reports it (Q3); on any throw the prior <paramref name="finalPath"/>, if it existed, is byte-intact.</summary>
-    /// <param name="stagedPath">Complete same-volume temporary file; consumed after a successful commit.</param>
-    /// <param name="finalPath">Native destination path to create or replace.</param>
-    /// <exception cref="IOException">The same-volume rename/replacement could not be completed.</exception>
-    /// <exception cref="UnauthorizedAccessException">Filesystem permissions prohibit the replacement.</exception>
+    /// <summary>Commit a fully-written <paramref name="stagedPath"/> onto <paramref name="finalPath"/>, which must be on the same volume; throws rather than degrading.</summary>
     public static void Commit(string stagedPath, string finalPath)
     {
+        if (OperatingSystem.IsLinux() && File.Exists(finalPath))
+            File.SetUnixFileMode(stagedPath, File.GetUnixFileMode(finalPath));
+        BeforeCommitForTest.Value?.Invoke(stagedPath, finalPath);
         try
         {
             File.Replace(stagedPath, finalPath, destinationBackupFileName: null);
         }
-        // Catch FileNotFoundException ONLY, and deliberately: a cross-volume or metadata failure surfaces as
-        // IOException and, given the same-volume invariant, is a caller/filesystem fault we WANT loud with the
-        // original retained. Widening this catch would silently degrade the guarantee (Q3).
+        // FileNotFoundException ONLY: every other failure must stay loud — see the note.
         catch (FileNotFoundException)
         {
-            // File.Replace requires an existing destination; the fresh-file case (no prior output) it throws on is
-            // served by a rename instead. overwrite:true keeps that branch idempotent against the (mutex-guarded,
-            // houseCARL-owned-path) sub-millisecond TOCTOU where the target appears between the probe and here — there
-            // is no original to lose on a path just judged fresh. A MISSING SOURCE still throws FileNotFoundException
-            // here, so File.Move re-throws it loud rather than masking it as a silent no-op.
+            // File.Replace cannot create, so the fresh-file case is served by a rename; a missing source still throws.
             File.Move(stagedPath, finalPath, overwrite: true);
         }
     }

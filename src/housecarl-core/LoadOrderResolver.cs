@@ -1,3 +1,4 @@
+using System.Text;
 using Mutagen.Bethesda;
 using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Plugins.Binary.Parameters;
@@ -8,276 +9,282 @@ using Mutagen.Bethesda.Strings;
 
 namespace HousecarlCore;
 
-// ======================================================================
-//  LoadOrderResolver — the net-new load-order resolver (MCP step §8.3, fork §6-C).
-//
-//  This is the read-side capability §5.2 of the PRFAQ specifies, realized:
-//    held structural index (small) + on-demand targeted parse, holding no record bodies —
-//    AND, under Option B (Aaron-locked 2026-06-04), holding NO PLUGIN FILE HANDLES AT REST.
-//
-//  SHAPE (Aaron-confirmed 2026-06-01 off the body-fetch probe; handle model proven by handle-probe 2026-06-04):
-//    • Held index — PURE DATA, ZERO file handles — built by enumerating every plugin ONE AT A TIME (low→high
-//      priority: open i → enumerate → DISPOSE → i+1, never all-open-at-once):
-//        - Index     : FormKey → (winnerOverlay, overrideCount)  — ALL keys, the O(1) "what wins" fast path (§8.1).
-//        - Overriders: FormKey → ordered overlay indices          — MULTI-override keys ONLY (the "list of touching
-//                        plugins" §5.2 calls for; singletons' sole overrider IS the winner, so they need no list).
-//      ~125–185 MB at full-modlist scale (within §5.2's "few hundred MB"); NO record bodies, NO mmap handles held.
-//    • On-demand body fetch = open the plugin, re-enumerate + match the FormKey, then DISPOSE when the work ends.
-//      A per-call OverlaySession (see OpenSession) opens each plugin a tool call touches AT MOST ONCE and disposes
-//      every one when the call returns. Measured (handle-probe 2026-06-04): open/read/dispose ~0.3–0.8 ms, invisible
-//      under the 200–2000 ms LLM round-trip; no leak. The write path takes its known-master set + a nested-override
-//      link cache from the SAME session, so a write opens handles only for its own duration too.
-//    • mtime freshness = re-stat the plugin files on demand; rebuild the index (one-at-a-time again) if any changed.
-//      Manager/profile freshness is handled by the Amethyst adapter before it supplies a new ordered path list; this
-//      core type deliberately knows nothing about profiles, deployment, filemaps, or manager configuration.
-//
-//  WHY zero handles at rest (Option B): the original Windows implementation exposed how a mapped overlay could block
-//  atomic replacement. Linux normally permits replacement while an old inode is open, but retaining thousands of
-//  overlays would still waste resources and let a reader observe obsolete inode contents after a staging write.
-//  Opening only within a short session therefore remains the portable and least surprising lifetime model.
-//
-//  ORDER IS INJECTED. Build takes the plugin paths already in priority order. Override COUNTS/DEPTHS and tree
-//  MEMBERSHIP are order-independent; winner IDENTITY is only as correct as that input. AmethystLoadOrder is
-//  responsible for interpreting the active profile, loadorder.txt, Data_Core, and staging sources before this class
-//  is built. Keeping that boundary here prevents manager formats from leaking into the record engine.
-//
-//  Q3 (no silent failure): a plugin the index build cannot fully read — it won't OPEN, or it contains a
-//  record Mutagen cannot PARSE (a strict-validation throw mid-enumeration; the common real case is a
-//  malformed subrecord an upstream ESP ships and the game engine ignores) — is EXCLUDED wholesale and the
-//  reason is COLLECTED + surfaced (LoadFailures / ExcludedPlugins → load_order_status), never skipped
-//  silently. ONE such record used to kill the whole build (bricking EVERY tool call, since all resolve
-//  through this index); now it costs only its own plugin. The throw is non-resumable, so we can't skip just
-//  the bad record (Mutagen 0.53.1: the group enumerator can't advance past it) — exclusion is per-PLUGIN,
-//  and atomic (a partially-read plugin never half-populates the index). A body the index says exists but the
-//  plugin can't yield still throws (a real inconsistency, named).
-// ======================================================================
+// LoadOrderResolver — a held structural index over the active order plus on-demand targeted parse: no record bodies and
+// no plugin file handles at rest, the order injected. Contracts in docs/architecture/load-order-resolver.md.
 
-/// <summary>One plugin's version of a record in a conflict tree. The body belongs to the
-/// <see cref="LoadOrderResolver.OverlaySession"/> used to build the tree and must be consumed before that session is
-/// disposed.</summary>
-/// <param name="Plugin">The plugin filename that supplies this version.</param>
-/// <param name="Record">The lazily read Mutagen record body supplied by that plugin.</param>
 public sealed record ConflictNode(string Plugin, IMajorRecordGetter Record);
 
-/// <summary>A record's full conflict tree: every touching plugin's body, in priority order (winner last).</summary>
-/// <param name="FormKey">The stable Skyrim record identifier shared by every node.</param>
-/// <param name="RecordType">The human-readable Mutagen record type with overlay suffixes removed.</param>
-/// <param name="Nodes">All versions in ascending priority order. The final node is the winner.</param>
 public sealed record ConflictTree(FormKey FormKey, string RecordType, IReadOnlyList<ConflictNode> Nodes)
 {
-    /// <summary>The highest-priority node. A constructed tree always contains at least one node.</summary>
     public ConflictNode Winner => Nodes[^1];
-
-    /// <summary>Whether more than one plugin defines the record.</summary>
     public bool IsConflict => Nodes.Count > 1;
 }
 
-/// <summary>The winner + depth for a FormKey, without fetching any body (the O(1) fast path).</summary>
-/// <param name="FormKey">The queried Skyrim record identifier.</param>
-/// <param name="WinnerPlugin">The filename of the highest-priority plugin that defines the record.</param>
-/// <param name="OverrideDepth">The number of plugins in the active order that define the record.</param>
 public readonly record struct WinnerInfo(FormKey FormKey, string WinnerPlugin, int OverrideDepth);
 
-/// <summary>One record of a plugin with its whole-order conflict status (no body fetched).</summary>
-/// <param name="FormKey">The record identifier.</param>
-/// <param name="RecordType">The human-readable record type.</param>
-/// <param name="PluginWins">True when the inspected plugin supplies the active winning version.</param>
-/// <param name="OverrideDepth">The number of active plugins that define this record.</param>
-/// <param name="TouchingPlugins">Every defining plugin in ascending priority order, winner last.</param>
 public readonly record struct RecordStatus(
     FormKey FormKey, string RecordType, bool PluginWins, int OverrideDepth, IReadOnlyList<string> TouchingPlugins);
 
-/// <summary>
-/// Builds a compact, manager-neutral index over an already resolved Skyrim load order and opens record bodies only
-/// for the duration of a caller-owned session. Amethyst path and profile parsing belongs outside this class: callers
-/// provide absolute native plugin paths from lowest to highest priority.
-/// </summary>
+/// <summary>A plugin could not be opened during a scan, although it opened when the index was built; thrown from the record stream so a scan reports it rather than skipping it.</summary>
+public class PluginUnreadableException : Exception
+{
+    public string PluginName { get; }
+    public PluginUnreadableException(string pluginName, Exception inner)
+        : this(pluginName, inner,
+               $"could not read '{pluginName}': it opened when the load order was indexed but not now — another " +
+               "program is probably holding it open. Close that program and run this again. " +
+               $"({inner.GetType().Name}: {inner.Message})") { }
+
+    protected PluginUnreadableException(string pluginName, Exception inner, string message)
+        : base(message, inner) => PluginName = pluginName;
+}
+
+/// <summary>A plugin OPENED but its records could not be walked to the end — a different fault from <see cref="PluginUnreadableException"/>, worded as one, reported the same way.</summary>
+public sealed class PluginUnscannableException : PluginUnreadableException
+{
+    public PluginUnscannableException(string pluginName, Exception inner)
+        : base(pluginName, inner,
+               $"could not finish reading '{pluginName}': it opened, but its records could not be walked to the end " +
+               "— the file has probably changed since the load order was indexed. Run this again, and check the " +
+               $"plugin in xEdit if it repeats. ({inner.GetType().Name}: {inner.Message})") { }
+}
+
+/// <summary>A BASELINE master (Skyrim.esm / Update.esm) is active but cannot be opened; thrown from the master-set builders, the point every write lane funnels through.</summary>
+public sealed class UnopenableBaselineMasterException : Exception
+{
+    public string PluginName { get; }
+    public UnopenableBaselineMasterException(string pluginName)
+        : base($"'{pluginName}' is a BASELINE master (Skyrim.esm / Update.esm) and is ACTIVE in your load order, but " +
+               "houseCARL cannot open it — see load_order_status for the reason. Nothing can be written while that is " +
+               "true, for either reason alone: a new patch must list the baselines in its header (emitting one without " +
+               "them produces a plugin the game treats as malformed), and no write can resolve references against a " +
+               "master it cannot read. Repair or replace that plugin in MO2 and retry. Nothing was written.")
+        => PluginName = pluginName;
+}
+
+/// <remarks>The master-set builders enforce a WRITE policy in this read-side class on purpose; contract in docs/architecture/load-order-resolver.md.</remarks>
 public sealed class LoadOrderResolver : IDisposable
 {
     readonly string[] _paths;                          // every active plugin's path, priority order (masters → … → winner)
     readonly string[] _names;                          // index → plugin filename (e.g. "Skyrim.esm"); == Path.GetFileName(path)
     readonly Dictionary<string, int> _nameToIdx;       // plugin filename → index (last copy of a duplicate name wins = priority)
-    DateTime[] _mtimes;                                // last-write at the last index build, per path (freshness baseline)
-    readonly string? _dataDir;                         // vanilla source folder (normally Data_Core) used only for localized-string fallback
+    FileStamp[] _stamps;                               // last-write AND length at the last index build, per path (freshness baseline)
+    readonly string? _dataDir;                         // real game-Data folder (Skyrim.esm's dir) — localized-strings fallback source (OpenOverlay)
+    ReverseReferenceIndex? _reverse;                   // lazy, held BESIDE the snapshot so a snapshot swap does not drop it
+    readonly object _reverseGate = new();              // one build at a time; a second caller waits rather than walking the order twice
 
-    /// <summary>Optional: given a plugin filename this index does NOT contain, a clause saying WHY it isn't in the
-    /// active order — or null if the injector can't say. Every "not in the load order" refusal below is a dead end for
-    /// the reader as it stands: the commonest cause by far is a plugin that IS installed and IS in an enabled mod but
-    /// is disabled in the active Amethyst profile, and a flat not-found sends an agent searching for a file that is
-    /// already staged. The resolver cannot answer that itself and must not learn how: it is built from a bare ordered
-    /// path list and knows nothing about Amethyst files. The layout/service layer therefore injects the explanation.
-    /// Direct <c>Build(paths)</c> callers may omit it and retain a simple spelling suggestion.</summary>
+    /// <summary>The real game-Data folder this order resolved, for callers OUTSIDE the session that open a plugin through <see cref="OpenOverlay"/> and need the same strings resolution.</summary>
+    internal string? DataDir => _dataDir;
+
+    /// <summary>Optional: why a plugin filename this index does NOT contain isn't in the active order, or null. Injected, because the resolver knows nothing of MO2;
+    /// contract in docs/architecture/load-order-resolver.md.</summary>
     readonly Func<string, string?>? _explainAbsence;
 
-    /// <summary>One index build's ENTIRE output, swapped in as a SINGLE reference write. The service refreshes the
-    /// index under its own gate, but READERS run outside that gate (concurrent tool calls hold the resolver while a
-    /// sibling call's freshness check may rebuild) — when the per-build state lived in five separate fields, a reader
-    /// could observe a NEW index next to OLD overriders mid-swap (a KeyNotFound on a freshly-multi key, surfaced as an
-    /// opaque transport error pre-Guard). Bundling the build into one immutable snapshot, captured ONCE per operation
-    /// (single-shot members and the scan wrappers capture at CALL time; <see cref="Capture"/> pins a whole logical
-    /// operation), makes a torn view impossible by construction (HCBR-2026-06-11-01 hardening, extended by
-    /// HCBR-2026-06-11-02's IndexView). The volatile field gives the swap release/acquire visibility.</summary>
+    /// <summary>One index build's ENTIRE output, swapped in as a SINGLE reference write so no reader sees a torn view; contract in docs/architecture/load-order-resolver.md.</summary>
     internal sealed class IndexSnapshot   // internal (not private) so IndexView's ctor can take it; never leaves the assembly
     {
-        /// <summary>Every indexed FormKey mapped to its winning plugin-array index and total definition count.</summary>
-        public readonly Dictionary<FormKey, (int winner, int count)> Index;
-
-        /// <summary>Only conflicting FormKeys, mapped to every defining plugin-array index in priority order.</summary>
-        public readonly Dictionary<FormKey, int[]> Overriders;
-
-        /// <summary>User-facing descriptions of plugins that could not be indexed completely.</summary>
-        public readonly List<string> LoadFailures;
-
-        /// <summary>Plugin-array indices excluded from every record-reading path for this build.</summary>
-        public readonly HashSet<int> Excluded;
-
-        /// <summary>Excluded plugin filename to actionable failure reason.</summary>
-        public readonly Dictionary<string, string> ExcludedPlugins;
-
-        /// <summary>The largest number of active definitions observed for one FormKey.</summary>
+        public readonly Dictionary<FormKey, (ushort winner, ushort count, byte type)> Index;   // ALL keys — winner, depth, and the winner's class code
+        public readonly Dictionary<FormKey, int[]> Overriders;                // MULTI keys only — ordered touching overlay indices
+        public readonly IndexTypes Types;                                     // the class codes this build interned
+        public readonly Dictionary<FormKey, byte[]> MixedTypes;               // MIXED keys only — each provider's own class code, aligned with Overriders
+        public readonly List<string> LoadFailures;                            // per-plugin index-build failures (open OR parse), always surfaced
+        public readonly HashSet<int> Excluded;                                // overlay indices excluded this build — never re-touched by any path
+        /// <summary>The SUBSET of <see cref="Excluded"/> whose file could not be OPENED at all; its own set, not derived from the reason string — prose can be reworded, membership is a fact.</summary>
+        public readonly HashSet<int> Unopenable;
+        public readonly Dictionary<string, string> ExcludedPlugins;           // excluded plugin name → reason
         public readonly int MaxDepth;
+        public readonly string Epoch;                                         // this build's fingerprint — immutable with the snapshot
 
-        /// <summary>Collects every piece of one completed build so publication requires one reference assignment.</summary>
-        public IndexSnapshot(Dictionary<FormKey, (int winner, int count)> index, Dictionary<FormKey, int[]> overriders,
-                             List<string> loadFailures, HashSet<int> excluded, Dictionary<string, string> excludedPlugins, int maxDepth)
-        { Index = index; Overriders = overriders; LoadFailures = loadFailures; Excluded = excluded; ExcludedPlugins = excludedPlugins; MaxDepth = maxDepth; }
+        public readonly OrderStamp Stamp;
+        public readonly ContainmentIndex Containment;                         // child → parent, off the same one-pass walk
+
+        /// <summary>Per plugin index: is it a LIGHT plugin? Read off the header while the build had the overlay open, and the .esl extension counts too.</summary>
+        public readonly bool[] Light;
+
+        /// <summary>Per plugin index: is it in the MASTER BLOCK (a header Master flag, or a .esm/.esl filename)? A separate fact from <see cref="Light"/> — an esp-fe is light but regular in the order.</summary>
+        public readonly bool[] MasterBlock;
+
+        /// <summary>The FIRST active plugin whose kind could not be read, as a POSITION not a flag: a runtime FormID at or after it cannot be answered, one before it can. -1 when all are known.</summary>
+        public readonly int FirstUnknownKind;
+
+        public readonly string? FirstUnknownKindName;
+
+        public readonly Lazy<RuntimeSlots> Slots;
+
+        public IndexSnapshot(Dictionary<FormKey, (ushort winner, ushort count, byte type)> index, Dictionary<FormKey, int[]> overriders,
+                             IndexTypes types, Dictionary<FormKey, byte[]> mixedTypes, List<string> loadFailures, HashSet<int> excluded, HashSet<int> unopenable,
+                             Dictionary<string, string> excludedPlugins, int maxDepth, string epoch,
+                             bool[] light, int firstUnknownKind, string? firstUnknownKindName,
+                             ContainmentIndex containment, bool[] masterBlock)
+        {
+            Index = index; Overriders = overriders; Types = types; MixedTypes = mixedTypes; LoadFailures = loadFailures; Excluded = excluded; Unopenable = unopenable;
+            ExcludedPlugins = excludedPlugins; MaxDepth = maxDepth; Epoch = epoch; Light = light; Containment = containment;
+            MasterBlock = masterBlock;
+            FirstUnknownKind = firstUnknownKind; FirstUnknownKindName = firstUnknownKindName;
+            Slots = new Lazy<RuntimeSlots>(() => RuntimeSlots.Build(light));
+            Stamp = OrderStamp.For(epoch, excludedPlugins.Keys);
+        }
+
+        /// <summary>The seek type plugin <paramref name="idx"/>'s copy of <paramref name="fk"/> is walked by; null with <paramref name="known"/> true when this build saw no copy there.</summary>
+        public Type? CopyType(FormKey fk, int idx, out bool known)
+        {
+            known = Index.TryGetValue(fk, out var e);
+            if (!known) return null;
+            int at = e.count == 1 ? (e.winner == idx ? 0 : -1) : Array.IndexOf(Overriders[fk], idx);
+            if (at < 0) return null;
+            return Types.Seek(e.type == IndexTypes.Mixed ? MixedTypes[fk][at] : e.type);
+        }
+
+        /// <summary>The record class of the winning copy, or null for a key this build did not see.</summary>
+        public Type? WinnerClass(FormKey fk)
+            => Index.TryGetValue(fk, out var e) ? Types.Class(e.type == IndexTypes.Mixed ? MixedTypes[fk][^1] : e.type) : null;
+    }
+
+    /// <summary>The runtime address tables for ONE build: which plugin loads at each load index and at each light index. The engine numbers the two kinds separately.</summary>
+    internal sealed class RuntimeSlots
+    {
+        public readonly int[] FullToPlugin;
+        public readonly int[] LightToPlugin;
+        public readonly int[] SlotOfPlugin;
+        public readonly int FullCount;
+        public readonly int LightCount;
+
+        RuntimeSlots(int[] fullToPlugin, int[] lightToPlugin, int[] slotOfPlugin, int fullCount, int lightCount)
+        { FullToPlugin = fullToPlugin; LightToPlugin = lightToPlugin; SlotOfPlugin = slotOfPlugin; FullCount = fullCount; LightCount = lightCount; }
+
+        /// <summary>0xFE is the light block and 0xFF the runtime-dynamic block, so a full plugin loads at 0x00–0xFD.</summary>
+        public const int MaxFullSlots = 0xFE;
+        public const int MaxLightSlots = 0x1000;
+
+        public static RuntimeSlots Build(bool[] light)
+        {
+            var full = new int[MaxFullSlots];
+            var lite = new int[MaxLightSlots];
+            Array.Fill(full, -1);
+            Array.Fill(lite, -1);
+            var slotOf = new int[light.Length];
+            int nFull = 0, nLight = 0;
+            for (int i = 0; i < light.Length; i++)
+            {
+                if (light[i]) { slotOf[i] = nLight < MaxLightSlots ? nLight : -1; if (nLight < MaxLightSlots) lite[nLight] = i; nLight++; }
+                else { slotOf[i] = nFull < MaxFullSlots ? nFull : -1; if (nFull < MaxFullSlots) full[nFull] = i; nFull++; }
+            }
+            return new RuntimeSlots(full, lite, slotOf, nFull, nLight);
+        }
     }
 
     volatile IndexSnapshot _snap;
 
-    /// <summary>Per-plugin index-build failures (couldn't open, or contains a record Mutagen can't parse) — each
-    /// excluded plugin named with its reason, surfaced never silently skipped (Q3). Same content as
-    /// <see cref="ExcludedPlugins"/>, formatted "name: reason" for log/harness display.</summary>
+    /// <summary>Per-plugin index-build failures, each excluded plugin named with its reason — the display form of <see cref="ExcludedPlugins"/>.</summary>
     public IReadOnlyList<string> LoadFailures => _snap.LoadFailures;
 
-    /// <summary>Plugins EXCLUDED from this build (name → why): unopenable, or carrying a record Mutagen can't parse.
-    /// Their records are not in the index and no path will re-touch them; load_order_status reports them so the user
-    /// can fix/remove the upstream plugin (Q3 — the exclusion is visible, not silent).</summary>
+    public bool IsUnopenable(string pluginName)
+        => _nameToIdx.TryGetValue(pluginName, out int i) && _snap.Unopenable.Contains(i);
+
+    /// <summary>Plugins EXCLUDED from this build (name → why): unopenable, or carrying a record Mutagen cannot parse. load_order_status reports them, so the exclusion is visible.</summary>
     public IReadOnlyDictionary<string, string> ExcludedPlugins => _snap.ExcludedPlugins;
 
-    /// <summary>The number of plugin source paths in the injected active order, including excluded plugins.</summary>
     public int PluginCount => _paths.Length;
-
-    /// <summary>The number of distinct FormKeys successfully indexed in the current snapshot.</summary>
-    public int RecordCount => _snap.Index.Count;
-
-    /// <summary>The number of FormKeys defined by more than one successfully indexed plugin.</summary>
-    public int ConflictCount => _snap.Overriders.Count;
-
-    /// <summary>The greatest override depth found in the current snapshot.</summary>
+    public int RecordCount => _snap.Index.Count;            // distinct FormKeys across the order
+    public int ConflictCount => _snap.Overriders.Count;     // FormKeys overridden by >1 plugin
     public int MaxDepth => _snap.MaxDepth;
 
-    /// <summary>Every plugin's filename, in priority order (PURE DATA — no handles). The known-name list the write
-    /// harnesses scan to decide which masters are in the order; replaces the old held-overlay ModKey enumeration.</summary>
+    public string Epoch => _snap.Epoch;
+
+    public OrderStamp Stamp => _snap.Stamp;
+
     public IReadOnlyList<string> PluginNames => _names;
 
-    // ---- Per-call overlay session (Option B: open on demand, dispose at call end; ZERO handles at rest) ----
+    // ---- Per-call overlay session: open on demand, dispose at call end, zero handles at rest ----
 
-    /// <summary>Open a per-call overlay session. ONE tool invocation (or one write) opens every plugin it needs
-    /// THROUGH the session — each at most once — and DISPOSES the session when the call returns, releasing every
-    /// handle. Between calls the resolver holds none. A session is single-call/single-thread; the index it reads is
-    /// immutable between rebuilds, so concurrent calls each take their own session and never share open overlays.</summary>
+    /// <summary>Open a per-call overlay session: one call opens every plugin it needs THROUGH it, each at most once, and disposes them all at return;
+    /// contract in docs/architecture/load-order-resolver.md.</summary>
     public OverlaySession OpenSession() => new(this);
 
-    /// <summary>The lifetime scope for the overlays one tool call needs: opens each plugin lazily, caches it for the
-    /// call (so a record fetched, then read field-by-field, stays valid), and disposes them ALL on Dispose. The reader
-    /// keeps results valid by holding the session open until it has materialised what it returns (the service reads
-    /// fields off a fetched body before its session disposes; the write path keeps the source body + link cache valid
-    /// through serialize).</summary>
+    /// <summary>What this resolver's reads cost, for the cost tests; the service hands in its own so a rebuild keeps counting.</summary>
+    public CostCounters Counters { get; }
+
     public sealed class OverlaySession : IDisposable
     {
         readonly LoadOrderResolver _r;
         readonly Dictionary<int, ISkyrimModGetter> _open = new();
         internal OverlaySession(LoadOrderResolver r) => _r = r;
 
-        /// <summary>The plugin at <paramref name="idx"/>, opened once and cached for this call (lazy mmap overlay —
-        /// records parse on access). Released when the session disposes.</summary>
+        /// <summary>The counters of the resolver this session reads through.</summary>
+        public CostCounters Counters => _r.Counters;
+
         internal ISkyrimModGetter Overlay(int idx)
         {
             if (!_open.TryGetValue(idx, out var ov))
+            {
+                System.Threading.Interlocked.Increment(ref _r.Counters.SessionOverlayOpens);
                 _open[idx] = ov = OpenOverlay(_r._paths[idx], _r._dataDir);
+            }
             return ov;
         }
 
-        /// <summary>Open EVERY plugin (priority order) and return them as the FULL known-master set the multi-master
-        /// write path hands the serializer (<see cref="WriteEngine.WritePatch(SkyrimMod,System.Collections.Generic.IReadOnlyList{ISkyrimModGetter},string)"/>):
-        /// with every master resolvable + ordered, a cross-master patch serializes with a lean only-referenced header.
-        /// Opened for THIS write only and disposed with the session (Option B). [Tier-1: the full set — byte-identical to
-        /// the xEdit-proven write path. A future Tier-2 could open only the patch-referenced masters so even a write stays
-        /// near-handle-free; a tracked optimization, not done here.] To write INTO a patch that is itself ACTIVE in the
-        /// order, the write path uses <see cref="AllMastersExcept"/> instead — mapping the write TARGET would lock it
-        /// against its own overwrite (the active-patch self-lock); that exclusion is a CORRECTNESS fix, separate from the
-        /// Tier-2 perf idea above.</summary>
+        /// <summary>Open EVERY plugin (priority order) as the FULL known-master set the multi-master write path hands the serializer; a write into an active patch uses <see cref="AllMastersExcept"/>.</summary>
         public IReadOnlyList<ISkyrimModGetter> AllMasters()
         {
-            // Excluded plugins (BuildIndex couldn't fully parse) are INTENTIONALLY retained here — NOT filtered by
-            // the snapshot's Excluded set. A clean plugin can override a record whose ORIGIN master is an excluded one, and that master
-            // must still appear in the patch's output header for FormID resolution; dropping it would corrupt the
-            // header. Safe: Overlay() opens lazily (no parse, no enumeration → no throw), and the serializer parses a
-            // master's bodies ONLY when the patch references them — and an excluded plugin's OWN records can't be
-            // referenced (they're unreadable). So this is the one read-path that touches excluded plugins on purpose,
-            // and it cannot re-throw. (If a future change enumerates or link-caches over this full set, it must
-            // re-introduce the Excluded skip — the per-read "single choke point" is BuildIndex, not this method.)
-            var arr = new ISkyrimModGetter[_r._paths.Length];
-            for (int i = 0; i < arr.Length; i++) arr[i] = Overlay(i);
+            // Excluded plugins that OPEN are retained on purpose; the unopenable ones cannot be, and are skipped and named.
+            // Contract in docs/architecture/load-order-resolver.md.
+            var arr = new List<ISkyrimModGetter>(_r._paths.Length);
+            for (int i = 0; i < _r._paths.Length; i++)
+            {
+                if (SkipUnopenable(i)) continue;
+                arr.Add(Overlay(i));
+            }
             return arr;
         }
 
-        /// <summary>Like <see cref="AllMasters"/>, but NEVER opens an overlay on <paramref name="excludeFileName"/> — the
-        /// file the caller is about to serialize to. THE ACTIVE-PATCH WRITE FIX (Heisen bug 2026-06-08): when the write
-        /// target is itself active in the load order (the normal case once a generated patch is enabled), opening a
-        /// memory-mapped overlay on it — as <see cref="AllMasters"/> does for EVERY plugin — gives the writer an
-        /// unnecessary live view of the file it is replacing. Windows refuses that replacement; Linux permits it but
-        /// leaves the overlay reading the old inode. Avoiding the target is therefore correct on both platforms.
-        ///
-        /// <para>The fix is to never OPEN that overlay: a patch is never its own master, so the target is never NEEDED in
-        /// the resolve set, and SKIPPING its index leaves no handle to collide with the serialize. Proven (writelock-probe
-        /// 2026-06-08): a held overlay locks the target even when it is excluded from the load-order ARGUMENT — it is the
-        /// open handle, not the argument membership, that locks, so the index must be skipped (Overlay never called),
-        /// NOT merely filtered from the returned list. Master derivation is unaffected: only the target itself is dropped,
-        /// and a patch never links to itself, so every master its records DO reference is still opened + ordered. Excluded
-        /// (unparseable) plugins are retained for the same reason <see cref="AllMasters"/> retains them (see above).</para>
-        ///
-        /// <para>This closes the MASTER-SET source of a target overlay. A write path can hold one from ANOTHER source —
-        /// <see cref="WritePatchBuilder.Apply"/>'s Phase-1 winner fetch, when re-editing a record the active patch itself
-        /// overrides (there the resolved winner IS the target) — which this can't reach; <see cref="ReleaseOverlay"/>
-        /// closes that one before the serialize. Both together = no mapped handle on the target survives the write.</para></summary>
+        /// <summary>Like <see cref="AllMasters"/>, but never OPENS an overlay on <paramref name="excludeFileName"/> — the file about to be serialized, which a mapped handle would lock;
+        /// contract in docs/architecture/load-order-resolver.md.</summary>
         public IReadOnlyList<ISkyrimModGetter> AllMastersExcept(string excludeFileName)
         {
             var list = new List<ISkyrimModGetter>(_r._paths.Length);
             for (int i = 0; i < _r._paths.Length; i++)
-                if (!string.Equals(_r._names[i], excludeFileName, StringComparison.OrdinalIgnoreCase))
-                    list.Add(Overlay(i));   // SKIP the target's index — never map the file we're about to overwrite
+            {
+                if (string.Equals(_r._names[i], excludeFileName, StringComparison.OrdinalIgnoreCase)) continue;  // never map the file we're about to overwrite
+                if (SkipUnopenable(i)) continue;                                                                 // and never try to map one that cannot be opened
+                list.Add(Overlay(i));
+            }
             return list;
         }
 
-        /// <summary>Dispose and forget any overlay this session holds on <paramref name="fileName"/> — the file the caller
-        /// is about to serialize to. The SECOND half of the active-patch write fix (with <see cref="AllMastersExcept"/>):
-        /// it closes a target overlay opened from a source AllMastersExcept can't reach — notably
-        /// <see cref="WritePatchBuilder.Apply"/>'s Phase-1 winner fetch
-        /// (<see cref="GetRecord(OverlaySession,string,FormKey)"/> → <see cref="Overlay"/>),
-        /// which, when you re-edit a record the active patch itself overrides, opens an overlay on the target (the winner
-        /// IS the target) that would otherwise still be mapped at serialize and refuse the overwrite (writelock-apply-probe).
-        ///
-        /// <para>SAFE to call before the write: the only consumer of a fetched winner body is
-        /// <see cref="WriteEngine.GenericGetOrAddAsOverride"/>, which DEEP-COPIES it into the patch mod, so releasing the
-        /// source overlay cannot strip content from the patch about to be written (proven: the edited override reads back
-        /// intact after the release). A no-op when no overlay is open on the file — the common case, and Create/Remove,
-        /// which never winner-fetch the target.</para></summary>
+        /// <summary>The named plugins' overlays in priority order, shared with this session's later master sets; one absent or unopenable is left out.</summary>
+        public IReadOnlyList<ISkyrimModGetter> MastersNamed(IEnumerable<string> names) =>
+            names.Select(n => _r._nameToIdx.TryGetValue(n, out var i) ? i : -1)
+                 .Where(i => i >= 0 && !_r._snap.Unopenable.Contains(i)).Distinct().OrderBy(i => i).Select(Overlay).ToList();
+
+        /// <summary>Is this index the could-not-be-OPENED exclusion class, which no master set can contain? Records the name, because a sorted multi-master header then refuses naming it.</summary>
+        bool SkipUnopenable(int i)
+        {
+            if (!_r._snap.Unopenable.Contains(i)) return false;
+            var name = _r._names[i];
+            // A BASELINE master must never be skipped: that would silently emit a plugin missing a mandatory master, so this refuses.
+            // Contract in docs/architecture/load-order-resolver.md.
+            if (Array.Exists(WriteEngine.BaselineMasters, bm => string.Equals(bm.FileName.String, name, StringComparison.OrdinalIgnoreCase)))
+                throw new UnopenableBaselineMasterException(name);
+            _skippedUnopenable.Add(name);
+            return true;
+        }
+
+        readonly SortedSet<string> _skippedUnopenable = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>The plugins this session's master-set builds skipped as unopenable; a SET with an OrdinalIgnoreCase comparer, so a serialize failure can be attributed to one of them.</summary>
+        public IReadOnlySet<string> SkippedUnopenable => _skippedUnopenable;
+
+        /// <summary>Dispose and forget any overlay this session holds on <paramref name="fileName"/> — the second half of the active-patch write fix. A no-op when none is open.</summary>
         public void ReleaseOverlay(string fileName)
         {
             var hits = _open.Keys.Where(i => string.Equals(_r._names[i], fileName, StringComparison.OrdinalIgnoreCase)).ToList();
             foreach (var i in hits) { (_open[i] as IDisposable)?.Dispose(); _open.Remove(i); }
         }
 
-        /// <summary>An immutable link cache over ONE named plugin (opened in this session) — built ON DEMAND for the
-        /// write path to reconstruct a NESTED record's parent chain when overriding it (Cell / the Placed* family / INFO
-        /// / Navmesh / Landscape; the winner overlay is where the winning nested override + its context live). COSTLY and
-        /// never held past the session (a per-mod link cache is GBs to retain). null if the plugin isn't in the order.</summary>
+        /// <summary>An immutable link cache over ONE named plugin in this session, for the write path's nested-parent reconstruction. Costly, never held past the session; null if not in the order.</summary>
         public ILinkCache? LinkCacheFor(string pluginName)
             => _r._nameToIdx.TryGetValue(pluginName, out int idx) ? Overlay(idx).ToImmutableLinkCache() : null;
 
-        /// <summary>Closes every overlay opened by this session. Calling it more than once is harmless.</summary>
         public void Dispose()
         {
             foreach (var ov in _open.Values) (ov as IDisposable)?.Dispose();
@@ -285,145 +292,112 @@ public sealed class LoadOrderResolver : IDisposable
         }
     }
 
-    /// <summary>Creates a resolver from normalized arrays prepared by <see cref="Build"/> and immediately publishes
-    /// its first complete index snapshot.</summary>
-    LoadOrderResolver(string[] paths, string[] names, Dictionary<string, int> nameToIdx, DateTime[] mtimes,
-                      Func<string, string?>? explainAbsence)
+    LoadOrderResolver(string[] paths, string[] names, Dictionary<string, int> nameToIdx, FileStamp[] stamps,
+                      Func<string, string?>? explainAbsence, CostCounters counters)
     {
-        _paths = paths; _names = names; _nameToIdx = nameToIdx; _mtimes = mtimes;
+        _paths = paths; _names = names; _nameToIdx = nameToIdx; _stamps = stamps;
         _explainAbsence = explainAbsence;
+        Counters = counters;
         _dataDir = ComputeDataDir(nameToIdx, paths);
         _snap = BuildIndex();
+        // Settle the heap on the process's first build only; a rebuild does not repay it. Measured in #728, landed in #802.
+        if (System.Threading.Interlocked.Exchange(ref _heapSettled, 1) == 0)
+            GC.Collect(2, GCCollectionMode.Aggressive, blocking: true, compacting: true);
     }
 
-    /// <summary>The trailing clause for a refusal naming a plugin this order does not contain. Prefers the injected
-    /// EXPLANATION (<see cref="_explainAbsence"/>) — a real cause with a real remedy — and falls back to the
-    /// did-you-mean suggester when nothing can be explained, which is the right split: a name that resolves to a real
-    /// installed plugin should never be answered with a spelling guess, and a genuine typo has no cause to state.
-    /// One home, so the refusal sites below cannot drift apart on the wording.</summary>
-    internal string AbsenceClause(string pluginName)
-        => ExplainAbsence(pluginName) is { } why ? " " + why : NameSuggestion(pluginName);
+    static int _heapSettled;   // process-wide on purpose: the heap is one per process, so the settle is a one-time GC, not a count
 
-    /// <summary>ONLY the injected explanation, or null when there is none — the half a caller needs when the presence
-    /// of a real CAUSE changes more than one sentence (read_record drops its generic posture tail once a specific cause
-    /// has been stated, and the did-you-mean is not a cause). Kept separate from <see cref="AbsenceClause"/> because
-    /// that one deliberately returns a non-empty string in BOTH cases, so its length says nothing about which
-    /// happened.</summary>
+    /// <summary>The trailing clause for a refusal naming a plugin this order does not contain: the injected explanation when there is one, else the did-you-mean. One home.</summary>
+    internal string AbsenceClause(string pluginName) => AbsenceClause(pluginName, out _);
+
+    /// <summary>The same clause, also handing back the CAUSE it found (null when it fell through to the did-you-mean); one explainer invocation serves both.</summary>
+    internal string AbsenceClause(string pluginName, out string? cause)
+    {
+        cause = ExplainAbsence(pluginName);
+        return cause is { } why ? " " + why : NameSuggestion(pluginName);
+    }
+
+    /// <summary>ONLY the injected explanation, or null — the half a caller needs when the presence of a real CAUSE changes more than one sentence.</summary>
     internal string? ExplainAbsence(string pluginName)
     {
         try { return _explainAbsence?.Invoke(pluginName); }
         catch { return null; }   /* an explainer that throws (an unreadable profile mid-call) must never turn a clean
-                                    refusal into a crash — fall through to the suggester, the pre-injection behaviour (Q3). */
+                                    refusal into a crash — fall through to the suggester. */
     }
 
-    /// <summary>The did-you-mean for a name nothing can explain — the fallback half of <see cref="AbsenceClause"/>,
-    /// exposed so a caller that already asked for the explanation need not re-invoke the explainer to get it.</summary>
     internal string NameSuggestion(string pluginName) => PluginNameSuggest.DidYouMean(pluginName, _names);
 
-    /// <summary>The vanilla source directory — normally Amethyst's <c>Data_Core</c> — that holds the base-game BSAs
-    /// containing localized strings. It is derived from the resolved <c>Skyrim.esm</c> source so this manager-neutral
-    /// class needs no separate game-path setting. It is null only when the injected order lacks Skyrim.esm, in which
-    /// case overlays retain Mutagen's normal folder-adjacent lookup.</summary>
+    /// <summary>The real game-Data directory, derived as the folder of the resolved <c>Skyrim.esm</c> — the localized-strings fallback target in <see cref="OpenOverlay"/>.</summary>
     internal static string? ComputeDataDir(Dictionary<string, int> nameToIdx, string[] paths)
         => nameToIdx.TryGetValue("Skyrim.esm", out var i) ? Path.GetDirectoryName(paths[i]) : null;
 
-    /// <summary>Open one plugin as a lazy binary overlay — THE single overlay-open choke point (every read/scan/index
-    /// path routes through here) — wiring localized-string (FULL/DESC/…) resolution so a plugin resolved to a folder
-    /// WITHOUT its own strings still reads its names. Mutagen's bare overload only scans the plugin's OWN folder for
-    /// strings (loose <c>Strings/</c> + BSAs there); a localized master resolved to a strings-less staging folder
-    /// — for example a cleaned base-game master whose <c>.STRINGS</c> remain in the vanilla BSAs beside Skyrim.esm —
-    /// otherwise reads every localized field EMPTY (HCBR-2026-06-24: <c>where Name contains</c> silently
-    /// 0-matched the DLC masters; <see cref="ReadEngine.EmitToken"/> turned the unresolved <c>TranslatedString</c> into
-    /// a blank token). When the plugin's own folder carries NO strings source, point the lookup at the real game-Data
-    /// folder so those archived strings resolve; otherwise leave the folder-adjacent default UNTOUCHED, so a mod whose
-    /// strings sit in its own folder (loose OR in its own BSA) is never redirected away from them — no regression. A
-    /// non-localized plugin needs no strings at all, so the override is simply never consulted.
-    ///
-    /// <para>PUBLIC (2026-07-06): also the open path for <c>housecarl_read_plugin_file</c>'s RAW, out-of-load-order
-    /// read of an inactive/arbitrary plugin — a pure <c>(path, dataDir) → overlay</c> factory that touches no resolver
-    /// index, so that tool reuses this one strings-correct choke point instead of re-deriving it.</para></summary>
+    /// <summary>Open one plugin as a lazy binary overlay — THE single overlay-open choke point, wiring localized-string resolution; contract in docs/architecture/load-order-resolver.md.
+    /// Public because the off-order and donor read lanes reuse it as a pure (path, dataDir) factory that touches no resolver index.</summary>
     public static ISkyrimModGetter OpenOverlay(string path, string? dataDir)
     {
         if (dataDir is not null && !FolderHasOwnStrings(path))
         {
-            var prm = BinaryReadParameters.Default with
+            var prm = PluginTextEncoding.ReadWith(path, new StringsReadParameters
             {
-                StringsParam = new StringsReadParameters
-                {
-                    BsaFolderOverride = dataDir,
-                    StringsFolderOverride = Path.Combine(dataDir, "Strings"),
-                },
-            };
+                BsaFolderOverride = dataDir,
+                StringsFolderOverride = Path.Combine(dataDir, "Strings"),
+            });
             return SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE, prm);
         }
-        return SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE);
+        return SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(path));
     }
 
-    /// <summary>True if the plugin's OWN folder carries a strings source Mutagen's folder-adjacent default would find —
-    /// a loose <c>Strings\</c> subfolder or any <c>.bsa</c> (which may embed strings). Cheap (one dir stat + a lazy,
-    /// short-circuited <c>.bsa</c> scan; negligible beside the per-plugin overlay open it precedes). Defensive: any IO
-    /// fault answers "has its own", keeping the unchanged default open — we only ever REDIRECT on a clean, empty read.</summary>
-    internal static bool FolderHasOwnStrings(string path)
-    {
-        try
-        {
-            var folder = Path.GetDirectoryName(path);
-            if (folder is null) return true;
-            if (Directory.Exists(Path.Combine(folder, "Strings"))) return true;
-            return Directory.EnumerateFiles(folder, "*.bsa").Any();
-        }
-        catch { return true; }
-    }
+    /// <summary>True if the plugin's OWN folder carries a strings source FOR THIS PLUGIN; one home, <see cref="LocalizedStrings.OwnFolderCarriesStringsFor"/>, so read and refusal cannot disagree.</summary>
+    internal static bool FolderHasOwnStrings(string path) => LocalizedStrings.OwnFolderCarriesStringsFor(path);
 
-    /// <summary>Take the plugin paths already in priority order and build the index — WITHOUT holding any plugin open
-    /// (Option B). Names + mtimes come from the path list + a stat (no parse, no handle); the index build
-    /// (<see cref="BuildIndex"/>) opens each plugin one at a time to enumerate it, then disposes it. <paramref
-    /// name="orderedPluginPaths"/> = masters → … → highest priority (the order is INJECTED; §8.5 supplies the true
-    /// active order). Per-plugin open failures are collected into <see cref="LoadFailures"/> at index time (Q3), never
-    /// silently skipped.</summary>
-    /// <param name="orderedPluginPaths">Physical plugin sources ordered from masters to highest priority.</param>
-    /// <param name="explainAbsence">Optional injected answer to "why is this name not in the order?" — see
-    /// <see cref="_explainAbsence"/>. Omit (the default) and refusals read exactly as they did before.</param>
+    /// <summary>Take the plugin paths already in priority order and build the index without holding any plugin open; the order is INJECTED, and open failures land in <see cref="LoadFailures"/>.</summary>
     public static LoadOrderResolver Build(IReadOnlyList<string> orderedPluginPaths,
-                                          Func<string, string?>? explainAbsence = null)
+                                          Func<string, string?>? explainAbsence = null,
+                                          CostCounters? counters = null)
     {
+        if (orderedPluginPaths.Count > ushort.MaxValue)
+            throw new ArgumentException(
+                $"the load order holds {orderedPluginPaths.Count:N0} plugins, past the {ushort.MaxValue:N0} the order index can number; " +
+                "check the plugin list handed to houseCARL.");
         var paths = new string[orderedPluginPaths.Count];
         var names = new string[orderedPluginPaths.Count];
-        var mtimes = new DateTime[orderedPluginPaths.Count];
+        var stamps = new FileStamp[orderedPluginPaths.Count];
         var nameToIdx = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
 
         for (int i = 0; i < orderedPluginPaths.Count; i++)
         {
             var p = orderedPluginPaths[i];
             paths[i] = p;
-            // A plugin's ModKey filename IS its file name (how Mutagen derives the overlay's ModKey), so the name needs
-            // no open — keeping Build itself handle-free. last copy of a duplicate name wins its slot (priority).
+            // A plugin's ModKey filename IS its file name, so the name needs no open; the last copy of a duplicate wins.
             var name = Path.GetFileName(p);
             names[i] = name;
             nameToIdx[name] = i;
-            mtimes[i] = SafeMtime(p);
+            stamps[i] = FileStamp.Of(p);
         }
 
-        return new LoadOrderResolver(paths, names, nameToIdx, mtimes, explainAbsence);
+        // These names are the canonical spelling of every plugin in the order — every FormID token prints through them.
+        FormIdToken.Publish(names);
+
+        return new LoadOrderResolver(paths, names, nameToIdx, stamps, explainAbsence, counters ?? new CostCounters());
     }
 
-    /// <summary>Enumerate every plugin once (low→high), ONE AT A TIME (open → enumerate → dispose), building the
-    /// winner/count index for all keys and the ordered overrider list for multi-override keys only. At most ONE plugin
-    /// handle open at any instant (Option B — never the floor). RESILIENT (Q3): a plugin that won't OPEN, or that
-    /// contains a record Mutagen can't PARSE (a throw mid-enumeration — Mutagen constructs each record's body as it
-    /// enumerates, so a malformed subrecord throws here, NOT lazily on field access), is EXCLUDED wholesale and the
-    /// reason recorded — it no longer takes the whole index down with it. Per plugin it's ATOMIC: records go into a
-    /// per-plugin buffer and fold into the shared index only if the WHOLE plugin enumerated, so a plugin that throws
-    /// part-way never leaves a half-set behind (which would mis-resolve winners for its un-enumerated records).
-    /// Returns the build as ONE immutable <see cref="IndexSnapshot"/> — the caller swaps it in with a single
-    /// reference write, so a concurrent reader only ever sees a complete, internally-consistent build.</summary>
+    /// <summary>Enumerate every plugin once (low→high), ONE AT A TIME, building the winner/count index for all keys and the ordered overrider list for multi-override keys only, and
+    /// returning the build as one immutable <see cref="IndexSnapshot"/>; the exclusion contracts are in docs/architecture/load-order-resolver.md.</summary>
     IndexSnapshot BuildIndex()
     {
-        var index = new Dictionary<FormKey, (int winner, int count)>();
+        var index = new Dictionary<FormKey, (ushort winner, ushort count, byte type)>();
         var overriders = new Dictionary<FormKey, List<int>>();        // multi keys only
+        var types = new IndexTypes();
+        var mixed = new Dictionary<FormKey, List<byte>>();            // keys whose providers differ in class
         var failures = new List<string>();
         var excluded = new HashSet<int>();
+        var unopenable = new HashSet<int>();                          // the could-not-be-OPENED subset
         var excludedPlugins = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
+        var light = new bool[_paths.Length];
+        var masterBlock = new bool[_paths.Length];
+        var containment = new ContainmentIndex();                     // child → parent, off the same walk
+        int firstUnknownKind = -1;
+        string? firstUnknownKindName = null;
         int maxDepth = 0;
 
         for (int i = 0; i < _paths.Length; i++)
@@ -433,16 +407,32 @@ public sealed class LoadOrderResolver : IDisposable
             catch (Exception ex)
             {
                 Exclude(i, $"could not be opened — {Concise(ex)}", failures, excluded, excludedPlugins);
+                unopenable.Add(i);   // cannot serve as a master overlay either; the write path must skip it
+                // The header is unreadable, so only the extension can settle whether this one loads into the light block.
+                light[i] = ModKey.FromFileName(_names[i]).Type == ModType.Light;
+                // Same fallback for the block: with no header, only the filename settles it.
+                masterBlock[i] = ModKey.FromFileName(_names[i]).Type is ModType.Master or ModType.Light;
+                if (!light[i] && firstUnknownKind < 0) { firstUnknownKind = i; firstUnknownKindName = _names[i]; }
                 continue;
             }
 
-            // Buffer the WHOLE plugin's keys first (plugin-atomic). EnumerateMajorRecords() constructs each record
-            // body as it advances, so a record Mutagen rejects (e.g. a malformed PKCU data-count) throws HERE. The
-            // throw is non-resumable, so we can't skip just that record — but catching it lets us EXCLUDE this one
-            // plugin and carry on with every other (vs. the old try/finally, where the throw escaped and killed the
-            // entire index → every tool call failed). The buffer means a partial enumeration is discarded, not merged.
-            var keys = new List<FormKey>();
-            try { foreach (var rec in ov.EnumerateMajorRecords()) keys.Add(rec.FormKey); }
+            // Both ways: the engine force-treats the .esl extension as light, and an esp-fe carries the bit without it.
+            light[i] = ov.IsSmallMaster || ov.ModKey.Type == ModType.Light;
+            // The master BLOCK is a different question from the light FormID space; see IndexSnapshot.MasterBlock.
+            masterBlock[i] = ov.ModHeader.Flags.HasFlag(SkyrimModHeader.HeaderFlag.Master)
+                          || ov.ModKey.Type is ModType.Master or ModType.Light;
+
+            // Buffer the WHOLE plugin's keys first (plugin-atomic); the CONTEXT walk carries each record's containing parent.
+            var keys = new List<(FormKey Key, Type Class)>();
+            var edges = new List<(FormKey Child, FormKey Parent)>();
+            try
+            {
+                foreach (var ctx in ov.EnumerateMajorRecordContexts())
+                {
+                    keys.Add((ctx.Record.FormKey, ctx.Record.GetType()));
+                    ContainmentIndex.Stage(ctx, edges);
+                }
+            }
             catch (Exception ex)
             {
                 Exclude(i, $"contains a record Mutagen cannot parse, so the whole plugin is excluded from this " +
@@ -454,16 +444,18 @@ public sealed class LoadOrderResolver : IDisposable
             }
             finally { (ov as IDisposable)?.Dispose(); }                    // one plugin open at a time — never the whole floor
 
-            foreach (var fk in keys)                                       // fold the COMPLETE plugin into the index
+            containment.Merge(edges);                                      // later plugin wins, like the winner index
+            foreach (var (fk, cls) in keys)                                // merge the COMPLETE plugin into the index
             {
+                var t = types.Intern(cls);
                 if (!index.TryGetValue(fk, out var e))
                 {
-                    index[fk] = (i, 1);                                    // first sighting — singleton so far, no list
+                    index[fk] = ((ushort)i, 1, t);                         // first sighting — singleton so far, no list
                 }
                 else
                 {
                     int newCount = e.count + 1;
-                    index[fk] = (i, newCount);                              // higher overlay = new winner
+                    index[fk] = ((ushort)i, (ushort)newCount, MergeType(fk, e.type, e.count, t));   // higher overlay = new winner
                     if (newCount == 2) overriders[fk] = new List<int> { e.winner, i };  // 2nd sighting promotes to multi
                     else overriders[fk].Add(i);                            // 3rd+ extends the list
                     if (newCount > maxDepth) maxDepth = newCount;
@@ -471,14 +463,52 @@ public sealed class LoadOrderResolver : IDisposable
             }
         }
 
+        // The winner index is readonly from here on and was built at about half fill, so its spare buckets are trimmed. #728.
+        index.TrimExcess();
         return new IndexSnapshot(
             index,
             overriders.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray()),  // trim List overhead → int[]
-            failures, excluded, excludedPlugins, maxDepth);
+            types, mixed.ToDictionary(kv => kv.Key, kv => kv.Value.ToArray()),
+            failures, excluded, unopenable, excludedPlugins, maxDepth, ComputeEpoch(_names, _paths, _stamps, excludedPlugins),
+            light, firstUnknownKind, firstUnknownKindName, containment, masterBlock);
+
+        // The code a key carries once one more provider joins: the one class while every provider shares it, else Mixed.
+        byte MergeType(FormKey fk, byte held, int count, byte next)
+        {
+            if (held == IndexTypes.Mixed) { mixed[fk].Add(next); return held; }
+            if (held == next) return next;
+            // Every provider so far shares the held class, so it stands for each of them.
+            var per = new List<byte>(count + 1);
+            for (int k = 0; k < count; k++) per.Add(held);
+            per.Add(next);
+            mixed[fk] = per;
+            return IndexTypes.Mixed;
+        }
     }
 
-    /// <summary>Record one plugin's exclusion from the index build (Q3): into the human-readable failure list, the
-    /// fast-skip index set, and the name→reason map the server surfaces in load_order_status.</summary>
+    /// <summary>The epoch fingerprint: a deterministic identity for ONE build, over every plugin's filename, RESOLVED PATH and freshness stamp in priority order plus which plugins it
+    /// EXCLUDED; the contract and its known approximations are in docs/architecture/load-order-resolver.md.</summary>
+    static string ComputeEpoch(string[] names, string[] paths, FileStamp[] stamps, Dictionary<string, string> excludedPlugins)
+    {
+        var sb = new StringBuilder(names.Length * 96);
+        for (int i = 0; i < names.Length; i++)
+            sb.Append(names[i]).Append('|').Append(paths[i]).Append('|').Append(stamps[i].Mtime.Ticks)
+              .Append('|').Append(stamps[i].Size).Append('\n');
+        // Sorted, names only: the exclusion REASON embeds exception text that varies between identical world-states.
+        foreach (var name in excludedPlugins.Keys.OrderBy(n => n, StringComparer.OrdinalIgnoreCase))
+            sb.Append("excluded|").Append(name).Append('\n');
+        var hash = System.Security.Cryptography.SHA256.HashData(Encoding.UTF8.GetBytes(sb.ToString()));
+        return EpochFormat + "-" + Convert.ToHexString(hash.AsSpan(0, 8)).ToLowerInvariant();
+    }
+
+    /// <summary>The epoch string's FORMAT tag, bumped when <see cref="ComputeEpoch"/>'s input changes shape: an epoch with another tag cannot be compared at all.</summary>
+    internal const string EpochFormat = "e2";
+
+    /// <summary>Whether an epoch string was written in the format THIS build computes — i.e. whether comparing it against a current epoch means anything.</summary>
+    public static bool IsCurrentEpochFormat(string epoch) =>
+        epoch.StartsWith(EpochFormat + "-", StringComparison.Ordinal);
+
+    /// <summary>Record one plugin's exclusion: into the failure list, the fast-skip index set, and the name→reason map.</summary>
     void Exclude(int i, string reason, List<string> failures, HashSet<int> excluded, Dictionary<string, string> excludedPlugins)
     {
         failures.Add($"{_names[i]}: {reason}");
@@ -486,102 +516,211 @@ public sealed class LoadOrderResolver : IDisposable
         excludedPlugins[_names[i]] = reason;
     }
 
-    /// <summary>One-line essence of an exception for a user-facing reason: the message lines (the Mutagen
-    /// RecordException/SubrecordException family names the offending record + subrecord in its display text) up to the
-    /// stack trace, newlines flattened, bounded. Keeps the WHICH-record context without dumping the whole trace.</summary>
+    /// <summary>One-line essence of an exception for a user-facing reason: the message lines up to the stack trace, newlines flattened, bounded, keeping the WHICH-record context.</summary>
     static string Concise(Exception ex)
     {
         var s = ex.ToString();
-        // "\n   at " is the en-US stack-frame prefix; on a localized runtime it won't match and the whole ToString()
-        // (stack included) gets flattened + capped instead — noisier, never WRONG, and the RecordException "which
-        // record" context is front-loaded in ToString() so it survives the 300-char cap either way. Reading the
-        // exception's record-identity properties would be the locale-proof upgrade.
+        // The en-US stack-frame prefix; on a localized runtime the whole ToString() is flattened and capped instead.
         int at = s.IndexOf("\n   at ", StringComparison.Ordinal);
         var head = (at >= 0 ? s.Substring(0, at) : s).Replace("\r", "").Replace("\n", " | ").Trim();
         return head.Length > 300 ? head.Substring(0, 300) + "…" : head;
     }
 
-    // ---- Snapshot-scoped reads (HCBR-2026-06-11-02: one build per logical operation) --------------------
+    // ---- Snapshot-scoped reads: one build per logical operation --------------------
 
-    /// <summary>Capture the CURRENT build as a pinned read view. The snapshot swap (HCBR-2026-06-11-01 hardening)
-    /// made each individual read internally consistent; this is the cross-VALUE companion: a service method that
-    /// issues SEVERAL resolver reads in one logical operation could still observe TWO adjacent builds if a
-    /// freshness rebuild landed between them — a status line mixing counters from different builds, a record's
-    /// winner disagreeing with its own touching-plugin list, a scan row's winner= reflecting a newer build than
-    /// the scan that produced it. Capture ONCE per logical operation (one service method / one tool call) and
-    /// answer every question in that operation off the SAME view; a rebuild mid-operation then changes nothing
-    /// the operation reports. Pure data over the immutable snapshot — no handles, safe to hold for a call.</summary>
-    public IndexView Capture() => new(this, _snap);
+    /// <summary>Capture the CURRENT build as a pinned read view for one logical operation; it carries that call's absence cache, so it must not outlive the call.</summary>
+    public IndexView Capture() => new(this, _snap, new AbsenceCache());
 
-    /// <summary>A read view pinned to ONE captured index build (see <see cref="Capture"/>). Every member answers
-    /// from the SAME build — winner, touching list, counters, and the scan streams can never disagree about which
-    /// build they describe. Bodies are still fetched from the files on disk (Option B holds no bodies), so a
-    /// mid-operation file edit surfaces as the existing named staleness errors, never as torn index values.</summary>
+    /// <summary>The same view sharing <paramref name="absences"/> across a call's per-row captures, or with no cache when null, which allocates nothing.</summary>
+    public IndexView Capture(AbsenceCache? absences) => new(this, _snap, absences);
+
+    // ---- runtime FormIDs: the eight-hex form the game, the console and the logs print --------------------
+
+    public FormKey ParseFormId(string? raw) => Capture(null).ParseFormId(raw);
+
+    /// <summary>Turn a runtime FormID into the FormKey it names in THIS build, or throw one plain sentence: 0xFE is the light block, 0xFF a dynamic form, anything else a load index.</summary>
+    FormKey RuntimeToFormKey(IndexSnapshot s, uint value)
+    {
+        if (RuntimeFormId.IsDynamic(value))
+            throw new FormatException(
+                $"{RuntimeFormId.Format(value)} is a dynamic form — the game creates FF...... FormIDs while playing and " +
+                "they exist only in a save game, so no plugin defines one.");
+
+        var slots = s.Slots.Value;
+        if (RuntimeFormId.IsLight(value))
+        {
+            int slot = (int)RuntimeFormId.LightIndex(value);
+            int p = slot < slots.LightToPlugin.Length ? slots.LightToPlugin[slot] : -1;
+            if (p < 0)
+                throw new FormatException(
+                    $"{RuntimeFormId.Format(value)} names light index 0x{slot:X3}, which no active plugin occupies " +
+                    $"(the load order has {slots.LightCount} light plugin(s)) — the plugin may be inactive; read an " +
+                    "inactive plugin with 'XXXXXX:Plugin.esp'.");
+            EnsureKindKnownUpTo(s, p, value);
+            return FormKey.Factory($"{FormIdRange.LocalObjectId(value):X6}:{_names[p]}");
+        }
+
+        int idx = (int)RuntimeFormId.LoadIndex(value);
+        int fp = idx < slots.FullToPlugin.Length ? slots.FullToPlugin[idx] : -1;
+        if (fp < 0)
+            throw new FormatException(
+                $"{RuntimeFormId.Format(value)} names load index 0x{idx:X2}, which no active plugin occupies " +
+                $"(the load order has {slots.FullCount} full plugin(s); light plugins are addressed as FExxxYYY) — " +
+                "the plugin may be inactive; read an inactive plugin with 'XXXXXX:Plugin.esp'.");
+        EnsureKindKnownUpTo(s, fp, value);
+        return FormKey.Factory($"{FormIdRange.LocalObjectId(value):X6}:{_names[fp]}");
+    }
+
+    /// <summary>Refuse when a plugin whose kind could not be read sits at or before the slot just resolved; a slot before it answers normally.</summary>
+    static void EnsureKindKnownUpTo(IndexSnapshot s, int pluginIndex, uint value)
+    {
+        if (s.FirstUnknownKind < 0 || pluginIndex < s.FirstUnknownKind) return;
+        throw new FormatException(
+            $"{RuntimeFormId.Format(value)} cannot be resolved this session: '{s.FirstUnknownKindName}' could not be " +
+            "opened, so whether the game loads it as a light plugin — and therefore where everything from it onward " +
+            "sits — is unknown; address the record as 'XXXXXX:Plugin.esp' instead.");
+    }
+
+    /// <summary>The runtime FormID the game, the console and the logs print for this record; both halves are null when the order gives it no address, and the note half says why.</summary>
+    RuntimeAddress RuntimeAddressFor(IndexSnapshot s, FormKey fk)
+    {
+        if (fk.IsNull) return default;
+        var name = fk.ModKey.FileName.ToString();
+        if (!_nameToIdx.TryGetValue(name, out int p)) return default;
+        if (s.FirstUnknownKind >= 0 && p >= s.FirstUnknownKind) return default;
+        int slot = s.Slots.Value.SlotOfPlugin[p];
+        if (slot < 0) return default;
+        return RuntimeFormId.TryCompose(s.Light[p], slot, fk.ID, out uint value)
+            ? new RuntimeAddress(RuntimeFormId.Format(value), null)
+            : new RuntimeAddress(null, RuntimeFormId.OutOfWindowNote(name, fk.ID));
+    }
+
+    /// <summary>One call's absence clauses per plugin name, case-sensitive so each spelling is echoed as given; the map is made on first use.</summary>
+    public sealed class AbsenceCache
+    {
+        Dictionary<string, (string Clause, string? Cause)>? _map;
+
+        /// <summary>The cached clause, or the explainer's; lock order: this lock is never held while the explainer takes the service gate.</summary>
+        internal string Get(LoadOrderResolver r, string pluginName, out string? cause)
+        {
+            lock (this)
+                if (_map is not null && _map.TryGetValue(pluginName, out var hit)) { cause = hit.Cause; return hit.Clause; }
+            var clause = r.AbsenceClause(pluginName, out var why);
+            lock (this)
+            {
+                _map ??= new Dictionary<string, (string, string?)>(StringComparer.Ordinal);
+                if (!_map.TryAdd(pluginName, (clause, why))) (clause, why) = _map[pluginName];   // a racing compute keeps the first
+            }
+            cause = why;
+            return clause;
+        }
+
+        /// <summary>The clause through <paramref name="cache"/>, or straight from the resolver when there is none.</summary>
+        internal static string Clause(AbsenceCache? cache, LoadOrderResolver r, string pluginName) =>
+            cache is null ? r.AbsenceClause(pluginName) : cache.Get(r, pluginName, out _);
+    }
+
+    /// <summary>A read view pinned to ONE captured build (see <see cref="Capture"/>): every member answers from the SAME build, while bodies are still fetched from disk.</summary>
     public readonly struct IndexView
     {
         readonly LoadOrderResolver _r;
         readonly IndexSnapshot _s;
+        readonly AbsenceCache? _absences;   // null on a single-shot view, which explains each absence afresh
+        internal IndexView(LoadOrderResolver r, IndexSnapshot s, AbsenceCache? absences) { _r = r; _s = s; _absences = absences; }   // only Capture() constructs
 
-        /// <summary>Constructs a view only for <see cref="Capture"/>; external callers cannot pair a resolver with an
-        /// unrelated snapshot.</summary>
-        internal IndexView(LoadOrderResolver r, IndexSnapshot s) { _r = r; _s = s; }   // only Capture() constructs
-
-        /// <summary>The number of plugin sources in the resolver's injected order.</summary>
         public int PluginCount => _r._paths.Length;
 
-        /// <summary>The number of distinct FormKeys in this captured build.</summary>
-        public int RecordCount => _s.Index.Count;
+        /// <summary>Every plugin this build indexed, in load order, MINUS the ones it excluded — the scope a whole-order walk can name plugin by plugin.</summary>
+        public IReadOnlyList<string> ScannablePluginNames
+        {
+            get
+            {
+                var names = new List<string>(_r._names.Length);
+                for (int i = 0; i < _r._names.Length; i++) if (!_s.Excluded.Contains(i)) names.Add(_r._names[i]);
+                return names;
+            }
+        }
 
-        /// <summary>The number of FormKeys with more than one definition in this captured build.</summary>
-        public int ConflictCount => _s.Overriders.Count;
-
-        /// <summary>The largest override depth in this captured build.</summary>
+        public int RecordCount => _s.Index.Count;               // distinct FormKeys across the order
+        public int ConflictCount => _s.Overriders.Count;        // FormKeys overridden by >1 plugin
         public int MaxDepth => _s.MaxDepth;
-
-        /// <summary>Formatted index-build failures belonging to this captured build.</summary>
         public IReadOnlyList<string> LoadFailures => _s.LoadFailures;
-
-        /// <summary>Excluded plugin filenames and their reasons in this captured build.</summary>
         public IReadOnlyDictionary<string, string> ExcludedPlugins => _s.ExcludedPlugins;
 
-        /// <summary>Whether a plugin filename is in the indexed load order — the same OrdinalIgnoreCase name table
-        /// <see cref="LoadOrderResolver.GetRecord(OverlaySession,string,FormKey)"/> resolves against (fixed for the
-        /// resolver's lifetime, like
-        /// <see cref="PluginCount"/>). False for a plugin on disk but not enabled/registered — a state the service
-        /// must name DISTINCTLY from "in the order but doesn't define the record", because GetRecord returns null
-        /// for both (HCBR-2026-06-11-02 verify-loop wave (a)).</summary>
+        public bool IsUnopenable(string pluginName)
+            => _r._nameToIdx.TryGetValue(pluginName, out int i) && _s.Unopenable.Contains(i);
+
+        public string Epoch => _s.Epoch;
+
+        public OrderStamp Stamp => _s.Stamp;
+
+        /// <summary>The one FormID door: an eight-hex token with no colon is a RUNTIME FormID resolved against this build's tables, anything else the <c>XXXXXX:Plugin.esp</c> form, a HYBRID refused.</summary>
+        public FormKey ParseFormId(string? raw)
+            => RuntimeFormId.HybridNote(raw) is { } hybrid ? throw new FormatException(hybrid)
+             : RuntimeFormId.TryParse(raw, out uint v) ? _r.RuntimeToFormKey(_s, v)
+             : FormKey.Factory((raw ?? "").Trim());
+
+        public RuntimeAddress RuntimeAddressOf(FormKey fk) => _r.RuntimeAddressFor(_s, fk);
+
+        /// <summary>Whether a plugin filename is in the indexed load order — a state the service must name DISTINCTLY from "in the order but defines no such record".</summary>
         public bool ContainsPlugin(string pluginName) => _r._nameToIdx.ContainsKey(pluginName);
 
-        /// <summary>The trailing clause for a refusal naming a plugin <see cref="ContainsPlugin"/> just returned false
-        /// for: WHY it isn't in the order (injected — typically "installed, but UNTICKED in plugins.txt"), else a
-        /// did-you-mean. Always safe to append; returns "" when there is nothing to add. Every ContainsPlugin-false
-        /// refusal should carry it — a bare not-found makes the reader re-derive a fact the tool already had (#271).</summary>
-        public string AbsenceClause(string pluginName) => _r.AbsenceClause(pluginName);
+        /// <summary>This plugin's position in the priority order — higher loads later and therefore WINS — or -1 when it is not in the order.</summary>
+        public int OrderIndexOf(string pluginName) => _r._nameToIdx.TryGetValue(pluginName, out int i) ? i : -1;
 
-        /// <summary>Only the injected CAUSE (null when there is none) — see
-        /// <see cref="LoadOrderResolver.ExplainAbsence"/>; pair with <see cref="NameSuggestion"/> to rebuild the full
-        /// clause without invoking the explainer twice.</summary>
-        public string? ExplainAbsence(string pluginName) => _r.ExplainAbsence(pluginName);
+        /// <summary>The plugin AT an order index, the inverse of <see cref="OrderIndexOf"/>; null outside the order, and deliberately not <see cref="ScannablePluginNames"/>, whose indices differ.</summary>
+        public string? PluginNameAt(int orderIndex)
+            => orderIndex >= 0 && orderIndex < _r._names.Length ? _r._names[orderIndex] : null;
 
-        /// <summary>The did-you-mean fallback — see <see cref="LoadOrderResolver.NameSuggestion"/>.</summary>
-        public string NameSuggestion(string pluginName) => _r.NameSuggestion(pluginName);
+        /// <summary>The trailing clause for a refusal naming a plugin <see cref="ContainsPlugin"/> just returned false for; always safe to append, and "" when there is nothing to add.</summary>
+        public string AbsenceClause(string pluginName) => AbsenceClause(pluginName, out _);
 
-        /// <summary>The on-disk PATH of the active plugin named <paramref name="pluginName"/> (a filename like
-        /// "MyMod.esp"), or null if no such plugin is in the order. The minimal name→path exposure the dialogue
-        /// validator's SEQ lint needs to stat the quest's defining plugin (mtime) and read its master list; the
-        /// resolver otherwise exposes only filenames (see <see cref="WinnerInfo.WinnerPlugin"/>).</summary>
+        /// <summary>The same clause and the cause it found (null when it fell back to the did-you-mean), read once per plugin per pin.</summary>
+        public string AbsenceClause(string pluginName, out string? cause)
+        {
+            if (_absences is null) return _r.AbsenceClause(pluginName, out cause);
+            return _absences.Get(_r, pluginName, out cause);
+        }
+
+        /// <summary>Is this plugin LIGHT — ESL-flagged in its header, or a <c>.esl</c> — in THIS build? A refusal about ESL compaction asks the index rather than inferring it from a FormID.</summary>
+        public bool IsLightFlagged(string pluginName)
+            => _r._nameToIdx.TryGetValue(pluginName, out int i) && _s.Light[i];
+
+        /// <summary>Is this plugin in the MASTER BLOCK (a header Master flag, or a .esm/.esl filename)? See <see cref="IndexSnapshot.MasterBlock"/> for why it is not the light flag.</summary>
+        public bool IsMasterBlock(string pluginName)
+            => _r._nameToIdx.TryGetValue(pluginName, out int i) && _s.MasterBlock[i];
+
+        /// <summary>The on-disk PATH of the active plugin named <paramref name="pluginName"/>, or null — the minimal name→path exposure the dialogue validator's SEQ lint needs.</summary>
         public string? PluginPath(string pluginName)
             => _r._nameToIdx.TryGetValue(pluginName, out int idx) ? _r._paths[idx] : null;
 
-        /// <summary>O(1): the winning plugin + override depth for a FormKey. null if the FormKey isn't in the order.</summary>
+        /// <summary>The real game-Data folder this order resolved; a caller outside this assembly that opens a plugin file itself must pass it to <see cref="LoadOrderResolver.OpenOverlay"/>.</summary>
+        public string? DataDir => _r.DataDir;
+
         public WinnerInfo? ResolveWinner(FormKey fk)
             => _s.Index.TryGetValue(fk, out var e) ? new WinnerInfo(fk, _r._names[e.winner], e.count) : null;
 
-        /// <summary>Every FormKey overridden by more than one plugin (the whole-order conflict set).</summary>
+        /// <summary>O(1): the record that CONTAINS this one in THIS build — a DIAL over its INFO, a CELL over its placed references and navmeshes, a WRLD over its cells.</summary>
+        public FormKey? ParentOf(FormKey fk) => _s.Containment.ParentOf(fk);
+
+        public int ContainedRecordCount => _s.Containment.Count;
+
+        public IEnumerable<FormKey> RecordKeys() => _s.Index.Keys;
+
+        /// <summary>Build the reverse-reference index if nothing has needed it yet and refresh the partitions whose plugin bytes changed — see <see cref="LoadOrderResolver.EnsureReverseIndex"/>.</summary>
+        public ReverseReferenceIndex.Refreshed EnsureReverseIndex() => _r.EnsureReverseIndex(_s);
+
+        public ReverseReferenceIndex? ReverseIndex => _r.ReverseIndex;
+
         public IEnumerable<FormKey> ConflictKeys() => _s.Overriders.Keys;
 
-        /// <summary>The ordered touching-plugin names for a FormKey (priority order, winner last) — no body fetched.
-        /// The atom behind every conflict-status question.</summary>
+        /// <summary>Whether the named plugin holds a version of the record in this build, without allocating.</summary>
+        public bool Touches(FormKey fk, string pluginName)
+        {
+            if (!_r._nameToIdx.TryGetValue(pluginName, out int i) || !_s.Index.TryGetValue(fk, out var e)) return false;
+            return e.count == 1 ? e.winner == i : Array.IndexOf(_s.Overriders[fk], i) >= 0;
+        }
+
         public IReadOnlyList<string>? TouchingPlugins(FormKey fk)
         {
             if (!_s.Index.TryGetValue(fk, out var e)) return null;
@@ -590,70 +729,86 @@ public sealed class LoadOrderResolver : IDisposable
             return Array.ConvertAll(_s.Overriders[fk], i => names[i]);
         }
 
-        /// <summary>The winner-body scan stream (<see cref="LoadOrderResolver.WinnerRecordsOfType(IReadOnlyList{Type})"/>),
-        /// pinned to THIS view's build — so a caller's per-match winner/depth fills agree with the scan by construction.</summary>
-        public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(IReadOnlyList<Type> getterTypes)
-            => _r.WinnerRecordsOfType(getterTypes, _s);
+        // The resolver's own streams and fetches, each judged against THIS view's build.
+        public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(
+            IReadOnlyList<Type> getterTypes, ICollection<PluginUnreadableException>? unreadable = null)
+            => _r.WinnerRecordsOfType(getterTypes, _s, unreadable);
 
-        /// <summary>The plugin-scoped scan stream (<see cref="LoadOrderResolver.RecordsIn(IReadOnlyList{string}, IReadOnlyList{Type})"/>),
-        /// pinned to THIS view's build.</summary>
         public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body, string source)> RecordsIn(
             IReadOnlyList<string> plugins, IReadOnlyList<Type>? getterTypes)
-            => _r.RecordsIn(plugins, getterTypes, _s);
+            => _r.RecordsIn(plugins, getterTypes, _s, _absences);
 
-        /// <summary>One record's body from a named plugin
-        /// (<see cref="LoadOrderResolver.GetRecord(OverlaySession,string,FormKey)"/>), with the
-        /// excluded-plugin check judged against THIS view's build — so a winner this view resolved and the body
-        /// fetched for it can never be vetted by two different builds (2026-06-12 hunt F5: the write path resolves
-        /// every edit of one call off ONE view; reads pin their fetch to the same view they resolved with).</summary>
+        /// <summary>One record's body from a named plugin, with the excluded-plugin check judged against THIS view's build, so a winner and its body are never vetted by two builds.</summary>
         public IMajorRecordGetter? GetRecord(OverlaySession session, string pluginName, FormKey fk)
             => _r.GetRecord(session, pluginName, fk, _s);
 
-        /// <summary>The master filenames a plugin DECLARES in its header (the master table), in declared order — opens
-        /// the overlay, reads the header, disposes (Option B; the header parses without enumerating records). Throws
-        /// (Q3) on a name not in the order or excluded this build. The integrity sweep diffs this against the masters a
-        /// plugin's records actually reference; judged against THIS view's build (same exclusion set as the scan).</summary>
-        public IReadOnlyList<string> DeclaredMasters(string pluginName) => _r.DeclaredMasters(pluginName, _s);
+        /// <summary>One record's body from a plugin the index says HOLDS it — the per-record fallback a chunked gather needs; it THROWS the inconsistency rather than answering null.</summary>
+        public IMajorRecordGetter FetchRecord(OverlaySession session, string pluginName, FormKey fk)
+            => _r.FetchRecord(session, pluginName, fk, _s);
+
+        public void CollectRecords(OverlaySession session, string pluginName, IReadOnlyCollection<FormKey> wanted,
+                                   IDictionary<FormKey, IMajorRecordGetter> sink)
+            => _r.CollectRecords(session, pluginName, wanted, sink, _s);
+
+        /// <summary>The record class of the winning copy, read off this build with no body fetched; null for a key it did not see.</summary>
+        public Type? WinnerClassOf(FormKey fk) => _s.WinnerClass(fk);
+
+        /// <summary>The master filenames a plugin DECLARES in its header, in declared order; throws on a name not in the order or excluded this build.</summary>
+        public IReadOnlyList<string> DeclaredMasters(string pluginName) => _r.DeclaredMasters(pluginName, _s, _absences);
+
+        public ConflictTree? ResolveTree(OverlaySession session, FormKey fk) => _r.ResolveTree(session, fk, _s);
+
+        public IEnumerable<ConflictNode>? StreamTree(OverlaySession session, FormKey fk, bool winnerFirst = false)
+            => _r.StreamTree(session, fk, _s, winnerFirst);
     }
 
-    // ---- Queries -------------------------------------------------------
-    //  Single-shot conveniences: each delegates to a fresh Capture(), so one call = one build (the pre-existing
-    //  contract). A caller making SEVERAL reads in one logical operation should Capture() once and read off the
-    //  view instead — that's the HCBR-2026-06-11-02 discipline the service layer follows.
+    // ---- Queries: single-shot conveniences, each delegating to a fresh Capture() — one call, one build ----
 
-    /// <summary>O(1): the winning plugin + override depth for a FormKey. null if the FormKey isn't in the order.</summary>
-    public WinnerInfo? ResolveWinner(FormKey fk) => Capture().ResolveWinner(fk);
+    public WinnerInfo? ResolveWinner(FormKey fk) => Capture(null).ResolveWinner(fk);
 
-    /// <summary>Every FormKey overridden by more than one plugin (the whole-order conflict set).</summary>
-    public IEnumerable<FormKey> ConflictKeys() => Capture().ConflictKeys();
+    public IEnumerable<FormKey> ConflictKeys() => Capture(null).ConflictKeys();
 
-    /// <summary>The ordered touching-plugin names for a FormKey (priority order, winner last) — no body fetched.
-    /// The atom behind every conflict-status question.</summary>
-    public IReadOnlyList<string>? TouchingPlugins(FormKey fk) => Capture().TouchingPlugins(fk);
+    public IReadOnlyList<string>? TouchingPlugins(FormKey fk) => Capture(null).TouchingPlugins(fk);
 
-    /// <summary>The full conflict tree: every touching plugin's body, in priority order (winner last). Bodies are
-    /// fetched on demand into <paramref name="session"/> (which keeps the touched plugins open until the caller has
-    /// materialised them, then disposes them). null if the FormKey isn't in the order.</summary>
-    public ConflictTree? ResolveTree(OverlaySession session, FormKey fk)
+    /// <summary>The full conflict tree: every touching plugin's body, in priority order (winner last), fetched on demand into <paramref name="session"/>. null if the FormKey isn't in the order.</summary>
+    public ConflictTree? ResolveTree(OverlaySession session, FormKey fk) => ResolveTree(session, fk, _snap);
+
+    /// <summary>The snapshot-pinned body of <see cref="ResolveTree(OverlaySession, FormKey)"/>, so a caller that already pinned a build reads the tree off the build its epoch stamp names.</summary>
+    internal ConflictTree? ResolveTree(OverlaySession session, FormKey fk, IndexSnapshot s)
     {
-        var s = _snap;                                                 // ONE build — Index and Overriders can't disagree
         if (!s.Index.TryGetValue(fk, out var e)) return null;
-        var overlayIdxs = e.count == 1 ? new[] { e.winner } : s.Overriders[fk];
+        var overlayIdxs = e.count == 1 ? new int[] { e.winner } : s.Overriders[fk];
         var nodes = new ConflictNode[overlayIdxs.Length];
         string? recType = null;
         for (int n = 0; n < overlayIdxs.Length; n++)
         {
             int oi = overlayIdxs[n];
-            var rec = FetchBody(session, oi, fk);
+            var rec = FetchBody(session, oi, fk, s);
             recType ??= RecordNaming.StripOverlay(rec.GetType().Name);
             nodes[n] = new ConflictNode(_names[oi], rec);
         }
         return new ConflictTree(fk, recType ?? "?", nodes);
     }
 
-    /// <summary>Every record in one plugin with its whole-order conflict status (no bodies fetched). Drives "what is
-    /// this plugin overwriting / being overwritten on" (capabilities 1, 2, 6). Opens the plugin for the enumeration and
-    /// disposes it when the enumeration ends (Option B — self-scoped, one handle); the yielded status is pure data.</summary>
+    /// <summary>The same walk as <see cref="ResolveTree(OverlaySession, FormKey, IndexSnapshot)"/>, yielding one provider's body at a time and holding none, so a tree over a much-touched
+    /// record pins one body rather than hundreds of GRUP byte arrays. <paramref name="winnerFirst"/> walks the same providers in reverse.</summary>
+    internal IEnumerable<ConflictNode>? StreamTree(OverlaySession session, FormKey fk, IndexSnapshot s, bool winnerFirst = false)
+    {
+        if (!s.Index.TryGetValue(fk, out var e)) return null;
+        return Walk(e.count == 1 ? new int[] { e.winner } : s.Overriders[fk]);
+
+        IEnumerable<ConflictNode> Walk(int[] overlayIdxs)
+        {
+            for (int n = 0; n < overlayIdxs.Length; n++)
+            {
+                int oi = overlayIdxs[winnerFirst ? overlayIdxs.Length - 1 - n : n];
+                var rec = FetchBody(session, oi, fk, s);
+                yield return new ConflictNode(_names[oi], rec);
+            }
+        }
+    }
+
+    /// <summary>Every record in one plugin with its whole-order conflict status (no bodies fetched); opens the plugin for the enumeration and disposes it when the enumeration ends.</summary>
     public IEnumerable<RecordStatus> PluginRecordStatus(string pluginName)
     {
         var s = _snap;                                                 // ONE build, captured for the whole enumeration
@@ -667,9 +822,9 @@ public sealed class LoadOrderResolver : IDisposable
             foreach (var rec in ov.EnumerateMajorRecords())
             {
                 var fk = rec.FormKey;
-                if (!s.Index.TryGetValue(fk, out var e))               // the FILE outran the snapshot (edited after the build) — name it (Q3)
+                if (!s.Index.TryGetValue(fk, out var e))               // the FILE outran the snapshot (edited after the build) — name it, never skip
                     throw new InvalidOperationException(
-                        $"index staleness: '{pluginName}' yields {fk} which the current index build does not contain — the plugin changed since the index was built; re-run (the next call's freshness check rebuilds).");
+                        $"index staleness: '{pluginName}' yields {FormIdToken.Of(fk)} which the current index build does not contain — the plugin changed since the index was built; re-run (the next call's freshness check rebuilds).");
                 var touching = e.count == 1 ? new[] { _names[e.winner] } : Array.ConvertAll(s.Overriders[fk], i => _names[i]);
                 yield return new RecordStatus(fk, RecordNaming.StripOverlay(rec.GetType().Name),
                                               PluginWins: e.winner == idx, OverrideDepth: e.count, TouchingPlugins: touching);
@@ -678,127 +833,200 @@ public sealed class LoadOrderResolver : IDisposable
         finally { (ov as IDisposable)?.Dispose(); }
     }
 
-    /// <summary>Fetch one record's body from a NAMED plugin in the order (re-enum into <paramref name="session"/>).
-    /// Returns null if the plugin isn't in the order or doesn't define this FormKey — the nullable, public sibling of
-    /// the private <see cref="FetchBody"/> (which throws on an index inconsistency). The server's read_record uses this
-    /// for an explicit-plugin read, and for the winner's body off <see cref="ResolveWinner"/>. The returned body is
-    /// backed by the session's overlay — read it before the session disposes.</summary>
+    /// <summary>Fetch one record's body from a NAMED plugin in the order; null if the plugin isn't in the order or doesn't define this FormKey. Read it before the session disposes.</summary>
     public IMajorRecordGetter? GetRecord(OverlaySession session, string pluginName, FormKey fk)
         => GetRecord(session, pluginName, fk, _snap);                      // single-shot: this call = its own build (the IndexView overload pins a whole operation)
 
-    /// <summary>Snapshot-pinned implementation used by <see cref="IndexView.GetRecord"/>. It returns null for absent
-    /// or excluded plugins and keeps the returned lazy body owned by <paramref name="session"/>.</summary>
     IMajorRecordGetter? GetRecord(OverlaySession session, string pluginName, FormKey fk, IndexSnapshot s)
     {
         if (!_nameToIdx.TryGetValue(pluginName, out int idx)) return null;
         if (s.Excluded.Contains(idx)) return null;                         // excluded plugin — never re-enumerate it (would re-throw); the service reports the reason via ExcludedPlugins
-        foreach (var rec in session.Overlay(idx).EnumerateMajorRecords())
+        return SeekBody(session, idx, fk, s);
+    }
+
+    /// <summary>Find one record in one plugin, walking only the groups of the seek type this build recorded for that copy. The flat walk is left for a key the build did not see,
+    /// or a typed walk that missed because the plugin changed under the call; a copy the build says this plugin lacks is absent with no read.</summary>
+    IMajorRecordGetter? SeekBody(OverlaySession session, int idx, FormKey fk, IndexSnapshot s)
+    {
+        var type = s.CopyType(fk, idx, out bool known);
+        if (known && type is null) return null;
+        var ov = session.Overlay(idx);
+        System.Threading.Interlocked.Increment(ref Counters.BodySeeks);
+        if (type is not null)
+            foreach (var rec in ov.EnumerateMajorRecords(type, throwIfUnknown: false))
+                if (rec.FormKey == fk) { System.Threading.Interlocked.Increment(ref Counters.TypedSeeks); return rec; }
+        foreach (var rec in ov.EnumerateMajorRecords())
             if (rec.FormKey == fk) return rec;
         return null;
     }
 
-    /// <summary>The master filenames a plugin declares in its header (the master TABLE). Opens the overlay, reads
-    /// <c>ModHeader.MasterReferences</c>, disposes (Option B — the header parses without enumerating records). Throws
-    /// (Q3) on a name not in the order or excluded this build, mirroring <see cref="PluginRecordStatus"/>. The
-    /// integrity sweep (housecarl_check_errors) diffs this against the masters a plugin's records actually reference.</summary>
-    public IReadOnlyList<string> DeclaredMasters(string pluginName) => DeclaredMasters(pluginName, _snap);
+    /// <summary>The master filenames a plugin declares in its header: opens the overlay, reads <c>ModHeader.MasterReferences</c>, disposes. Throws on a name not in the order or excluded this
+    /// build, and <see cref="PluginUnreadableException"/> on a plugin that opened at index time but cannot be opened now.</summary>
+    public IReadOnlyList<string> DeclaredMasters(string pluginName) => DeclaredMasters(pluginName, _snap, null);
 
-    /// <summary>Snapshot-pinned master-header reader. The snapshot supplies the exclusion decision while the resolver's
-    /// immutable name table supplies the physical plugin path.</summary>
-    IReadOnlyList<string> DeclaredMasters(string pluginName, IndexSnapshot s)
+    IReadOnlyList<string> DeclaredMasters(string pluginName, IndexSnapshot s, AbsenceCache? absences)
     {
         if (!_nameToIdx.TryGetValue(pluginName, out int idx))
-            throw new ArgumentException($"plugin not in the load order: {pluginName}.{AbsenceClause(pluginName)}");
+            throw new ArgumentException($"plugin not in the load order: {pluginName}.{AbsenceCache.Clause(absences, this, pluginName)}");
         if (s.Excluded.Contains(idx))
             throw new ArgumentException($"plugin '{pluginName}' was excluded from this session: {s.ExcludedPlugins[pluginName]}");
-        var ov = OpenOverlay(_paths[idx], _dataDir);
+        ISkyrimModGetter ov;
+        // Named as unopenable, exactly as RecordsIn names it: one held-open file must reach both callers as one fault.
+        try { ov = OpenOverlay(_paths[idx], _dataDir); }
+        catch (Exception ex) { throw new PluginUnreadableException(_names[idx], ex); }
         try { return ov.ModHeader.MasterReferences.Select(m => m.Master.FileName.ToString()).ToList(); }
         finally { (ov as IDisposable)?.Dispose(); }
     }
 
-    /// <summary>Fetch one record body from one overlay by re-enumerating it (primitive B — into the session). Throws if
-    /// the overlay can't yield a FormKey the index says it contains (a real inconsistency, named — Q3).</summary>
-    IMajorRecordGetter FetchBody(OverlaySession session, int overlayIdx, FormKey fk)
+    /// <summary>The bodies ONE plugin holds for a KNOWN set of FormKeys into <paramref name="sink"/>: one typed walk per seek type the wanted copies carry in this build, however many
+    /// are wanted (#251). A key this plugin does not hold is simply absent; only the OPEN faults as <see cref="PluginUnreadableException"/>, and a walk fault is left as it came.</summary>
+    public void CollectRecords(OverlaySession session, string pluginName, IReadOnlyCollection<FormKey> wanted,
+                               IDictionary<FormKey, IMajorRecordGetter> sink)
+        => CollectRecords(session, pluginName, wanted, sink, _snap);
+
+    void CollectRecords(OverlaySession session, string pluginName, IReadOnlyCollection<FormKey> wanted,
+                        IDictionary<FormKey, IMajorRecordGetter> sink, IndexSnapshot s)
     {
-        foreach (var rec in session.Overlay(overlayIdx).EnumerateMajorRecords())
-            if (rec.FormKey == fk) return rec;
-        throw new InvalidOperationException(
-            $"body-fetch inconsistency: {_names[overlayIdx]} is indexed as containing {fk} but did not yield it on re-enumeration.");
+        if (wanted.Count == 0) return;
+        if (!_nameToIdx.TryGetValue(pluginName, out int idx)) return;
+        if (s.Excluded.Contains(idx)) return;                              // excluded plugin — never re-enumerate it (would re-throw)
+        var byType = new Dictionary<Type, HashSet<FormKey>>();
+        var flat = new HashSet<FormKey>();                                 // keys the build did not see, and typed misses
+        foreach (var fk in wanted)
+        {
+            if (sink.ContainsKey(fk)) continue;                            // already in hand from an earlier call
+            if (s.CopyType(fk, idx, out bool known) is { } t)
+            {
+                if (!byType.TryGetValue(t, out var set)) byType[t] = set = new HashSet<FormKey>();
+                set.Add(fk);
+            }
+            else if (!known) flat.Add(fk);
+        }
+        if (byType.Count == 0 && flat.Count == 0) return;
+        ISkyrimModGetter ov;
+        // Only the OPEN is named as unopenable; a fault from the walk below is a different problem.
+        try { ov = session.Overlay(idx); }
+        catch (Exception ex) { throw new PluginUnreadableException(_names[idx], ex); }
+        System.Threading.Interlocked.Increment(ref Counters.CollectPasses);         // past here the plugin is actually walked
+        foreach (var (t, keys) in byType)
+        {
+            int left = keys.Count;
+            foreach (var rec in ov.EnumerateMajorRecords(t, throwIfUnknown: false))
+                if (keys.Contains(rec.FormKey) && sink.TryAdd(rec.FormKey, rec) && --left == 0) break;
+            if (left > 0) foreach (var fk in keys) if (!sink.ContainsKey(fk)) flat.Add(fk);
+        }
+        if (flat.Count == 0) { System.Threading.Interlocked.Increment(ref Counters.TypedCollectPasses); return; }
+        int missing = flat.Count;
+        foreach (var rec in ov.EnumerateMajorRecords())
+            if (flat.Contains(rec.FormKey) && sink.TryAdd(rec.FormKey, rec) && --missing == 0) return;
     }
 
-    // ---- Cross-query scan primitives (§8.4 Beat B.2) -------------------
-    //  These feed cross_plugin_query. Each is a SINGLE enumeration pass that yields the matching record's body
-    //  IN HAND (no per-candidate re-fetch — the naive "get each winner body separately" was measured at ~100 s
-    //  over 9k weapons because GetRecord re-enumerates a whole overlay per call). The body the SERVICE filters
-    //  on (editorid/references) is this in-hand body; the resolver holds nothing past the yield. Each opens the
-    //  CURRENT plugin, enumerates it, and DISPOSES it before moving to the next (Option B — one handle at a time;
-    //  every yielded body is consumed by the caller before the iterator advances to the next plugin).
+    internal IMajorRecordGetter FetchRecord(OverlaySession session, string pluginName, FormKey fk, IndexSnapshot s)
+    {
+        if (!_nameToIdx.TryGetValue(pluginName, out int idx) || s.Excluded.Contains(idx))
+            throw new InvalidOperationException(
+                $"body-fetch inconsistency: {pluginName} is indexed as containing {FormIdToken.Of(fk)} but is not readable on this build.");
+        return FetchBody(session, idx, fk, s);
+    }
 
-    /// <summary>Stream every record of the given type(s) whose instance in this overlay IS the load-order winner
-    /// — i.e. the WINNER body, in hand, for each distinct typed FormKey (no re-fetch). Typed group enumeration
-    /// (Mutagen seeks the GRUP). Multiple types (GMST → 4 GameSetting variants) are unioned. Yields
-    /// (FormKey, override-depth, winner body). The throw-if-unknown guard is Q3 belt-and-braces (corpus-resolved
-    /// types are always real).</summary>
-    public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(IReadOnlyList<Type> getterTypes)
-        => WinnerRecordsOfType(getterTypes, _snap);                        // ONE build for the whole scan (captured here, at the call)
+    /// <summary>Fetch one record body from one overlay by re-enumerating it into the session; throws if the overlay cannot yield a FormKey the index says it contains.</summary>
+    IMajorRecordGetter FetchBody(OverlaySession session, int overlayIdx, FormKey fk, IndexSnapshot s)
+    {
+        if (SeekBody(session, overlayIdx, fk, s) is { } rec) return rec;
+        throw new InvalidOperationException(
+            $"body-fetch inconsistency: {_names[overlayIdx]} is indexed as containing {FormIdToken.Of(fk)} but did not yield it on re-enumeration.");
+    }
 
-    /// <summary>Implements the winner scan against one captured snapshot so iterator execution cannot switch index
-    /// generations between plugins.</summary>
-    IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(IReadOnlyList<Type> getterTypes, IndexSnapshot s)
+    // ---- Cross-query scan primitives: one enumeration pass each, the body yielded IN HAND, one plugin handle at a time, nothing held past the yield ----
+
+    /// <summary>Stream every record of the given type(s) whose instance in this overlay IS the load-order winner — the winner body in hand per distinct typed FormKey, types unioned. Pass
+    /// <paramref name="unreadable"/> to collect a plugin that opened at index time but not now, or whose records stop partway, and carry on; with no collector the stream THROWS.</summary>
+    public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(
+        IReadOnlyList<Type> getterTypes, ICollection<PluginUnreadableException>? unreadable = null)
+        => WinnerRecordsOfType(getterTypes, _snap, unreadable);            // ONE build for the whole scan (captured here, at the call)
+
+    IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(
+        IReadOnlyList<Type> getterTypes, IndexSnapshot s, ICollection<PluginUnreadableException>? unreadable)
     {
         for (int i = 0; i < _paths.Length; i++)
         {
             if (s.Excluded.Contains(i)) continue;                          // excluded at build (unparseable/unopenable) — wins nothing; never re-touch (would re-throw)
             ISkyrimModGetter ov;
             try { ov = OpenOverlay(_paths[i], _dataDir); }
-            catch { continue; }                                            // an unopenable plugin wins nothing (surfaced at build)
+            catch (Exception ex)
+            {
+                // It opened when the index was built, so it became unreadable after that: collected and skipped, or thrown.
+                var fault = new PluginUnreadableException(_names[i], ex);
+                if (unreadable is null) throw fault;
+                unreadable.Add(fault);
+                continue;
+            }
             try
             {
-                foreach (var t in getterTypes)
-                    foreach (var rec in ov.EnumerateMajorRecords(t, throwIfUnknown: true))
-                        if (s.Index.TryGetValue(rec.FormKey, out var e) && e.winner == i)   // this overlay's instance wins
-                            yield return (rec.FormKey, e.count, rec);
+                // RecordArms is the shared arm re-check: a typed enumeration seeks the GRUP, which for an abstract group holds every arm.
+                using var recs = RecordArms.OfTypes(ov, getterTypes).GetEnumerator();
+                while (true)
+                {
+                    IMajorRecordGetter rec;
+                    // A parse fault partway through the plugin is collected like the open fault above, and the rest of the
+                    // order still walks; a cancellation, running out of memory or a bug goes on up.
+                    try { if (!recs.MoveNext()) break; rec = recs.Current; }
+                    catch (Exception ex) when (RecordParseFault.Is(ex))
+                    {
+                        var fault = new PluginUnscannableException(_names[i], ex);
+                        if (unreadable is null) throw fault;
+                        unreadable.Add(fault);
+                        break;
+                    }
+                    if (s.Index.TryGetValue(rec.FormKey, out var e) && e.winner == i)   // this overlay's instance wins
+                        yield return (rec.FormKey, e.count, rec);
+                }
             }
             finally { (ov as IDisposable)?.Dispose(); }
         }
     }
 
-    /// <summary>Stream every record contained in the given plugins (optionally only of the given type(s)), each
-    /// with that PLUGIN'S body in hand — the plugin-scoped path (the Q4.9 plugin_dump fold + a plugin-content
-    /// audit). A FormKey touched by more than one scoped plugin is yielded once per scoped plugin (the SERVICE
-    /// de-dupes). Yields (FormKey, whole-order override-depth, the scoped plugin's body, the scoped plugin's
-    /// filename — so a caller can DISPLAY from the same body it filtered, not the winner). Holds nothing.</summary>
+    /// <summary>Stream each record in the given plugins once, with its highest-loading scoped copy's body; contract in docs/architecture/load-order-resolver.md.</summary>
     public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body, string source)> RecordsIn(
         IReadOnlyList<string> plugins, IReadOnlyList<Type>? getterTypes)
-        => RecordsIn(plugins, getterTypes, _snap);                         // ONE build for the whole scan (captured here, at the call)
+        => RecordsIn(plugins, getterTypes, _snap, null);                   // ONE build for the whole scan (captured here, at the call)
 
-    /// <summary>Implements a plugin-scoped scan against one captured snapshot. Each yielded body remains valid only
-    /// until the iterator advances beyond the overlay that owns it.</summary>
     IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body, string source)> RecordsIn(
-        IReadOnlyList<string> plugins, IReadOnlyList<Type>? getterTypes, IndexSnapshot s)
+        IReadOnlyList<string> plugins, IReadOnlyList<Type>? getterTypes, IndexSnapshot s, AbsenceCache? absences)
     {
-        foreach (int i in ScopeIndices(plugins, s))
+        var scope = ScopeIndices(plugins, s, absences);
+        var inScope = new bool[_paths.Length];
+        foreach (int i in scope) inScope[i] = true;
+        foreach (int i in scope)
         {
             ISkyrimModGetter ov;
+            // A plugin that opened at build time but not now became unreadable after it; surfaced with the name.
             try { ov = OpenOverlay(_paths[i], _dataDir); }
-            catch { continue; }
+            catch (Exception ex) { throw new PluginUnreadableException(_names[i], ex); }
             try
             {
                 IEnumerable<IMajorRecordGetter> recs = getterTypes is null
                     ? ov.EnumerateMajorRecords()
-                    : getterTypes.SelectMany(t => ov.EnumerateMajorRecords(t, throwIfUnknown: true));
+                    : RecordArms.OfTypes(ov, getterTypes);   // the shared arm re-check
                 foreach (var rec in recs)
-                    if (s.Index.TryGetValue(rec.FormKey, out var e))
+                    if (s.Index.TryGetValue(rec.FormKey, out var e)
+                        && (e.count == 1 || !HigherScopedCopy(s.Overriders[rec.FormKey], i, inScope)))
                         yield return (rec.FormKey, e.count, rec, _names[i]);   // _names[i] = this scoped plugin's filename (the source body)
             }
             finally { (ov as IDisposable)?.Dispose(); }
         }
     }
 
-    /// <summary>Resolve a scope (plugin filenames) to overlay indices; null/empty = the whole order. Throws
-    /// (Q3) on a name not in the order, naming it — never silently scans an empty/partial scope. Works off the
-    /// caller's captured snapshot so scope and scan judge exclusion against the SAME build.</summary>
-    IReadOnlyList<int> ScopeIndices(IReadOnlyList<string>? scopePlugins, IndexSnapshot s)
+    /// <summary>Whether a scoped plugin loading after overlay <paramref name="i"/> also touches the key (ascending <paramref name="touching"/>).</summary>
+    static bool HigherScopedCopy(int[] touching, int i, bool[] inScope)
+    {
+        for (int k = touching.Length - 1; k >= 0 && touching[k] > i; k--)
+            if (inScope[touching[k]]) return true;
+        return false;
+    }
+
+    /// <summary>Resolve a scope (plugin filenames) to overlay indices in load order, each once; contract in docs/architecture/load-order-resolver.md.</summary>
+    IReadOnlyList<int> ScopeIndices(IReadOnlyList<string>? scopePlugins, IndexSnapshot s, AbsenceCache? absences)
     {
         if (scopePlugins is null || scopePlugins.Count == 0)
             return Enumerable.Range(0, _paths.Length).Where(i => !s.Excluded.Contains(i)).ToArray();  // whole order, minus excluded
@@ -806,41 +1034,50 @@ public sealed class LoadOrderResolver : IDisposable
         foreach (var name in scopePlugins)
         {
             if (!_nameToIdx.TryGetValue(name, out int i))
-                throw new ArgumentException($"plugin not in the load order: {name}.{AbsenceClause(name)}");
-            if (s.Excluded.Contains(i))                                    // explicitly scoped to an excluded plugin → fail loud with the reason (Q3), don't silently scan nothing
+                throw new ArgumentException($"plugin not in the load order: {name}.{AbsenceCache.Clause(absences, this, name)}");
+            if (s.Excluded.Contains(i))                                    // explicitly scoped to an excluded plugin → fail loud with the reason, don't silently scan nothing
                 throw new ArgumentException($"plugin '{name}' was excluded from this session: {s.ExcludedPlugins[name]}");
             idxs.Add(i);
         }
-        return idxs;
+        return idxs.Distinct().Order().ToArray();
     }
 
     // ---- Freshness -----------------------------------------------------
 
-    /// <summary>Re-stat the plugin files; if any last-write differs from the build-time baseline, rebuild the index
-    /// (re-enumerating one plugin at a time — Option B, no held overlays to dispose/reopen), then return true. The cheap
-    /// no-change path is just the stat sweep. Content edits to existing plugins are handled here; a changed plugin SET
-    /// (added/removed) = a new order → the caller re-Builds. Called by the server per query-batch (§8.4).</summary>
+    /// <summary>Re-stat the plugin files and rebuild the index if any last-write OR length differs from the baseline, then return true. A changed plugin SET is a new order; the caller re-Builds.</summary>
     public bool RefreshIfStale()
     {
         bool stale = false;
         for (int i = 0; i < _paths.Length; i++)
-            if (SafeMtime(_paths[i]) != _mtimes[i]) { stale = true; break; }
+            if (FileStamp.Of(_paths[i]) != _stamps[i]) { stale = true; break; }
         if (!stale) return false;
 
-        for (int i = 0; i < _paths.Length; i++) _mtimes[i] = SafeMtime(_paths[i]);
+        for (int i = 0; i < _paths.Length; i++) _stamps[i] = FileStamp.Of(_paths[i]);
         _snap = BuildIndex();                                              // ONE reference write — in-flight readers keep their captured build
         return true;
     }
 
-    /// <summary>Returns a file's UTC modification time, or a stable sentinel when the path cannot be statted. A
-    /// missing or inaccessible file therefore participates in freshness comparison without crashing the server.</summary>
-    static DateTime SafeMtime(string path)
+    // ---- The reverse-reference index: lazy, per-plugin, beside the snapshot ----------------
+
+    /// <summary>Build the reverse-reference index on first need and refresh its per-plugin partitions. Held on the RESOLVER, so a snapshot swap keeps every partition whose (path, mtime) is unchanged.</summary>
+    internal ReverseReferenceIndex.Refreshed EnsureReverseIndex(IndexSnapshot s)
     {
-        try { return File.GetLastWriteTimeUtc(path); } catch { return DateTime.MinValue; }
+        lock (_reverseGate)
+        {
+            _reverse ??= new ReverseReferenceIndex();
+            return _reverse.Refresh(_names, _paths, i => OpenOverlay(_paths[i], _dataDir), s.Excluded);
+        }
     }
 
-    /// <summary>Option B: the resolver holds NO plugin file handles at rest (only the pure-data index), so there is
-    /// nothing to release — Dispose is a no-op, kept so the service can treat a resolver as a disposable resource it
-    /// builds + swaps over its lifetime (and so `using var resolver = …` call sites stay unchanged).</summary>
+    internal ReverseReferenceIndex? ReverseIndex { get { lock (_reverseGate) return _reverse; } }
+
+    /// <summary>Take over the reverse index of the resolver this one replaces; partitions are keyed on (path, mtime), so the next refresh builds only the plugins this order added.</summary>
+    public void AdoptReverseIndexFrom(LoadOrderResolver previous)
+    {
+        var carried = previous.ReverseIndex;
+        if (carried is null) return;
+        lock (_reverseGate) _reverse ??= carried;
+    }
+
     public void Dispose() { }
 }

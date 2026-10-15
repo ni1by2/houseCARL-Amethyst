@@ -1,0 +1,1 @@
+- **Amethyst can write new record patches into staging.** Apply, create, forward and copy preserve originals, roll back output on a profile race, and report pending deployment; previews write nothing. Existing-plugin edits remain pending implementation.

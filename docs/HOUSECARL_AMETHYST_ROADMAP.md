@@ -1,3 +1,5 @@
+> Historical record: this describes the earlier filemap-based build or its migration plan. For current setup and limitations, start with [README](../README.md) and [Linux installation](linux-install.md).
+
 # houseCARL-Amethyst Linux Roadmap
 
 This is the durable source of truth for the Linux-only Amethyst fork of

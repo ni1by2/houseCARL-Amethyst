@@ -1,137 +1,177 @@
 ---
 name: skypatcher-authoring
-description: Author or interpret SkyPatcher INI patches — runtime, no-ESP record edits that filter Bethesda records and set/add/remove their properties, from the bundled SkyPatcher grammar reference. Use when the user wants to write or fix a SkyPatcher patch or `.ini`, buff/nerf/rebalance weapons or armor, change NPC stats/factions/inventory, add or remove keywords, edit a leveled list or container contents, retune spells/enchantments/potions, unlevel encounter zones, tweak cell lighting or fog, disable a placed reference — or asks what an existing SkyPatcher INI does, which records or NPCs it affects, why a patch line isn't applying, to audit or review a mod's INI patches, which filters or operations a record type supports (filterByWeapons, filterByNpcs, attackDamage, keywordsToAdd…), or which subfolder a `.ini` belongs in. Load before writing or reading any SkyPatcher line — the `Plugin.esp|FormID`/EditorID addressing and per-record filter names are non-obvious, and a misread line silently changes what it edits.
+description: >-
+  Authors and interprets SkyPatcher INI patches — runtime, no-ESP edits that filter Bethesda records and set, add or remove those records' own fields (SkyPatcher 6.4.1 grammar). Load before any SkyPatcher line — the `Plugin.esp|FormID` addressing, the per-type subfolder and the filename gate are non-obvious, and a wrong token fails silently. Use when writing or auditing a SkyPatcher `.ini`, rebalancing weapons, armor, NPCs or leveled lists without an ESP, putting items into a container or chest, or asking why a patch line isn't applying. Not for distribution — distribution to NPCs by group (faction, race, level, trait) is SPID, keywords onto item records is KID.
+compatibility: Requires the houseCARL MCP server and an explicitly selected Amethyst saved-snapshot connection.
 ---
 
 # SkyPatcher Authoring
 
-## Overview
+SkyPatcher is an SKSE plugin that edits Bethesda records at runtime from plain-text INI files — no
+ESP or ESL is produced for the edit itself. This skill composes and reads those patch strings and
+places the file where SkyPatcher will read it. SkyPatcher edits a record's own fields, an individual
+NPC's included; it does not distribute. Two neighbouring jobs are someone else's: what fields a
+record has at the Mutagen/xEdit level, with their types and writability, is
+`housecarl:mutagen-reference`; distributing a form to NPCs is `housecarl:spid-authoring`, which is
+*best* for groups (faction, race, level, trait) and can also name one NPC, though for a single NPC
+SkyPatcher is usually the *better* fit; a keyword onto item records is `housecarl:kid-authoring`. On
+a Codex flat install these siblings are the bare folder names — `mutagen-reference`, `spid-authoring`,
+`kid-authoring`.
 
-SkyPatcher is an SKSE plugin that edits Bethesda records **at runtime** from plain-text INI
-files — no ESP/ESL is produced for the edit itself. This skill composes correct SkyPatcher
-patch strings and places the INI file, drawing every filter, operation, value, and example
-from the bundled grammar reference in `references/`.
+## Route to the record type
 
-It is a **procedural** skill (a patch-authoring playbook) with a **reference-lookup** step at
-its core — the same lookup-and-never-invent discipline `mutagen-reference` and `papyrus-reference`
-use, because a fabricated SkyPatcher token fails silently (see "Bundled-or-warn").
+Find the record type in the table, then read `references/<file>.md` — that type's own filters,
+operations and worked examples. Filter and operation availability varies per type, so the record
+file is authoritative; do not carry one across from another type. Read one record file, not the set.
 
-**Scope boundary — what this is *not*:**
-- **Record field schema** (what fields a WEAP record has at the Mutagen/xEdit level, their types,
-  writability) → that's the `mutagen-reference` skill. This skill covers SkyPatcher's *own* filter
-  and operation names, which differ from the underlying field names.
-- **Distribution frameworks** — SPID (forms→NPCs), KID (keywords→items), CID (items→containers)
-  are *separate INI frameworks* with different syntax and file locations. SkyPatcher *edits
-  records*; it does not distribute. If the user names SPID/KID/CID or asks to "distribute" rather
-  than "edit/patch," this is the wrong skill.
+| Record type (xEdit sig) | Subfolder | Primary filter | Reference file |
+|---|---|---|---|
+| NPC (NPC_) | `npc` | `filterByNpcs` | `references/npc.md` |
+| Weapon (WEAP) | `weapon` | `filterByWeapons` | `references/weapon.md` |
+| Armor (ARMO) | `armor` | `filterByArmors` | `references/armor.md` |
+| Ammo (AMMO) | `ammo` | `filterByAmmos` | `references/ammo.md` |
+| Spell (SPEL) | `spell` | `filterBySpells` | `references/spell.md` |
+| Scroll (SCRL) | `scroll` | `filterByScrolls` | `references/scroll.md` |
+| Enchantment (ENCH) | `enchantment` | `filterByEnchs` | `references/enchantment.md` |
+| Magic Effect (MGEF) | `magicEffect` | `filterByMgefs` | `references/magic-effect.md` |
+| Alchemy / Ingestible (ALCH) | `ingestible` | `filterByAlchs` | `references/alchemy-ingestible.md` |
+| Ingredient (INGR) | `ingredient` | `filterByIngs` | `references/ingredient.md` |
+| Book (BOOK) | `book` | `filterByBooks` | `references/book.md` |
+| Misc Item (MISC) | `misc` | `filterByMiscs` | `references/misc.md` |
+| Soul Gem (SLGM) | `soulGem` | `filterBySoulGems` | `references/soul-gem.md` |
+| Outfit (OTFT) | `outfit` | `filterByOutfits` | `references/outfit.md` |
+| FormList (FLST) | `formList` | `filterByFormLists` | `references/formlist.md` |
+| Leveled List (LVLI / LVLN) | `leveledList` | `filterByLLs` / `filterByLLNPCs` | `references/leveled-list.md` |
+| Container (CONT) | `container` | `filterByContainers` | `references/container.md` |
+| Constructible Object (COBJ) | `constructibleObject` | `filterByCobjs` | `references/constructible-object.md` |
+| Cell (CELL) | `cell` | `filterByCells` | `references/cell.md` |
+| Location (LCTN) | `location` | `filterByLocations` | `references/location.md` |
+| Encounter Zone (ECZN) | `encounterzone` | `filterByEncounterZones` | `references/encounter-zone.md` |
+| Reference (REFR) | `reference` | `filterByRefs` | `references/placed-reference.md` |
+| Faction (FACT) | `faction` | `filterByFactions` | `references/faction.md` |
+| Movement Type (MOVT) | `movementType` | `filterByMovementTypes` | `references/movement-type.md` |
+| Projectile (PROJ) | `projectile` | `filterByProjectiles` | `references/projectile.md` |
+| Race (RACE) | `race` | `filterByRaces` | `references/race.md` |
+| Race Hook (RACE) | `raceHook` | `filterByRaces` | `references/race-hook.md` |
+| Object Modification (OMOD) | `objectModification` *(unconfirmed)* | *(undocumented)* | `references/object-modification.md` |
 
-## First step — open the grammar reference
+Read `references/grammar-core.md` only when the record file leaves a syntax question open — the
+shared patch-string structure, the addressing rules and the operation conventions live there.
+Shared enums (cast types, actor values, soul types, the biped slot index) are in
+`references/value-tables.md`; open it when a record file names one.
 
-When composing or fixing any SkyPatcher patch, open the reference before writing a line:
+## Compose the patch
 
-1. **Resolve the record type** via `references/index.jsonl` — one JSON entry per line, grep-friendly
-   on `name`, `sig` (xEdit signature), `primaryFilter`, `subfolder`, or `aliases`. It maps the type
-   to its reference file.
-2. **Read `references/grammar-core.md`** — the shared syntax (patch-string structure, `Plugin|FormID`
-   vs EditorID, the filter system, operation conventions, file placement, conflict resolution).
-3. **Read the matched `references/records/<type>.md`** — that type's specific filters, operations,
-   flags, and worked examples.
-4. Shared enums (cast types, actor values, biped-slot index, archetypes, soul types) live in
-   `references/value-tables.md`; record files point there.
+1. **Pick the filter.** The primary filter by form from the table, or a cross-cutting one the record
+   file lists (`filterByKeywords`, `filterByEditorIdContains`, `filterByModNames`, `hasPlugins`).
+   A line with no filter patches every record of that type.
+2. **Address the forms** as `Plugin.esp|FormID`, copied whole from xEdit or the Creation Kit, or by
+   EditorID — except on the FormID-only operations, which the record file and `grammar-core.md` name.
+3. **Build the string:** chain segments with `:`, list values with `,`, pack compound values with
+   `~` (`mgefsToAdd=Plugin.esp|id~Magnitude~Duration~Area`). Rename with `fullName=~New Name~`;
+   clear a form field with `null`.
+4. **Pick the operation from the record file**, preferring a relative `…Mult` or `…ToAdd` over an
+   absolute set wherever the current winner is generated or the order is tiered — an absolute set
+   flattens a whole balance ladder to one number, a multiply preserves it.
 
-Read grammar-core once plus the one record file you need — don't bulk-load every record file.
+Worked pair. Ask: "double the damage of every iron weapon in my load order, no ESP." Line:
 
-## Workflow — compose a patch
+```ini
+filterByKeywords=WeapMaterialIron:attackDamageMult=2
+```
 
-1. **Identify the record type** from the user's goal: buff a sword → Weapon (`weapon/`, WEAP);
-   retune a potion → Alchemy/Ingestible (`ingestible/`, ALCH); add loot to a chest → Container.
-   Grep `index.jsonl` for the type, signature, or an alias. A type that isn't in the index → go to
-   "Bundled-or-warn."
+The keyword is addressed by EditorID here; `Plugin.esp|FormID`, copied whole from xEdit, is the
+other legal form and the only one on a FormID-only operation.
 
-2. **Look up the grammar** — `grammar-core.md` for the mechanics, `records/<type>.md` for the
-   filters and operations that type actually supports. Availability varies per record, so the
-   record file is authoritative; don't assume a filter/op exists by analogy with another type.
+File: `Data/SKSE/Plugins/SkyPatcher/weapon/MyBalance/ironWeapons.ini` — a plain (always-loading)
+name, nested under a mod-specific folder, in the `weapon` subfolder the table gives.
 
-3. **Compose the patch string** as `filter(s) : operation(s)`:
-   - Pick a filter that selects the records — the primary filter by form (`filterByWeapons=…`), or
-     a cross-cutting one (`filterByKeywords`, `filterByEditorIdContains`, `filterByModNames`).
-   - Address forms as `Plugin.esp|FormID` (copy the full FormID from xEdit/CK) or by EditorID —
-     except the FormID-only operations listed in `grammar-core.md` §4.
-   - Chain segments with `:`, list multiple values with `,`, pack compound values with `~`
-     (e.g. `mgefsToAdd=Form|id~Magnitude~Duration~Area`).
-   - Rename with `fullName=~New Name~`; clear a form field with `null`; multiply with `…Mult`.
+## Place the INI
 
-4. **Place the INI** at `Data/SKSE/Plugins/SkyPatcher/<subfolder>/<file>.ini` — the `<subfolder>`
-   comes from the index. Name it `SomePlugin.esp.ini` to auto-gate on that plugin being active in
-   the load order, or a plain name to always load. Nest plugin-named INIs in a mod-specific
-   subfolder (`SkyPatcher/npc/MyMod/Skyrim.esm.ini`) so a mod manager can't overwrite a same-named
-   file from another mod (`grammar-core.md` §2).
+The INI goes at `Data/SKSE/Plugins/SkyPatcher/<subfolder>/<name>.ini`, with `<subfolder>` taken from
+the table. A plain filename always loads; a filename that matches a plugin (`Plugin.esp.ini`) loads
+only when that plugin is active, so it self-gates — the right shape for a patch against one mod, the
+wrong shape when the targets span many plugins. Nest a plugin-named INI in a mod-specific subfolder
+so another mod shipping the same filename cannot overwrite it. Comments start with `;`.
 
-5. **Write the file and confirm** the subfolder, the filename's load behavior (always vs
-   plugin-gated), and — if relevant — the conflict-ordering note (same-field edits resolve by
-   filename order `0`→`z`; different-field edits don't conflict).
+Read `references/placement-and-conflicts.md` before naming the file — the exact subfolder casing,
+the per-type toggles, the global `SkyPatcher.ini` switches and the filename-order conflict rule.
 
-6. **Verify through the reader** — this is what makes the skill-authored write path safe.
-   After placing the INI, refresh Amethyst, enable its mod if new, rebuild the filemap, and deploy:
-   - `housecarl_skypatcher_read` on a record the patch targets: the computed post-state must show
-     your ops APPLIED with the intended before → after values. A typo'd filter or operation
-     classifies **Unknown with a loud warning** here — the same line SkyPatcher itself would skip
-     *silently* in game — and a subtly-valid-but-wrong op shows up as the wrong field changing.
-   - `housecarl_skypatcher_layer` for the file-level checks: your INI listed as APPLIED (not
-     BSA-only, not filename-gated off, not shadowed by a same-path file from another mod), in the
-     apply-order position you expect, no new same-field set conflict against another INI, and
-     none of the three ITM classes pointing at your file: an intra-file dead write (a later line
-     of your own file unconditionally overwrites every target of an earlier set — only the last
-     write applies), a cross-INI duplicate (your line sets the same field/target to the same
-     value another INI already sets), or a no-op write (the replay shows your SET writes the
-     value the record already has). All three are authoring slips to fix at the source. (Dead
-     writes list only FULLY dead ones — partial or conditional-only overwrites are not flagged,
-     because the earlier write may still fire.)
-   A patch that passes both is verified against the actual grammar and the actual load order —
-   no game launch needed. (Resolving a reported conflict is the same loop: author the
-   later-sorted INI that pins the intended value, then re-run the reader to confirm it wins.)
+The job needs three things from the user: which records to hit, what the field change is, and
+whether the INI may be installed into the live setup or only written to a working folder.
 
-## Bundled-or-warn — never invent SkyPatcher grammar
+## Check before you install
 
-The reference covers the 27 documented record types. If a filter, operation, or record type isn't
-in it, **say so — don't fabricate a plausible token.** A wrong filter/operation name doesn't
-error: SkyPatcher silently skips lines it can't parse, and a mistyped or unresolvable FormID is
-skipped too — so the user gets a patch that quietly does nothing, with no log line pointing at the
-cause. A clear "that's not in the SkyPatcher reference" beats a confident wrong line that wastes a
-debugging session. The `housecarl_skypatcher_read` verify step (workflow step 6) is the safety net
-for this failure class — an unrecognized key surfaces there as a loud unknown-key warning instead
-of a silent in-game no-op — but it is a net, not a license to guess.
+Prove the target set, every address, and the draft file itself before anything is placed in a mod.
 
-Specifically: **Object Modification (OMOD)** patching is enabled in SkyPatcher but has no
-documentation and no verified grammar (`references/records/object-modification.md`). Surface the
-gap and the leads recorded there; do not guess OMOD syntax.
+- The set: `housecarl_records` with `types=`, `plugins=` and `where=` for the set the filter means to
+  hit, plus `counts_only=true` for the cheap census. Record the count and the epoch stamp beside it.
+- Each address: `housecarl_records` with `formids=["012EB7:Skyrim.esm"]` and the default summary
+  rows — a FormID that resolves to nothing here resolves to nothing in
+  game, silently.
+- The draft: `housecarl_records` with `formids=` a target and `source={"overlay": "skypatcher",
+  "state": "post", "ini": "<absolute path to the draft .ini>", "subfolder": "weapon"}` reads the
+  record as the game would see it once that draft is placed — the live layer plus the draft, sorted
+  into its type folder by filename. Drop `subfolder` when the draft already sits in a folder of that
+  name. Keep that pole on `source=` and pass the plain post pole,
+  `versus={"overlay": "skypatcher", "state": "post"}`, with `project={"form": "delta"}` for the
+  draft's own effect and nothing else. Warnings the replay produces for a draft line (an unknown
+  key, an op with no field mapping, a filter it cannot evaluate) render beside the answer under
+  the draft's path.
 
-## Common mistakes
+Stop when the count is what you meant, every address resolves, the delta is the change you intended,
+and the replay warned on none of your lines.
 
-- **Wrong subfolder.** A weapon patch under `npc/` never runs. The subfolder is part of the
-  contract — take it from the index, not from a guess.
-- **Inventing a filter or operation by analogy.** Each record file lists what *that* type supports;
-  `filterByNameContains` exists for armor but not every type. Look it up.
-- **A truncated or wrong FormID.** Copy the full FormID from xEdit/CK — a form SkyPatcher can't
-  resolve is silently skipped, looking exactly like a syntax bug.
-- **Forgetting the player exception.** Race and keyword filters always exclude the player; patch
-  the player with `filterByNpcs=Skyrim.esm|7` alone (`grammar-core.md` §4).
-- **EditorID on a FormID-only op** (NPC `objectsToAdd`/`factionsToAdd`, Outfit/FormList/LeveledList
-  `formsToReplace`) — these need `Plugin|FormID`.
-- **Reaching for SkyPatcher when the user means SPID/KID/CID** — those distribute; SkyPatcher
-  edits. Check the verb ("distribute" vs "edit/patch/buff") and any named framework.
+## Check after you install
+
+Once the INI is installed, three reads prove it landed.
+
+- `housecarl_skypatcher_layer` with `filter=` the type folder or the INI filename, for the
+  file-level verdict — whether the file is read at all, where it sorts, what it conflicts with, and
+  which of its ITM findings (an intra-file dead write, a cross-INI duplicate, a no-op write) name
+  your file. The first two are authoring slips to fix at the source, and a dead write hides from the
+  delta below, which shows only the value that survived it.
+- `housecarl_records` with `formids=` a target, `source={"overlay": "skypatcher", "state": "post"}`,
+  `versus={"overlay": "skypatcher", "state": "pre"}` and `project={"form": "delta"}`, for the
+  before → after on that record, with the replay's warnings for the placed file's lines beside it.
+- `housecarl_skse` with `findings='config'` and `filter=` the INI filename, which resolves every
+  `Plugin.esp|FormID` the file contains to OK, PLUGIN MISSING, DANGLING or UNPARSEABLE — the machine
+  check for a truncated or wrong FormID.
+
+## Never invent a token
+
+Look up every filter, operation, and value in the bundled reference. Report missing tokens.
+SkyPatcher silently skips unparseable lines and unresolved FormIDs without logging them, so an
+invented token can leave no useful diagnostic. The replay adds warnings, but it does not justify
+guessing. SkyPatcher enables Object Modification (OMOD) without documenting its grammar. Report
+that gap and the leads in its table row.
+
+Two limitations need care. Where a worked example disagrees with its own
+file's filter list, the primary filter in the table above wins and the example is a carried-over
+article typo. A token the corpus marks unverified against the DLL, or names without a grammar, is a
+warn case, not a use case.
+
+## Common mistakes, and the rule that replaces each
+
+- **Wrong subfolder.** A weapon patch under `npc/` is read by the wrong patcher and does nothing.
+  Take the subfolder from the table.
+- **A filter or operation assumed by analogy.** `filterByNameContains` exists for armor and not for
+  every type. Read it out of that record's own file.
+- **A truncated or wrong FormID.** Copy it whole; an unresolvable form is skipped in silence and
+  looks exactly like a syntax bug.
+- **Forgetting the player exception.** Race and keyword filters always exclude the player. Patch the
+  player with `filterByNpcs=Skyrim.esm|7` alone, no other filter on the line.
+- **An EditorID on a FormID-only operation** (NPC `objectsToAdd` / `factionsToAdd`, Outfit /
+  FormList / Leveled List `formsToReplace`) — these take `Plugin.esp|FormID` only.
 
 ## Notes
 
-- **Provenance.** The `references/` corpus is reconstructed from SkyPatcher's official Nexus
-  documentation (v6.4.1), covering 27 record types (Object Modification / OMOD is a documented
-  gap — see `references/records/object-modification.md`). On a SkyPatcher version bump, re-derive
-  from the updated articles before trusting it for new operations.
-- **Lookup without authoring.** The same reference answers "what filters/operations does record X
-  support" or "what are the legal cast types" — open the record file or `value-tables.md`; no patch
-  needs to be written.
-- **Conflict model.** SkyPatcher's low-conflict property is real but not magic: same-field set
-  operations still resolve by filename order; only add/remove operations truly accumulate. Mention
-  this when a user layers multiple patches on one record (`grammar-core.md` §2).
-  `housecarl_skypatcher_layer` reports these same-field set collisions across the whole load
-  order (winner named); `housecarl_skypatcher_read` shows the resolved end state for one record.
+- **Provenance and floor.** The reference corpus is reconstructed from SkyPatcher's official Nexus
+  documentation at **v6.4.1**, covering 27 record types plus one documented gap (OMOD). On a
+  SkyPatcher version bump, re-derive from the updated articles before trusting it for new
+  operations.
+- **Conflict model.** SkyPatcher can still have conflicts: same-field set
+  operations still resolve by filename order, and only add/remove operations truly accumulate.
+  Say so when a user layers several patches on one record.
+- **Lookup without authoring.** The same corpus answers "what filters does this record type
+  support" or "what are the legal cast types" with no patch written at all.

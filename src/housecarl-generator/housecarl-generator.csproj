@@ -11,9 +11,20 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <!-- Reflection target. Pinned to match housecarl-mcp (spike-proven 0.53.1). -->
-    <PackageReference Include="Mutagen.Bethesda.Skyrim" Version="0.53.1" />
-    <PackageReference Include="YamlDotNet" Version="18.0.0" />
+    <!-- Reflection target. Pinned to match housecarl-mcp and housecarl-core; the three move together on a bump. -->
+    <PackageReference Include="Mutagen.Bethesda.Skyrim" Version="0.54.4" />
+    <PackageReference Include="YamlDotNet" Version="18.1.0" />
+    <!-- The C# parser, for DescriptionVocabularyScanTests' READER A (in housecarl-mcp-tests) (#386). The guard's net is "every string literal in
+         the shipped source trees", and what counts as a literal is the compiler's decision, not a matter of
+         opinion — two hand-written designs of that guard were measured green over prose their own lexers could not
+         see. Roslyn is that decision, and HandLiteralLexer is the independent second spelling its output is held
+         against. BUILD-TIME ONLY: the generator regenerates corpus.json and runs the guards; build-plugin.ps1
+         publishes housecarl-mcp and housecarl-setup and never this project, so nothing here reaches a release and
+         THIRD-PARTY-NOTICES.txt is untouched.
+         Pinned, and the pin is load-bearing: the parse runs at LanguageVersion.Preview, so a language feature
+         newer than this package is a PARSE ERROR that INV6-PARSE names, never a construct read into fewer
+         literals. Bump it deliberately when the codebase adopts a newer C# — the guard will say so first. -->
+    <PackageReference Include="Microsoft.CodeAnalysis.CSharp" Version="5.9.0" />
   </ItemGroup>
 
   <ItemGroup>
@@ -21,8 +32,8 @@
     <!-- The CI regression guards drive the SERVICE-layer scan logic (LoadOrderService.CrossQuery, via the
          ForGuard seam) — the first CI coverage of the mcp layer (PR #23 follow-up). -->
     <ProjectReference Include="..\housecarl-mcp\housecarl-mcp.csproj" />
-    <!-- The setup update-lock guard (HCBR item 9.1 / PR-M) drives the real installer's now-public
-         Program.TryInstall seam — the only way to regression-test the locked-server pre-flight in CI. -->
+    <!-- description-vocab-guard scans the installer's literals; this reference is also how the installer
+         reaches the xUnit test bin, where the setup tests drive Program.TryInstall and Uninstall. -->
     <ProjectReference Include="..\housecarl-setup\housecarl-setup.csproj" />
   </ItemGroup>
 

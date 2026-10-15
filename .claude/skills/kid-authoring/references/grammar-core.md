@@ -5,8 +5,8 @@ the shape of a distribution line, how the keyword is named, and the two tail fie
 vocabularies live beside this file:
 
 - **`types.md`** — the 19 item types you can add keywords to (the `type` section).
-- **`filters.md`** — the String / Form filters that choose *which items* get the keyword (section 3).
-- **`traits.md`** — the per-type trait filters that narrow further (section 4).
+- **`filters.md`** — the String / Form filters that choose *which items* get the keyword (section 2).
+- **`traits.md`** — the per-type trait filters that narrow further (section 3).
 - **`value-tables.md`** — the flat enums (archetypes, spell types, schools, soul/furniture/bench
   sizes, body slots, delivery/casting values) the prose files reference.
 
@@ -16,6 +16,10 @@ vocabularies live beside this file:
 > Provenance markers: **[source]** = from the C++ parser/headers only · **[desc]** = stated in the
 > Nexus description only · **[lib]** = confirmed from CommonLibSSE (`powerof3/CommonLibSSE@dev`), the
 > library KID compiles against · unmarked = confirmed by both.
+
+**Sections in this file:** 1. What KID is · 2. File discovery & parsing · 3. When distribution
+happens · 4. The distribution line · 5. The keyword (section 0) · 6. Chance (section 4) ·
+7. `ExclusiveGroup` · 8. Input forms & normalization · 9. Cross-tool routing.
 
 ---
 
@@ -32,8 +36,10 @@ every launch, directly onto the in-memory record, so a KID mod is trace-free to 
 KID's target is **items** (object/base records). That's its lane in the distributor family:
 
 - keyword/form to an **item record** → **KID** (this skill)
-- spell/perk/item/keyword to an **NPC** → **SPID**
-- item into a **container** → **CID**
+- spell/perk/item/keyword to **NPCs** → **SPID**, best by group (faction, race, level, trait); for one
+  named NPC **SkyPatcher** is usually the better fit, though a single-NPC SPID line is valid
+- item into a **container** → **SkyPatcher** (its container patcher — `filterByContainers` with
+  `addToContainers`)
 - editing a record's **own fields** (damage, value, an NPC's stats) → **SkyPatcher**
 
 KID and SPID share an author and many idioms (the `~` FormID form, the `+`/`-`/`*` filter modifiers),
@@ -48,7 +54,8 @@ keyword**.
 - KID scans Skyrim's `Data\` folder for **every `.ini` whose name contains the substring `_KID`**
   (e.g. `MyMod_KID.ini`, `AllGearKID.ini`). **[source]** (`get_configs(R"(Data\)", "_KID")`)
 - Files are loaded in **alphabetical order, A → Z**, each read **top to bottom**. **[source]**
-- Files live **flat in `Data\`** — *not* under `SKSE\Plugins\` (where SPID and SkyPatcher put theirs).
+- Files live **flat in `Data\`** — *not* under `SKSE\Plugins\` (SkyPatcher puts theirs in
+  `SKSE\Plugins\SkyPatcher\<type folder>\`).
   Shipped inside a mod managed by a mod manager, but resolved from `Data\` at runtime.
 - Parsed through **CSimpleIniA** (`SetUnicode`, `SetMultiKey`). **[source]** Consequences:
   - **Comments:** standard INI line comments with **`;`** (CSimpleIniA's default).
@@ -173,8 +180,9 @@ e.g., material or rarity tags from doubling up on the same item.
 | You want to… | Tool |
 |---|---|
 | add a keyword to **items** (weapon/armor/potion/…) | **KID** ← this skill |
-| give a spell/perk/item/keyword to **NPCs** | SPID |
-| put an item into a **container** | CID |
+| give a spell/perk/item/keyword to **NPCs** | SPID (best by group; for one named NPC, usually SkyPatcher) |
+| put an item into a **container** | SkyPatcher (its container patcher) |
 | change a record's **own fields** (damage, value, NPC stats) | SkyPatcher |
 
-When unsure, ask **what receives the keyword**: an item record → KID; an NPC → SPID.
+When unsure, ask **what receives the keyword**: an item record → KID; NPCs → SPID, and one named NPC
+usually SkyPatcher.

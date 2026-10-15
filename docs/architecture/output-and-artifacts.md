@@ -1,0 +1,193 @@
+---
+updated: 2026-09-30
+covers: [src/housecarl-mcp/OutputLocations.cs, src/housecarl-mcp/PatchStemShadow.cs, src/housecarl-mcp/SeqTools.cs, src/housecarl-mcp/Artifacts.cs, src/housecarl-mcp/ResultsStore.cs, src/housecarl-core/ResultArtifact.cs, src/housecarl-core/AtomicFile.cs, src/housecarl-core/FileStamp.cs, src/housecarl-core/OrderStamp.cs, src/housecarl-core/PathArguments.cs]
+---
+# Output locations and result artifacts: where a write lands, and the contracts that hold it
+
+## What it is
+
+houseCARL writes to an owned MO2 mod folder, an explicit caller-supplied folder, or a result artifact.
+The files listed above cite the shared contracts below under ADR 0001.
+
+## Contracts
+
+### Where output lands
+
+- **A houseCARL-owned mod folder, by default.** Plugins and every non-`.esp` rider (compiled scripts, a packed
+  `.bsa`, extracted loose files, a generated `.seq`) go into `<ModsDir>\houseCARL - <stem>`. Ownership is
+  `[houseCARL] generated=true` in the folder's `meta.ini`, the one mod-root file MO2 does not deploy into Data. A
+  missing or stripped marker reads as NOT owned.
+- **`into=` extends an owned folder** through one resolver shared by the `.esp`, rider and asset lanes. Four
+  ownership-gated arms, in order: canonical `houseCARL - <stem>`; the owned folder holding `<stem>.esp` (the `.esp`
+  basename is fixed by whatever binds the patch, the folder name is the user's to rename); the folder's own name;
+  then a refusal naming every place searched, offering only `into=` spellings that resolve back. `needEsp` tightens
+  the canonical arm for the record lane.
+- **A fresh stem is auto-suffixed** to `<stem>_NNN` when a mod folder of that name exists or an ACTIVE plugin is
+  named `<stem>.esp`. Two departures from suffixing:
+  - a stem that would shadow a plugin the active order is NOT loading REFUSES (#561);
+  - a lane whose artifact's exact basename is load-bearing (the `.bsa` the game auto-loads under its plugin's
+    basename, the merged plugin) refuses a TAKEN stem **the caller named**; a defaulted stem is suffixed like any
+    other.
+- **`out_path=` is the escape hatch:** the caller names a mod-folder ROOT and houseCARL appends the artifact's
+  subfolder (`Scripts\`, `SEQ\`), never doubling a segment already there. The folder is the user's, so
+  `CreatedFresh=false` and residue cleanup never touches it; `into=` stays ownership-gated on these lanes.
+- **Deployability is a shape rule**, shared by every `out_path=` lane that emits a game-loaded file (`Scripts`,
+  `SEQ`); the decompile lane appends nothing and checks nothing, because a `.psc` is compiler input. MO2 overlays
+  a mod folder's CONTENTS onto the Data root, so the served shapes are exactly
+  `<mods>\<modFolder>\<sub>`, `<overwriteDir>\<sub>` and
+  `<data>\<sub>`; anything else warns. The rule is shared, the sentence naming what a mis-placed artifact costs
+  stays with each caller.
+- **A rider that failed after cutting a fresh folder** deletes it when it holds nothing but our own `meta.ini`, and
+  otherwise keeps it and names its path. A reused `into=` folder is never touched.
+- **Result artifacts:** an auto-spill goes to the server-managed results directory (`HOUSECARL_DATA_DIR`, else the
+  server binary's folder, plus `results\`), pruned after `ResultsStore.PruneAfterDays` days. A caller-named
+  `to_file=` never lands there, and one pointing into it is refused by name.
+- **Two dispositions write one:** `to_file=`, because the caller asked, which renders only the manifest inline; and
+  the `ceiling` auto-spill, because the inline render hit `max_chars`, which renders the prefix it managed and claims
+  the complete result only when the file holds every match, naming where the missing matches are when it cannot.
+
+### Generated reports publish after completion
+
+An auto-spill chooses a timestamped path with a random suffix. Choosing the path creates no file. The writer creates a unique sibling temporary file, writes and flushes all bytes, then moves it to the final path without replacement. A competing destination, including a symlink, causes a named failure and remains untouched. Failed writes remove their own temporary file.
+
+On Linux the temporary file is created with native `open(O_CREAT | O_EXCL | O_NOFOLLOW)` and mode 0600, then wrapped in a managed stream. This avoids the interval between .NET creating a file and acquiring its advisory lock. An indexer can hold a read handle on the temporary inode while the completed report is published. The final `.jsonl` path is never an empty reservation or a partially written report.
+
+A caller-named target carries the opposite hazard (it is the CALLER's file and may already hold an artifact they
+want) so it is written through a same-directory temp published through `AtomicFile.Commit`. A crash mid-write cannot pass a half
+artifact off as a whole one: the manifest is line 1 and carries `row_count`, so a short file fails its own manifest.
+An artifact is immutable once written; a re-run writes a new file, or overwrites a caller-named target wholesale.
+
+### Re-entering an artifact
+
+An `@<path>` list input whose target is an artifact yields that artifact's IDENTITY column as the list, and
+server-side consumption is EPOCH-CHECKED against the current build: a mismatch is a loud refusal naming both
+epochs, with deliberately NO stale-override parameter. The check happens after the consuming call's own capture,
+inside the service, so the check and the answer read the same build. An artifact whose identity column is not the
+one the parameter takes is refused by name, and an identity that is not a FormID is not epoch-checked at all,
+because it names no record that could go stale.
+
+**Error rows are not identity-bearing.** A row carrying an `error` member documents a failure and does not name a
+record, so extraction SKIPS them: re-entering an artifact means "the records this file resolved". An all-error
+artifact refuses by its real cause, never by accusing the file; the "was it edited?" refusal is reserved for a
+SUCCESS row missing the identity column, which a server-written artifact never contains.
+
+### The atomic-write contract
+
+`AtomicFile.Commit` is the one primitive every houseCARL FINAL swap funnels through. The caller stages a complete
+file into a temp on the SAME volume as the final path, then hands it here: an existing target is swapped with
+`File.Replace`, which keeps the destination's NTFS identity and creation time; an absent one is served by
+`File.Move`, because `File.Replace` cannot create.
+
+On Linux, an existing target's Unix permissions are applied to the staged file before publication.
+Replacing a private file must not broaden its final permissions. Linux creation times are not a
+portable replacement-identity contract; Amethyst mod priority comes from the saved profile, not birth time.
+
+Two contracts hold it. Same-volume staging is the caller's, and the `FileNotFoundException`-ONLY catch is what
+keeps that honest: a cross-volume swap surfaces as `IOException` and an EFS or special-ACL target as a
+metadata-merge error, and both must stay loud with the original byte-intact rather than degrade into a non-atomic
+copy. The 3-argument overload is deliberate — the 4-argument `ignoreMetadataErrors: true` would swallow that
+failure. `AtomicFile` holds no handle at rest.
+
+Crash-atomicity itself is not demonstrable in one process and is not claimed anywhere. Fresh-CREATE writes
+deliberately do not funnel through it: there is no original to lose.
+
+### The freshness stamp: last write plus size
+
+`FileStamp` is one filesystem entry's last-write time AND its length, and it is THE key every houseCARL cache
+stamps against (the plugin read cache, the MO2 profile gate, the BSA and loose-subtree tables, the SkyPatcher INI
+parse cache) so there is one answer to "has this changed" rather than one per cache. Length is in the key because
+an edit inside the filesystem's timestamp granularity, or one whose tool restores the timestamp it found, leaves
+the mtime where it was (#406). Both terms come from ONE stat. `FileStamp.Absent`, with its negative length, is the
+single sentinel for missing, locked and unreadable.
+
+### The order stamp: epoch plus health
+
+`OrderStamp` carries an index build's epoch AND the plugins that build lost to a load failure as ONE value, because
+a legitimate reorder changes the epoch too and the epoch alone cannot tell a degraded order from a reordered one
+(#353). The health is a SIBLING of the epoch, never folded into it: the epoch is opaque and compared only for
+equality.
+
+Standing notices are stateless; relevance, never memory: a call carries what bears on its own records, the same on every call, and points to where the rest is listed.
+
+### The absolute-path rule
+
+Every path a CALLER names (an `out_path=` folder, a `to_file=` artifact, an `@file` list, a draft INI) must be
+FULLY QUALIFIED, not merely rooted: the server's working directory is not the caller's, and `C:work` or `\work`
+resolve against the server's own directory while the response names the path that was typed. One definition,
+`PathArguments.NotAbsolute`, in core because the predicate and draft readers are there, and carrying no `error:`
+prefix so a throwing lane and a returning lane can both use it.
+
+## Pinned by
+
+- *Where output lands*, ownership: `ExtendResolveRenamedPatchTests.AnUnownedHousecarlFolderIsRefusedOnBothLanesAndLeftByteIntact`
+  pins the refusal of an unmarked folder on the record and rider lanes, with its plugin left byte-intact, and
+  `ExtendResolveRefusalTests.EveryWriteToolsUnownedRefusalNamesTheCandidatesAndNoInPlaceLane` the same refusal on
+  every write tool; both folders have no `meta.ini` at all. *These do not pin a `meta.ini` present with the marker
+  stripped.*
+- *Where output lands*, `into=`: `ExtendResolveRenamedPatchTests` pins each arm alone (canonical folder, by-plugin,
+  by-folder name, ambiguous, two-plugin). By-plugin before the folder-name catch-all is pinned by
+  `ExtendResolveCandidateTests.AFolderWhoseNameResolvesElsewhereIsOfferedByItsPluginAndThatSpellingResolves`. *No test pins
+  the canonical folder before by-plugin: no test has both a canonical folder and another owned folder holding its
+  `.esp`.*
+- *Where output lands*, `into=` on the copy lane: `CopyServiceLaneTests` — a patch that does not exist refuses offering
+  to create it fresh, the patch's own `.esp` name extends it, and a refusal after a fresh folder was cut leaves no folder.
+- *Where output lands*, the shadowing stem: `PatchStemShadowTests.AStemThatWouldShadowAnInactivePluginInAForeignModFolderIsRefused`,
+  with `…AForeignEsmOfTheSameStemIsNoShadowForTheEspTheLaneWrites` for the boundary.
+- *Where output lands*, a caller-named taken stem: `PatchArtifactCollisionTests.Merge_folder_collision_refuses_by_name_and_writes_nothing`
+  and `…Repack_folder_collision_refuses_by_name_rather_than_renaming_the_archive`, both of which name the stem.
+- *Where output lands*, result artifacts: `RecordsArtifactTests.ToFileIntoTheServersResultsDirectoryIsRefusedNamingThePruneHazard`.
+- *Where output lands*, the two dispositions: `RecordsTransportTests.ToFile_TheArtifactIsWrittenAndTheResponseIsManifestOnlyInline`,
+  with `RecordsArtifactTests.ToFileJson_TheRowsAreOmittedWhileTheTrueTotalStaysIntact` for the json twin; and
+  `RecordsArtifactTests.AnAutoSpillAnnouncesTheCompleteResultWithItsRowCountNotTheRenderedPrefix` and
+  `…AWindowedAutoSpillSaysWindowAndNeverClaimsTheCompleteResult` for the `ceiling` auto-spill.
+- *Generated reports publish after completion*: the publication and cleanup contracts are checked directly:
+
+| contract | pinned by |
+|---|---|
+| same-second writers choose distinct names and preserve both byte sequences | `RecordsArtifactResultsStoreTests.SameSecondReservationsChooseDistinctUnpublishedPaths` |
+| the final report is absent during writing and complete when published | `ArtifactPublicationTests.AReportHasNoPublishedPathUntilAllItsBytesAreWritten` |
+| a scanner holds the temporary inode across publication | `ArtifactPublicationTests.AScannerCanHoldTheTemporaryFileAcrossPublication` and `RecordsArtifactTests.AnAutoSpillLandsWhileAScannerGrabsEveryFileTheResultsDirectoryGains` |
+| errors during writing or immediately before publication remove owned scratch files | `ArtifactPublicationTests.AFailedWriteLeavesNoPublishedReportOrTemporaryFile` and `…AFailureImmediatelyBeforePublicationRemovesOnlyOurScratch` |
+| competing files and symlinks at the final path are preserved | `ArtifactPublicationTests.AnEntryAppearingAtTheFinalPathIsNeverReplacedOrDeleted` |
+| concurrent writers retain distinct complete reports without leftover temporary files | `ArtifactPublicationTests.ConcurrentWritersPublishDistinctCompleteReports` |
+| a failed write to a caller-named target leaves that file as it was | `RecordsArtifactTests.ToFile_AWriteThatFailsAfterItStartedLeavesTheCallersFileAsItWas` |
+
+- *Re-entering an artifact*: `RecordsArtifactEpochTests.StaleReEntry_TheBodyLaneRefusalNamesBothEpochsAndTheNoOverridePosture`
+  — the epoch mismatch refuses naming both epochs, with no override. `RecordsArtifactTests.AnArtifactDeclaringNoIdentityColumnRefusesReEntryByName`
+  — an artifact with no identity column refuses re-entry by name. `RecordsScopeAtFileTests.AFormIdArtifactIsRefusedByItsIdentityInOneShortSentence`
+  — an artifact whose identity column is not the one the parameter takes is refused by that identity in one sentence.
+- *Re-entering an artifact*, error rows: pinned across `RecordsArtifactTests`' re-entry facts —
+  `AMixedArtifactReEntersOnItsResolvedRowsWithNoWasItEditedMisdiagnosis` (error rows are skipped) and
+  `AnAllErrorArtifactIsRefusedByItsRealCauseNeverByAccusingTheFile` (an all-error artifact refuses by its real cause).
+- *The atomic-write contract*: `AtomicCommitGuardTests` checks byte-exact publication, consumed staging,
+  Unix permission preservation and loud failure with the prior bytes intact. `CommitFault` injects a
+  failure after the actual payload exists, scoped to one async test and one destination. The same
+  boundary is exercised through patch writes, artifact exports, mesh edits, create/upsert and SEQ regeneration;
+  tests retain cleanup and consent assertions rather than relying on Windows rename restrictions.
+- *The freshness stamp: last write plus size*: pinned by `FreshnessKeyTests` — an edit that leaves the mtime alone is
+  still stale, the shared stamp separates two files that differ only in length, and one sentinel stands for a path
+  that cannot be statted.
+- *The order stamp: epoch plus health*: pinned by `DegradedOrderMarkerTests` (`ADegradedBuildsJsonResponseCarriesTheMarkerAndNamesWhatIsMissing` and
+  `ADegradedBuildsTextHeadCarriesTheClauseBesideTheEpoch` for the marker riding beside the epoch on both transports,
+  `HealthyOrderMarkerTests.AHealthyBuildCarriesNoMarkerOnEitherLane` for the silence on a healthy build) and by
+  `AssetStatusSetTests.TheDegradedOrderRosterSurvivesTheArtifactRoundTrip` for the roster travelling with an
+  artifact.
+- *The absolute-path rule*: pinned per lane by `AbsolutePathArgumentTests`.
+
+## Where
+
+`src/housecarl-mcp/OutputLocations.cs` holds the output folders, the ownership marker, `into=`, the stem suffix,
+`out_path=`, the `.seq` writer and the on-disk plugin locate, as the class `OutputLocations`, which the head builds over
+itself and hands, as the same instance, to `AssetLayers`; what it takes from the head is `IOutputHost` at the top of that file, which adds nothing to the shared door: `ConfiguredRoots()` (one hold for the
+configured check, the roots and the built plugin names) and `WriteGate`. The folder allocation
+lock, `FolderAllocationGate`, is the class's; the write lanes take the same one. `src/housecarl-mcp/PatchStemShadow.cs`
+is the shadow sweep a fresh stem runs; `src/housecarl-mcp/SeqTools.cs` is `housecarl_write_seq`'s tool front.
+`src/housecarl-mcp/Artifacts.cs` is what a response says when its result lives in an artifact, including the owned-child
+annotation a spilled scan carries ([`records-owned-child-declarers.md`](records-owned-child-declarers.md));
+`LoadOrderService.ResultsDir` is the server-managed results directory, `results` beside `houseCARL.user.json`;
+`src/housecarl-mcp/ResultsStore.cs` is the reservation and the prune inside the folder it is given.
+`src/housecarl-core/ResultArtifact.cs` is the artifact, its manifest, and the identity read re-entry takes
+(`ReadIdentity`); `AtomicFile.cs` is `AtomicFile.Commit`;
+`FileStamp.cs` and `OrderStamp.cs` are the two stamps; `PathArguments.cs` is `PathArguments.NotAbsolute`. Entry
+points: the output lanes of the write tools (`patch=`, `into=`, `out_path=`), and `to_file=` and the auto-spill on
+the tools that take them.

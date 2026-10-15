@@ -6,10 +6,17 @@ it blank or `NONE` to match **every** item of that type. Entries are **comma-sep
 
 Two kinds of entry:
 
-- **String filters** — match by text (name, archetype, actor value, model path). §1.
+- **String filters** — match by text (EditorID, name, archetype, actor value, model path). §1.
 - **Form / EditorID filters** — match by record (FormID, EditorID, plugin, or an *associated* form). §2.
 
+An EditorID term belongs to **both** lists, and which one it lands in is decided at load: KID tries
+to resolve it to a form first and only falls through to the string bucket when nothing resolves (§2).
+That fall-through is what makes the EditorID a live String-filter channel.
+
 Both kinds take the **pattern-matching modifiers** (`+` / `-` / `*` / none). §3.
+
+**Sections in this file:** 1. String filters · 2. Form / EditorID filters · 3. Pattern-matching
+modifiers · 4. Worked examples.
 
 ---
 
@@ -19,6 +26,7 @@ A bare word/phrase matched against the item, by these channels: **[desc]**
 
 | Channel | Applies to | Example term |
 |---|---|---|
+| **EditorID** | all types | `IronSword01` (only when it resolves to no form — §2) |
 | **Item name** | all types | `Iron Sword` |
 | **Effect archetype** | Magic Effect, Spell, Enchantment, Scroll, Potion | `Absorb`, `Paralysis` (full list: `value-tables.md`) |
 | **Actor Value (by name)** | Book, Magic Effect, Spell, Enchantment, Scroll, Potion, Weapon | `Destruction`, `OneHanded` (names: `value-tables.md`) |
@@ -29,6 +37,20 @@ A bare word/phrase matched against the item, by these channels: **[desc]**
   Destruction spells/books" without naming each record.
 - **Nif path** lets you tag every item sharing a mesh (`*steelmace.nif` with a wildcard is the common
   form) — explicitly **does not work for armors** [desc].
+- A bare term is an **exact** test on each channel (`Item::Data::HasStringFilter`,
+  `src/LookupFilters.cpp`, KID v3.5.0.rc1): the line opens
+  `string::iequals(edid, a_str) || string::iequals(name, a_str)` — the whole EditorID or the whole
+  name, case-insensitively — then the whole model path, then the archetype or actor-value name as a
+  whole. Substring matching is the `*wildcard`'s job, and it reaches a different channel set —
+  see §3.
+- On the model-path channel, **the two sides are not normalized the same way**, on a bare term as on
+  a wildcard. The **term** is put through `Filter::SanitizePath` at load (`include/KeywordData.h`),
+  which lowercases, collapses `/` and `\` runs to a single `\`, strips leading separators, and strips
+  everything up to and including `meshes\`. The **item's model** is put through
+  `Filter::SanitizeString` (`Item::Data::Data`), which only lowercases. So a model path stored with
+  forward slashes, or with a `meshes\` prefix the term no longer carries, will not match a term that
+  looks correct. Write the term the way the record stores the path, minus `meshes\`, and check with a
+  `where=` scan rather than assuming the normalizer closes the gap.
 
 ---
 
@@ -37,9 +59,24 @@ A bare word/phrase matched against the item, by these channels: **[desc]**
 Match specific records (or records *associated* with another form):
 
 - **FormID** — `0x1234~MyMod.esp` (tilde-suffix; `esp` omitted for vanilla/DLC).
-- **EditorID** — `MyAwesomeSwordID`.
+- **EditorID** — `MyAwesomeSwordID`. **It is a Form filter only if it resolves. [source]**
+  `detail::formID_to_form` (`include/KeywordData.h`) tries `LookupByEditorID` first; when that
+  returns nothing the term falls through into the **strings** bucket, where it is tested against the
+  EditorID channel of §1 (exact) or §3 (substring, under a `*`). So an EditorID that names a loaded
+  record filters by record; one that does not — a typo, a plugin not installed, a record type the
+  lookup does not index — silently becomes a text test rather than an error.
 - **Plugin name** — `MyMod.esp` matches **all items of that type defined in the plugin** (`[desc]`
   "To get all items in a mod: `MyAwesomeSwords.esp`"). Combine several: `ModA.esp,ModB.esp`.
+  **It is the defining plugin, not the winning one. [source]** A plugin-name term resolves to an
+  `RE::TESFile*` (`detail::formID_to_form` → `dataHandler->LookupModByName`, `include/KeywordData.h`),
+  and the test KID runs on each item is `a_file->IsFormInMod(item->GetFormID())`
+  (`Item::Data::HasFormOrStringFilter`, `src/LookupFilters.cpp`, KID v3.5.0.rc1, commit `a7a5589`).
+  `TESFile::IsFormInMod` compares the FormID's own index against that file's load index — the
+  regular index for a full plugin, the `0xFE` light index for an ESL (CommonLibSSE-NG
+  `src/RE/T/TESFile.cpp`). So the question it answers is "does this FormID belong to that plugin",
+  never "does that plugin win the record": `-Skyrim.esm` excludes every record whose FormID belongs
+  to `Skyrim.esm`, whoever overrides it, and `MyMod.esp` catches only the records `MyMod.esp` itself
+  defines — never a vanilla record it merely overrides. Count with the defining plugin.
 
 ### Type-specific Form filters [desc]
 
@@ -78,7 +115,7 @@ Every filter entry (string or form) carries one of four roles, set by a prefix/j
 |---|---|---|---|---|
 | `+` | **Requirement** | infix joiner: `A+B` | item must have **all** (AND) | strings, forms |
 | `-` | **Exclusion** | prefix: `-X` | item must **not** have it (AND-NOT) | strings, forms |
-| `*` | **Wildcard** | prefix: `*Iron` | substring of name/keyword (ANY) | **strings only** |
+| `*` | **Wildcard** | prefix: `*Iron` | substring of EditorID / name / keyword EditorIDs (ANY); a term containing `.nif` tests the model path **instead** | **strings only** |
 | *(none)* | **Match** | bare: `A` | item matches **any** listed (OR) | strings, forms |
 
 **Parser specifics [source]:** `+` is detected anywhere in a comma-segment, which is then split on `+`
@@ -86,11 +123,43 @@ into the requirement set (so `ArmorHeavy+ArmorGauntlet` is one requirement-pair)
 the **first character** of their term. Wildcards go into a strings-only bucket (they are substring
 tests, not resolved to forms).
 
-**Evaluation order [desc]:** `Requirements → Exclusions → Matches → Wildcards`.
+**Which channels a wildcard tests. [source]** A `*` term never resolves to a form; it goes to a
+strings-only bucket and is compared in `Item::Data::ContainsStringFilter`
+(`src/LookupFilters.cpp`, KID v3.5.0.rc1, commit `a7a5589`), which tests exactly three channels, the
+same three for **every** item type — no per-type switch:
+
+| Wildcard channel | Detail |
+|---|---|
+| **EditorID** | `string::icontains(edid, str)` — case-insensitive substring |
+| **Display name** | `string::icontains(name, str)` — case-insensitive substring |
+| **The item's own keyword EditorIDs** | `keyword->formEditorID.contains(str)` over the item's keyword array; `BSFixedString::contains` runs `_strnicmp`, so this too is case-insensitive |
+
+One exception routes away from all three: a term containing `.nif` is tested **only** against the
+model path (`model.contains(str)`, `src/LookupFilters.cpp`). The two sides reach that comparison
+**asymmetrically normalized**: the term gets `Filter::SanitizePath` at load
+(`include/KeywordData.h`) — lowercase, `/` and `\` runs collapsed to a single `\`, leading separators
+stripped, everything up to and including `meshes\` stripped — while the item's model gets only
+`Filter::SanitizeString` (`Item::Data::Data`), which lowercases and nothing else. Only case is
+reliably reconciled; separators and the `meshes\` prefix are not. A `.nif` wildcard therefore never
+matches a name or a keyword, and can miss a mesh whose stored path is spelled differently from the
+sanitized term.
+
+What a wildcard does **not** test: effect archetypes and actor-value names. Those live in
+`HasStringFilter`, the exact-match path used by Match, Requirement and Exclusion terms only — so
+`*Absorb` will not catch Absorb-archetype effects the way the bare term `Absorb` does. And a `*`
+before a FormID, EditorID or plugin name is not rejected by the parser: `*0x1234~MyMod.esp` becomes
+a substring test against those three channels, which will practically never match, so it is a
+mis-cut filter that silently tags nothing, not a term KID refuses.
+
+**Evaluation order:** `Requirements → Exclusions → Matches → Wildcards` [desc], and that is the order
+the four checks run in `Item::Data::PassedFilters` (`src/LookupFilters.cpp`, v3.5.0.rc1) `[source]`.
 *(The description prints "3. Matches / 3. Wildcards" — a numbering typo; Wildcards evaluate last.)*
 
-**How they combine:** an item passes when it has **all** Requirements, **none** of the Exclusions, and
-matches **at least one** of the Matches/Wildcards (when any positive terms are given). Each added filter
+**How they combine [source]:** the four groups are four independent gates, each skipped when empty —
+an item passes when it has **all** Requirements, **none** of the Exclusions, **at least one** Match,
+**and** at least one Wildcard. Matches and Wildcards are separate `and`ed groups, not one pooled OR:
+a line carrying both `Iron` and `*Steel` needs the item to satisfy each side, not either
+(`PassedFilters` tests `MATCH` and `ANY` in sequence, failing on either). Each added filter
 **narrows** the pool — "combining multiple filters will progressively restrict the pool of items"
 [desc]. To distribute to a *union* of groups, write **multiple lines** for the same keyword.
 
@@ -102,13 +171,13 @@ matches **at least one** of the Matches/Wildcards (when any positive terms are g
 ;all magic effects in a mod (plugin-name form filter)
 Keyword = MysticismSpells|Magic Effect|MysticismMagic.esp
 
-;all iron-named weapons, but not wooden swords (wildcard ANY + exclusion)
+;weapons with "iron" in EditorID, name or a keyword, but not wooden swords (wildcard ANY + exclusion)
 Keyword = RustProne|Weapon|*Iron,-Wooden Sword
 
 ;non-enchanted heavy gauntlets: Requirement (two keywords) + a -E trait
 Keyword = 0x1234~MyArmorMod.esp|Armor|ArmorHeavy+ArmorGauntlet|-E
 
-;all bound arrows, by name wildcard
+;all bound arrows, by wildcard (EditorID, name and keyword EditorIDs)
 Keyword = MysticalAmmo|Ammo|*Bound
 
 ;magic effects with specific hit-art forms (Form filters, OR)
@@ -120,4 +189,9 @@ Keyword = SpellTomeDestruction|Book|NONE|S,20
 
 ;every item sharing a mesh path
 Keyword = SteelMace|Weapon|*steelmace.nif
+
+;exclusion-only filters, then a trait: every poison NOT defined in Skyrim.esm
+;the filters section carries only a -exclusion (no positive term is required), and the
+;trait narrows what is left — this is the shape a "everything except vanilla" job takes
+Keyword = MyModdedPoisonTag|Potion|-Skyrim.esm|P
 ```

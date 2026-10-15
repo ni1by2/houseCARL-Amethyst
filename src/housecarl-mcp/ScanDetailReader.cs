@@ -1,0 +1,72 @@
+using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Plugins.Records;
+using HousecarlCore;
+
+namespace HousecarlMcp;
+
+/// <summary>The scan detail lane's row reader — the one path the four scan renders (text, json, dense, artifact)
+/// read a match's body through, on one overlay session and one <see cref="BodyPrefetch"/> chunk, checking the
+/// caller's cancellation token per ROW; contract in docs/architecture/read-engine.md.</summary>
+internal sealed class ScanDetailReader : IDisposable
+{
+    readonly LoadOrderService _svc;
+    readonly CrossQueryOutcome _q;
+    readonly IReadOnlyList<string>? _fields;
+    readonly int _depth;
+    readonly bool _resolveNames, _winnerFields;
+    readonly string? _containerHint;
+    readonly IReadOnlyList<(int Depth, string[]? Tail)>? _depths;
+    readonly CancellationToken _ct;
+    readonly RecordReads.LinkMemo? _linkMemo;
+    readonly LoadOrderResolver.IndexView? _view;
+    readonly LoadOrderResolver.OverlaySession? _session;
+
+    BodyPrefetch.Chunk? _chunk;
+    int _chunkStart = -1;
+
+    internal ScanDetailReader(LoadOrderService svc, CrossQueryOutcome q, IReadOnlyList<string>? fields, int depth,
+                              bool resolveNames, bool winnerFields, string? containerHint,
+                              IReadOnlyList<(int Depth, string[]? Tail)>? depths, CancellationToken ct)
+    {
+        _svc = svc; _q = q; _fields = fields; _depth = depth;
+        _resolveNames = resolveNames; _winnerFields = winnerFields;
+        _containerHint = containerHint; _depths = depths; _ct = ct;
+        _linkMemo = resolveNames ? new RecordReads.LinkMemo() : null;
+        // Only a pinned outcome can be read this way; an unpinned one falls through to the plain per-row path.
+        _view = q.Pin?.View;
+        _session = q.Pin?.Resolver.OpenSession();
+    }
+
+    /// <summary>One link-resolution cache for the whole render, so a target recurring across rows resolves once.</summary>
+    internal RecordReads.LinkMemo? LinkMemo => _linkMemo;
+
+    /// <summary>Read row <paramref name="i"/> of the scan's key list.</summary>
+    internal ReadOutcome Row(int i)
+    {
+        _ct.ThrowIfCancellationRequested();
+        var fk = _q.Keys[i];
+        var plugin = SourceAt(i);
+        FillChunk(i);
+        var body = _chunk?.Body(fk);   // the plugin is walked here, on the first row of the chunk that wants it
+        return _svc.ResolveReadOn(_q, fk, plugin, _fields, false, _depth, _resolveNames, _linkMemo,
+                                  _containerHint, _depths, _session, body, heldParent: _chunk is null ? null : _chunk.Parent);
+    }
+
+    /// <summary>The plugin whose body this row displays: the scan's own per-match source, or the winner when the
+    /// call retargeted display to it.</summary>
+    string? SourceAt(int i)
+        => _winnerFields ? null : (_q.Sources is { } src && i < src.Count ? src[i] : null);
+
+    void FillChunk(int i)
+    {
+        if (_view is not { } view || _session is null) return;   // unpinned: the per-row path answers
+        int start = BodyPrefetch.ChunkStart(i);
+        if (start == _chunkStart) return;
+        _chunkStart = start;
+        _chunk = BodyPrefetch.Gather(view, _session, _q.Pin!.Resolver.Counters, _q.Keys, start,
+                                     Math.Min(start + BodyPrefetch.ChunkRows, _q.Keys.Count),
+                                     SourceAt, _ct);
+    }
+
+    public void Dispose() => _session?.Dispose();
+}

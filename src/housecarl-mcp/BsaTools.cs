@@ -4,116 +4,337 @@ using ModelContextProtocol.Server;
 
 namespace HousecarlMcp;
 
-/// <summary>
-/// Lists and extracts Bethesda archives natively through Mutagen. Repacking remains a separate BSArch-backed
-/// operation until the post-v1 structured Proton runner is implemented. Managed outputs go to Amethyst staging;
-/// originals are not modified.
-/// </summary>
+/// <summary>List, extract and repack Bethesda .bsa archives via <see cref="HousecarlCore.BsaArchive"/>. Repack
+/// drives BSArch, whose path comes from <see cref="ToolPathResolver"/>; extract and repack write into a new
+/// houseCARL mod folder and originals are untouched (docs/architecture/assets.md).</summary>
 [McpServerToolType]
 public static class BsaTools
 {
-    /// <summary>Lists the canonical entry paths stored in one Bethesda archive.</summary>
-    [McpServerTool(Name = "housecarl_bsa_list", ReadOnly = true, Title = "List a .bsa archive's contents"),
+    [McpServerTool(Name = ToolNames.BsaList, ReadOnly = true, Title = "List a .bsa archive's contents"),
      Description(
          "List the files inside a Bethesda .bsa archive. Returns the archive format + the contained file paths. " +
          "Read-only — extracts nothing. Reads the archive directly (via Mutagen) — no external tool needed. To read a " +
-         "file's CONTENTS, use housecarl_bsa_extract then read the file.")]
+         "file's CONTENTS, use " + ToolNames.BsaExtract + " then read the file.")]
     public static string BsaList(
         [Description("Full path to the .bsa archive to list.")]
             string archive,
-        [Description("Optional. Max characters before the file list is cut with an explicit notice. 0 = the server default (~80k).")]
-            int max_chars = 0) => Guard.Tool("housecarl_bsa_list", () =>
+        [Description(UnderText)]
+            string[]? under = null,
+        [Description("Optional. Return only the file count, of the under= matches when given.")]
+            bool counts_only = false,
+        [Description("Optional. Max characters before the file list is cut with an explicit notice. 0 = the server default (~40k).")]
+            int max_chars = 0) => Guard.Tool(ToolNames.BsaList, () =>
     {
         if (string.IsNullOrWhiteSpace(archive)) return "error: no archive given. Pass the full path to the .bsa.";
         try { archive = Path.GetFullPath(archive.Trim().Trim('"')); }
         catch (Exception ex) { return $"error: '{archive}' is not a usable path ({ex.Message})."; }
         if (!File.Exists(archive)) return $"error: no such file: '{archive}'.";
+        if (Keep(under, out var selectors, out var notes) is { } bad) return bad;
 
         var r = HousecarlCore.BsaArchive.List(archive);
         if (!r.Ran) return "error: " + r.RunError;
         if (!r.Success) return "error: " + r.Raw;   // header-vs-reader file-count mismatch (possible corruption)
 
-        int cap = max_chars > 0 ? max_chars : 80_000;
+        var files = r.Files;
+        if (selectors is not null) { (files, var dead) = Tally(selectors, r.Files, archive); notes.AddRange(dead); }
+        int cap = Wire.Cap(max_chars);
         var sb = new StringBuilder();
         sb.Append(Path.GetFileName(archive)).Append("  [").Append(r.Format ?? "unknown format").Append("]  ")
-          .Append(r.DeclaredCount).Append(" file(s)\n");
+          .Append(r.DeclaredCount).Append(" file(s)");
+        if (selectors is not null) sb.Append(", ").Append(files.Count).Append(" matching under=");
+        AssetWire.AppendSelectorNotes(sb, notes, RenderCap.For(cap, 0));
+        if (counts_only) return sb.ToString().TrimEnd('\n');
+        if (sb[^1] != '\n') sb.Append('\n');
         int shown = 0;
-        foreach (var f in r.Files)
+        foreach (var f in files)
         {
-            if (sb.Length >= cap) { sb.Append("  ... [").Append(r.Files.Count - shown).Append(" more omitted at max_chars=").Append(cap).Append("]\n"); break; }
+            if (sb.Length >= cap) { sb.Append("  ... [").Append(files.Count - shown).Append(" more omitted at max_chars=").Append(cap).Append("]\n"); break; }
             sb.Append("  ").Append(f).Append('\n'); shown++;
         }
         return sb.ToString().TrimEnd('\n');
     });
 
-    /// <summary>Extracts an entire archive into a requested folder or new Amethyst staging mod.</summary>
-    [McpServerTool(Name = "housecarl_bsa_extract", Title = "Extract a .bsa archive to a folder"),
+    const string UnderText =
+        "Optional. Archive path(s) or glob(s) to keep, as asset_status under=: forward or back slashes, any case; " +
+        "'*' within one segment, '?' one character, '**' across separators; a plain path keeps that file or " +
+        "everything beneath that folder.";
+
+    const string SelectorFix = "pass an archive-relative path or glob such as 'scripts/**/*.pex'";
+
+    /// <summary>The usable under= selectors (null when none were given) and a note per blank or bad one, or the refusal when none is usable.</summary>
+    static string? Keep(string[]? under, out List<(string Sel, Func<string, bool> Test)>? tests, out List<string> notes)
+    {
+        tests = null;
+        notes = new();
+        if (under is not { Length: > 0 }) return null;
+        var usable = new List<(string Sel, Func<string, bool> Test)>();
+        foreach (var raw in under)
+        {
+            var sel = (raw ?? "").Trim();
+            if (sel.Length == 0) { notes.Add($"under: an empty selector was skipped; {SelectorFix}."); continue; }
+            try { usable.Add((sel, HousecarlCore.AssetGlob.Matcher(sel))); }
+            catch (ArgumentException ex) { notes.Add($"under '{sel}': {ex.Message}; {SelectorFix}."); }
+        }
+        if (usable.Count == 0) return "error: under= holds no usable selector: " + string.Join(" ", notes.Distinct());
+        tests = usable;
+        return null;
+    }
+
+    /// <summary>One pass over the listing: the paths any selector keeps, and a note per selector that kept none.</summary>
+    static (IReadOnlyList<string> Kept, List<string> Dead) Tally(List<(string Sel, Func<string, bool> Test)> tests, IReadOnlyList<string> files, string archive)
+    {
+        var hits = new int[tests.Count];
+        var kept = new List<string>();
+        foreach (var f in files)
+        {
+            bool any = false;
+            for (int i = 0; i < tests.Count; i++)
+                if (tests[i].Test(f)) { hits[i]++; any = true; }
+            if (any) kept.Add(f);
+        }
+        var dead = tests.Where((_, i) => hits[i] == 0)
+                        .Select(t => $"under '{t.Sel}' matched no file in '{Path.GetFileName(archive)}' — check the spelling.")
+                        .ToList();
+        return (kept, dead);
+    }
+
+    [McpServerTool(Name = ToolNames.BsaExtract, Title = "Extract a .bsa archive to a folder"),
      Description(
-         "Extract a Bethesda .bsa archive's contents to a folder so you can read the files. Reads the archive directly " +
-         "(via Mutagen — handles compressed archives too) — no external tool needed. Unpacks the WHOLE archive. Pass " +
-         "dest= a folder to unpack into; OMIT dest to let houseCARL unpack into a NEW reviewable mod folder under your " +
-         "mods directory (reported back) — that requires an Amethyst connection. Originals are never modified.")]
+         "Extract a Bethesda .bsa archive's contents, or with under= only the matching files, to a folder so you can read the files. Reads the archive " +
+         "directly, compressed archives included; no external tool needed. Without out_path= it unpacks into a new mod " +
+         "folder under the selected manager's staging directory, which needs a configured MO2 instance or Amethyst connection. The archive is never " +
+         "modified.")]
     public static string BsaExtract(
         LoadOrderService svc,
         [Description("Full path to the .bsa archive to extract.")]
             string archive,
-        [Description("Optional. Folder to unpack into. If omitted, houseCARL creates a NEW mod folder under your mods directory and reports its path.")]
-            string? dest = null) => Guard.Tool("housecarl_bsa_extract", () =>
+        [Description("Optional. Absolute path to the folder to unpack into. Omit for a new houseCARL mod folder under your mods directory; its path is reported.")]
+            string? out_path = null,
+        [Description("Optional. Extract only the files matching these, as " + ToolNames.BsaList + " under=; matching none is refused.")]
+            string[]? under = null) => Guard.Tool(ToolNames.BsaExtract, () =>
     {
         if (string.IsNullOrWhiteSpace(archive)) return "error: no archive given. Pass the full path to the .bsa.";
         try { archive = Path.GetFullPath(archive.Trim().Trim('"')); }
         catch (Exception ex) { return $"error: '{archive}' is not a usable path ({ex.Message})."; }
         if (!File.Exists(archive)) return $"error: no such file: '{archive}'.";
+        if (Keep(under, out var selectors, out var notes) is { } bad) return bad;
+        // Matched before any folder is cut, so an empty match refuses with nothing written.
+        var matched = new StringBuilder();
+        Func<string, bool>? keep = null;
+        if (selectors is not null)
+        {
+            var listed = HousecarlCore.BsaArchive.List(archive);
+            if (!listed.Ran) return "error: " + listed.RunError;
+            if (!listed.Success) return "error: " + listed.Raw;
+            var (kept, dead) = Tally(selectors, listed.Files, archive);
+            if (kept.Count == 0)
+            {
+                var refusal = new StringBuilder($"error: under= matched none of the {listed.Files.Count} file(s) in '{Path.GetFileName(archive)}', so nothing was extracted; check the pattern with {ToolNames.BsaList} under=.");
+                AssetWire.AppendSelectorNotes(refusal, notes, RenderCap.For(Wire.DefaultMaxChars, 0));
+                return refusal.ToString();
+            }
+            notes.AddRange(dead);
+            matched.Append(kept.Count).Append(" of ").Append(listed.Files.Count).Append(" file(s) matched under=.");
+            AssetWire.AppendSelectorNotes(matched, notes, RenderCap.For(Wire.DefaultMaxChars, 0));
+            if (matched[^1] != '\n') matched.Append('\n');
+            keep = kept.ToHashSet(StringComparer.Ordinal).Contains;
+        }
 
         string target;
-        bool managed = string.IsNullOrWhiteSpace(dest);
+        bool managed = string.IsNullOrWhiteSpace(out_path);
         if (managed)
         {
             if (svc.ConfigPromptOrNull() is { } cfg) return cfg;   // need ModsDir for the default managed folder
-            // Extract keeps its own #49 residue contract (the "left at X" message below) — out of H2's delete-if-empty
-            // scope, which Aaron set to repack/compile/decompile. Just take the output dir.
-            try { target = svc.ResolvePatchModFolder(Path.GetFileNameWithoutExtension(archive) + " (extracted)", into: null, "houseCARL_Extract").OutputDir; }
+            // Extract names the folder it left behind on failure rather than deleting it, unlike repack below.
+            try { target = svc.ResolvePatchModFolder(Path.GetFileNameWithoutExtension(archive) + " (extracted)", into: null, "houseCARL_Extract", naming: null).OutputDir; }
             catch (InvalidOperationException ex) { return "error: " + ex.Message; }
         }
         else
         {
-            target = Path.GetFullPath(dest!.Trim().Trim('"'));
+            var given = out_path!.Trim().Trim('"');
+            if (PathArguments.NotAbsolute(given, "out_path", "the folder to unpack into", "C:\\work\\extracted") is { } notAbsolute)
+                return "error: " + notAbsolute;
+            // An absolute path can still be unusable (an embedded NUL, or past the OS length limit); named here rather than thrown at the guard.
+            try { target = Path.GetFullPath(given); }
+            catch (Exception ex) { return $"error: out_path '{given}' is not a usable path ({ex.Message})."; }
         }
 
-        string residue = managed ? $"\nThe freshly created mod folder was left at '{target}' — delete it or retry into it." : "";
-        var r = HousecarlCore.BsaArchive.Unpack(archive, target);
-        if (!r.Ran) return "error: " + r.RunError + residue;   // archive couldn't be opened/read
-        if (!r.Success)                                          // path-traversal refusal or a mid-extract error (Q3)
-            return "extract FAILED: " + r.Raw + residue;
+        var transactional = AmethystStagingWrite.IsActive;
+        string residue = managed && !transactional ? $"\nThe freshly created mod folder was left at '{target}' — delete it or retry into it." : "";
+        var scratch = transactional ? AmethystStagingWrite.CreateScratchDirectory("bsa-extract") : null;
+        try
+        {
+            var extractionTarget = scratch ?? target;
+            var r = HousecarlCore.BsaArchive.Unpack(archive, extractionTarget, keep);
+            if (!r.Ran) return "error: " + r.RunError + residue;   // archive couldn't be opened/read
+            if (!r.Success)                                          // path-traversal refusal or a mid-extract error
+                return "extract FAILED: " + r.Raw + residue;
 
-        var sb = new StringBuilder();
-        sb.Append("extracted ").Append(Path.GetFileName(archive)).Append(" → ").Append(target).Append('\n');
-        sb.Append(r.Raw).Append('\n');   // e.g. "extracted 5826 file(s)."
-        sb.Append(managed
-            ? "(a new Amethyst staging mod — read the files you need from it; enable and deploy it only if you want the loose files in your load order.)"
-            : "(read the files you need from that folder.)");
-        return sb.ToString();
+            if (transactional)
+            {
+                var artifacts = Directory.EnumerateFiles(scratch!, "*", SearchOption.AllDirectories)
+                    .OrderBy(p => p, StringComparer.Ordinal)
+                    .Select(staged =>
+                    {
+                        var rel = Path.GetRelativePath(scratch!, staged);
+                        var destination = BethesdaPath.Under(target, rel);
+                        AmethystStagingWrite.RegisterOutputPath(destination);
+                        return (staged, destination, "asset");
+                    }).ToArray();
+                if (artifacts.Length == 0) return "archive contains no matching files; nothing was extracted.";
+                AmethystStagingWrite.PublishActiveArtifactGroup(artifacts);
+            }
+
+            var sb = new StringBuilder();
+            sb.Append("extracted ").Append(Path.GetFileName(archive)).Append(" → ").Append(target).Append('\n');
+            sb.Append(matched).Append(r.Raw).Append('\n');   // e.g. "extracted 5826 file(s)."
+            sb.Append(managed
+                ? ManagerPresentation.NewFolderFiles()
+                : "(read the files you need from that folder.)");
+            return sb.ToString();
+        }
+        catch (Exception ex) when (transactional && ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        { return "error: extracted files could not be committed as one recoverable Amethyst group: " + ex.Message + residue; }
+        finally { if (scratch is not null && Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true); }
     });
 
-    /// <summary>Refuses repacking until the structured Proton command runner is implemented.</summary>
-    [McpServerTool(Name = "housecarl_bsa_repack", Title = "Pack a folder into a .bsa archive"),
+    /// <summary>How the repack lane names its mod folder, for the into= not-found refusal. That name is load-bearing
+    /// — the game auto-loads an archive only as &lt;activePluginBasename&gt;.bsa — so a taken stem the caller passed
+    /// refuses here rather than being suffixed; a defaulted stem is still suffixed.</summary>
+    internal static readonly OutputLocations.RiderNaming RepackNaming = new(
+        "patch",
+        new OutputLocations.StemRefusal(
+            "the .bsa (the game auto-loads an archive only under its plugin's exact basename)",
+            "Remove the conflicting archive from the selected manager's staging directory, pass patch= a different name, or pass into= to place the archive in an existing houseCARL patch folder."),
+        Noun: ".bsa");
+
+    [McpServerTool(Name = ToolNames.BsaRepack, Title = "Pack a folder into a .bsa archive"),
      Description(
-         "Reserved post-v1 surface for packing loose files into a Bethesda archive. Execution is unavailable until " +
-         "houseCARL-Amethyst has a structured Proton command contract for BSArch. Native archive listing and extraction " +
-         "remain available without Proton.")]
+         "Pack a folder of loose files into a Bethesda .bsa archive with BSArch, written into a new houseCARL mod " +
+         "folder under the selected manager's staging directory, or with into= an existing houseCARL patch; activate the matching plugin and deploy it through your manager to use it. The " +
+         "source folder is untouched. The .bsa takes its mod folder's name without the 'houseCARL - ' prefix.")]
     public static string BsaRepack(
+        LoadOrderService svc,
+        ToolPathResolver bridge,
         [Description("Full path to the source folder of loose files to pack (its tree becomes the archive's contents).")]
             string source_folder,
-        [Description("Optional. The .bsa filename to create (default: the source folder's name + '.bsa').")]
-            string? archive_name = null,
+        [Description("Optional. Name for the new mod folder and the .bsa inside it: patch='MyArchive' writes " +
+            "'houseCARL - MyArchive\\MyArchive.bsa'. The game loads an archive only under its plugin's exact basename. " +
+            "Default: the source folder's name, which gets a _001-style suffix if that name is already taken (a " +
+            "'houseCARL - <name>' mod folder exists, or <name>.esp is active in the selected profile); a taken name you pass is refused, not " +
+            "suffixed.")]
+            string? patch = null,
         [Description("Optional. Archive format: 'sse' (default, Skyrim SE), 'tes5' (Skyrim LE), 'fo4', 'fo4dds', 'sf1', 'sf1dds', 'tes4', 'fo3', 'fnv', 'tes3'.")]
             string? format = null,
-        [Description("Optional. Compress the archive (default false). WARNING: compression breaks sounds/voices — leave false if the folder contains any audio.")]
+        [Description("Optional, default false. Compress the archive. Compression breaks any sounds or voices in it, so leave it false if the folder contains audio.")]
             bool compress = false,
-        [Description("Optional. Base name for the NEW mod folder the .bsa lands in (default 'houseCARL_Archive'); auto-suffixed if taken.")]
-            string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL patch mod to place the .bsa into instead of a fresh folder. Found by plugin filename even if its Amethyst mod folder was renamed; for duplicate filenames, pass the mod-folder name.")]
-            string? into = null) =>
-        "error: BSA repacking is deferred until houseCARL-Amethyst implements the planned structured Proton runner. " +
-        "Use housecarl_bsa_list and housecarl_bsa_extract for native read operations.";
+        [Description("Optional. An existing houseCARL patch folder to place the .bsa into instead of a new folder; the archive takes that folder's name without the 'houseCARL - ' prefix. Pass the patch's plugin filename, if present, or the mod-folder name.")]
+            string? into = null) => Guard.Tool(ToolNames.BsaRepack, () =>
+    {
+        if (string.IsNullOrWhiteSpace(source_folder)) return "error: no source_folder given.";
+        source_folder = Path.GetFullPath(source_folder.Trim().Trim('"'));
+        if (!Directory.Exists(source_folder)) return $"error: no such folder: '{source_folder}'.";
+        if (svc.ConfigPromptOrNull() is { } cfg) return cfg;
+        if (bridge.RequireOrPrompt(ToolDependency.Bsarch, out var bsarch) is { } prompt) return prompt;
+        // patch= names the mod FOLDER and the .bsa inside takes that folder's name. A caller who spells the archive
+        // itself means that name, so the extension is stripped rather than doubled on the file.
+        OutputLocations.RiderFolder rf;
+        var stem = patch?.Trim().Trim('"');
+        if (stem is not null && stem.EndsWith(".bsa", StringComparison.OrdinalIgnoreCase)) stem = stem[..^4];
+        // The resolver refuses patch= beside into= before any folder is cut.
+        try { rf = svc.ResolvePatchModFolder(stem, into, new DirectoryInfo(source_folder).Name, RepackNaming); }
+        catch (InvalidOperationException ex) { return "error: " + ex.Message; }
+        var folder = rf.OutputDir;
+        var name = rf.Stem + ".bsa";
+        var transactional = AmethystStagingWrite.IsActive;
+
+        // On any post-allocation failure: an empty fresh folder is deleted, a partial .bsa is kept and named, and a reused into= folder is left alone.
+        string Refuse(string msg)
+        {
+            if (transactional)
+                return msg + " The Amethyst transaction wrapper will record whether publication was rolled back or needs recovery.";
+            var left = svc.RemoveOrNameRiderResidue(rf);
+            return left is null ? msg
+                : msg + $"\nThe freshly created mod folder at '{left}' still holds a partial archive — delete it or retry with into=.";
+        }
+
+        var archive = Path.Combine(folder, name);
+        // An archive already at that path is REFUSED, never replaced: on the into= lane every repack resolves to the
+        // same filename, and a silent overwrite loses the first archive's contents.
+        if (File.Exists(archive))
+            return Refuse($"error: '{name}' already exists in that mod folder ('{archive}') — houseCARL won't replace an "
+                        + "archive it did not just write. Delete it, or repack into a different folder.");
+        // An unknown format token refuses: a typo like 'fo4dd' must not silently pack -sse.
+        var fmtFlag = HousecarlCore.BsaArchive.TryFormatFlag(format);
+        if (fmtFlag is null)
+            return Refuse($"error: unknown format '{format}'. Legal tokens: {HousecarlCore.BsaArchive.FormatTokens}.");
+
+        // Validate caller-owned naming, collision, and format errors before reporting that this host cannot run
+        // BSArch. A refusal after folder allocation must use Refuse so a fresh empty folder is removed.
+        HousecarlCore.SteamProtonSelection? proton = null;
+        if (OperatingSystem.IsLinux())
+        {
+            if (AmethystSnapshotContext.Current is not { } saved)
+                return Refuse("error: BSArch is a Windows executable; Linux execution requires the selected Amethyst Skyrim SE prefix and native Steam CompatToolMapping. Run it through an active Amethyst connection.");
+            try { proton = HousecarlCore.SteamProtonResolver.Resolve(saved); }
+            catch (InvalidOperationException ex) { return Refuse("error: cannot resolve the selected Skyrim SE Proton runner: " + ex.Message); }
+            catch (Exception ex) { return Refuse($"error: cannot read the selected Skyrim SE Proton runner configuration ({ex.GetType().Name}: {ex.Message})."); }
+        }
+        var scratch = transactional ? AmethystStagingWrite.CreateScratchDirectory("bsa-repack") : null;
+        try
+        {
+            var stagedArchive = scratch is null ? archive : Path.Combine(scratch, name);
+            var r = HousecarlCore.BsaArchive.Pack(bsarch!, source_folder, stagedArchive, fmtFlag, compress, proton: proton);
+            if (!r.Ran) return Refuse("error: " + r.RunError);
+            if (r.CountError is { } mismatch) return Refuse("error: " + mismatch);
+            if (!r.Success)
+                return Refuse($"repack FAILED: no .bsa written at '{archive}'. Raw BSArch output:\n" + r.Raw + RootSkipNote(r.RootSkipped));
+
+            if (transactional)
+            {
+                var readback = HousecarlCore.BsaArchive.List(stagedArchive);
+                var expectedCount = r.Packed ?? r.Expected;
+                if (!readback.Ran || !readback.Success || readback.Files.Count == 0 || expectedCount is { } expected && readback.Files.Count != expected)
+                    return Refuse("error: staged archive failed independent readback validation; it was not published. "
+                        + (readback.RunError ?? (!readback.Success ? readback.Raw : expectedCount is { } count
+                            ? $"expected {count} entries but read back {readback.Files.Count}." : "readback contained no entries.")));
+                try
+                {
+                    AmethystStagingWrite.RegisterOutputPath(archive);
+                    AmethystStagingWrite.PublishManagedArtifact(stagedArchive, archive, "new_archive");
+                }
+                catch (Exception ex)
+                { return Refuse("error: staged archive could not be committed safely: " + ex.Message); }
+            }
+            return PackReport(r, name, archive, fmtFlag, compress);
+        }
+        finally { if (scratch is not null && Directory.Exists(scratch)) Directory.Delete(scratch, recursive: true); }
+    });
+
+    /// <summary>The success message for a repack: how many files the archive holds, where it landed, and any root-level files BSArch dropped.</summary>
+    internal static string PackReport(HousecarlCore.BsaPackResult r, string name, string archive, string fmtFlag, bool compress)
+    {
+        var sb = new StringBuilder();
+        sb.Append("packed ");
+        if (r.Packed is { } packed) sb.Append(packed).Append(" file(s) into ");
+        sb.Append(name)
+          .Append(" (").Append(fmtFlag.TrimStart('-')).Append(compress ? ", compressed" : ", uncompressed").Append(") → ").Append(archive).Append('\n');
+        sb.Append(ManagerPresentation.NewFolderFiles(requiresPlugin: true));
+        // A null count means the format carries no .bsa header, or the header of one that should have been read failed.
+        if (r.Packed is null)
+            sb.Append(fmtFlag is "-fo4" or "-fo4dds" or "-sf1" or "-sf1dds" or "-tes3"
+                ? "\nhouseCARL reads file counts from .bsa headers only, so this archive's contents were not counted or checked against the source."
+                : $"\nWARNING: '{name}' was written but houseCARL could not read its .bsa header, so its contents were not counted or checked against the source — list it before relying on it.");
+        else if (r.Expected is null)
+            sb.Append("\nThe source folder could not be fully scanned, so this archive's contents were not checked against it — list it before relying on it.");
+        sb.Append(RootSkipNote(r.RootSkipped));
+        if (compress) sb.Append("\nNOTE: compressed — any sounds/voices in it will not work in-game (BSArch limitation).");
+        return sb.ToString();
+    }
+
+    /// <summary>The sentence naming the source-root files BSArch dropped, or empty when there were none.</summary>
+    static string RootSkipNote(IReadOnlyList<string> rootSkipped) =>
+        rootSkipped.Count == 0 ? ""
+            : $"\n{rootSkipped.Count} file(s) at the source folder's root were NOT archived — BSArch packs only files " +
+              "under a subfolder, so move them into one and repack if they belong in the archive.";
 }

@@ -1,0 +1,239 @@
+using HousecarlCore;
+
+namespace HousecarlMcp;
+
+/// <summary>One project.fields path's quantified step: the LIST path, the sub-path after the quantifier, and the
+/// fold the caller spelled.</summary>
+sealed record FieldFold(string Requested, string Root, string[] Tail, PathFold Fold)
+{
+    /// <summary>How many expansion levels the sub-path adds below one element: a dotted step is one, and a
+    /// bracketed index inside a step another.</summary>
+    internal int TailLevels => PathFoldGrammar.Levels(Tail);
+}
+
+/// <summary>The PROJECT half of the quantified path step: <c>[*count]</c> yields ONE number per record, <c>[*]</c>
+/// ONE row per element — the row shape the 'rows' form produces. The tokens are <see cref="PathFoldGrammar"/>'s;
+/// contract in docs/architecture/read-engine.md.</summary>
+sealed record FoldPlan(IReadOnlyList<string> Requested, string[] Paths, FieldFold?[] Folds, int Depth, int CallerDepth = 1)
+{
+    /// <summary>What the READ is asked for: each distinct (path, sub-path) once, sub-path reads first so the
+    /// shared budget reaches them before any whole read, each at the depth its own column needs.</summary>
+    internal (string[] Paths, (int Depth, string[]? Tail)[] Depths) Read()
+    {
+        var at = new Dictionary<(string, string?), int>();
+        var paths = new List<string>(Paths.Length);
+        var depths = new List<(int Depth, string[]? Tail)>(Paths.Length);
+        foreach (bool tails in new[] { true, false })
+            for (int i = 0; i < Paths.Length; i++)
+            {
+                // A sub-path column always reads just that sub-path off each element, whatever else reads the list.
+                var tail = Folds[i] is { Fold: PathFold.Set, Tail.Length: > 0 } f ? f.Tail : null;
+                if ((tail is not null) != tails) continue;
+                // A [*count] column renders the list's own count line and nothing under it, so it reads at depth 1.
+                int d = Folds[i] switch { { Fold: PathFold.Set } => Depth, { Fold: PathFold.Count } => 1, _ => CallerDepth };
+                var key = (Paths[i], tail is null ? null : string.Join(".", tail));
+                if (at.TryGetValue(key, out int j)) { depths[j] = (Math.Max(depths[j].Depth, d), tail); continue; }
+                at[key] = paths.Count; paths.Add(Paths[i]); depths.Add((d, tail));
+            }
+        return (paths.ToArray(), depths.ToArray());
+    }
+
+    internal bool RendersElements => Folds.Any(f => f is { Fold: PathFold.Set });
+
+    /// <summary>The read paths whose every column is a <c>[*count]</c>, which take the child union's INDEX-ONLY
+    /// tier (docs/architecture/records-owned-child-declarers.md).</summary>
+    internal IReadOnlyList<string> CountOnlyPaths
+    {
+        get
+        {
+            var all = new HashSet<string>(StringComparer.Ordinal);
+            var other = new HashSet<string>(StringComparer.Ordinal);
+            for (int i = 0; i < Paths.Length; i++)
+                (Folds[i] is { Fold: PathFold.Count } ? all : other).Add(Paths[i]);
+            all.ExceptWith(other);
+            return all.ToList();
+        }
+    }
+
+    internal FieldFold First => Folds.First(f => f is not null)!;
+
+    /// <summary>The distinct LIST paths a <c>[*]</c> binds to, so a flattening render knows when a call names two.</summary>
+    internal IReadOnlyList<string> SetRoots =>
+        Folds.Where(f => f is { Fold: PathFold.Set }).Select(f => f!.Root).Distinct(StringComparer.Ordinal).ToList();
+
+    /// <summary>One record's lines, grouped per REQUESTED path and in the caller's own order.</summary>
+    internal (IReadOnlyList<FieldValue>[]? Columns, IReadOnlyList<FieldValue> Carried, string? Error) Columns(RecordFields rec)
+    {
+        var fields = rec.Fields;
+        var setRoots = SetRoots.OrderByDescending(r => r.Length).ToList();
+        // The element rows come from the 'rows' fold itself, run over the same lines.
+        var rows = setRoots.Count > 0 ? RowProjection.Fold(fields, setRoots, Depth) : fields;
+
+        var cols = new IReadOnlyList<FieldValue>[Paths.Length];
+        for (int i = 0; i < Paths.Length; i++)
+        {
+            if (Folds[i] is not { } fold) { cols[i] = Lines(fields, Paths[i], CallerDepth); continue; }
+            var head = fields.FirstOrDefault(f => f.Path == fold.Root);
+            // An absent or unreadable list is the READ's answer, not a misuse of the token.
+            if (head is null || !head.Present || !head.Readable)
+            {
+                cols[i] = new[] { (head ?? new FieldValue(fold.Root, false, null, ReadEngine.AbsentNote, Present: false)) with { Path = fold.Requested } };
+                continue;
+            }
+            if (head.Count is null) return (null, Array.Empty<FieldValue>(), NotAList(rec, fold, head));
+            if (fold.Fold == PathFold.Count)
+            {
+                // The head line's annotation travels with the number; on a child-bearing field it says the count
+                // is this body's own list, not the whole set the game assembles.
+                cols[i] = new[] { new FieldValue(fold.Requested, true, head.Count.Value.ToString(), null) with { Display = head.Display } };
+                continue;
+            }
+            var elems = Elements(rows, fields, fold).ToList();
+            // No element row is still an ANSWER and never an empty column.
+            cols[i] = elems.Count > 0 ? elems
+                    : head.Count.Value == 0 ? new[] { head with { Path = fold.Requested } }
+                    : new[] { new FieldValue(fold.Requested, false, null, NoElement(fold, head.Count.Value)) };
+        }
+        var claimed = new HashSet<string>(cols.SelectMany(c => c).Select(f => f.Path), StringComparer.Ordinal);
+        // What no column claims and no requested path covers — the read's own truncation note — rides out beside
+        // the columns rather than being dropped with them.
+        var carried = (setRoots.Count > 0 ? rows : fields)
+            .Where(f => !claimed.Contains(f.Path) && !Paths.Any(p => f.Path == p || RowProjection.IsUnder(f.Path, p)))
+            .ToList();
+        return (cols, carried, null);
+    }
+
+    internal ReadOutcome Apply(ReadOutcome o)
+    {
+        if (o.Record is null) return o;
+        var (cols, carried, error) = Columns(o.Record);
+        // The carried note leads: it is what the read did to the columns below it.
+        return error is null ? o with { Record = o.Record with { Fields = carried.Concat(Merge(cols!)).ToList() },
+                                        OwnedChildFields = WithQuantifiedSpellings(o.OwnedChildFields) }
+                             : o with { Record = null, Error = error };
+    }
+
+    /// <summary>The columns as one list, each path once and every line beside its own element.</summary>
+    IEnumerable<FieldValue> Merge(IReadOnlyList<FieldValue>[] cols)
+    {
+        bool overlap = false;
+        for (int i = 0; i < Paths.Length && !overlap; i++)
+            for (int j = i + 1; j < Paths.Length && !overlap; j++)
+                overlap = Paths[i] == Paths[j] || RowProjection.IsUnder(Paths[i], Paths[j]) || RowProjection.IsUnder(Paths[j], Paths[i]);
+        if (!overlap) return cols.SelectMany(c => c);
+        var kept = new List<(FieldValue F, int Col)>();
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        for (int c = 0; c < cols.Length; c++)
+            foreach (var f in cols[c])
+            {
+                if (seen.Contains(f.Path) || kept.Any(k => k.F.Cells is not null && RowProjection.IsUnder(f.Path, k.F.Path))) continue;
+                var under = kept.Where(k => k.Col < c && RowProjection.IsUnder(k.F.Path, f.Path)).ToList();
+                kept.RemoveAll(k => k.Col < c && RowProjection.IsUnder(k.F.Path, f.Path));
+                kept.Add((f, c));
+                seen.Add(f.Path);
+                if (f.Cells is { } cells) foreach (var x in cells) seen.Add(x.Path);
+                kept.AddRange(under.Where(u => f.Cells?.Any(x => x.Path == u.F.Path) != true));
+            }
+        return kept.Select(k => k.F);
+    }
+
+    /// <summary>The child-union annotation keyed by the spelling each quantified column RENDERS under.</summary>
+    IReadOnlyDictionary<string, ChildUnion?>? WithQuantifiedSpellings(IReadOnlyDictionary<string, ChildUnion?>? annotated)
+    {
+        if (annotated is not { Count: > 0 }) return annotated;
+        Dictionary<string, ChildUnion?>? both = null;
+        foreach (var f in Folds)
+            if (f is not null && annotated.TryGetValue(f.Root, out var u) && !annotated.ContainsKey(f.Requested))
+                (both ??= new Dictionary<string, ChildUnion?>(annotated, StringComparer.Ordinal))[f.Requested] = u;
+        return both ?? annotated;
+    }
+
+    internal IReadOnlyList<ReadOutcome> Apply(IReadOnlyList<ReadOutcome> outcomes)
+        => outcomes.Select(Apply).ToList();
+
+    static IEnumerable<FieldValue> Elements(IReadOnlyList<FieldValue> rows, IReadOnlyList<FieldValue> raw, FieldFold fold)
+    {
+        var roots = new[] { fold.Root };
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        if (fold.Tail.Length == 0)
+        {
+            foreach (var f in rows)
+                if (RowProjection.RowKey(f.Path, roots) == f.Path && seen.Add(f.Path))
+                    yield return f;
+            yield break;
+        }
+        var tail = "." + string.Join(".", fold.Tail);
+        foreach (var f in raw)
+            if (RowProjection.RowKey(f.Path, roots) is { } key && f.Path == key + tail && seen.Add(f.Path))
+                yield return f;
+    }
+
+    static IReadOnlyList<FieldValue> Lines(IReadOnlyList<FieldValue> fields, string path, int depth)
+        => fields.Where(f => f.Path == path || (RowProjection.IsUnder(f.Path, path) && Levels(f.Path, path) < depth)).ToList();
+
+    static int Levels(string path, string owner)
+    {
+        int n = 0;
+        for (int i = owner.Length; i < path.Length; i++) if (path[i] == '.' || path[i] == '[') n++;
+        return n;
+    }
+
+    /// <summary>The element KEY a folded line carries, as TEXT, because the read brackets a DICT by its own key.</summary>
+    internal static string? ElementKey(string path, string root)
+    {
+        if (path.Length <= root.Length || path[root.Length] != '[') return null;
+        int close = path.IndexOf(']', root.Length + 1);
+        return close > 0 ? path[(root.Length + 1)..close] : null;
+    }
+
+    static string NoElement(FieldFold fold, int count)
+        => $"(no element of '{fold.Root}' carries '{string.Join(".", fold.Tail)}' — the list holds {count})";
+
+    static string NotAList(RecordFields rec, FieldFold fold, FieldValue head)
+        => $"project.fields path '{fold.Requested}' quantifies a LIST, and '{fold.Root}' on {rec.Type} " +
+           $"{(head.HasValue ? "holds a single value" : "is a substruct")} — drop the quantifier to read it, " +
+           "or name a list path (index an element, e.g. 'Effects[0]', to read just that one).";
+}
+
+static class FieldFolds
+{
+    /// <summary>Parse project.fields into the paths the READ runs plus the fold each path declares, or the
+    /// one-sentence refusal; the parse runs before any read, so a bad token refuses the CALL, not each record.</summary>
+    internal static (FoldPlan? Plan, string? Error) Parse(IReadOnlyList<string> fields)
+    {
+        var readPaths = new string[fields.Count];
+        var folds = new FieldFold?[fields.Count];
+        bool any = false;
+        for (int i = 0; i < fields.Count; i++)
+        {
+            var path = fields[i] ?? "";
+            readPaths[i] = path;
+            var segs = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+            for (int s = 0; s < segs.Length; s++)
+            {
+                // A quantifier on the containment step is that grammar's mistake, left to the read walk's check.
+                var (bare, fold, key) = PathFoldGrammar.Read(segs[s]);
+                if (key is null || ContainmentIndex.IsParentStep(bare)) continue;
+                if (folds[i] is not null)
+                    return (null, $"project.fields path '{path}' quantifies two steps, and one row per element of one list is the shape this form renders — quantify the outer step and read the inner list on the row, or name a concrete element of one of them.");
+                if (bare.Length == 0)
+                    return (null, $"project.fields path '{path}': '{segs[s]}' has no field name before '[' — a quantifier binds to a list field, e.g. 'Conditions[*]'.");
+                if (fold == PathFold.None)
+                    return (null, $"project.fields path '{path}': '[{key}]' is not a quantifier — the tokens are [*], [*count], [*any], [*all] and [*none] (the last three fold to a boolean and belong in where=).");
+                if (fold is PathFold.Any or PathFold.All or PathFold.NoneOf)
+                    return (null, $"project.fields path '{path}' folds the elements into a boolean, and a boolean is not a row — use {PathFoldGrammar.Token(fold)} in where= to SELECT the records, and [*] here to read one row per element.");
+                if (fold == PathFold.Count && s != segs.Length - 1)
+                    return (null, $"project.fields path '{path}': nothing can follow '[*count]' — it yields how MANY elements there are, not an element to step into.");
+                folds[i] = new FieldFold(path, string.Join(".", segs[..s].Append(bare)), segs[(s + 1)..], fold);
+                readPaths[i] = folds[i]!.Root;
+                any = true;
+            }
+        }
+        if (!any) return (null, null);
+        // The depth the TOKENS require: an element lives one level under its list, each sub-path step one more.
+        int need = 1;
+        foreach (var f in folds)
+            if (f is { Fold: PathFold.Set }) need = Math.Max(need, 2 + f.TailLevels);
+        return (new FoldPlan(fields, readPaths, folds, need), null);
+    }
+}

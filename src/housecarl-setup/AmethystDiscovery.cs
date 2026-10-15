@@ -10,6 +10,40 @@ public static class AmethystDiscovery
     private const string FlatpakId = "io.github.Amethyst.ModManager";
     private const string GameName = "Skyrim Special Edition";
 
+    /// <summary>Runs standalone connection setup without installing files or selecting a game profile.</summary>
+    public static int Run(string[] args)
+    {
+        string? config = null;
+        for (int i = 0; i < args.Length; i++)
+        {
+            if (args[i] == "--connect-only") continue;
+            if (args[i] == "--amethyst-config" && ++i < args.Length && !args[i].StartsWith("--"))
+            {
+                config = args[i];
+                continue;
+            }
+            Console.Error.WriteLine("error: use --connect-only [--amethyst-config PATH]; no manifest was written.");
+            return 2;
+        }
+        try
+        {
+            var home = Environment.GetFolderPath(Environment.SpecialFolder.UserProfile);
+            var xdg = Environment.GetEnvironmentVariable("XDG_CONFIG_HOME");
+            if (string.IsNullOrWhiteSpace(xdg)) xdg = Path.Combine(home, ".config");
+            var result = CreateConnection(new(home, xdg, config,
+                Environment.GetEnvironmentVariable("MOD_MANAGER_PROFILES_DIR")));
+            Console.WriteLine($"Amethyst connection manifest: {result.ManifestPath}");
+            Console.WriteLine("Select it with housecarl_set_amethyst_connection and filegraph_mode='saved-snapshot'. " +
+                "This creates connection paths only; saved filegraph compatibility and freshness are checked by the server.");
+            return 0;
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("error: " + ex.Message);
+            return 1;
+        }
+    }
+
     /// <summary>Explicit filesystem inputs used by discovery and its hermetic tests.</summary>
     /// <param name="Home">Native user home.</param>
     /// <param name="XdgConfigHome">Native XDG configuration root.</param>

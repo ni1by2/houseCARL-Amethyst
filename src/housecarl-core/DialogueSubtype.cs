@@ -3,30 +3,27 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>Describes how a dialogue topic's four-character SNAM marker was handled.</summary>
+// DialogueSubtype — the authority for a DialogTopic's SNAM subtype marker; contract in
+// docs/architecture/dialogue.md. The table is the join of xEdit's DATA\Subtype index→name enum and its
+// 4-char-signature→name enum, matched by subtype name; the lookup key is (int)DialogTopic.Subtype.
+
+/// <summary>The outcome of <see cref="DialogueSubtype.NormalizeMarker"/>.</summary>
 public enum MarkerFill
 {
-    /// <summary>An explicit non-blank marker was preserved.</summary>
+    /// <summary>The marker was already non-blank — an explicit value is never overridden. Nothing changed.</summary>
     AlreadySet,
-    /// <summary>A missing or stale marker was replaced with the marker for the numeric subtype.</summary>
+    /// <summary>The marker was blank and has been filled from the subtype (the marker is in the out param).</summary>
     Filled,
-    /// <summary>No marker is known for the numeric subtype, so no safe change was possible.</summary>
+    /// <summary>Blank AND no marker modeled for the subtype. NOTHING filled — the caller MUST warn or refuse.</summary>
     Unmodeled,
 }
 
-/// <summary>Maps numeric DIAL subtypes to the four-character SNAM markers used by Skyrim.</summary>
-/// <remarks>
-/// Mutagen stores the numeric subtype and marker independently. New topics need both. The table comes from xEdit's
-/// TES5 record definitions because the marker cannot be derived reliably from the enum name or vanilla DATA values.
-/// </remarks>
+/// <summary>The authority for a DialogTopic's SNAM subtype marker — the 4-char tag the game buckets topics by.
+/// The create path and the validator both read it through THIS type, so they cannot disagree.</summary>
 public static class DialogueSubtype
 {
-    /// <summary>
-    /// Maps contiguous xEdit subtype indexes to Mutagen enum names and SNAM markers.
-    /// </summary>
-    /// <remarks>
-    /// Index 3 has no Mutagen enum member, so its name is empty. Tests pin every named row to its enum value.
-    /// </remarks>
+    /// <summary>Subtype index → (Mutagen enum name, 4-char SNAM marker). Contiguous 0..102; Name is empty only for
+    /// index 3, which Mutagen's enum omits. CI asserts Enum.Parse(Name)==index for every named row.</summary>
     static readonly (string Name, string Marker)[] Table =
     {
         ("Custom", "CUST"),                          //   0
@@ -134,56 +131,75 @@ public static class DialogueSubtype
         ("LeaveWaterBreath", "LWBS"),                // 102
     };
 
-    /// <summary>Gets the number of modeled subtype indexes.</summary>
+    /// <summary>The number of subtype indices the table covers (0..<see cref="Count"/>-1).</summary>
     public static int Count => Table.Length;
 
-    /// <summary>Gets the Mutagen enum name for a modeled index.</summary>
-    /// <param name="index">Numeric subtype index.</param>
-    /// <returns>The enum name, or an empty string for an invalid or unnamed index.</returns>
+    /// <summary>Mutagen's SubtypeEnum name for a row, or "" for index 3; the input to the name↔index CI check.</summary>
     public static string NameAt(int index) => index >= 0 && index < Table.Length ? Table[index].Name : "";
 
-    /// <summary>Gets the SNAM marker for a numeric subtype.</summary>
-    /// <param name="subtypeIndex">Numeric subtype index.</param>
-    /// <returns>The four-character marker, or null when the index is not modeled.</returns>
+    /// <summary>The 4-char SNAM marker for a subtype index, or null outside the modeled range 0..102.</summary>
     public static string? MarkerFor(int subtypeIndex) =>
         subtypeIndex >= 0 && subtypeIndex < Table.Length ? Table[subtypeIndex].Marker : null;
 
-    /// <summary>Gets the SNAM marker for a Mutagen subtype.</summary>
-    /// <param name="subtype">Mutagen subtype value.</param>
-    /// <returns>The four-character marker, or null when the value is not modeled.</returns>
+    /// <summary>The 4-char SNAM marker for a <see cref="DialogTopic.SubtypeEnum"/>, or null if unmodeled.</summary>
     public static string? MarkerFor(DialogTopic.SubtypeEnum subtype) => MarkerFor((int)subtype);
 
-    /// <summary>Tests whether a SNAM marker contains no usable characters.</summary>
-    /// <param name="marker">Marker to inspect.</param>
-    /// <returns>True for empty, whitespace-only, or NUL-only markers.</returns>
+    /// <summary>Marker → subtype index, the reverse of the table; ordinal, as the markers are fixed-case.</summary>
+    static readonly Dictionary<string, int> ByMarker =
+        Table.Select((row, i) => (row.Marker, i)).ToDictionary(p => p.Marker, p => p.i, StringComparer.Ordinal);
+
+    /// <summary>The subtype index a SNAM marker names, or null when it is blank or unmodeled. SNAM is the
+    /// authoritative statement, so this is the lookup to trust over <c>(int)DialogTopic.Subtype</c>.</summary>
+    public static int? IndexForMarker(RecordType marker) =>
+        !IsBlankMarker(marker) && ByMarker.TryGetValue(marker.Type, out var i) ? i : null;
+
+    /// <summary>Mutagen's SubtypeEnum name for the subtype a SNAM marker names, or null when it cannot.</summary>
+    public static string? NameForMarker(RecordType marker) => IndexForMarker(marker) is { } i ? NameAt(i) : null;
+
+    /// <summary>The best LABEL for the subtype a marker names: Mutagen's enum name, or the MARKER ITSELF for the
+    /// one modeled row the enum omits (index 3, FVDL). Null only for a blank or unmodeled marker.</summary>
+    public static string? LabelForMarker(RecordType marker) =>
+        IndexForMarker(marker) is { } i ? (NameAt(i) is { Length: > 0 } n ? n : Table[i].Marker) : null;
+
+    /// <summary>True when a topic's numeric <c>Subtype</c> contradicts its SNAM marker, both modeled; the
+    /// renumbering that causes it is in docs/architecture/dialogue.md. A blank or unmodeled marker is not this.</summary>
+    public static bool MarkerDisagreesWithSubtype(IDialogTopicGetter topic) =>
+        IndexForMarker(topic.SubtypeName) is { } fromMarker && fromMarker != (int)topic.Subtype;
+
+    /// <summary>How far a pre-Dragonborn DATA\Subtype sits below the modern table — the six inserted rows.</summary>
+    public const int RenumberOffset = 6;
+
+    /// <summary>The first modern index that also existed under the OLD numbering; below it, nothing shifted.</summary>
+    public const int RenumberFirstShifted = 26;
+
+    /// <summary>Does a disagreeing pair carry the RENUMBERING signature? True means an old file with a stale
+    /// number; false means the two fields were edited apart and the Subtype edit is an in-game no-op.</summary>
+    public static bool IsRenumberedVintage(int markerIndex, int subtypeValue) =>
+        markerIndex >= RenumberFirstShifted && markerIndex - subtypeValue == RenumberOffset;
+
+    /// <summary>True when a topic's SNAM marker is 0000 or whitespace-only — the single home for "no marker".</summary>
     public static bool IsBlankMarker(RecordType marker)
     {
         var s = marker.Type;
         return string.IsNullOrEmpty(s) || string.IsNullOrWhiteSpace(s) || s.All(c => c == '\0');
     }
 
-    /// <summary>Fills a blank SNAM marker from the topic's numeric subtype.</summary>
-    /// <param name="topic">Writable topic.</param>
-    /// <param name="marker">Receives the marker when a fill occurs; otherwise null.</param>
-    /// <returns>A value describing whether the marker was preserved, filled, or unmodeled.</returns>
+    /// <summary>Auto-fill a topic's SNAM marker from its <c>Subtype</c> when it is blank, on the create path, and
+    /// report which of the three <see cref="MarkerFill"/> arms happened. Never overrides, never touches
+    /// <c>Subtype</c>.</summary>
     public static MarkerFill NormalizeMarker(IDialogTopic topic, out string? marker)
     {
         marker = null;
         if (!IsBlankMarker(topic.SubtypeName)) return MarkerFill.AlreadySet;   // explicit marker wins — never override
-        if (MarkerFor((int)topic.Subtype) is not { } tag)
-            return MarkerFill.Unmodeled;
+        if (MarkerFor((int)topic.Subtype) is not { } tag) return MarkerFill.Unmodeled;   // no modeled marker — caller warns
         topic.SubtypeName = new RecordType(tag);
         marker = tag;
         return MarkerFill.Filled;
     }
 
-    /// <summary>Synchronizes SNAM to the topic's current numeric subtype after an explicit subtype edit.</summary>
-    /// <param name="topic">Writable topic whose subtype was changed by the caller.</param>
-    /// <param name="marker">Receives the marker when synchronization changes it; otherwise null.</param>
-    /// <returns>A value describing whether the marker already matched, changed, or was unmodeled.</returns>
-    /// <remarks>
-    /// The caller must invoke this only when the same edit changed Subtype without explicitly setting SNAM.
-    /// </remarks>
+    /// <summary>Force a topic's SNAM marker to MATCH its current <c>Subtype</c>, overwriting a stale one, on the
+    /// edit path only after a call that set <c>Subtype</c> and not <c>SubtypeName</c> — the gate is the CALLER's
+    /// job. Returns the same three <see cref="MarkerFill"/> arms.</summary>
     public static MarkerFill SyncMarkerToSubtype(IDialogTopic topic, out string? marker)
     {
         marker = null;

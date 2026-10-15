@@ -1,0 +1,125 @@
+# docs/
+
+- **`architecture/`**: one short note per subsystem, saying what it is and the contracts that hold it together. Written when a subsystem is touched and something about it is not obvious from the code.
+- **`decisions/`**: short numbered records of architectural decisions, one per file: context, decision, consequences. A PR that changes the architecture adds one. A change of mind is a new record that names the one it replaces.
+
+Start with [README.md](../README.md), then [CLAUDE.md](../CLAUDE.md), then the note for the subsystem you are entering. Linux / Amethyst contributors can follow the [development and build guide](linux-development.md).
+
+## The pieces, and who calls whom
+
+```mermaid
+flowchart LR
+  R[resolver] --> RD[reads]
+  R --> W[writes]
+  R --> A[assets / SKSE / NIF]
+  R --> C[checks]
+  W --> A
+  A --> RD
+  W --> RD
+  RD --> D[dialogue]
+  C --> D
+  C --> A
+  D --> A
+  RD --> O[output / render / wire]
+  W --> O
+  A --> O
+  C --> O
+  D --> O
+```
+
+## The architecture notes
+
+File architecture notes under the subsystem that owns their tools and entry points, using the "Where things live" table in [CLAUDE.md](../CLAUDE.md). Use the row named in the note's `## Where` section, not a count of its `covers:` files. Files in `src/housecarl-core/` belong to the subsystem they serve; notes without a tool belong under their project. Start a new note from [`architecture/TEMPLATE.md`](architecture/TEMPLATE.md) and add it here. The categories follow `CLAUDE.md`.
+
+### The MCP server and tool surface
+
+| Note | What it covers |
+|---|---|
+| [`architecture/nexus.md`](architecture/nexus.md) | Keyless read-only access to the Nexus Mods v2 GraphQL API: search, mod detail, file-level update checks, MD5 identify, and the raw-query backstop. |
+| [`architecture/papyrus.md`](architecture/papyrus.md) | The compile lane: where the import path comes from and why its order is semantics, how success is decided, and the class hierarchy the decompiler reads. |
+| [`architecture/papyrus-decompile.md`](architecture/papyrus-decompile.md) | The decompile lane: the codegen patterns it reads and the decompiler's fail-loud contracts. |
+
+### Instance, status, config
+
+| Note | What it covers |
+|---|---|
+| [`architecture/mo2-instance.md`](architecture/mo2-instance.md) | houseCARL reads a live MO2 portable instance off disk, never through the USVFS, so the instance ini and the three profile files are the only standalone source of truth. |
+| [`architecture/load-order-resolver.md`](architecture/load-order-resolver.md) | The held structural index over the active order: zero handles at rest, one immutable snapshot per build, exclusion, the epoch, and freshness. |
+| [`architecture/load-order-service.md`](architecture/load-order-service.md) | The service that owns the resolver's lifecycle: the two gates, the lazy build, the profile refresh and the two lanes' split on a held profile, the asset build, and the three configuration modes. |
+
+### Assets, SKSE, NIF, SkyPatcher
+
+| Note | What it covers |
+|---|---|
+| [`architecture/assets.md`](architecture/assets.md) | Which copy of a file the game uses: loose beats BSA-packed, the overwrite-then-mods-then-Data walk, and the archive tie-break. |
+| [`architecture/skse-layer.md`](architecture/skse-layer.md) | What an SKSE DLL declares and the static-load rule: everything in the layer is what a file declares, never what a DLL does. |
+| [`architecture/skypatcher-layer.md`](architecture/skypatcher-layer.md) | SkyPatcher edits records from INI files at load, so a plugin read alone does not say what the game sees; houseCARL reads that layer in four tiers. |
+| [`architecture/nif.md`](architecture/nif.md) | Reading mesh values and the two write gates: `NifService` is pure format logic, and the service layer resolves the winning bytes. |
+
+### Output, render, wire, schema, shim
+
+| Note | What it covers |
+|---|---|
+| [`architecture/output-and-artifacts.md`](architecture/output-and-artifacts.md) | Everything houseCARL writes lands in a houseCARL-owned MO2 mod folder, a folder the caller named outright, or a result artifact file. |
+| [`architecture/render-budget.md`](architecture/render-budget.md) | Two budgets share the word: `max_chars`, how wide a response may be, and the render bound, how long a call may spend rendering before it refuses up front. |
+| [`architecture/json-wire.md`](architecture/json-wire.md) | The json transport's own contracts: what a machine-readable document may say and how it may say it. |
+| [`architecture/tool-schema-publication.md`](architecture/tool-schema-publication.md) | The SDK generates each tool's `inputSchema` from its C# signature; three things it cannot get right are corrected at registration, and a fourth pass cuts the result to a nesting depth. |
+| [`architecture/tool-call-argument-shim.md`](architecture/tool-call-argument-shim.md) | A call-tool filter that runs before the SDK binds a call's JSON arguments, so a malformed argument shape is an answer a caller can self-correct from instead of an opaque dead end. |
+
+### Checks and the rulebook
+
+| Note | What it covers |
+|---|---|
+| [`architecture/check-families.md`](architecture/check-families.md) | The checks area, `RecordChecks` and its files, and the contracts the check families share: the DELETED rule, the integrity sweep's boundary, the narrowing and exclusion axes, family selection, and selection versus outcome. |
+| [`architecture/check-scripts-and-dialogue-families.md`](architecture/check-scripts-and-dialogue-families.md) | The script-property sweep's boundary and its unverifiable ride-through, the dialogue family's four seed words, and the EditorID near-miss hint. |
+
+### Writes
+
+| Note | What it covers |
+|---|---|
+| [`architecture/write-path.md`](architecture/write-path.md) | The write path as the service sees it: new plugin by default and the in-place consent opt-in, the write gate, what a write response may report off the file it wrote, the sentence catalogue's contracts, and the reflection-driven engine underneath — the patch-mod lifecycle, create, the verbs, the serialize and its refusals. |
+| [`architecture/corpus-rulebook.md`](architecture/corpus-rulebook.md) | The write surface's pre-flight: every write is validated against the generated schema before any Mutagen mutation, and the gate can never disagree with apply. |
+
+### Dialogue
+
+| Note | What it covers |
+|---|---|
+| [`architecture/dialogue.md`](architecture/dialogue.md) | The implementation side of dialogue: the merged INFO order, the fold, and the SNAM subtype marker. |
+| [`architecture/dialogue-validation.md`](architecture/dialogue-validation.md) | What houseCARL checks before dialogue goes out: CK parity, what a clean pass means, and the dialogue check family. |
+
+### Records and owned children
+
+| Note | What it covers |
+|---|---|
+| [`architecture/records-owned-child-declarers.md`](architecture/records-owned-child-declarers.md) | A child-bearing field is declared per plugin and assembled by the game from every declarer, so a read states two quantities: the field's own value, and the additive union beside it. |
+| [`architecture/select-and-walk.md`](architecture/select-and-walk.md) | How a selection is made: the `where=` value predicate, and the `*parent` containment step and its index. |
+| [`architecture/read-engine.md`](architecture/read-engine.md) | The reads area, `RecordReads` and its files, and the read path from a `records` call to a rendered body: what winner resolution the read engine does and does not do, the tree and field folds, the reverse walk, and the deep comparison behind the tree form. |
+| [`architecture/records-tool-front.md`](architecture/records-tool-front.md) | The `housecarl_records` tool front: form scoping, the refusal shape, the one FormID door and one source statement, the per-form vocabulary, `limit`/`offset` per lane, the accounting, the epoch seams, the reverse-walk routing, the owned-child clause and the `info_order` fold. |
+| [`architecture/walk-and-reverse.md`](architecture/walk-and-reverse.md) | How a selection is followed: the closure walk and its ordered source universe, and the whole-order reverse index behind an unbounded `references=`. |
+
+### Tests and fixtures
+
+| Note | What it covers |
+|---|---|
+| [`architecture/check-family-tests.md`](architecture/check-family-tests.md) | The errors, scripts and dialogue families of `housecarl_check` are asserted from two driving lanes, and which lane a fact uses is a decision, not a convenience. |
+| [`architecture/test-project-fixtures.md`](architecture/test-project-fixtures.md) | Two pieces of test machinery, the Papyrus `.pex` world and the file-lock harness, plus the tests that prove each is what it claims to be. |
+| [Linux / Amethyst test retirement and resolution audit](testing/linux-amethyst-test-audit-2026-10-14/index.html) | Historical catalogue of 266 failures: three documented retirements and all 263 retained cases resolved. Includes the [removal ledger](testing/linux-amethyst-test-audit-2026-10-14/removed-tests.json) with archived methods and the [resolution ledger](testing/linux-amethyst-test-audit-2026-10-14/resolution.json) mapping every retained case to passing coverage. Five former compiler skips also now pass against real Caprica; the current full suite reports 7,136 passed, zero failures and one Windows-only skip. |
+
+## Older notes outside `architecture/`
+
+[`dialogue.md`](dialogue.md) and [`facegen.md`](facegen.md) are modder-facing, and the template does not apply to them.
+
+| Note | What it covers |
+|---|---|
+| [`dialogue.md`](dialogue.md) | The modder-facing page: what decides which line plays, and where a line lands — quest priority, intra-topic order, and the bookkeeping `housecarl_create` fills for you. |
+| [`facegen.md`](facegen.md) | Dark faces: the desync between the winning `NPC_` record and the winning baked face files, what each class means, and what fixes each. |
+
+## Decision records
+
+| Record | What it decided |
+|---|---|
+| [`decisions/0001-terse-comments-public-knowledge-home.md`](decisions/0001-terse-comments-public-knowledge-home.md) | Comments stay terse; engineering knowledge moves to a public `docs/` home. Superseded 2026-09-04; kept because other records and code cite it. |
+| [`decisions/0002-published-tool-schemas-carry-no-ref.md`](decisions/0002-published-tool-schemas-carry-no-ref.md) | Published tool schemas carry no `$ref`. |
+| [`decisions/0003-guards-move-to-a-standard-test-project.md`](decisions/0003-guards-move-to-a-standard-test-project.md) | Guards move to a standard test project, behind a residue countdown. Superseded 2026-09-04. |
+| [`decisions/0004-tool-names-are-compile-time-constants.md`](decisions/0004-tool-names-are-compile-time-constants.md) | Tool names are compile-time constants, never spelled by hand. |
+| [`decisions/0005-the-1x-tools-are-deleted-not-deprecated.md`](decisions/0005-the-1x-tools-are-deleted-not-deprecated.md) | The 1.x tools are deleted, not deprecated. |

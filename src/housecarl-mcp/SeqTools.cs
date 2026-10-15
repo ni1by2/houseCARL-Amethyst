@@ -1,73 +1,139 @@
 using System.ComponentModel;
 using System.Text;
+using HousecarlCore;
 using ModelContextProtocol.Server;
 
 namespace HousecarlMcp;
 
-/// <summary>
-/// houseCARL SEQ rider — housecarl_write_seq. Writes the start-game-enabled-quest "sequence" file
-/// (<c>Data\SEQ\&lt;plugin&gt;.seq</c>) a plugin needs for its Start-Game-Enabled quests to actually run. Ticking the SGE
-/// flag in the CK/xEdit does nothing on its own; without the .seq the quest — and any dialogue or world change gated on it
-/// — silently never starts (the exact silent-failure class houseCARL refuses, Q3). This is the data-layer equivalent of
-/// the CK's on-save SEQ generation / xEdit's "Create SEQ file": it reads the plugin's SGE quests and emits the file into a
-/// reviewable houseCARL mod folder (originals untouched — same folder-per-patch model as every other write). The byte
-/// format and FormID encoding are load-order-independent (see <see cref="HousecarlCore.SeqFile"/>), so the .seq is correct
-/// the moment it's written and travels with the mod.
-/// </summary>
+/// <summary>housecarl_write_seq — writes the <c>Data\SEQ\&lt;plugin&gt;.seq</c> a plugin's Start-Game-Enabled quests need to run at all. Its bytes are load-order-independent (<see cref="HousecarlCore.SeqFile"/>), so the call consults no load-order build and both renders say there is no epoch.</summary>
 [McpServerToolType]
 public static class SeqTools
 {
-    /// <summary>Regenerates a plugin's start-game-enabled quest SEQ file in staging.</summary>
-    [McpServerTool(Name = "housecarl_write_seq", Title = "Write a start-game-enabled-quest .seq file"),
+    [McpServerTool(Name = ToolNames.WriteSeq, Title = "Write a start-game-enabled-quest .seq file"),
      Description(
-         "Write the SEQ file (Data\\SEQ\\<plugin>.seq) a plugin needs for its START-GAME-ENABLED quests to actually run. " +
-         "Ticking 'Start Game Enabled' on a quest does NOTHING on its own — without the .seq the quest, and any dialogue or " +
-         "change gated on it, silently never starts. Pass plugin= the path to the .esp/.esm/.esl (e.g. the path " +
-         "housecarl_create_record reported for your patch); houseCARL reads its start-game-enabled quests and writes the " +
-         ".seq into a houseCARL staging mod you refresh, enable, and deploy through Amethyst. If the plugin is itself in a houseCARL patch folder, the .seq " +
-         "defaults into THAT same folder (so enabling the one mod deploys both .esp and .seq); otherwise it lands in a fresh " +
-         "folder (pass into= an existing houseCARL patch to keep them together). A plugin with no start-game-enabled quests " +
-         "needs no .seq — that's reported, nothing is written. The .seq makes the quest START; it does not verify the quest " +
-         "or its dialogue is otherwise correct. Needs an active Amethyst connection for the output folder.")]
+         "Write the .seq file (Data\\SEQ\\<plugin>.seq) a plugin needs for its Start Game Enabled quests to run. Without it " +
+         "such a quest, and anything gated on it, silently never starts. The .seq makes the quests start; it does not check " +
+         "that they or their dialogue are otherwise correct. A plugin with no such quests needs no .seq: that is reported " +
+         "and nothing is written.\n\n" +
+         "By default the .seq lands in the plugin's own houseCARL mod folder when it is still under the name houseCARL gave " +
+         "it ('houseCARL - MyQuestMod' for MyQuestMod.esp), so enabling that one mod deploys both; otherwise in a fresh houseCARL folder you " +
+         "enable in MO2. For a renamed folder, pass into= the plugin's filename; after an in-place edit, pass out_path= the " +
+         "plugin's own mod folder. When the destination is that own folder, into= or out_path= and it already holds exactly " +
+         "these bytes, nothing is written and the reply says 'unchanged'. A fresh folder (patch=, or the default for any " +
+         "other plugin, a renamed folder's included) always gets a write, so such a re-run makes another folder.\n\n" +
+         "The reply carries no epoch: a .seq is derived from the plugin file alone. Needs houseCARL pointed at your MO2 " +
+         "instance.")]
     public static string WriteSeq(
         LoadOrderService svc,
-        [Description("Full path to the plugin (.esp/.esm/.esl) whose start-game-enabled quests need a .seq.")]
-            string plugin,
-        [Description("Optional. Base name for a NEW patch-mod folder the .seq lands in (default: the plugin's own houseCARL folder if it's in one, else 'houseCARL_SEQ'); auto-suffixed if taken.")]
-            string? patch_name = null,
-        [Description("Optional. Filename of an existing houseCARL patch mod to write the .seq into (e.g. the patch that holds the .esp, so one mod deploys both).")]
-            string? into = null) => Guard.Tool("housecarl_write_seq", () =>
+        [Description("The plugin: a filename ('MyQuestMod.esp', found across enabled and disabled mod folders, the overwrite folder and game Data) or an absolute path to the .esp/.esm/.esl, e.g. the path " + ToolNames.Create + " reported for a patch not yet in the load order. The reply says which copy it read.")]
+            string source,
+        [Description("Base name for a new mod folder for the .seq (default 'houseCARL_SEQ'); auto-suffixed if taken.")]
+            string? patch = null,
+        [Description("Filename of an existing houseCARL patch mod to write the .seq into (e.g. the patch holding the .esp). Not with patch=.")]
+            string? into = null,
+        [Description("Absolute path to a mod-folder root of your choosing, typically the plugin's own mod after an in-place edit; houseCARL appends SEQ\\ unless the path already ends in it. patch= and into= are then ignored. An existing .seq there is overwritten with no backup (the reply says 'replaced'). The game reads .seq files only from a mod's SEQ\\ folder, the selected manager's overwrite folder or <Data>\\SEQ; elsewhere, the file is still written with a warning that it will not be read.")]
+            string? out_path = null,
+        [Description("'text' (default) or 'json' (the same data, machine-readable).")]
+            string? format = null,
+        [Description("Character ceiling on the reply; past it trailing quest rows are cut with a notice. 0 = the server default (~40k).")]
+            int max_chars = 0) => Guard.Tool(ToolNames.WriteSeq, () =>
     {
-        if (svc.ConfigPromptOrNull() is { } cfgPrompt) return cfgPrompt;
+        bool json = Wire.WantsJson(format, out var ferr);
+        if (ferr is not null) return ferr;
+        if (svc.ConfigPromptOrNull() is { } cfgPrompt)
+            return json ? JsonWire.RenderError(cfgPrompt, null) : cfgPrompt;
 
-        var o = svc.WriteSeq(plugin, patch_name, into);
-        if (!o.Success) return "error: " + o.Error;
-        return Render(o);
+        // Lane exclusivity, out_path= first; contract in docs/architecture/write-path.md.
+        string? outputNote = null;
+        if (!string.IsNullOrWhiteSpace(out_path))
+        {
+            if (!string.IsNullOrWhiteSpace(patch) || !string.IsNullOrWhiteSpace(into))
+                outputNote = "note: out_path= was given, so patch=/into= are ignored (the .seq lands in out_path, not a houseCARL patch folder).";
+        }
+        else if (LaneSentences.PatchIntoFolderRefusal(patch, into, ".seq") is { } laneErr)
+            return json ? JsonWire.RenderError(laneErr, null) : "error: " + laneErr;
+
+        var o = svc.WriteSeq(source, patch, into, out_path);
+        if (json) return JsonWire.RenderSeqOutcome(o, max_chars, outputNote);
+        // The ignored-lane note rides the refusal too.
+        if (!o.Success) return "error: " + o.Error + (outputNote is { Length: > 0 } ne ? "\n" + ne : "");
+        return Render(o, max_chars, outputNote);
     });
 
-    internal static string Render(SeqOutcome o)
+    internal static string Render(SeqOutcome o, int maxChars = 0, string? outputNote = null)
     {
-        // No SGE quests → a clean, explicit no-op (Q3: never a silent empty .seq, never a misleading "done").
+        // No SGE quests is an explicit no-op: never a silent empty .seq, never a misleading "done".
         if (o.Quests.Count == 0)
-            return $"no start-game-enabled quests in {o.PluginFileName} — no .seq is needed (a .seq lists only quests with the " +
-                   "Start Game Enabled flag). Nothing written. If a quest SHOULD start at game start, set its Start Game Enabled " +
-                   "flag first, then write the .seq.";
+            return $"no start-game-enabled quests in {o.PluginFileName}{ReadFrom(o)} — {WriteSentences.Twins.SeqNoQuests}. " +
+                   "If a quest SHOULD start at game start, set its Start Game Enabled flag first, then write the .seq."
+                   // This returns before any folder is resolved, so an unusable out_path= was never diagnosed.
+                   + (o.UserChoseOutput ? "\nnote: out_path= was not resolved or checked — nothing needed writing, so no destination was touched." : "")
+                   + (outputNote is { Length: > 0 } n0 ? "\n" + n0 : "");
 
         var sb = new StringBuilder();
         var seqName = Path.GetFileName(o.SeqPath);
-        sb.Append("wrote ").Append(seqName).Append(": ").Append(o.Quests.Count)
-          .Append(o.Quests.Count == 1 ? " start-game-enabled quest" : " start-game-enabled quests").Append('\n');
-        foreach (var q in o.Quests)
+        // "already current" is its own headline; contract in docs/architecture/write-path.md.
+        sb.Append(o.Unchanged ? "unchanged — " : o.Replaced ? "replaced " : "wrote ").Append(seqName).Append(": ").Append(o.Quests.Count)
+          .Append(o.Quests.Count == 1 ? " start-game-enabled quest" : " start-game-enabled quests")
+          .Append(o.Unchanged
+              ? "; " + WriteSentences.Twins.SeqUnchanged + "."
+              // "replaced" is its own word, and the no-backup alarm is scoped to the out_path lane.
+              : o.Replaced
+                  // Identical replaced bytes lost nothing, so no alarm.
+                  ? (o.ReplacedSameBytes
+                      ? "; " + WriteSentences.Twins.SeqReplacedSameBytes
+                      : o.UserChoseOutput
+                          ? "; " + WriteSentences.Twins.SeqReplacedUserFolder
+                          : "; " + WriteSentences.Twins.SeqReplacedOwnFolder)
+                  : "")
+          .Append('\n');
+        // Only the quest rows are budgeted: a truncated list still has to say where the file landed.
+        int cap = Wire.Cap(maxChars);
+        for (int i = 0; i < o.Quests.Count; i++)
+        {
+            if (sb.Length >= cap)
+            {
+                // Not "raise max_chars to see the rest": with no lane named a re-run writes a second mod folder.
+                sb.Append("  ... [truncated: ").Append(i).Append(" of ").Append(o.Quests.Count)
+                  .Append(" quest(s) listed at max_chars=").Append(cap).Append("; ")
+                  .Append(WriteSentences.Twins.SeqListCutRemedy).Append("]\n");
+                break;
+            }
+            var q = o.Quests[i];
             sb.Append("  ").Append(q.EditorId is { Length: > 0 } e ? e : "(no EditorID)")
               .Append("  →  0x").AppendFormat("{0:X8}", q.OnDiskFormId).Append('\n');
+        }
+        // Which copy of the source was read, several layers being able to provide one filename.
+        if (o.ResolvedFrom is { Length: > 0 })
+            sb.Append("source: ").Append(o.PluginFileName).Append(" — read from ").Append(o.ResolvedFrom)
+              .Append(o.PluginPath is { Length: > 0 } p ? $" ({p})" : "").Append('\n');
         sb.Append("path: ").Append(o.SeqPath).Append('\n');
-        sb.Append(o.WroteIntoPluginFolder
-            ? "the .seq is in the plugin's OWN houseCARL folder — refresh Amethyst, rebuild the filemap, and deploy that mod to publish both files."
-            : "the .seq is in a houseCARL mod folder — refresh Amethyst, enable it and the plugin, rebuild the filemap, and deploy.");
-        // Q3 standing limit: a written .seq makes the quest START; it is not a guarantee the quest/dialogue is otherwise correct.
-        sb.Append("\nnote: this makes the quest(s) START at game start; it does not verify the quest or its dialogue is otherwise " +
-                  "well-formed (use housecarl_validate_dialogue for the dialogue graph).");
-        if (o.Note is not null) sb.Append("\nnote: ").Append(o.Note);
+        // Where the file landed decides the next step, so the three destinations get three different sentences.
+        sb.Append(AmethystSnapshotContext.Current is not null
+            ? o.UserChoseOutput
+                ? "the .seq is in the folder you named (out_path) — no houseCARL mod folder was created; activate its mod and plugin in Amethyst's selected profile, then Refresh and Deploy."
+                : o.WroteIntoPluginFolder
+                    ? "the .seq is in the plugin's OWN houseCARL folder — activate that plugin and folder in Amethyst's selected profile, then Refresh and Deploy."
+                    : "the .seq is in a houseCARL staging folder — activate it and the plugin in Amethyst's selected profile, then Refresh and Deploy."
+            : o.UserChoseOutput
+                ? "the .seq is in the folder you named (out_path) — no houseCARL mod folder was created; make sure that mod is enabled in MO2 so the game reads Data\\SEQ\\."
+                : o.WroteIntoPluginFolder
+                    ? "the .seq is in the plugin's OWN houseCARL folder — enabling that one mod in MO2 deploys both the .esp and its .seq."
+                    : "the .seq is in a houseCARL mod folder — enable it in MO2 (AND make sure the plugin itself is enabled) so the game reads Data\\SEQ\\.");
+        // A skipped write still refreshes the timestamp, keeping the SEQ lint in agreement with this call.
+        if (o.TimestampRefreshed)
+            // The claim is only that THIS file is now newer than the plugin, not what the VFS serves the lint.
+            sb.Append('\n').Append(WriteSentences.Twins.SeqTimestampRefreshed);
+        // Never a clean "done" for a .seq the engine will not read.
+        if (o.DeployWarning is { Length: > 0 } dw) sb.Append('\n').Append(dw);
+        if (outputNote is { Length: > 0 }) sb.Append('\n').Append(outputNote);
+        // The absent epoch is STATED; contract in docs/architecture/write-path.md.
+        sb.Append("\nno epoch on this call: ").Append(WriteSentences.Twins.SeqNoEpoch);
+        sb.Append("\nnote: ").Append(WriteSentences.Twins.SeqStandingLimit);
         return sb.ToString();
     }
+
+    /// <summary>The read-from clause for the nothing-to-do render, because "no SGE quests" is a claim about one file.</summary>
+    static string ReadFrom(SeqOutcome o)
+        => o.ResolvedFrom is { Length: > 0 } w ? $" (read from {w}{(o.PluginPath is { Length: > 0 } p ? $": {p}" : "")})" : "";
 }

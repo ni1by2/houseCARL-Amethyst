@@ -1,0 +1,42 @@
+namespace HousecarlCore;
+
+/// <summary>What one service's reads cost, counted where the work happens: never read by product code, never rendered,
+/// only held to by the cost tests. The service owns one and its resolver carries it across a rebuild.</summary>
+public sealed class CostCounters
+{
+    /// <summary>Overlay opens the service's sessions have paid.</summary>
+    public long SessionOverlayOpens;
+
+    /// <summary>Every per-record seek, typed or not; the flat walks are <c>BodySeeks - TypedSeeks</c>.</summary>
+    public long BodySeeks;
+
+    /// <summary>Per-record seeks answered by walking only the record type's groups.</summary>
+    public long TypedSeeks;
+
+    /// <summary>Plugins a gather actually walked.</summary>
+    public long CollectPasses;
+
+    /// <summary>Gather walks answered by reading only the wanted record types' groups.</summary>
+    public long TypedCollectPasses;
+
+    /// <summary>Provider bodies the conflict-tree fold read.</summary>
+    public long TreeBodiesRead;
+
+    /// <summary>Record bodies the chunk gather was asked for.</summary>
+    public long KeysWanted;
+
+    /// <summary>SkyPatcher layers an overlay read opened for replay.</summary>
+    public long ReplayOpens;
+
+    /// <summary>Off-order files a comparison pole swept.</summary>
+    public long OffOrderSweeps;
+
+    /// <summary>Identify passes run by compact and merge.</summary>
+    public int IdentifyPasses;
+
+    /// <summary>The most record bodies the last forward walk held at once; reset per walk.</summary>
+    public int WalkBodyHighWater;
+
+    /// <summary>The record bodies the last forward walk still held when it returned; reset per walk.</summary>
+    public int WalkBodiesHeldAtReturn;
+}

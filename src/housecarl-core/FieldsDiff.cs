@@ -2,88 +2,57 @@ using System.Text;
 
 namespace HousecarlCore;
 
-/// <summary>
-/// The winner-relative CONTENT comparison behind the conflict-tree diff (HCBR-2026-06-09-01).
-///
-/// The old diff compared depth-1 rendered lines, where a list collapses to a "[List: N item(s)]" count
-/// token — so two lists with EQUAL counts but DIFFERENT contents compared identical, and a whole override
-/// could be reported "(identical to winner)" while carrying the very edit that motivated it (the report's
-/// masked USSEP PlayerFaction regression). This module compares DEEP reads (every modeled leaf):
-///
-///   • scalar / substruct / dict leaves — exact-path token comparison (the old behavior, at full depth).
-///     Dict brackets are semantic KEYS — non-numeric (Skills[OneHanded]) by spelling, numeric-keyed dicts
-///     (Package.Data) by the read engine's in-band "N pair(s)" container marker — so a key rebinding is a
-///     real delta, never absorbed by positional handling;
-///   • positional LIST contents — order-INSENSITIVE multiset comparison of whole elements keyed on their
-///     content (the report's case: USSEP and the winner store the same relations in different orders, so
-///     an index-wise comparison would over-report; element identity is content-based). Elements present
-///     on only one side are reported with identifying leaf values. When the multisets are EQUAL but the
-///     positional order differs, an ORDER-DIFFERS note is emitted (#275) — for record types where list
-///     order IS the semantics (a DIAL's INFO children decide which line plays), a pure reorder must not
-///     read as identical; contents-equal means no element deltas, so the note stands alone. Nested list
-///     reordering INSIDE an
-///     element is not canonicalised (v1) — it can over-report as a content delta, never under-report;
-///   • honesty (Q3) — if either side's deep read hit the expansion cap, <see cref="Result.Complete"/> is
-///     false: list comparison and one-sided-presence deltas are SUPPRESSED (where the two caps fell would
-///     otherwise fabricate differences), only value mismatches observed on both sides are reported, and
-///     the caller must not claim identity beyond what was actually compared.
-/// </summary>
+/// <summary>The winner-relative CONTENT comparison behind the conflict-tree diff, over DEEP reads rather than depth-1 rendered lines; contracts in docs/architecture/read-engine.md.</summary>
 public static class FieldsDiff
 {
-    /// <summary>Field-level deltas, preformatted for the conflict-tree render. <see cref="Complete"/> false ⇒
-    /// at least one side's read was truncated at the expansion cap, so an empty <see cref="Deltas"/> must NOT
-    /// be rendered as "identical to winner" (Q3 — never claim knowledge the comparison doesn't have).
-    ///
-    /// <para><see cref="AgreedCount"/> + <see cref="AgreedSample"/> are the present-==-winner signal (PR-G, item
-    /// 4.3): how many VALUE LEAVES the node carries that exactly equal the winner's — i.e. ITM-restated fields,
-    /// the deltas of which are (by design) OMITTED, so without this count a contributor that restates a field
-    /// identically (an ITM override) was indistinguishable from one that simply doesn't carry it. Counts only
-    /// exact-path value leaves read on BOTH sides (never container summaries, never a side's <c>(absent)</c> /
-    /// <c>(null link)</c> sentinel — an absent field is NOT an agreement). <see cref="AgreedSample"/> is up to a
-    /// few of those paths for the render. Both are 0/empty on a truncated comparison (the agreed set, like the
-    /// one-sided deltas, would be a where-the-cap-fell artifact — Q3).</para>
-    ///
-    /// <para><b>Honest limit (Q3):</b> per-field presence is reliable only for NULLABLE fields, whose absence the
-    /// read engine surfaces as a distinct <c>(absent)</c> / <c>(null link)</c> note. Non-nullable scalars grouped
-    /// in a binary subrecord (Armor <c>DATA</c> → rating/value/weight) read as <c>0</c>/default with no carried
-    /// presence bit, so a leaf that EQUALS the winner is counted as agreement (it IS the same modeled value) but
-    /// the render never claims the contributor "carries" it as a distinct subrecord — there is no bit to prove
-    /// that. The ABSENT render fires only on the explicit sentinels, which only nullable fields produce.</para></summary>
-    /// <param name="Deltas">Display-ready field/list differences relative to the requested reference.</param>
-    /// <param name="Complete">False when either read was truncated and absence/identity claims are unsafe.</param>
-    /// <param name="AgreedCount">Value-leaf paths present and equal on both complete reads.</param>
-    /// <param name="AgreedSample">A bounded illustrative subset of agreed paths.</param>
+    /// <summary>Field-level deltas, preformatted for the conflict-tree render; <see cref="Complete"/> false means an empty <see cref="Deltas"/> must NOT be rendered as "identical to winner".</summary>
+    /// <param name="NoVerdictCount">How many of <paramref name="Deltas"/> are no-verdict lines (UNREADABLE, or NO FIELD on both sides) rather than value differences.</param>
+    /// <param name="NoFieldCount">How many of those no-verdicts are NO FIELD on both sides: a wrong path, not a read fault.</param>
     public sealed record Result(IReadOnlyList<string> Deltas, bool Complete,
-        int AgreedCount, IReadOnlyList<string> AgreedSample);
+        int AgreedCount, IReadOnlyList<string> AgreedSample, int NoVerdictCount, int NoFieldCount = 0, bool Capped = false)
+    {
+        /// <summary>Why the comparison is incomplete, in words; empty when it is complete.</summary>
+        public string Why => IncompleteWhy(NoVerdictCount - NoFieldCount, NoFieldCount, Capped);
+    }
 
-    /// <summary>True when a CleanLines value is a read-engine "no value here" note sentinel — the field is
-    /// modeled but the contributor carries nothing (absent optional, or a present-but-null link). Treated as a
-    /// first-class state, never compared as if it were a real token value. References the <see cref="ReadEngine"/>
-    /// constants directly (same assembly) — single source of truth, compile-time coupling, no drift.</summary>
-    /// <param name="val">A cleaned token-or-note string from one field line.</param>
-    /// <returns>True only for the read engine's explicit no-value sentinels.</returns>
+    /// <summary>The causes of an incomplete comparison as one phrase; a fields= narrowing is offered only where it helps.</summary>
+    public static string IncompleteWhy(int unreadable, int noField, bool capped)
+    {
+        var parts = new List<string>();
+        if (unreadable > 0) parts.Add("a field above could not be read (nothing at or under it was compared)");
+        if (noField > 0) parts.Add("a path above names no field on either record, a wrong path to fix against the record's schema");
+        if (capped) parts.Add("the deep read hit the cap (which suppresses list-content and one-sided-presence deltas for the whole record)");
+        // A hand-built incomplete result names neither cause, so it gets both the read and the cap.
+        return parts.Count > 0 ? string.Join(", and ", parts)
+            : "a field above could not be read (nothing at or under it was compared), or the deep read hit the cap (which suppresses list-content and one-sided-presence deltas for the whole record)";
+    }
+
+    /// <summary>True when a value is a read-engine "no value here" sentinel; <see cref="ReadEngine.PresentNullLinkNote"/> is deliberately not one.</summary>
     static bool IsAbsentSentinel(string val) =>
-        val == ReadEngine.AbsentNote || val == ReadEngine.NullLinkNote || val == ReadEngine.UnresolvedStringNote;
+        ReadEngine.IsAbsentNote(val) || val == ReadEngine.NullLinkNote || val == ReadEngine.UnresolvedStringNote;
 
-    /// <summary>Compare one plugin's deep-read fields against the winner's. Both sides should be read by the
-    /// same <see cref="ReadEngine.ReadFields"/> call shape (same paths, same depth) so line sets correspond.</summary>
-    /// <param name="theirs">The contributor/plugin version being described.</param>
-    /// <param name="winner">The reference record, normally the active winner.</param>
-    /// <param name="referenceLabel">Human-readable label inserted into delta text.</param>
-    /// <returns>Observed deltas plus completeness and identical-value evidence.</returns>
+    /// <summary>Compare one plugin's deep-read fields against the winner's; both sides must be read by the same <see cref="ReadEngine.ReadFields"/> call shape.</summary>
     public static Result Compare(RecordFields theirs, RecordFields winner, string referenceLabel = "winner")
     {
         var tValueLeaves = new HashSet<string>(StringComparer.Ordinal);
         var wValueLeaves = new HashSet<string>(StringComparer.Ordinal);
-        var (tLines, tComplete) = CleanLines(theirs, tValueLeaves);
-        var (wLines, wComplete) = CleanLines(winner, wValueLeaves);
-        bool complete = tComplete && wComplete;
+        var tUnreadable = new Dictionary<string, string>(StringComparer.Ordinal);
+        var wUnreadable = new Dictionary<string, string>(StringComparer.Ordinal);
+        var (tLines, tCapped) = CleanLines(theirs, tValueLeaves, tUnreadable);
+        var (wLines, wCapped) = CleanLines(winner, wValueLeaves, wUnreadable);
+        bool capped = tCapped || wCapped;
+        // A path with no field on either side is a wrong path, never two equal values.
+        var wNoField = wLines.Where(l => ReadEngine.IsNoSuchFieldNote(l.val)).Select(l => l.path).ToHashSet(StringComparer.Ordinal);
+        var noField = new Dictionary<string, string>(StringComparer.Ordinal);
+        foreach (var (p, v) in tLines) if (ReadEngine.IsNoSuchFieldNote(v) && wNoField.Contains(p)) noField.TryAdd(p, v);
+        var noVerdict = tUnreadable.Keys.Union(wUnreadable.Keys).Union(noField.Keys).OrderBy(p => p, StringComparer.Ordinal).ToList();
+        bool complete = !capped && noVerdict.Count == 0;
 
-        // Numeric-bracket roots seen on EITHER side (the union, so a 0-item-vs-N-item list is still compared
-        // as elements), then split DICT-vs-LIST by the read engine's in-band container marker: a numeric-KEYED
-        // dict (Package.Data) renders "N pair(s)" and is compared by EXACT PATH — its bracket content is a
-        // semantic KEY, so the same values rebound to different keys is a real delta — while a positional
-        // list is compared by element content (PR #28 review finding 2).
+        // A path is OUT of the comparison when it, or a path it hangs under, could not be read on either side.
+        bool Suppressed(string p) => noVerdict.Any(s => p.StartsWith(s, StringComparison.Ordinal)
+                                                     && (p.Length == s.Length || p[s.Length] is '.' or '['));
+
+        // Numeric-bracket roots seen on either side, split dict-vs-list by the read engine's in-band container marker.
         var candidates = new HashSet<string>(StringComparer.Ordinal);
         foreach (var (p, _) in tLines) if (ListRoot(p) is { } r) candidates.Add(r);
         foreach (var (p, _) in wLines) if (ListRoot(p) is { } r) candidates.Add(r);
@@ -92,25 +61,41 @@ public static class FieldsDiff
         {
             var tSum = RootSummary(tLines, root);
             var wSum = RootSummary(wLines, root);
-            // No root-summary line on EITHER side ⇒ a fields=-bracketed read (e.g. fields=["Data[3].Name"]):
-            // the dict marker is structurally absent there, so positional handling could absorb a dict key
-            // rebinding — and the user named specific indices/keys anyway, so EXACT-PATH is the natural
-            // semantics. The failure direction flips to over-report (a reordered list under bracketed
-            // fields= shows index-wise deltas), never under-report (PR #28 review #2).
+            // No root summary on either side means a bracketed fields= read, where exact-path is the natural semantics.
             bool seen = tSum is not null || wSum is not null;
             bool dict = (tSum?.Contains(" pair(s)]", StringComparison.Ordinal) ?? false)
                      || (wSum?.Contains(" pair(s)]", StringComparison.Ordinal) ?? false);
             if (seen && !dict) listRoots.Add(root);
         }
 
+        // The roots whose ELEMENTS are still compared: none on a cap, and not one holding an unreadable leaf.
+        var comparedRoots = new HashSet<string>(StringComparer.Ordinal);
+        if (!capped)
+            foreach (var root in listRoots)
+                if (!Suppressed(root) && !noVerdict.Any(s => ListRoot(s) == root)) comparedRoots.Add(root);
+
         var deltas = new List<string>();
 
-        // ---- exact-path comparison: scalars, substructs, dict children (bracket = a semantic key) --------
-        // On a TRUNCATED comparison the list roots' own summary lines join the exact-path set: a root count
-        // token read on BOTH sides is a real, cap-independent read, so a count delta still surfaces even
-        // though element comparison is suppressed (PR #28 review #2, non-blocking note).
-        var tScalar = ExactPathLines(tLines, listRoots, includeListRootSummaries: !complete);
-        var wScalar = ExactPathLines(wLines, listRoots, includeListRootSummaries: !complete);
+        // Unreadable leaves: a no-verdict, named, saying which field and on which side.
+        foreach (var path in noVerdict)
+        {
+            if (noField.TryGetValue(path, out var nf)) { deltas.Add($"{path}: NO FIELD on both sides — not compared {nf}"); continue; }
+            bool t = tUnreadable.TryGetValue(path, out var tn), w = wUnreadable.TryGetValue(path, out var wn);
+            var side = t && w ? "on both sides" : t ? "here" : $"in {referenceLabel}";
+            deltas.Add($"{path}: UNREADABLE {side} — not compared{Why(t, tn, w, wn)}");
+        }
+
+        // The read's own reason travels with the line, because one of those reasons is itself the remedy.
+        string Why(bool t, string? tn, bool w, string? wn)
+        {
+            if (t && w && !string.Equals(tn, wn, StringComparison.Ordinal)) return $" (here {tn}, {referenceLabel} {wn})";
+            var note = t ? tn : wn;
+            return string.IsNullOrEmpty(note) ? "" : " " + note;
+        }
+
+        // Exact-path comparison: scalars, substructs, dict children, and the summary line of a root whose elements are not compared.
+        var tScalar = ExactPathLines(tLines, listRoots, comparedRoots, Suppressed);
+        var wScalar = ExactPathLines(wLines, listRoots, comparedRoots, Suppressed);
         int agreedCount = 0;
         var agreedSample = new List<string>();
         foreach (var (path, val) in tScalar)
@@ -120,14 +105,11 @@ public static class FieldsDiff
                 bool tAbsent = IsAbsentSentinel(val), wAbsent = IsAbsentSentinel(wv);
                 if (tAbsent && wAbsent)
                 {
-                    // Both carry nothing here (a nullable field neither side sets) — same state, no delta and
-                    // not an agreement (there is no value to agree ON).
+                    // Both carry nothing here — same state, no delta and not an agreement.
                 }
                 else if (tAbsent)
                 {
-                    // FIRST-CLASS absent state (item 4.3): the contributor doesn't carry this field but the
-                    // winner does. Rendered as ABSENT, not as a "=(absent)" phantom value delta. Only nullable
-                    // fields reach here — the read engine emits the sentinel only for them.
+                    // First-class ABSENT state, never a "=(absent)" phantom value delta; only nullable fields reach here.
                     deltas.Add($"{path}: ABSENT here ({referenceLabel} has {wv})");
                 }
                 else if (wAbsent)
@@ -141,67 +123,43 @@ public static class FieldsDiff
                 }
                 else if (tValueLeaves.Contains(path) && wValueLeaves.Contains(path))
                 {
-                    // present-==-winner: a VALUE leaf the contributor restates identically (an ITM override).
-                    // Counted (not a delta) so the render can distinguish an ITM-restating override from a
-                    // fields-narrow one. Container summary lines ("[3 item(s)]") that happen to match are NOT
-                    // value leaves and so never inflate this count.
+                    // present-==-winner: a VALUE leaf the contributor restates identically; counted, not a delta.
                     agreedCount++;
                     if (agreedSample.Count < AgreedSampleCap) agreedSample.Add(path);
                 }
             }
-            // One-sided presence is only a delta when BOTH sides were fully read: on a truncated side a
-            // missing line is an artifact of WHERE its cap fell, not of content — reporting it would
-            // FABRICATE a difference (PR #28 review finding 1).
-            else if (complete) deltas.Add($"{path}={val} ({referenceLabel} has no {path})");   // shape difference (e.g. another ConditionData arm)
+            // One-sided presence is a delta only when neither side was CAPPED; a capped side's missing line is an artifact.
+            else if (!capped) deltas.Add($"{path}={val} ({referenceLabel} has no {path})");   // shape difference (e.g. another ConditionData arm)
         }
-        if (complete)
+        if (!capped)
             foreach (var (path, wv) in wScalar)
                 if (!tScalar.ContainsKey(path)) deltas.Add($"{path} only in {referenceLabel}: {wv}");
 
-        // ---- positional lists: order-insensitive whole-element multiset comparison. SKIPPED entirely on a
-        //      truncated comparison — a cap landing mid-list fabricates one-sided elements and wrong counts;
-        //      the renderer surfaces the truncation instead (PR #28 review finding 1). --------------------
-        if (complete)
+        // Positional lists: order-insensitive whole-element multiset comparison, over the roots still being compared.
+        foreach (var root in comparedRoots.OrderBy(r => r, StringComparer.Ordinal))
         {
-            foreach (var root in listRoots.OrderBy(r => r, StringComparer.Ordinal))
+            var tElems = ElementsOf(tLines, root);
+            var wElems = ElementsOf(wLines, root);
+            var (onlyT, onlyW) = MultisetDiff(tElems, wElems);
+            if (onlyT.Count == 0 && onlyW.Count == 0)
             {
-                var tElems = ElementsOf(tLines, root);
-                var wElems = ElementsOf(wLines, root);
-                var (onlyT, onlyW) = MultisetDiff(tElems, wElems);
-                if (onlyT.Count == 0 && onlyW.Count == 0)
-                {
-                    // Equal multisets ⇒ same CONTENTS. For most list fields order is noise (the report that
-                    // motivated the multiset compare: USSEP stores the same relations in a different order), but
-                    // for some it IS the semantics — a DIAL's INFO children decide which line the game plays, so a
-                    // pure reorder is the whole delta (#275). Folding it into "no delta" makes such a record read
-                    // "identical to winner" — a silent wrong. Detect it generically: ElementsOf returns elements in
-                    // positional (index) order, so an ordered fingerprint-sequence mismatch IS a reorder. Surface it
-                    // as an ORDER-DIFFERS note — never element deltas, the contents ARE equal. Type-agnostic by
-                    // design: over-reporting a noise reorder is the safe direction; silently equating a semantic one
-                    // is not (the whole module's posture — over-report, never under-report).
-                    if (!tElems.Select(e => e.Fingerprint).SequenceEqual(wElems.Select(e => e.Fingerprint)))
-                        deltas.Add($"{root}: same {tElems.Count} item(s), ORDER DIFFERS from {referenceLabel}");
-                    continue;
-                }
-                deltas.Add(DescribeListDelta(root, tElems.Count, wElems.Count, onlyT, onlyW, referenceLabel));
+                // Equal multisets mean the same contents; an ordered fingerprint mismatch is a pure reorder, which for some types IS the semantics.
+                if (!tElems.Select(e => e.Fingerprint).SequenceEqual(wElems.Select(e => e.Fingerprint)))
+                    deltas.Add($"{root}: same {tElems.Count} item(s), ORDER DIFFERS from {referenceLabel}");
+                continue;
             }
+            deltas.Add(DescribeListDelta(root, tElems.Count, wElems.Count, onlyT, onlyW, referenceLabel));
         }
 
-        // On a truncated comparison the agreed set, like the one-sided deltas, would be a where-the-cap-fell
-        // artifact — suppress it (Q3): a partial read must not claim "N fields match the winner".
-        if (!complete) { agreedCount = 0; agreedSample.Clear(); }
-        return new Result(deltas, complete, agreedCount, agreedSample);
+        // On a CAPPED comparison the agreed set would be a where-the-cap-fell artifact; an unreadable leaf does not touch it.
+        if (capped) { agreedCount = 0; agreedSample.Clear(); }
+        return new Result(deltas, complete, agreedCount, agreedSample, noVerdict.Count, noField.Count, capped);
     }
 
-    /// <summary>How many agreed-field paths to keep for the render — a small sample, not the full set (a deep
-    /// ITM override agrees on dozens of leaves; the count carries the weight, the sample is illustrative).</summary>
+    /// <summary>How many agreed-field paths to keep for the render — a small sample, not the full set.</summary>
     const int AgreedSampleCap = 3;
 
-    /// <summary>The root's own container-summary line ("[Type: N item(s)/pair(s)]"), or null when the read
-    /// never emitted one (a fields=-bracketed read names element paths directly, skipping the root).</summary>
-    /// <param name="lines">Cleaned path/value lines from one side.</param>
-    /// <param name="root">The candidate collection root path.</param>
-    /// <returns>The root summary value, otherwise null.</returns>
+    /// <summary>The root's own container-summary line, or null when the read never emitted one.</summary>
     static string? RootSummary(List<(string path, string val)> lines, string root)
     {
         foreach (var (path, val) in lines)
@@ -209,32 +167,25 @@ public static class FieldsDiff
         return null;
     }
 
-    /// <summary>The read's lines minus the expansion-cap sentinel; each value is the round-trippable token or,
-    /// for a non-leaf/absent line, its note. <paramref name="valueLeaves"/> collects the paths that carry a real
-    /// VALUE (<c>HasValue</c>) — the only lines an agreement count may consider, so a container summary line
-    /// ("[3 item(s)]") or an absent/null-link note is never miscounted as a present field. Complete=false iff the
-    /// expansion-cap sentinel was present.</summary>
-    /// <param name="rf">One structured deep-read result.</param>
-    /// <param name="valueLeaves">Receives paths backed by real round-trip values.</param>
-    /// <returns>Comparable token/note lines and whether the read reached its natural end.</returns>
-    static (List<(string path, string val)> lines, bool complete) CleanLines(RecordFields rf, HashSet<string> valueLeaves)
+    /// <summary>The read's lines minus the expansion-cap sentinel and the UNREADABLE ones, keyed on <c>Readable</c>.</summary>
+    static (List<(string path, string val)> lines, bool capped) CleanLines(RecordFields rf,
+        HashSet<string> valueLeaves, Dictionary<string, string> unreadable)
     {
         var lines = new List<(string, string)>(rf.Fields.Count);
-        bool complete = true;
+        bool capped = false;
         foreach (var f in rf.Fields)
         {
-            if (f.Path == "…") { complete = false; continue; }         // ReadEngine's expansion-cap sentinel (Q3)
+            if (f.Path == "…") { capped = true; continue; }            // ReadEngine's expansion-cap sentinel
+            if (!f.Readable && !ReadEngine.IsNoSuchFieldNote(f.Note)) { unreadable[f.Path] = f.Note ?? ""; continue; }
             if (f.HasValue) valueLeaves.Add(f.Path);
-            lines.Add((f.Path, f.HasValue ? f.Token ?? "" : f.Note ?? ""));
+            // A flags leaf carries its decode beside the token; the decode is a function of the bits, so equality holds.
+            var shown = f is { HasValue: true, Bytes: null, Display: { } d } ? $"{f.Token} [{d}]" : f.Token ?? "";
+            lines.Add((f.Path, f.HasValue ? shown : f.Note ?? ""));
         }
-        return (lines, complete);
+        return (lines, capped);
     }
 
-    /// <summary>The path's OUTERMOST positional-list root — the prefix before its first NUMERIC bracket — or
-    /// null when it has none (scalars, substructs, and dict keys like Skills[OneHanded], which are semantic
-    /// identities and belong in exact-path comparison).</summary>
-    /// <param name="path">A canonical dotted/bracketed read path.</param>
-    /// <returns>The first numeric-bracket prefix, or null when the path has no positional element.</returns>
+    /// <summary>The path's OUTERMOST positional-list root — the prefix before its first NUMERIC bracket — or null when it has none.</summary>
     internal static string? ListRoot(string path)
     {
         int from = 0;
@@ -251,39 +202,24 @@ public static class FieldsDiff
         }
     }
 
-    /// <summary>Exact-path map of every line OUTSIDE positional-list content: scalars, substructs, dict
-    /// children and dict-root summaries (a dict bracket is a semantic key — numeric or not — so exact-path is
-    /// the correct comparison), excluding only positional-list content and the list roots' own summary lines
-    /// (subsumed by the element comparison — including the 0-item side, whose only trace IS its summary).</summary>
-    /// <param name="lines">Cleaned path/value lines from one side.</param>
-    /// <param name="listRoots">Roots proven to represent positional lists.</param>
-    /// <param name="includeListRootSummaries">Keep list count summaries for partial-read comparison.</param>
-    /// <returns>An ordinal path-to-value map for exact comparison.</returns>
+    /// <summary>Exact-path map of every line outside positional-list content, minus the summary lines of the roots whose elements ARE compared and any suppressed path.</summary>
     static Dictionary<string, string> ExactPathLines(List<(string path, string val)> lines,
-        HashSet<string> listRoots, bool includeListRootSummaries = false)
+        HashSet<string> listRoots, HashSet<string> comparedRoots, Func<string, bool> suppressed)
     {
         var map = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (path, val) in lines)
         {
             var root = ListRoot(path);
             bool positionalContent = root is not null && listRoots.Contains(root);
-            if (!positionalContent && (includeListRootSummaries || !listRoots.Contains(path)))
+            if (!positionalContent && !comparedRoots.Contains(path) && !suppressed(path))
                 map[path] = val;
         }
         return map;
     }
 
-    /// <summary>One positional list element reconstructed from expanded field lines.</summary>
-    /// <param name="Index">The original display index, used only when describing a difference.</param>
-    /// <param name="Content">Relative leaf paths and values belonging to the element.</param>
-    /// <param name="Fingerprint">Order-insensitive normalized content used for multiset equality.</param>
     sealed record Element(int Index, List<(string rel, string val)> Content, string Fingerprint);
 
-    /// <summary>Group a root's bracketed lines into whole elements: positional index + (relative path, value)
-    /// content + an order-insensitive content fingerprint (nested content included verbatim).</summary>
-    /// <param name="lines">All cleaned lines from one record side.</param>
-    /// <param name="root">The positional list root to reconstruct.</param>
-    /// <returns>Elements ordered by their original numeric index.</returns>
+    /// <summary>Group a root's bracketed lines into whole elements: positional index, relative content, and an order-insensitive content fingerprint.</summary>
     static List<Element> ElementsOf(List<(string path, string val)> lines, string root)
     {
         var byIndex = new SortedDictionary<int, List<(string rel, string val)>>();
@@ -301,15 +237,7 @@ public static class FieldsDiff
             string.Join("\u0001", kv.Value.Select(c => c.rel + "=" + NormalizeForCompare(c.val)).OrderBy(s => s, StringComparer.Ordinal)))).ToList();
     }
 
-    /// <summary>Case-normalise a value for COMPARISON when it is a FormKey token ("XXXXXX:Plugin.esp").
-    /// ModKeys are case-insensitive and each plugin stores a master's filename as written in ITS OWN master
-    /// list, so the same link can render "17DDC4:ccBGSSSE001-Fish.esm" in one version and
-    /// "17ddc4:ccbgssse001-fish.esm" in another (seen live on the report's PlayerFaction record) — an ordinal
-    /// comparison would report a false content delta. Display keeps each side's original token; only equality
-    /// checks and element fingerprints use this form. Non-FormKey values pass through untouched (string
-    /// content stays case-SENSITIVE).</summary>
-    /// <param name="val">A token or explanatory note.</param>
-    /// <returns>A comparison-only normalized FormKey, or the original non-FormKey text.</returns>
+    /// <summary>Case-normalise a FormKey token for COMPARISON only; display keeps each side's original token, and non-FormKey values pass through.</summary>
     static string NormalizeForCompare(string val)
     {
         if (val.Length < 8 || val[6] != ':') return val;
@@ -317,11 +245,7 @@ public static class FieldsDiff
         return string.Concat(val[..6].ToUpperInvariant(), ":", val[7..].ToLowerInvariant());
     }
 
-    /// <summary>Content-keyed multiset difference: elements (with multiplicity) present on one side only.
-    /// Equal multisets ⇒ the lists hold the same contents, merely (possibly) reordered ⇒ no delta.</summary>
-    /// <param name="t">Contributor-side elements.</param>
-    /// <param name="w">Reference-side elements.</param>
-    /// <returns>Unmatched elements from each side, preserving source order.</returns>
+    /// <summary>Content-keyed multiset difference: elements (with multiplicity) present on one side only.</summary>
     static (List<Element> onlyT, List<Element> onlyW) MultisetDiff(List<Element> t, List<Element> w)
     {
         var counts = new Dictionary<string, int>(StringComparer.Ordinal);
@@ -338,14 +262,6 @@ public static class FieldsDiff
         return (onlyT, onlyW);
     }
 
-    /// <summary>Formats one positional-list content/count difference for the conflict renderer.</summary>
-    /// <param name="root">The list's field path.</param>
-    /// <param name="tCount">Contributor element count.</param>
-    /// <param name="wCount">Reference element count.</param>
-    /// <param name="onlyT">Contributor-only elements.</param>
-    /// <param name="onlyW">Reference-only elements.</param>
-    /// <param name="referenceLabel">Human-readable reference label.</param>
-    /// <returns>A bounded, display-ready delta line.</returns>
     static string DescribeListDelta(string root, int tCount, int wCount, List<Element> onlyT, List<Element> onlyW, string referenceLabel = "winner")
     {
         var sb = new StringBuilder();
@@ -356,10 +272,7 @@ public static class FieldsDiff
         return sb.ToString();
     }
 
-    /// <summary>Up to 2 elements, each as its index plus up to 3 identifying leaf values (emit order — the
-    /// model's field order — with the bare element-summary line used only when no real leaves exist).</summary>
-    /// <param name="elems">Unmatched elements from one side.</param>
-    /// <returns>A bounded illustrative summary with omitted counts.</returns>
+    /// <summary>Up to 2 elements, each as its index plus up to 3 identifying leaf values.</summary>
     static string DescribeElements(List<Element> elems)
     {
         var parts = elems.Take(2).Select(e =>

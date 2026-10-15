@@ -1,3 +1,5 @@
+> Historical documentation standard from the earlier Amethyst port. The current contribution and comment conventions are in [CLAUDE.md](../CLAUDE.md), [CONTRIBUTING.md](../CONTRIBUTING.md) and [the documentation decision](../docs/decisions/0001-terse-comments-public-knowledge-home.md).
+
 # houseCARL code documentation standard
 
 **Class:** LIVING standard. Update it when the code-review needs change.
@@ -80,4 +82,3 @@ The documentation milestone is complete only when:
   stale MO2/Windows claims except in explicitly marked legacy compatibility code;
 - the roadmap records the components reviewed, verification performed, and any
   deliberately deferred ambiguity.
-

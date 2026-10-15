@@ -1,3 +1,5 @@
+> Historical record: this describes the July filemap-based build. For current setup and limitations, start with [README](../README.md), [Linux installation](linux-install.md) and [Linux development](linux-development.md).
+
 # v1 release and rollback checklist
 
 This checklist is the release gate for a Linux x86_64 houseCARL-Amethyst v1

@@ -1,3 +1,5 @@
+> Historical record: this describes the July filemap-based build. For current setup and limitations, start with [README](../README.md), [Linux installation](linux-install.md) and [Linux development](linux-development.md).
+
 # Filesystem path model
 
 houseCARL-Amethyst uses two path domains. Treating them as interchangeable is a

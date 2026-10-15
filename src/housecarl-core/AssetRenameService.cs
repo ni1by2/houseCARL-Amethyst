@@ -5,90 +5,60 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>Reports a FormID-driven FaceGen carry pass.</summary>
-/// <param name="NpcCount">Renumbered NPCs considered.</param>
-/// <param name="FacegenNpcsCarried">NPCs for which at least one FaceGen file was written.</param>
-/// <param name="FacegenFilesCarried">Total mesh and tint files written.</param>
-/// <param name="Failures">Assets found but not readable, stageable, or committable.</param>
-/// <param name="ReadIncomplete">Whether an unreadable archive makes absence results inconclusive.</param>
+// AssetRenameService — carry FormID-KEYED assets (facegen, voice) across a renumber, plus the .seq rebuild that is
+// not a rename. The two-phase carry, the non-destructive rule, the disk-scan voice discovery and the refresh-only
+// .seq are contracts in docs/architecture/assets.md; pinned by CompactFacegenCarryTests and CompactVoiceCarryTests.
+
+/// <summary>The accounting of one facegen pass: renumbered NPCs considered, those with ≥1 file carried, files
+/// written, FOUND-but-unwritable failures, and whether a BSA failed to read (so "no facegen" may be incomplete).</summary>
 public sealed record AssetRenameOutcome(
-    int NpcCount,
-    int FacegenNpcsCarried,
-    int FacegenFilesCarried,
-    IReadOnlyList<string> Failures,
-    bool ReadIncomplete)
+    int NpcCount, int FacegenNpcsCarried, int FacegenFilesCarried,
+    IReadOnlyList<string> Failures, bool ReadIncomplete)
 {
-    /// <summary>Creates a clean no-work result while preserving read completeness.</summary>
-    /// <param name="readIncomplete">Whether archive discovery was incomplete.</param>
-    /// <returns>A zero-count outcome.</returns>
-    public static AssetRenameOutcome None(bool readIncomplete = false) =>
-        new(0, 0, 0, Array.Empty<string>(), readIncomplete);
+    /// <summary>The loose roots the scan could not walk or list, each named with the reason, so the "may be
+    /// incomplete" note says WHICH folder; empty when every root read.</summary>
+    public IReadOnlyList<string> RootFailures { get; init; } = Array.Empty<string>();
+
+    public static AssetRenameOutcome None(bool readIncomplete = false, IReadOnlyList<string>? rootFailures = null) =>
+        new(0, 0, 0, Array.Empty<string>(), readIncomplete) { RootFailures = rootFailures ?? Array.Empty<string>() };
 }
 
-/// <summary>Reports a FormID-driven voice-file carry pass.</summary>
-/// <param name="FilesScanned">Voice files found below the source plugin's voice prefix.</param>
-/// <param name="FilesCarried">Files whose embedded INFO identifier changed and whose bytes were written.</param>
-/// <param name="LinesCarried">Distinct renumbered INFO records for which at least one file was written.</param>
-/// <param name="Failures">Files found but not readable, stageable, or committable.</param>
-/// <param name="ReadIncomplete">Whether an unreadable archive makes absence results inconclusive.</param>
+/// <summary>The accounting of the voice pass: files found under the plugin's voice prefix, those whose embedded
+/// FormID was renumbered and written, the distinct lines they belong to, failures, and the read caveat.</summary>
 public sealed record VoiceCarryOutcome(
-    int FilesScanned,
-    int FilesCarried,
-    int LinesCarried,
-    IReadOnlyList<string> Failures,
-    bool ReadIncomplete)
+    int FilesScanned, int FilesCarried, int LinesCarried,
+    IReadOnlyList<string> Failures, bool ReadIncomplete)
 {
-    /// <summary>Creates a clean no-work result while preserving read completeness.</summary>
-    /// <param name="readIncomplete">Whether archive discovery was incomplete.</param>
-    /// <returns>A zero-count outcome.</returns>
-    public static VoiceCarryOutcome None(bool readIncomplete = false) =>
-        new(0, 0, 0, Array.Empty<string>(), readIncomplete);
+    /// <summary>The loose roots the scan could not walk or list, each named with the reason — the voice twin of
+    /// <see cref="AssetRenameOutcome.RootFailures"/>.</summary>
+    public IReadOnlyList<string> RootFailures { get; init; } = Array.Empty<string>();
+
+    public static VoiceCarryOutcome None(bool readIncomplete = false, IReadOnlyList<string>? rootFailures = null) =>
+        new(0, 0, 0, Array.Empty<string>(), readIncomplete) { RootFailures = rootFailures ?? Array.Empty<string>() };
 }
 
-/// <summary>Reports refresh of a renumbered plugin's start-game-enabled quest index.</summary>
-/// <param name="SgeQuestCount">Start-game-enabled quests in the written plugin.</param>
-/// <param name="Written">Whether a replacement SEQ file was committed.</param>
-/// <param name="SeqPath">Native destination path when written; otherwise null.</param>
-/// <param name="Failures">Named build, write, or missing-source advisories.</param>
+/// <summary>The accounting of the SEQ pass. Not a map-rename — the <c>.seq</c> is REBUILT from the renumbered
+/// plugin — and refresh-only: a source that shipped none gets a named advisory, never an invented file.</summary>
 public sealed record SeqRegenOutcome(
-    int SgeQuestCount,
-    bool Written,
-    string? SeqPath,
-    IReadOnlyList<string> Failures)
+    int SgeQuestCount, bool Written, string? SeqPath, IReadOnlyList<string> Failures)
 {
-    /// <summary>No start-game-enabled quests — nothing to write (no <c>.seq</c> cut), a clean no-op.</summary>
-    /// <returns>A zero-count no-work result.</returns>
     public static SeqRegenOutcome None() => new(0, false, null, Array.Empty<string>());
 }
 
-/// <summary>Carries FormID-keyed assets after compacting or merging plugin records.</summary>
-/// <remarks>
-/// FaceGen and voice files are copied from old paths to new paths derived from the renumber map. SEQ files are
-/// rebuilt from the written plugin because their contents contain renumbered IDs. Old files are never deleted.
-/// FaceGen and voice share a two-phase disk-staging algorithm so an in-place destination cannot overwrite another
-/// record's not-yet-read source. Failures are reported without invalidating the already-written record patch.
-/// </remarks>
 public static class AssetRenameService
 {
-    /// <summary>Carries FaceGen for each NPC renumbered into the written plugin.</summary>
-    /// <param name="pPrimePath">Native path to the already-written compacted or merged plugin.</param>
-    /// <param name="map">Complete old-to-new FormKey map from the record renumbering pass.</param>
-    /// <param name="assets">Pinned asset view used to read consistent old-path winners.</param>
-    /// <param name="outDir">Native output-mod root for the new-path copies.</param>
-    /// <returns>NPC/file counts, named failures, and resolver completeness.</returns>
-    /// <remarks>
-    /// Only NPCs whose new key appears in the map are considered. Existing overrides that retained a master key
-    /// require no asset rename. A missing FaceGen pair is normal; a found but unreadable or unwritable file is not.
-    /// </remarks>
+    /// <summary>Carry the FaceGen assets of every RENUMBERED NPC in <paramref name="pPrimePath"/> to their new-FormID
+    /// path under <paramref name="outDir"/> (the output mod-folder root in both lanes). Only NPCs whose new key is a
+    /// <paramref name="map"/> VALUE are carried; best-effort, so this never throws and never fails the compact.</summary>
     public static AssetRenameOutcome CarryFaceGen(
         string pPrimePath, IReadOnlyDictionary<FormKey, FormKey> map, AssetResolver.AssetView assets, string outDir)
     {
-        // Read the written plugin and intersect its NPCs with the map's new keys. The transient overlay is disposed
-        // immediately, preserving the zero-handle-at-rest rule.
+        // Which renumbered records are NPCs? Read P′ back and intersect its NPCs with the map's NEW keys, reversing
+        // the map once so each renumbered NPC yields its old key. The overlay is transient — zero handle at rest.
         List<(FormKey Old, FormKey New)> npcs;
         try
         {
-            using var pp = SkyrimMod.CreateFromBinaryOverlay(pPrimePath, SkyrimRelease.SkyrimSE);
+            using var pp = SkyrimMod.CreateFromBinaryOverlay(pPrimePath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(pPrimePath));
             var reverse = new Dictionary<FormKey, FormKey>(map.Count);
             foreach (var kv in map) reverse[kv.Value] = kv.Key;            // new → old
             npcs = pp.Npcs.Where(n => reverse.ContainsKey(n.FormKey))
@@ -97,76 +67,52 @@ public static class AssetRenameService
         }
         catch (Exception ex)
         {
-            // The record operation already succeeded, so report an incomplete asset phase instead of throwing.
-            var failure =
-                $"could not read '{Path.GetFileName(pPrimePath)}' back to find its NPCs for FaceGen carry " +
-                $"({ex.Message}) — verify NPC faces in-game.";
+            // Can't read P′ back, so this is a degraded asset pass on a compact that SUCCEEDED: a named warning.
             return new AssetRenameOutcome(0, 0, 0,
-                new[] { failure },
-                assets.ReadIncomplete);
+                new[] { $"could not read '{Path.GetFileName(pPrimePath)}' back to find its NPCs for facegen carry ({ex.Message}) — verify NPC faces in-game." },
+                assets.ReadIncomplete) { RootFailures = assets.RootFailures };
         }
 
-        if (npcs.Count == 0) return AssetRenameOutcome.None(assets.ReadIncomplete);
+        if (npcs.Count == 0) return AssetRenameOutcome.None(assets.ReadIncomplete, assets.RootFailures);
 
-        // Build old-to-new mesh and tint pairs. CarryItems stages all sources before any destination commit.
+        // Each renumbered NPC's mesh + tint, old path to new, through the shared two-phase carry.
         var items = new List<CarryItem>();
         foreach (var (oldKey, newKey) in npcs)
             foreach (var (slot, oldPath) in FaceGenPath.Both(oldKey))      // (Mesh, …), (Tint, …) — the dark-face pair
-                items.Add(new CarryItem(
-                    oldPath,
-                    FaceGenPath.For(newKey, slot),
-                    newKey,
-                    $"{oldKey.ID:X6}→{newKey.ID:X6} {slot}"));
+                items.Add(new CarryItem(oldPath, FaceGenPath.For(newKey, slot), newKey, $"{oldKey.ID:X6}→{newKey.ID:X6} {slot}"));
 
         var failures = new List<string>();
         var (files, carried) = CarryItems(items, assets, outDir, failures);
-        return new AssetRenameOutcome(npcs.Count, carried.Count, files, failures, assets.ReadIncomplete);
+        return new AssetRenameOutcome(npcs.Count, carried.Count, files, failures, assets.ReadIncomplete)
+               { RootFailures = assets.RootFailures };
     }
 
-    /// <summary>Carries voice files whose embedded INFO identifiers were renumbered.</summary>
-    /// <param name="pPrimePath">Native path to the already-written output plugin.</param>
-    /// <param name="map">Complete old-to-new FormKey map from the record renumbering pass.</param>
-    /// <param name="assets">Pinned asset view used to enumerate and read old-path winners.</param>
-    /// <param name="outDir">Native output-mod root for the new-path copies.</param>
-    /// <param name="sourcePlugin">
-    /// Original donor filename during a merge; null during compaction, where the plugin name is unchanged.
-    /// </param>
-    /// <returns>Scanned/file/line counts, named failures, and resolver completeness.</returns>
-    /// <remarks>
-    /// Discovery scans actual files under <c>Sound\Voice\plugin\</c> instead of reconstructing dialogue graphs.
-    /// Compaction changes only the embedded local ID. Merge also changes the defining-plugin folder segment.
-    /// </remarks>
+    /// <summary>Carry the VOICE files of every RENUMBERED dialogue line to their new-FormID name under
+    /// <paramref name="outDir"/>, DISCOVERING by scanning the plugin's voice prefix. Two lanes: on a compact only the
+    /// id segment moves; on a merge the caller passes each donor as <paramref name="sourcePlugin"/> and the folder
+    /// segment is rewritten alongside it. Rides the same two-phase carry; never throws.</summary>
     public static VoiceCarryOutcome CarryVoice(
         string pPrimePath, IReadOnlyDictionary<FormKey, FormKey> map, AssetResolver.AssetView assets, string outDir,
         string? sourcePlugin = null)
     {
-        // Compact keeps the same folder name; merge rewrites from the donor folder to the output folder.
-        var targetBasename = Path.GetFileName(pPrimePath);
-        var sourceBasename = sourcePlugin ?? targetBasename;
+        var targetBasename = Path.GetFileName(pPrimePath);                  // the OUTPUT plugin's filename → the NEW voice folder name
+        var sourceBasename = sourcePlugin ?? targetBasename;                // compact: same name; merge: the donor's filename (OLD folder)
 
-        // local-id → new-local-id for the SOURCE plugin's renumbered records — the only ones whose voice lives under
-        // Sound\Voice\<source>\ (an override kept at a master key has its voice under the MASTER's folder, untouched).
+        // local id to new local id for the SOURCE plugin's renumbered records — the only ones whose voice lives here.
         var idMap = new Dictionary<uint, uint>();
         foreach (var kv in map)
             if (string.Equals(kv.Key.ModKey.FileName.ToString(), sourceBasename, StringComparison.OrdinalIgnoreCase))
                 idMap[kv.Key.ID] = kv.Value.ID;
-        if (idMap.Count == 0) return VoiceCarryOutcome.None(assets.ReadIncomplete);
+        if (idMap.Count == 0) return VoiceCarryOutcome.None(assets.ReadIncomplete, assets.RootFailures);
 
-        // The new INFO FormKeys need a ModKey for the distinct-line accounting; the target basename came from a real
-        // plugin path, so a malformed name is surfaced instead of silently producing a zero pass.
+        // The new FormKeys need a ModKey for the distinct-line accounting; a malformed name is surfaced, not zeroed.
         ModKey modKey;
         try { modKey = ModKey.FromFileName(targetBasename); }
         catch (Exception ex)
         {
-            var failure =
-                $"'{targetBasename}' is not a valid plugin filename for voice carry ({ex.Message}) — " +
-                "verify voiced lines in-game.";
-            return new VoiceCarryOutcome(
-                0,
-                0,
-                0,
-                new[] { failure },
-                assets.ReadIncomplete);
+            return new VoiceCarryOutcome(0, 0, 0,
+                new[] { $"'{targetBasename}' is not a valid plugin filename for voice carry ({ex.Message}) — verify voiced lines in-game." },
+                assets.ReadIncomplete) { RootFailures = assets.RootFailures };
         }
 
         var srcPrefix = $@"Sound\Voice\{sourceBasename}";
@@ -177,139 +123,155 @@ public static class AssetRenameService
         {
             return new VoiceCarryOutcome(0, 0, 0,
                 new[] { $"could not scan '{srcPrefix}' for voice files ({ex.Message}) — verify voiced lines in-game." },
-                assets.ReadIncomplete);
+                assets.ReadIncomplete) { RootFailures = assets.RootFailures };
         }
-        if (files.Count == 0) return VoiceCarryOutcome.None(assets.ReadIncomplete);
+        if (files.Count == 0) return VoiceCarryOutcome.None(assets.ReadIncomplete, assets.RootFailures);
 
-        // Rewrite only files with a recognized embedded ID that appears in the renumber map.
+        // Each voice file whose embedded id was renumbered, to its new-id name. A file with no '_<8hex>_<num>.<ext>'
+        // tail, or whose id was not renumbered, is left alone.
         var items = new List<CarryItem>();
+        var failuresForInvalidPath = new List<string>();
         foreach (var oldRel in files)
         {
-            var fname = BethesdaPath.FileName(oldRel);
+            string canonical;
+            try { canonical = BethesdaPath.Normalize(oldRel); }
+            catch (Exception ex)
+            {
+                failuresForInvalidPath.Add($"could not interpret voice path '{oldRel}' ({ex.Message}) — verify voiced lines in-game.");
+                continue;
+            }
+            var fname = BethesdaPath.FileName(canonical);
             var m = VoiceIdRx.Match(fname);
-            if (!m.Success) continue;
+            if (!m.Success) continue;                                      // not an INFO-keyed voice file — nothing to remap
             uint full;
             try { full = Convert.ToUInt32(m.Groups[1].Value, 16); } catch { continue; }
-            uint oldLocal = full & FormIdRange.ObjectIdMask;
-            if (!idMap.TryGetValue(oldLocal, out var newLocal)) continue;
+            uint oldLocal = full & FormIdRange.ObjectIdMask;              // mask the index byte, exactly like VoicePath emits "00"+6hex
+            if (!idMap.TryGetValue(oldLocal, out var newLocal)) continue;  // id not renumbered → filename unchanged → no carry
 
             var newId = "00" + newLocal.ToString("X6");
-            var newFname = fname.Substring(0, m.Groups[1].Index) +
-                           newId +
-                           fname.Substring(m.Groups[1].Index + m.Groups[1].Length);
-            var dir = BethesdaPath.DirectoryName(oldRel);
-            var newDir = dir.Length >= srcPrefix.Length ? tgtPrefix + dir.Substring(srcPrefix.Length) : dir;
-            var newRel = newDir.Length == 0 ? newFname : newDir + "\\" + newFname;
-            items.Add(new CarryItem(
-                oldRel,
-                newRel,
-                new FormKey(modKey, newLocal),
-                $"{oldLocal:X6}→{newLocal:X6} {fname}"));
+            var newFname = fname.Substring(0, m.Groups[1].Index) + newId + fname.Substring(m.Groups[1].Index + m.Groups[1].Length);
+            if (!TryRewriteVoicePath(canonical, srcPrefix, tgtPrefix, newFname, out var newRel, out var pathError))
+            {
+                failuresForInvalidPath.Add($"{pathError} — verify voiced lines in-game.");
+                continue;
+            }
+            items.Add(new CarryItem(oldRel, newRel, new FormKey(modKey, newLocal), $"{oldLocal:X6}→{newLocal:X6} {fname}"));
         }
 
-        var failures = new List<string>();
+        var failures = failuresForInvalidPath;
         var (carriedFiles, carriedLines) = CarryItems(items, assets, outDir, failures);
-        return new VoiceCarryOutcome(files.Count, carriedFiles, carriedLines.Count, failures, assets.ReadIncomplete);
+        return new VoiceCarryOutcome(files.Count, carriedFiles, carriedLines.Count, failures, assets.ReadIncomplete)
+               { RootFailures = assets.RootFailures };
     }
 
-    /// <summary>Refreshes a source-supplied SEQ file from the renumbered plugin.</summary>
-    /// <param name="pPrimePath">Native path to the already-written output plugin.</param>
-    /// <param name="outDir">Native output-mod root that will contain the <c>SEQ</c> directory.</param>
-    /// <param name="sourceHadSeq">Whether the source shipped a SEQ file and therefore requires refresh.</param>
-    /// <returns>Quest count, committed destination, and any named advisory or failure.</returns>
-    /// <remarks>
-    /// SEQ contains master-relative on-disk FormIDs, so it must be rebuilt rather than renamed. This operation is
-    /// refresh-only: it never invents a SEQ file that the source did not ship. No start-game-enabled quests is a
-    /// clean no-op.
-    /// </remarks>
+    internal static bool TryRewriteVoicePath(string oldRel, string sourcePrefix, string targetPrefix,
+        string newFileName, out string newRel, out string? error)
+    {
+        newRel = "";
+        error = null;
+        try
+        {
+            var canonical = BethesdaPath.Normalize(oldRel);
+            var source = BethesdaPath.Normalize(sourcePrefix) + "\\";
+            var target = BethesdaPath.Normalize(targetPrefix);
+            var directory = BethesdaPath.DirectoryName(canonical);
+            if (!directory.StartsWith(source, StringComparison.OrdinalIgnoreCase))
+            {
+                error = $"voice path '{oldRel}' is outside the expected plugin folder '{sourcePrefix}'";
+                return false;
+            }
+
+            var suffix = directory[source.Length..];
+            if (suffix.Length == 0)
+            {
+                error = $"voice path '{oldRel}' has no voice-type directory";
+                return false;
+            }
+            var leaf = BethesdaPath.Normalize(newFileName);
+            if (leaf.Contains('\\'))
+            {
+                error = "the rewritten voice filename contains a directory";
+                return false;
+            }
+            newRel = BethesdaPath.Normalize(target + "\\" + suffix + "\\" + leaf);
+            return true;
+        }
+        catch (Exception ex)
+        {
+            error = $"could not rewrite voice path '{oldRel}' ({ex.Message})";
+            return false;
+        }
+    }
+
+    /// <summary>REFRESH the start-game-enabled-quest <c>.seq</c> of the renumbered plugin when the source SHIPPED
+    /// one, writing it to <c>&lt;outDir&gt;\SEQ\&lt;basename&gt;.seq</c> where the game reads it. Rebuilt from P′ via
+    /// <see cref="SeqFile.Build"/>, not renamed; no SGE quests is a clean no-op, and a source that shipped none gets
+    /// a named advisory rather than an invented file. Never throws.</summary>
     public static SeqRegenOutcome RegenerateSeq(string pPrimePath, string outDir, bool sourceHadSeq)
     {
         SeqFile.SeqBuild built;
         try { built = SeqFile.Build(pPrimePath); }
         catch (Exception ex)
         {
-            var failure =
-                $"could not read '{Path.GetFileName(pPrimePath)}' back to rebuild its .seq ({ex.Message}) — " +
-                "if it has start-game-enabled quests, run housecarl_write_seq on the compacted plugin.";
-            return new SeqRegenOutcome(0, false, null, new[] { failure });
+            // Can't read P′ back, so this is a degraded SEQ pass on a compact that SUCCEEDED: a named warning.
+            return new SeqRegenOutcome(0, false, null,
+                new[] { $"could not read '{Path.GetFileName(pPrimePath)}' back to (re)build its .seq ({ex.Message}) — if it has start-game-enabled quests, run {ToolNames.WriteSeq} on the compacted plugin." });
         }
 
-        // A renumber never clears quest flags, so no start-game-enabled quests means no SEQ is needed.
+        // No SGE quests means no .seq. Returns BEFORE the sourceHadSeq gate, so a source that shipped one for a quest
+        // whose SGE flag is since gone would leave it stale — unreachable via compact, latent if reused for merge.
         if (built.Quests.Count == 0) return SeqRegenOutcome.None();
 
         if (!sourceHadSeq)
-        {
-            var failure =
-                $"'{Path.GetFileName(pPrimePath)}' has {built.Quests.Count} start-game-enabled quest(s) but no " +
-                ".seq — they likely were not starting before compaction; run housecarl_write_seq to add one.";
-            return new SeqRegenOutcome(built.Quests.Count, false, null, new[] { failure });
-        }
+            // Refresh-only: do NOT invent a .seq the source lacked; the quests likely weren't starting before either.
+            return new SeqRegenOutcome(built.Quests.Count, false, null,
+                new[] { $"'{Path.GetFileName(pPrimePath)}' has {built.Quests.Count} start-game-enabled quest(s) but no .seq — they likely weren't starting even before compaction; run {ToolNames.WriteSeq} on the compacted plugin to add one." });
 
         var dest = Path.Combine(outDir, "SEQ", Path.GetFileNameWithoutExtension(pPrimePath) + ".seq");
         try
         {
-            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);
+            Directory.CreateDirectory(Path.GetDirectoryName(dest)!);       // AtomicFile.WriteAllBytes does NOT create the dir
             AtomicFile.WriteAllBytes(dest, built.Bytes);
             long size; try { size = new FileInfo(dest).Length; } catch { size = -1; }
-            if (size != built.Bytes.Length)
-            {
-                var failure =
-                    $"wrote {size} byte(s) to '{Path.GetFileName(dest)}', expected {built.Bytes.Length} — " +
-                    "verify the .seq.";
-                return new SeqRegenOutcome(built.Quests.Count, false, null, new[] { failure });
-            }
+            if (size != built.Bytes.Length)                               // truncation guard (the .seq is tiny; a short write is a real fault)
+                return new SeqRegenOutcome(built.Quests.Count, false, null,
+                    new[] { $"wrote {size} byte(s) to '{Path.GetFileName(dest)}', expected {built.Bytes.Length} — verify the .seq." });
         }
         catch (Exception ex)
         {
-            var failure =
-                $"could not write '{Path.GetFileName(dest)}' ({ex.Message}) — its start-game-enabled quests may " +
-                "not start; run housecarl_write_seq on the compacted plugin.";
-            return new SeqRegenOutcome(built.Quests.Count, false, null, new[] { failure });
+            return new SeqRegenOutcome(built.Quests.Count, false, null,
+                new[] { $"could not write '{Path.GetFileName(dest)}' ({ex.Message}) — its start-game-enabled quests may not start; run {ToolNames.WriteSeq} on the compacted plugin." });
         }
         return new SeqRegenOutcome(built.Quests.Count, true, dest, Array.Empty<string>());
     }
 
-    /// <summary>Describes one old-path winner that must be copied to a new FormID-keyed path.</summary>
-    /// <param name="OldPath">Canonical source path.</param>
-    /// <param name="NewPath">Canonical destination path.</param>
-    /// <param name="Owner">Renumbered record used for distinct-owner accounting.</param>
-    /// <param name="Label">Human-readable context prepended to failures.</param>
+    /// <summary>One asset to carry: read <see cref="OldPath"/>'s winning copy and place its bytes at <see cref="NewPath"/> under the output dir.</summary>
     readonly record struct CarryItem(string OldPath, string NewPath, FormKey Owner, string Label);
 
-    /// <summary>Stages every source read before committing any destination.</summary>
-    /// <param name="items">Old/new path pairs to carry.</param>
-    /// <param name="assets">Pinned view that resolves each old-path winner.</param>
-    /// <param name="outDir">Native output-mod root.</param>
-    /// <param name="failures">Collector receiving found-but-unreadable or unwritable paths.</param>
-    /// <returns>Committed file count and distinct owners with at least one committed file.</returns>
-    /// <remarks>
-    /// Phase one writes sibling temporary files only. Phase two atomically commits them after all reads finish.
-    /// This prevents an in-place new path from overwriting a different record's not-yet-read old path. Missing
-    /// paths are ignored because absence is normal for some records; all found-source failures are named.
-    /// </remarks>
+    /// <summary>The shared TWO-PHASE carry both facegen and voice ride: every read stages to a '.houseCARL-tmp'
+    /// sibling, and only once EVERY read is done are the temps committed — the in-place aliasing contract in
+    /// docs/architecture/assets.md. A resolve miss is skipped; a FOUND-but-unwritable file is a named failure.</summary>
     static (int Files, HashSet<FormKey> Owners) CarryItems(
         IReadOnlyList<CarryItem> items, AssetResolver.AssetView assets, string outDir, List<string> failures)
     {
         var pending = new List<(string Staged, string Final, FormKey Owner)>();
 
-        // Phase one reads every old asset and writes only destination-side temporary files.
+        // ---- phase 1: read every old asset + stage it to a temp (writes ONLY '.houseCARL-tmp', never an old read path) ----
         foreach (var it in items)
         {
             var res = assets.ResolveForPlacement(it.OldPath);
-            if (res.Sources.Count == 0) continue;
+            if (res.Sources.Count == 0) continue;                          // not on disk — the caller decides if that's normal
 
-            var (bytes, err) = ReadWinner(res.Sources[0]);
+            var (bytes, err) = ReadWinner(res.Sources[0]);                 // the copy that currently displays/plays in-game
             if (err is not null) { failures.Add($"{it.Label}: {err}"); continue; }
 
             var final = BethesdaPath.Under(outDir, it.NewPath);
-            var staged = final + ".houseCARL-tmp";
+            var staged = final + ".houseCARL-tmp";                         // sibling temp — distinct from every old read path
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(final)!);
-                try { if (File.Exists(staged)) File.Delete(staged); }
-                catch { /* a stuck temp surfaces on the write below */ }
+                try { if (File.Exists(staged)) File.Delete(staged); } catch { /* a stuck temp surfaces on the write below */ }
                 File.WriteAllBytes(staged, bytes!);
-                // Atomic rename cannot truncate; verify the temporary bytes before committing them.
                 long size; try { size = new FileInfo(staged).Length; } catch { size = -1; }
                 if (size != bytes!.Length)
                 {
@@ -326,7 +288,7 @@ public static class AssetRenameService
             }
         }
 
-        // Phase two starts only after every old path has been read.
+        // ---- phase 2: commit every staged temp (all reads done → overwriting an old file at a now-reused name is safe) ----
         int files = 0;
         var owners = new HashSet<FormKey>();
         foreach (var (staged, final, owner) in pending)
@@ -341,18 +303,10 @@ public static class AssetRenameService
         return (files, owners);
     }
 
-    /// <summary>
-    /// Matches the terminal <c>_8hex_response.extension</c> portion of an INFO-keyed voice filename.
-    /// </summary>
-    /// <remarks>
-    /// Group one is the eight-digit FormID. End anchoring prevents underscores or hexadecimal text in preceding
-    /// EditorID segments from being mistaken for the identifier.
-    /// </remarks>
+    /// <summary>Matches a voice file's '_&lt;8hex&gt;_&lt;response&gt;.&lt;ext&gt;' tail, anchored to the end so an EditorID segment cannot confuse it. Group 1 is the FormID.</summary>
     static readonly System.Text.RegularExpressions.Regex VoiceIdRx =
         new(@"_([0-9A-Fa-f]{8})_\d+\.[A-Za-z0-9]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
 
-    /// <summary>Reads the exact bytes of one already-resolved winning provider.</summary>
-    /// <param name="s">Loose-file or BSA-entry descriptor.</param>
-    /// <returns>Bytes on success, otherwise a named error.</returns>
+    /// <summary>Read the bytes of a resolved WINNING provider — the one shared loose-vs-BSA read.</summary>
     static (byte[]? bytes, string? error) ReadWinner(PlacementSource s) => AssetResolver.ReadPlacementSource(s);
 }

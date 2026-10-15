@@ -19,10 +19,10 @@ namespace HousecarlGenerator;
 /// <c>IFormLinkOrIndex&lt;T&gt;</c> condition target in BOTH modes (a real FormID vs a numeric
 /// alias/package index), and what decides which mode serializes?</b> so the wave-4 build doesn't fly blind.
 ///
-/// THE GAP (verbatim from <c>WriteEngine.TryFormLink</c>'s own note, WriteEngine.cs:1113):
+/// THE GAP (verbatim from <see cref="WriteEngine.TryFormLink"/>'s own note, WriteEngine.cs:1113):
 /// "IFormLinkOrIndex&lt;T&gt; (condition-data targets) is deliberately NOT recognised here — its concrete
 /// ctor needs a discriminator flag whose byte-semantics we won't ship unverified (no condition oracle yet)."
-/// READING conditions already works (the wave-0 differ snapshots them); coerce-audit loud-defers the 156
+/// READING conditions already works (the wave-0 differ snapshots them); CoerceAuditTests loud-defers the 156
 /// FormLinkOrIndex sites. The missing piece is purely value-CONSTRUCTION of the FormLinkOrIndex leaf.
 ///
 /// STATIC RECON ALREADY ESTABLISHED (this session, two read agents + the engine source):
@@ -31,7 +31,7 @@ namespace HousecarlGenerator;
 ///     SwapSubjectAndTarget). 424 arms; 156 FormLinkOrIndex sites across 33 distinct T; 44 separate
 ///     `System.Object` VATS params (a DIFFERENT deferral → the MCP typed-value wire format, not this).
 ///   - `IFormLinkOrIndex&lt;T&gt;` is OPAQUE in the corpus (a plain formlink leaf, no exposed members).
-///     Its concrete member/ctor surface is the unknown this probe reads off the LIVE Mutagen 0.53.1 type.
+///     Its concrete member/ctor surface is the unknown this probe reads off the LIVE Mutagen type at the referenced version.
 ///
 /// HYPOTHESIS UNDER TEST (named so it can be falsified, NOT assumed): the FormLinkOrIndex object carries
 /// its own form-vs-index state (a Link half + an Index half + a discriminator), settable via a ctor or a
@@ -46,13 +46,20 @@ namespace HousecarlGenerator;
 ///
 /// Run: <c>dotnet run --project src/housecarl-generator condition-probe [sourcePlugin]</c>
 /// </summary>
-internal static class ConditionProbe
+public static class ConditionProbe
 {
+    /// <summary>The Mutagen version actually loaded, read off the assembly rather than written down. A probe
+    /// banner that names a version by hand goes stale on the next bump and nothing catches it; this cannot.</summary>
+    static string MutagenVersion =>
+        typeof(Mutagen.Bethesda.Skyrim.ISkyrimModGetter).Assembly.GetName().Version?.ToString() ?? "unknown";
+
+    const string DefaultSource =
+        @"C:\Program Files (x86)\Steam\steamapps\common\Skyrim Special Edition\Data\Skyrim.esm";
     static readonly ModKey PatchKey = new("hc_cond_probe", ModType.Plugin);
 
     public static int RunConditionProbe(string[] args)
     {
-        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : ProbeInputs.DataFile("Skyrim.esm");
+        var src = args.Length > 0 && !args[0].StartsWith("--") ? args[0] : DefaultSource;
         var asm = typeof(IArmorGetter).Assembly;
 
         Console.WriteLine("################  WAVE 4 SCOUT — condition FormLinkOrIndex (form-vs-index) resolution  ################");
@@ -77,7 +84,7 @@ internal static class ConditionProbe
     // =====================================================================
     static void PhaseA(Assembly asm, List<Assembly> mutagen)
     {
-        Console.WriteLine("===== PHASE A : Mutagen FormLinkOrIndex / Condition API surface (pinned 0.53.1) =====");
+        Console.WriteLine($"===== PHASE A : Mutagen FormLinkOrIndex / Condition API surface (pinned {MutagenVersion}) =====");
         Console.WriteLine();
 
         Console.WriteLine("-- loaded Mutagen assemblies --");
@@ -148,7 +155,7 @@ internal static class ConditionProbe
                     targets[tn] = targets.GetValueOrDefault(tn) + 1;
                 }
         Console.WriteLine($"   concrete ConditionData arms: {arms.Count} | FormLinkOrIndex sites: {sites} | distinct T: {targets.Count} | owner arms: {owners.Count}");
-        Console.WriteLine($"   (cf. coerce-audit: 156 sites / 33 distinct T) {(sites == 156 && targets.Count == 33 ? "== MATCH ==" : "!! DRIFT — investigate")}");
+        Console.WriteLine($"   (cf. CoerceAuditTests: 156 sites / 33 distinct T) {(sites == 156 && targets.Count == 33 ? "== MATCH ==" : "!! DRIFT — investigate")}");
         foreach (var (t, n) in targets.OrderByDescending(kv => kv.Value).Take(8)) Console.WriteLine($"        {n,3}x  {t}");
         Console.WriteLine();
     }

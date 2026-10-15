@@ -2,12 +2,23 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "housecarl",
   "displayName": "houseCARL-Amethyst",
-  "version": "1.9.0",
+  "version": "2.0.4",
   "description": "Native Linux data-layer access to an Amethyst-managed Skyrim SE load order, with reviewable patch authoring and guarded in-place edits.",
-  "author": { "name": "ni1by2", "upstream": "Avick3110" },
+  "author": {
+    "name": "ni1by2"
+  },
   "homepage": "https://github.com/ni1by2/houseCARL-Amethyst",
   "repository": "https://github.com/ni1by2/houseCARL-Amethyst",
   "license": "GPL-3.0-only",
-  "keywords": ["skyrim", "modding", "amethyst", "linux", "mutagen", "xedit", "papyrus", "animation"],
+  "keywords": [
+    "skyrim",
+    "modding",
+    "amethyst",
+    "linux",
+    "mutagen",
+    "xedit",
+    "papyrus",
+    "animation"
+  ],
   "mcpServers": "./.mcp.json"
 }

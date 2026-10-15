@@ -1,3 +1,5 @@
+> Historical record: this describes the earlier filemap-based build or its migration plan. For current setup and limitations, start with [README](../README.md) and [Linux installation](linux-install.md).
+
 # houseCARL-Amethyst — Codex project handoff
 
 **Prepared:** 2026-10-02. **Purpose:** move work into a dedicated Codex project without losing the fork's design, current evidence, or safety boundaries. This is a handoff and a proposed update sequence, **not** authorization to port code or deploy a game profile.

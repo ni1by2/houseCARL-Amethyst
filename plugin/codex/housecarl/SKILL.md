@@ -1,82 +1,96 @@
 ---
 name: housecarl
-description: Work with Skyrim Special Edition load-order records and assets through houseCARL-Amethyst — connect or refresh an Amethyst profile, inspect active or inactive plugins and conflict trees, read records, query across plugins, author reviewable patch ESPs, create or remove records, edit leveled lists and composed structs, diff and resolve, edit NIF meshes and facegen, author dialogue, audit the SkyPatcher and SKSE runtime layers, compact or merge plugins, drive Papyrus compile/decompile and BSA archives, and look mods up on Nexus. Also routes to the bundled Skyrim helper skills. Use whenever the user mentions houseCARL, Amethyst, plugins, load order, conflicts, ESP patches, record types, facegen, dialogue, SKSE, Papyrus, BSA archives, Nexus, or a no-ESP runtime distribution.
+description: >-
+  Use whenever a task touches an Amethyst modlist, load order, plugins,
+  conflicts, ESP patches or overrides, a record type (ARMO, WEAP, NPC_, LVLI,
+  MGEF), leveled lists, dark faces or facegen, dialogue, NIF meshes, SkyPatcher,
+  SPID or KID lines, SKSE plugins, Papyrus, or BSA archives. Routes Skyrim
+  Special Edition data-layer work through the houseCARL MCP server — a saved Amethyst
+  snapshot with explicit freshness warnings, written into reviewable staging patch
+  plugins — and names the specialist skill that owns each grammar. Not for
+  another game, for installing Amethyst, or for gameplay advice with no data-layer
+  step.
+compatibility: Requires the houseCARL MCP server and an explicitly selected Amethyst saved-snapshot connection.
 ---
 
 # houseCARL
 
-Use this skill for data-layer Skyrim Special Edition modding through houseCARL-Amethyst. It reads the active native Amethyst profile and authoritative filemap, resolves true winners, and writes reviewable patches into Amethyst staging. Original source mods remain untouched unless the user explicitly chooses the guarded in-place lane.
+Read the selected Amethyst saved snapshot through the houseCARL MCP server, check the record schema, then write a staging patch for review and activation through Amethyst. Every dependent result carries saved-generation and freshness information; a successful write does not prove what the game loads. Use the routing table to choose the grammar skill and follow the read order before writing.
+Each tool description defines its parameters.
 
-## Core workflow (read before you write)
+The user's instructions take precedence over guidelines provided in a skill.
 
-1. Confirm context when it matters:
-   - `housecarl_amethyst_status` for the connected profile, staging roots, deployment state, and pending redeployments.
-   - `housecarl_refresh` to re-read Amethyst state immediately; normal tools also refresh lazily.
-   - `housecarl_load_order_status` for profile/plugin status, or to check whether a mod or plugin is active.
-   - `housecarl_set_amethyst_connection` when the user gives a schema-v1 Amethyst connection manifest.
-2. Read before any record write:
-   - `mutagen-reference` to verify field names, writability, enum values, and composed-struct shapes.
-   - `housecarl_read_record` or `housecarl_batch_record_detail` to inspect the current winner. Add `conflict_tree=true` for contested records or when winner provenance matters.
-   - `housecarl_cross_plugin_query` to locate records or references across the load order (page big results with `offset=`).
-3. Pick the narrowest write tool:
-   - `housecarl_set_field` for a single scalar or simple-collection edit.
-   - `housecarl_bulk_apply` for several edits in one patch, dict merges, leveled-list entries, effects, or other composed structs.
-   - `housecarl_create_record` (or `housecarl_bulk_create` for many at once) for a new top-level record — it needs an EditorID.
-   - `housecarl_remove_record` only to drop a record or override from a houseCARL-owned patch — never from a source mod.
-4. Accumulate related edits into one patch with `into=<patch filename>` after the first write returns a patch name.
-5. Prefer runtime, no-ESP INI systems when they fit the user's intent — `skypatcher-authoring`, `spid-authoring`, `kid-authoring` (see the helper skills below).
+## Which skill owns the job
 
-## The full tool surface
+| The user is asking about | Load | When |
+|---|---|---|
+| What fields a record type has, or a legal enum value | `housecarl:mutagen-reference` | before the write |
+| A no-ESP edit to a record's own fields, or to one NPC | `housecarl:skypatcher-authoring` | before the INI line |
+| Spells, perks, items, outfits or factions onto NPCs by group | `housecarl:spid-authoring` | before the `_DISTR.ini` line |
+| Keywords onto item records | `housecarl:kid-authoring` | before the `_KID.ini` line |
+| Gating animations by weapon, keyword, perk or race | `housecarl:open-animation-replacer` | before the condition |
+| A Papyrus or SKSE function signature, or a `.psc` edit | `housecarl:papyrus-reference` | before the script edit |
+| Writing or building a native SKSE plugin DLL in C++ | `housecarl:skse-plugin-authoring` | before the first C++ |
 
-Beyond the core workflow, reach for the right group. Depth for the specialist areas lives in the helper skills (next section) — load the skill before composing in that area.
+A dark, grey or black NPC face is not a skill: `housecarl_check findings=["facegen"]` reports it one row per
+NPC, and [docs/facegen.md](https://github.com/Avick3110/houseCARL/blob/main/docs/facegen.md) carries the causes behind each class.
+Dialogue is not a skill either: `housecarl_create` reports the bookkeeping it fills, and
+[docs/dialogue.md](https://github.com/Avick3110/houseCARL/blob/main/docs/dialogue.md) carries the greeting-priority
+and PNAM order rules a new or re-listed line has to respect. For a line that never plays, take those two in the
+order the game does: a generic greeting picks its topic **across quests by quest priority**, so check the quest's
+`Priority` before anything inside the topic; then, for a topic the game does reach, read the merged order —
+`housecarl_records` with `project={"form":"info_order"}` is the sequence the game walks, and it names which line
+moved and which plugin moved it.
 
-**Read / query / resolve**
-- `housecarl_read_record`, `housecarl_batch_record_detail` — read one or many records at the true winner (`conflict_tree=true` for provenance).
-- `housecarl_read_plugin_file` — read a plugin directly, even one that is disabled or not active.
-- `housecarl_cross_plugin_query` — query and filter records or references across the whole order; page with `offset=`, count with `group_by=`.
-- `housecarl_resolve` — resolve a list of FormIDs to identity; `housecarl_diff_record` — diff two plugins' versions of a record.
-- `housecarl_effect_chain` — trace a magic effect to every spell / enchantment / potion / scroll / ingredient that carries it.
-- `housecarl_load_order_status` — enabled/disabled mods & plugins; `housecarl_check_errors` — dangling refs, missing masters, broken links.
+MCP tools are written bare on both hosts (`housecarl_records`); a sibling is written `housecarl:<skill>`, the
+Claude Code form — on Codex it is the bare folder name (`mutagen-reference`) installed beside this one.
 
-**Runtime layers (what xEdit can't see)**
-- `housecarl_skypatcher_read` — a record's true state after the SkyPatcher INI layer replays; `housecarl_skypatcher_layer` — the INIs, apply order, conflicts.
-- `housecarl_skse_inventory` — SKSE-plugin DLLs, configs, provider/metadata; `housecarl_skse_config_audit` — config references vs the load order; `housecarl_native_pairing_audit` — native Papyrus declarations vs the DLLs implementing them.
+## Read before you write
 
-**Write / author**
-- `housecarl_set_field`, `housecarl_bulk_apply`, `housecarl_create_record`, `housecarl_bulk_create`, `housecarl_create_plugin` (header-only trigger plugin), `housecarl_remove_record`, `housecarl_forward_record` (copy-as-override, or revert to another plugin's version), `housecarl_validate_scripts` (unbound script properties).
+1. **Confirm context when it matters.** `housecarl_load_order_status` describes the saved profile;
+   use `housecarl_set_amethyst_connection` with the selected manifest and `filegraph_mode="saved-snapshot"` when changing connections. Preserve freshness warnings in your report.
+2. **Read the winner and the schema.** `housecarl:mutagen-reference` for the field path and its legal
+   values — no entry for a type means say so, never guess; `housecarl_records` for the record
+   as the order resolves it, `project={"form":"tree"}` for every provider when contested.
+3. **Write with one verb.** `housecarl_apply` edits fields (`ops=`), `housecarl_create` mints records
+   (`records=`), `housecarl_remove` drops them (`formids=`), `housecarl_forward` carries another plugin's
+   record as an override. Every list is set-valued — one op is a set of one; no single/bulk pair.
+4. **Read the written record back**, and say what happened if it did not take.
 
-**Dialogue** — `housecarl_validate_dialogue`, `housecarl_write_seq` (the start-game-enabled quest `.seq`). Depth: `dialogue-authoring`.
+```
+housecarl_apply(ops=[{"formid": "012EB7:Skyrim.esm", "field_path": "BasicStats.Damage", "value": "12"}], patch="SwordFix", readback=true)
+```
+```
+wrote SwordFix.esp (new patch; 1284 bytes)
+mod folder: SwordFix — review the new staging patch, then refresh, enable and deploy it through Amethyst
+full read-back — written file contents; successful staging does not establish what the game currently loads:
+  Weapon 012EB7:Skyrim.esm  editorid=IronSword
+    BasicStats.Damage = 12
+    ...
+```
 
-**Assets / NIF / facegen** — `housecarl_asset_status` (which staged file/BSA wins a Data-relative path), `housecarl_place_asset` / `housecarl_bulk_place_asset` (stage a chosen winning override), `housecarl_nif_inspect` / `housecarl_nif_set` (read/write mesh data values). Depth: `facegen-diagnostics`.
+Report the patch name and mod folder back — the name is auto-suffixed when taken. A refused call wrote
+nothing; a failed in-place write says so in its message.
 
-**Plugin operations** — `housecarl_compact_plugin` (ESL-renumber, carries FormID-keyed facegen/voice along), `housecarl_merge_plugins`, `housecarl_copy_npc_appearance` (standalone appearance, no donor master).
+## Lanes and FormIDs
 
-**Papyrus / SKSE code** — `housecarl_compile_script` (`.psc` → `.pex`), `housecarl_decompile_script` (`.pex` → `.psc`). Depth: `papyrus-reference`, `papyrus-optimization`, `skse-plugin-authoring`.
+A FormID is `XXXXXX:Plugin.esp` — six hex digits, then the defining master's filename. The runtime form a log
+or the console prints is read-only: `housecarl_records` takes it, every write refuses it and names the
+`XXXXXX:Plugin.esp` form. SkyPatcher, SPID and KID write their own syntax.
 
-**BSA archives** — `housecarl_bsa_list`, `housecarl_bsa_extract`, `housecarl_bsa_repack`.
+`housecarl_apply`, `housecarl_create` and `housecarl_forward` take three lanes: `patch=` a new plugin, `into=`
+an existing houseCARL patch, `in_place=` the file it names. `housecarl_remove` edits only what exists: `into=`
+or `in_place=`, no `patch=`. In place is consent-gated per plugin by `acknowledge=`. Existing-destination writes also require the applicable Amethyst redeployment and live-visibility confirmations; they may be immediately visible to the game. New output requires Amethyst activation and deployment.
 
-**Nexus (keyless, no browser)** — `housecarl_nexus_search`, `housecarl_nexus_mod`, `housecarl_nexus_check_updates`, `housecarl_nexus_identify`, `housecarl_nexus_graphql`.
+## Where this does not apply
 
-**Setup** — `housecarl_set_amethyst_connection`, `housecarl_amethyst_status`, `housecarl_refresh`, and `housecarl_set_tool_path` for deferred external tools or log folders.
+Another game; installing or configuring Amethyst; gameplay advice with no record, file or INI. Two reaches the
+surface lacks today, both filed: `housecarl_check` with `findings=["dialogue"]` resolves against the active
+order, so a plugin not yet enabled cannot be dialogue-checked (#615); and a hand-composed raw mods-folder path
+is not refused in one sentence by `housecarl_place` or `housecarl_nif_inspect` (#617) — pass the mod folder a
+read-back named.
 
-## Bundled helper skills
+## The sidecar
 
-Load the specialist skill before composing in its domain:
-
-- **Reference** — `mutagen-reference` (record schemas), `papyrus-reference` (Papyrus / SKSE function signatures), `biped-slot-reference` (armor by biped slot).
-- **Runtime distribution grammars** — `skypatcher-authoring` (record edits), `spid-authoring` (spells / perks / items / factions / outfits → NPCs), `kid-authoring` (keywords → items).
-- **Content authoring / investigation** — `dialogue-authoring`, `facegen-diagnostics` (the dark-face NPC bug), `oar-authoring` (Open Animation Replacer), `skse-plugin-authoring` (C++ SKSE plugin DLLs).
-- **Performance & guardrail** — `papyrus-optimization` (script cost review), `tool-output-awareness` (keep generated tool output out of authored patches).
-- **Bulk planning** — `bulk-record-jobs` (catalogues, audits, link graphs, conflict surveys, fan-out extraction — many records into one structured deliverable).
-
-## FormID notes
-
-houseCARL tools use `XXXXXX:Plugin.esp` FormIDs — six hex digits, then the filename of the master that defines the record. SkyPatcher, SPID, and KID each use their own FormID syntax; consult their skills before writing INI lines.
-
-## Safety notes
-
-- houseCARL patches are reviewable output mods. Tell the user which patch was created or extended.
-- A staged write is not game-visible until Amethyst refreshes, enables the generated mod when needed, rebuilds the filemap, and deploys.
-- Don't invent schemas or field paths. If `mutagen-reference` has no entry for a type, say so directly rather than guessing.
-- Don't reach for record edits when the user explicitly wants a no-ESP / runtime distribution file — use SkyPatcher, SPID, or KID instead.
-- Never edit a source mod in place unless the user has explicitly opted in, completed the consent handshake, and confirmed the required Amethyst redeployment.
+Codex reads `agents/openai.yaml` beside this file for the display name and invocation policy; nothing here
+depends on it.

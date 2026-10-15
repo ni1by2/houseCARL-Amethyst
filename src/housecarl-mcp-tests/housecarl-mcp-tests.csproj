@@ -1,0 +1,32 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net9.0</TargetFramework>
+    <Nullable>enable</Nullable>
+    <LangVersion>latest</LangVersion>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <RootNamespace>HousecarlMcpTests</RootNamespace>
+    <AssemblyName>housecarl-mcp-tests</AssemblyName>
+    <IsPackable>false</IsPackable>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="18.10.1" />
+    <!-- Coverage for the in-process part of this suite only; it cannot see the server process the
+         stdio tests spawn. Read coverage.runsettings before trusting a number from it. Never a gate. -->
+    <PackageReference Include="coverlet.collector" Version="10.1.0" PrivateAssets="all" />
+    <PackageReference Include="xunit" Version="2.9.3" />
+    <PackageReference Include="xunit.runner.visualstudio" Version="4.0.0" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\housecarl-core\housecarl-core.csproj" />
+    <ProjectReference Include="..\housecarl-mcp\housecarl-mcp.csproj" />
+    <ProjectReference Include="..\housecarl-generator\housecarl-generator.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <Using Include="HousecarlCore" />
+  </ItemGroup>
+
+</Project>

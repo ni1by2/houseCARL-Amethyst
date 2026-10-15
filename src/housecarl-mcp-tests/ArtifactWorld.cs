@@ -1,0 +1,69 @@
+using System.Text.Json;
+using HousecarlMcp;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+/// <summary>The artifact family's fixture: a <see cref="RecordsWorld"/>.</summary>
+public sealed class ArtifactFixture : IDisposable
+{
+    public RecordsWorld W { get; } = new();
+
+    public void Dispose() => W.Dispose();
+}
+
+/// <summary>Shared shorthand for the artifact tests: the world, the artifact readers, the transport helpers.</summary>
+public abstract class ArtifactTestBase
+{
+    protected readonly RecordsWorld W;
+
+    protected ArtifactTestBase(ArtifactFixture f) => W = f.W;
+
+    protected LoadOrderService Svc => W.Svc;
+
+    protected static string Fid(Mutagen.Bethesda.Plugins.FormKey fk) => RecordsWorld.Fid(fk);
+
+    /// <summary>The three weapons the world's master defines, as FormID tokens (index 2 is deleted by the
+    /// active override — so a batch over this set carries one error row, which is deliberate).</summary>
+    protected string[] Ids => W.Weapons.Select(Fid).ToArray();
+
+    /// <summary>A caller-named artifact path under the world's scratch tree.</summary>
+    protected string Art(string name) => W.Scratch("artifacts", name);
+
+    protected static JsonElement Je(string json) => JsonDocument.Parse(json).RootElement.Clone();
+
+    protected static RecordsTools.RecordsProject Form(string form) => new() { form = form };
+
+    protected static readonly RecordsTools.RecordsProject SummaryForm = new() { form = "summary" };
+    protected static readonly RecordsTools.RecordsProject Everything = new() { form = "everything" };
+
+    /// <summary>A refusal: the text lane's own discriminant plus what the caller claims it names.</summary>
+    protected static void Refused(string response, params string[] mustName)
+    {
+        Assert.StartsWith("error:", response);
+        foreach (var s in mustName) Assert.Contains(s, response);
+    }
+
+    protected static ResultArtifact.Manifest ManifestOf(string path)
+    {
+        var (m, _, err) = ResultArtifact.ReadIdentity(path, File.ReadAllText(path));
+        Assert.Null(err);
+        return m!;
+    }
+
+    protected static List<string> TokensOf(string path)
+    {
+        var (_, tokens, err) = ResultArtifact.ReadIdentity(path, File.ReadAllText(path));
+        Assert.Null(err);
+        return tokens!;
+    }
+
+    /// <summary>The wire spellings of <c>format=</c>, derived from the product's own transport enum — a
+    /// hand-typed list would be short by exactly whatever a later transport adds.</summary>
+    public static TheoryData<string> Transports()
+    {
+        var d = new TheoryData<string>();
+        foreach (var n in Enum.GetNames<Wire.QueryFormat>()) d.Add(n.ToLowerInvariant());
+        return d;
+    }
+}

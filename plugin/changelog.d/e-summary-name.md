@@ -1,0 +1,1 @@
+- **`housecarl_records` summary rows now carry each record's `Name`, the pole's copy under `source=`, and `form='identity'` is a spelling of `summary`.** Dense summary gains a `name` column after `editorid` (later columns move one place), and summary artifacts list `name` in `row_schema`.

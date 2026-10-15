@@ -5,56 +5,23 @@ using ModelContextProtocol.Server;
 
 namespace HousecarlMcp;
 
-/// <summary>
-/// The tool-argument binding shim (HCBR-2026-06-11-01) — a call-tool filter that runs BEFORE the SDK binds a
-/// call's JSON arguments to the tool method's parameters, closing the one layer where houseCARL's named-error
-/// (Q3) discipline could not reach: a malformed argument SHAPE used to throw inside SDK binding, which the SDK
-/// genericizes to "An error occurred invoking '&lt;tool&gt;'." — an opaque dead end the live audit agent could not
-/// self-correct from (it abandoned the documented query path; see the bug report's transcripts).
-///
-/// Its moves, all schema-driven off the tool's own published InputSchema (so every current and future tool
-/// parameter is covered by construction — no per-tool wiring):
-/// <list type="number">
-/// <item><b>Resolve obvious aliases</b> — a parameter named by an obvious synonym of a declared one
-/// (<c>form_id</c> for <c>formid</c>; <c>plugin</c>/<c>plugin_name</c> for a tool's <c>plugins</c>; any
-/// underscore/case variant) is renamed to the canonical parameter when the mapping is unambiguous — exactly one
-/// declared, not-already-supplied synonym target — so a first-guess miss BINDS instead of costing a round-trip
-/// (#221). A synonym that resolves to nothing (or to more than one target) is left for the unknown-parameter
-/// path. The published schema still advertises only the canonical name, and a declared parameter is never
-/// treated as an alias (so a tool's real <c>plugin=</c> is untouched).</item>
-/// <item><b>Coerce obvious intent</b> — a bare string where an array is declared becomes a one-element array
-/// (the live failing shape: <c>plugins="A.esp"</c>); quoted numbers/booleans become numbers/booleans; a bare
-/// number where a string is declared becomes its text. Anything else is left for binding to judge.</item>
-/// <item><b>Refuse missing REQUIRED parameters by name</b> — the audit's <c>{}</c> call gets
-/// "required parameter missing: formids", not the generic text.</item>
-/// <item><b>Name a mistyped parameter</b> — an argument whose JSON kind can't bind to its declared schema type
-/// (e.g. an object where a number is declared) is refused BEFORE binding, naming the offender, its expected
-/// type, and the kind received (#222) — so the caller never has to bisect a byte-offset binding error across
-/// the whole argument list.</item>
-/// <item><b>Name what still fails</b> — if binding still throws (an uncoercible shape), the exception passes
-/// through this filter on its way to the SDK's catch (which sits ABOVE the filter pipeline and would genericize
-/// it — measured: AIFunctionMcpServerTool.InvokeAsync doesn't catch; McpServerImpl's outermost wrapper does).
-/// Catching it HERE instead returns a named error carrying the real exception text plus each received
-/// argument's JSON kind, so the caller can fix and retry. (With every tool body wrapped in <see cref="Guard"/>,
-/// what reaches this catch is the pre-body machinery — argument binding — which is what makes the
-/// "could not be bound" wording honest.)</item>
-/// </list>
-/// </summary>
+/// <summary>A call-tool filter that renames, coerces and refuses a call's arguments off the tool's published schema
+/// before the SDK binds them; pass order and per-pass contracts in
+/// <c>docs/architecture/tool-call-argument-shim.md</c>.</summary>
 internal static class ToolCallShim
 {
     /// <summary>The filter. Registered on the server in Program.cs via WithRequestFilters → AddCallToolFilter.</summary>
     public static McpRequestFilter<CallToolRequestParams, CallToolResult> LenientArguments => next => async (request, cancellationToken) =>
     {
-        // MatchedPrimitive is resolved by the SDK BEFORE filters run; unknown tool names pass through untouched
-        // (the SDK's own unknown-tool error is already specific).
+        // MatchedPrimitive is resolved before filters run, so this only ever sees a name the server does not register.
         var p = request.Params;
-        var received = DescribeArgs(p?.Arguments);   // what the caller ACTUALLY sent — captured before coercion rewrites
-                                                     // the dictionary, so the failure message never shows a coerced shape
-                                                     // as if the caller had sent it (review #1 finding 2)
+        if (request.MatchedPrimitive is not McpServerTool && AliasTable.RetiredToolHint(p?.Name) is { } retiredRedirect)
+            return NamedError(retiredRedirect);
+        var received = DescribeArgs(p?.Arguments);   // captured before coercion rewrites the dictionary, so a
+                                                     // failure never reports a coerced shape as the caller's own
         try
         {
-            // The shim's own pre-processing runs inside the same safety net as the call (review #1 finding 4):
-            // a throw from coercion/required-check must also come back named, never the SDK generic.
+            // The passes run inside the same try as the call, so a throw from one also comes back named.
             if (p is not null && request.MatchedPrimitive is McpServerTool tool)
             {
                 var schema = tool.ProtocolTool.InputSchema;
@@ -62,15 +29,12 @@ internal static class ToolCallShim
                 CoerceObviousShapes(p, schema);
                 if (MissingRequired(p, schema) is { } refusal) return refusal;
                 if (UnknownParameters(p, schema) is { } unknownRefusal) return unknownRefusal;
+                if (InPlaceNamesAFile(p, schema) is { } laneRefusal) return laneRefusal;
                 if (TypeMismatches(p, schema) is { } typeRefusal) return typeRefusal;
             }
             return await next(request, cancellationToken);
         }
-        // A REAL request cancellation belongs to the SDK's special-casing — but ONLY a real one (the SDK's own
-        // test): an OperationCanceledException with a live request token (e.g. an internal HttpClient timeout)
-        // would be genericized above, so it gets named here instead (review #1 finding 1). McpException is the
-        // protocol surface (e.g. the unknown-tool path) whose handling must stay the SDK's. Everything else
-        // below this filter would otherwise surface as the opaque generic text (Q3's dead end) — name it.
+        // A real cancellation and McpException stay the SDK's; a cancel with a live token is named here.
         catch (Exception ex) when (ex is not McpException &&
                                    !(ex is OperationCanceledException && cancellationToken.IsCancellationRequested))
         {
@@ -84,30 +48,13 @@ internal static class ToolCallShim
         }
     };
 
-    /// <summary>Sets of interchangeable parameter names (normalized: lowercased, underscores stripped) — the
-    /// synonyms that differ by more than an underscore/case variant, so <see cref="Normalize"/> alone can't
-    /// bridge them: singular↔plural and the <c>plugin_name</c> spelling. Underscore/case variants
-    /// (<c>form_id</c>≡<c>formid</c>) need no entry here — <see cref="Normalize"/> equality catches those.</summary>
-    static readonly string[][] SynonymGroups =
-    {
-        new[] { "plugin", "plugins", "pluginname", "pluginnames" },
-        new[] { "formid", "formids" },
-    };
-
-    /// <summary>Rename an argument keyed by an obvious synonym of a declared parameter to that canonical parameter,
-    /// so a first-guess miss (<c>form_id</c> for <c>formid</c>, <c>plugin</c> for a tool's <c>plugins</c>) binds
-    /// instead of costing a round-trip (#221). Conservative by construction: only a key the schema does NOT declare
-    /// is considered, it is renamed ONLY when EXACTLY ONE declared, not-already-supplied parameter is its synonym
-    /// (zero or ambiguous → left for <see cref="UnknownParameters"/> to name), and a declared parameter is never
-    /// touched — so a tool's real <c>plugin=</c> stays its own, an explicit canonical value is never clobbered, and
-    /// a well-formed call is byte-identical. Runs BEFORE <see cref="CoerceObviousShapes"/> so the renamed value is
-    /// then shape-coerced (a bare-string <c>plugin</c> → <c>plugins</c> → a one-element array) as usual.</summary>
-    static void ResolveAliases(CallToolRequestParams p, JsonElement schema)
+    /// <summary>Rename an argument keyed by an underscore/case variant of a declared parameter to the canonical
+    /// spelling, on exactly one declared match; must run before <see cref="CoerceObviousShapes"/>.</summary>
+    internal static void ResolveAliases(CallToolRequestParams p, JsonElement schema)
     {
         if (p.Arguments is not { Count: > 0 } args) return;
         if (schema.ValueKind != JsonValueKind.Object) return;
-        // Respect an explicit opt-in to extra properties (mirrors UnknownParameters): if a tool accepts free-form
-        // args, an undeclared key may be intentional data — never rewrite it. None of houseCARL's tools do today.
+        // If a tool opts into free-form args, an undeclared key may be intentional data — never rewrite it.
         if (schema.TryGetProperty("additionalProperties", out var ap) && ap.ValueKind != JsonValueKind.False) return;
         if (!schema.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object) return;
 
@@ -118,14 +65,16 @@ internal static class ToolCallShim
             if (key.Length > 0 && key[0] == '_') continue;            // MCP/JSON-RPC metadata — never an alias
             if (props.TryGetProperty(key, out _)) continue;           // already a real parameter of this tool
 
+            bool Supplied(string declaredName) => args.ContainsKey(declaredName)              // caller already supplied the canonical — don't clobber
+                || (rewritten is not null && rewritten.ContainsKey(declaredName));            // an earlier rename already produced it
+
+            // Not kind-gated: the rename proceeds even for an unbindable value, and TypeMismatches names the fault.
+            var nkey = Normalize(key);
             string? target = null; bool ambiguous = false;
             foreach (var prop in props.EnumerateObject())
             {
-                var declaredName = prop.Name;
-                if (args.ContainsKey(declaredName)) continue;                                 // caller already supplied the canonical — don't clobber
-                if (rewritten is not null && rewritten.ContainsKey(declaredName)) continue;   // an earlier rename already produced it
-                if (!AreSynonyms(key, declaredName)) continue;
-                if (target is null) target = declaredName; else { ambiguous = true; break; }
+                if (Normalize(prop.Name) != nkey || Supplied(prop.Name)) continue;
+                if (target is null) target = prop.Name; else { ambiguous = true; break; }
             }
             if (ambiguous || target is null) continue;                // nothing unambiguous — leave for UnknownParameters
 
@@ -136,25 +85,11 @@ internal static class ToolCallShim
         if (rewritten is not null) p.Arguments = rewritten;
     }
 
-    /// <summary>Whether two parameter names denote the same concept: equal once normalized (an underscore/case
-    /// variant, <c>form_id</c>≡<c>formid</c>) or listed together in a <see cref="SynonymGroups"/> entry
-    /// (singular↔plural, <c>plugin_name</c>↔<c>plugins</c>).</summary>
-    static bool AreSynonyms(string a, string b)
-    {
-        var na = Normalize(a);
-        var nb = Normalize(b);
-        if (na == nb) return true;
-        foreach (var g in SynonymGroups)
-            if (Array.IndexOf(g, na) >= 0 && Array.IndexOf(g, nb) >= 0) return true;
-        return false;
-    }
-
     /// <summary>A parameter name reduced to its comparison form: lowercased with underscores removed.</summary>
-    static string Normalize(string s) => s.Replace("_", "").ToLowerInvariant();
+    internal static string Normalize(string s) => s.Replace("_", "").ToLowerInvariant();
 
-    /// <summary>Rewrite arguments whose JSON kind mismatches the declared schema type but whose intent is
-    /// unambiguous. Only ever REPLACES values for keys the schema declares — unknown keys and already-correct
-    /// shapes pass through untouched, so a well-formed call is byte-identical to today.</summary>
+    /// <summary>Rewrite arguments whose JSON kind mismatches the declared schema type but whose intent is unambiguous;
+    /// only keys the schema declares are ever replaced.</summary>
     static void CoerceObviousShapes(CallToolRequestParams p, JsonElement schema)
     {
         if (p.Arguments is not { Count: > 0 } args) return;
@@ -174,8 +109,9 @@ internal static class ToolCallShim
         if (rewritten is not null) p.Arguments = rewritten;
     }
 
-    /// <summary>One value against one property schema: the coerced element, or null to leave it alone.</summary>
-    static JsonElement? Coerce(JsonElement value, JsonElement propSchema)
+    /// <summary>One value against one property schema: the coerced element, or null to leave it alone. Internal so a
+    /// test can assert the coerced value directly — over the wire only "it bound" is observable.</summary>
+    internal static JsonElement? Coerce(JsonElement value, JsonElement propSchema)
     {
         var declared = DeclaredTypes(propSchema);
         if (declared.Count == 0) return null;
@@ -183,13 +119,10 @@ internal static class ToolCallShim
         if (value.ValueKind == JsonValueKind.String)
         {
             var s = value.GetString() ?? "";
-            if (declared.Contains("array"))
+            // A parameter declaring both string and array takes the string as it stands.
+            if (declared.Contains("array") && !declared.Contains("string"))
             {
-                // A string-ENCODED JSON array first — the verified live Claude Code shape (#36): the client
-                // serializes array arguments into a JSON STRING ("[\"a\",\"b\"]") even though the published
-                // schema correctly declares the array. Parse it as the array it spells; only an unambiguous
-                // parse is taken — anything else (including a bare string that merely starts with '[') falls
-                // through to the one-element wrap below, so no previously-working shape changes meaning.
+                // A string-encoded JSON array first; only an unambiguous parse is taken, else it falls to the wrap.
                 var t = s.TrimStart();
                 if (t.StartsWith('['))
                 {
@@ -202,7 +135,7 @@ internal static class ToolCallShim
                 return Parse(b ? "true" : "false");                             // "true" → true
             if (declared.Contains("integer") || declared.Contains("number"))
             {
-                // "100" → 100. Parse validates it's a standalone JSON number; anything else stays for binding to name.
+                // "100" → 100, only when Parse says it is a standalone JSON number.
                 try { var el = Parse(s); if (el.ValueKind == JsonValueKind.Number) return el; }
                 catch (JsonException) { }
             }
@@ -215,8 +148,7 @@ internal static class ToolCallShim
         return null;
     }
 
-    /// <summary>The schema's declared type name(s) for a property — handles both <c>"type":"array"</c> and the
-    /// nullable-parameter form <c>"type":["array","null"]</c> the schema exporter emits.</summary>
+    /// <summary>The schema's declared type name(s) for a property, in both the string and array spellings.</summary>
     static HashSet<string> DeclaredTypes(JsonElement propSchema)
     {
         var set = new HashSet<string>(StringComparer.Ordinal);
@@ -230,10 +162,8 @@ internal static class ToolCallShim
         return set;
     }
 
-    /// <summary>Schema-required parameters absent from the call → a named refusal (Q3), or null to proceed.
-    /// An EXPLICIT JSON <c>null</c> for a required parameter counts as missing too (unless the schema itself declares
-    /// null legal): the SDK binds it and the tool body NullReferences into the generic "internal houseCARL failure"
-    /// misdirection (2026-06-12 hunt, proven over stdio on nexus_mod) — name the parameter instead.</summary>
+    /// <summary>Schema-required parameters absent from the call get a named refusal; null to proceed. An explicit JSON
+    /// null counts as missing unless the schema declares null legal, and a refusal also names any undeclared keys.</summary>
     static CallToolResult? MissingRequired(CallToolRequestParams p, JsonElement schema)
     {
         if (schema.ValueKind != JsonValueKind.Object ||
@@ -253,44 +183,28 @@ internal static class ToolCallShim
         }
         if (missing is null) return null;
 
+        // The undeclared keys of the same call, named here rather than left to a pass that will not run.
+        string strays = "";
+        if (Undeclared(p, schema) is { } u)
+            strays = $"{string.Join(", ", u.Unknown)} " +
+                     $"{(u.Unknown.Count == 1 ? "is not a parameter" : "are not parameters")} of {p.Name} " +
+                     $"(it accepts only: {string.Join(", ", u.Supported)}). ";
+
         string plural = missing.Count == 1 ? "" : "s";
         return NamedError(
             $"error: {p.Name}: required parameter{plural} missing: {string.Join(", ", missing)}. Supplied: " +
-            $"{(p.Arguments is { Count: > 0 } a ? string.Join(", ", a.Keys) : "(none)")}. Add the missing argument{plural} and retry.");
+            $"{(p.Arguments is { Count: > 0 } a ? string.Join(", ", a.Keys) : "(none)")}. {strays}" +
+            $"Add the missing argument{plural} and retry.");
     }
 
-    /// <summary>Schema-UNDECLARED arguments in the call → a named refusal listing the offenders and the tool's
-    /// supported parameters, or null to proceed. THE root-cause fix for HCBR-2026-07-12: an argument a tool does
-    /// not declare (<c>expand=</c>, <c>path=</c>, <c>field=</c>) is SILENTLY IGNORED by the SDK binder, so the
-    /// call runs with that intent dropped and no correction reaches the caller — the agent, getting a normal
-    /// (un-expanded) result, concluded the capability was missing and hand-rolled a workaround instead of
-    /// discovering the real knob (<c>depth=</c>). A silently-ignored argument is a silent tool-surface failure
-    /// (Q3); naming it — with the supported list — turns the dead end into a self-correction, exactly as
-    /// <see cref="MissingRequired"/> does for the absent-required case. Schema-driven off the tool's own
-    /// InputSchema, so every current and future parameter is covered by construction. Skipped when a tool's schema
-    /// opts into free-form args (<c>additionalProperties</c> not <c>false</c>); none of houseCARL's tools do today,
-    /// but the check does not assume it. Runs AFTER <see cref="CoerceObviousShapes"/> (which only ever rewrites
-    /// DECLARED keys) and <see cref="MissingRequired"/>, so a well-formed call is byte-identical to before.</summary>
-    static CallToolResult? UnknownParameters(CallToolRequestParams p, JsonElement schema)
+    /// <summary>Undeclared arguments get a named refusal listing the offenders and the supported parameters; null to
+    /// proceed. Skipped for a free-form schema, and must run after <see cref="CoerceObviousShapes"/>.</summary>
+    internal static CallToolResult? UnknownParameters(CallToolRequestParams p, JsonElement schema)
     {
-        if (p.Arguments is not { Count: > 0 } args) return null;
-        if (schema.ValueKind != JsonValueKind.Object) return null;
-        // Respect an explicit opt-in to extra properties: only reject when additionalProperties is absent or false.
-        if (schema.TryGetProperty("additionalProperties", out var ap) && ap.ValueKind != JsonValueKind.False) return null;
-        if (!schema.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object) return null;
-
-        List<string>? unknown = null;
-        foreach (var kv in args)
-        {
-            if (kv.Key.Length > 0 && kv.Key[0] == '_') continue;   // MCP/JSON-RPC metadata convention — never a real tool param
-            if (!props.TryGetProperty(kv.Key, out _)) (unknown ??= new()).Add(kv.Key);
-        }
-        if (unknown is null) return null;
-
-        var supported = props.EnumerateObject().Select(prop => prop.Name).ToList();
+        if (Undeclared(p, schema) is not { } u) return null;
+        var (unknown, supported) = u;
         string plural = unknown.Count == 1 ? "" : "s";
-        // Only nudge toward depth= on a tool that actually HAS it (the read tools) — a depth-less tool would
-        // point at a knob that doesn't exist. The supported list is printed either way, so the nudge is a bonus.
+        // Only nudge toward depth= on a tool that declares it; the supported list is printed either way.
         string knobHint = supported.Contains("depth")
             ? " (a wrong/guessed parameter often means the real knob is one of the above, e.g. depth= to expand a list/substruct)"
             : "";
@@ -300,20 +214,51 @@ internal static class ToolCallShim
             $"the call would otherwise run with that intent silently dropped — fix the name{knobHint} and retry.");
     }
 
-    /// <summary>Declared arguments whose JSON kind cannot bind to their declared schema type → a named refusal
-    /// listing each offender with its expected type(s) and the kind received, or null to proceed. THE fix for
-    /// #222: a wrong-TYPE argument (e.g. an object where a number is declared, or a string where a boolean is)
-    /// otherwise threw inside the SDK binder as a bare <c>JsonException … Path: $ | BytePositionInLine: 34</c> —
-    /// a byte offset with NO parameter name, which the catch below could only pass through with the full received
-    /// list, forcing the caller to bisect which argument was wrong. This catches the common kind-mismatch class
-    /// BEFORE binding and names it in the same style as <see cref="MissingRequired"/> / <see cref="UnknownParameters"/>.
-    /// Runs AFTER <see cref="CoerceObviousShapes"/> (so an obvious-intent shape — a bare string for an array, a
-    /// quoted number/bool — is fixed, never flagged) and judges ONLY keys the schema declares with a concrete
-    /// type: an untyped/polymorphic property (empty <see cref="DeclaredTypes"/>) is left for binding, an unknown
-    /// key is <see cref="UnknownParameters"/>' to report, and an explicit JSON null is left alone (optional-unset
-    /// for a non-required parameter; the required-null case is <see cref="MissingRequired"/>'s). So a well-formed
-    /// call is byte-identical to before, and anything this can't foresee (e.g. a non-integral number for an
-    /// integer parameter) still falls to the named catch.</summary>
+    /// <summary>The call's arguments the schema does not declare, with the tool's supported parameter names; null when
+    /// there are none or the tool opts into free-form args.</summary>
+    static (List<string> Unknown, List<string> Supported)? Undeclared(CallToolRequestParams p, JsonElement schema)
+    {
+        if (p.Arguments is not { Count: > 0 } args) return null;
+        if (schema.ValueKind != JsonValueKind.Object) return null;
+        if (schema.TryGetProperty("additionalProperties", out var ap) && ap.ValueKind != JsonValueKind.False) return null;
+        if (!schema.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object) return null;
+
+        List<string>? unknown = null;
+        foreach (var kv in args)
+        {
+            if (kv.Key.Length > 0 && kv.Key[0] == '_') continue;   // MCP/JSON-RPC metadata convention — never a real tool param
+            if (props.TryGetProperty(kv.Key, out _)) continue;
+            (unknown ??= new()).Add(kv.Key);
+        }
+        if (unknown is null) return null;
+        return (unknown, props.EnumerateObject().Select(prop => prop.Name).ToList());
+    }
+
+    /// <summary>An <c>in_place=</c> spelling a boolean, quoted or bare, gets a named refusal; null to proceed. The
+    /// parameter takes the filename being overwritten, so neither spelling is a file.</summary>
+    static CallToolResult? InPlaceNamesAFile(CallToolRequestParams p, JsonElement schema)
+    {
+        if (p.Arguments is not { Count: > 0 } args) return null;
+        if (!args.TryGetValue("in_place", out var val)) return null;
+        var spellsBool = val.ValueKind is JsonValueKind.True or JsonValueKind.False
+                      || (val.ValueKind == JsonValueKind.String && bool.TryParse(val.GetString(), out _));
+        if (!spellsBool) return null;                                                   // a real filename — not this pass's
+        if (schema.ValueKind != JsonValueKind.Object ||
+            !schema.TryGetProperty("properties", out var props) || props.ValueKind != JsonValueKind.Object) return null;
+        if (!props.TryGetProperty("in_place", out var inPlaceSchema)) return null;
+        var declared = DeclaredTypes(inPlaceSchema);
+        if (!declared.Contains("string") || declared.Contains("boolean")) return null;   // not the filename-valued shape
+
+        var spelled = val.ValueKind == JsonValueKind.String ? $"\"{val.GetString()}\"" : val.GetRawText();
+        return NamedError(
+            $"error: {p.Name}: in_place={spelled} names no file — in_place takes the FILENAME being " +
+            "overwritten (in_place=\"X.esp\"), and \"true\"/\"false\" are not files. Omit in_place entirely for the " +
+            "default new-patch lane. Fix the argument and retry.");
+    }
+
+    /// <summary>Declared arguments whose JSON kind cannot bind get a named refusal naming each offender, its expected
+    /// types and the kind received; null to proceed. Judges only keys declared with a concrete type, and must run
+    /// after <see cref="CoerceObviousShapes"/>.</summary>
     static CallToolResult? TypeMismatches(CallToolRequestParams p, JsonElement schema)
     {
         if (p.Arguments is not { Count: > 0 } args) return null;
@@ -340,9 +285,8 @@ internal static class ToolCallShim
             "is auto-wrapped; numbers take numbers; booleans take true/false) and retry.");
     }
 
-    /// <summary>Whether a JSON kind can bind to at least one of a property's declared schema types. A JSON number
-    /// satisfies both "number" and "integer" (an integral check is the binder's, not ours); every other kind maps
-    /// to its one schema type. Null never reaches here (filtered by the caller).</summary>
+    /// <summary>Whether a JSON kind can bind to at least one of a property's declared schema types; null never reaches
+    /// here, and a JSON number satisfies both "number" and "integer" — the integral check is the binder's, not ours.</summary>
     static bool KindSatisfies(JsonValueKind kind, HashSet<string> declared) => kind switch
     {
         JsonValueKind.String => declared.Contains("string"),
@@ -359,8 +303,7 @@ internal static class ToolCallShim
         Content = [new TextContentBlock { Text = text }],
     };
 
-    /// <summary>Each received argument's name + JSON kind ("plugins=string, limit=object") — exactly the view a
-    /// caller needs to spot which argument's shape disagrees with the schema.</summary>
+    /// <summary>Each received argument's name and JSON kind ("plugins=string, limit=object").</summary>
     static string DescribeArgs(IDictionary<string, JsonElement>? args)
         => args is not { Count: > 0 }
             ? "(no arguments)"
@@ -377,7 +320,7 @@ internal static class ToolCallShim
         _ => k.ToString().ToLowerInvariant(),
     };
 
-    /// <summary>A detached element from raw JSON text (no serializer reflection; valid past the document's lifetime).</summary>
+    /// <summary>A detached element from raw JSON text, valid past the document's lifetime.</summary>
     static JsonElement Parse(string json)
     {
         using var doc = JsonDocument.Parse(json);

@@ -75,8 +75,9 @@ internal static class RoundTripProbe
         Console.WriteLine($"   instance: {instanceDir}");
         Console.WriteLine();
 
-        var order = SyntheticManagerFixture.ReadConnectedOrder(instanceDir);
-        var orderedPaths = order.OrderedPaths.ToList();
+        var snapshot = AmethystSavedSnapshot.Capture(instanceDir);
+        Console.WriteLine($"WARNING: {AmethystSnapshotProvenance.Warning}");
+        var orderedPaths = snapshot.OrderedPluginPaths.ToList();
         // filename -> winning on-disk path (a plugin filename is unique in a load order; OrderedPaths is the
         // resolved winner per plugin). The master-resolution map for step 2's .WithLoadOrder.
         var byName = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);

@@ -1,60 +1,35 @@
 using System.Diagnostics;
+using System.Text;
 using System.Text.RegularExpressions;
 
 namespace HousecarlCore;
 
-/// <summary>Represents one location-bearing diagnostic parsed from PapyrusCompiler stderr.</summary>
-/// <param name="File">Source file path reported by the compiler.</param>
-/// <param name="Line">One-based source line.</param>
-/// <param name="Col">One-based source column.</param>
-/// <param name="Message">Compiler message.</param>
+/// <summary>One compiler diagnostic parsed off PapyrusCompiler's stderr; <see cref="ToString"/> renders it as "name(line,col): message" with the file's basename.</summary>
 public sealed record PapyrusDiagnostic(string File, int Line, int Col, string Message)
 {
-    /// <summary>Formats a compact diagnostic using only the source filename.</summary>
-    /// <returns><c>name(line,column): message</c>.</returns>
     public override string ToString() => $"{System.IO.Path.GetFileName(File)}({Line},{Col}): {Message}";
 }
 
-/// <summary>Reports process execution and output production for one Papyrus compile.</summary>
-/// <param name="Success">Whether this run created or updated the expected PEX.</param>
-/// <param name="ObjectName">Compiled Papyrus object name.</param>
-/// <param name="PexPath">Output PEX path after success.</param>
-/// <param name="Diagnostics">Parsed location-bearing stderr diagnostics.</param>
-/// <param name="Stdout">Captured standard output.</param>
-/// <param name="Stderr">Captured standard error.</param>
-/// <param name="ExitCode">Process exit code, or -1 when the process did not complete.</param>
-/// <param name="RunError">Start or timeout error; null when the compiler process ran.</param>
+/// <summary>The outcome of one compile; what <see cref="RunError"/> and <see cref="Success"/> each mean is in docs/architecture/papyrus.md.</summary>
 public sealed record CompileResult(
     bool Success, string ObjectName, string? PexPath, IReadOnlyList<PapyrusDiagnostic> Diagnostics,
     string Stdout, string Stderr, int ExitCode, string? RunError)
 {
-    /// <summary>Gets whether the compiler process started and completed within the timeout.</summary>
     public bool Ran => RunError is null;
 }
 
-/// <summary>Runs Bethesda's external Papyrus compiler with bounded process and stream handling.</summary>
-/// <remarks>
-/// This transitional runner expects a directly executable compiler path. Linux v1 does not claim native compiler
-/// support; structured Proton command execution is deferred. Success is output production, not exit code, because the
-/// Creation Kit compiler can return zero without compiling.
-/// </remarks>
+/// <summary>One isolated Champollion run and the exact PSC files it produced.</summary>
+public sealed record ChampollionResult(bool Success, IReadOnlyList<string> Sources, string Stdout, string Stderr,
+    int ExitCode, string? RunError, string? Version);
+
+/// <summary>Drives the Creation Kit's PapyrusCompiler.exe as a subprocess to compile a .psc to a .pex; the invocation
+/// and the success rule it models are in docs/architecture/papyrus.md.</summary>
 public static class PapyrusCompile
 {
-    /// <summary>Matches the compiler's file, line, column, and message stderr format.</summary>
-    static readonly Regex DiagLine = new(
-        @"^(?<file>.*?)\((?<line>\d+),(?<col>\d+)\):\s*(?<msg>.*)$",
-        RegexOptions.Compiled);
+    static readonly Regex DiagLine = new(@"^(?<file>.*?)\((?<line>\d+),(?<col>\d+)\):\s*(?<msg>.*)$", RegexOptions.Compiled);
+    static readonly Regex CapricaDiagLine = new(@"^(?<file>.*?)\s+\((?<line>\d+),\s*(?<col>\d+):\d+\):\s*(?<msg>.*)$", RegexOptions.Compiled);
 
-    // The "symbol/type could not be resolved" message fragments — the SIGNATURE of a MISSING IMPORT (a dependency's
-    // Source\Scripts folder not on the import path), as opposed to a syntax error. Grounded in the REAL CK compiler's
-    // wording captured against deliberately missing dependency sources:
-    //   "unknown type po3_sksefunctions"                     — a declared/return/param type whose source isn't found
-    //   "variable JValue is undefined"                       — a static call on a script namespace not on the path
-    //   "none is not a known user-defined type"              — the cascade when an unresolved expression types to none
-    //   "X is not a function or does not exist"              — an extended function whose source copy isn't found
-    //                                                          (captured during the import-order PEX gate)
-    // Contrast SYNTAX errors, which are NOT this class: "no viable alternative", "missing EOF", "mismatched input",
-    // "unknown user flag" — a code/grammar defect the import path can't fix.
+    // The compiler's own "symbol/type could not be resolved" wording, which a syntax error never uses.
     static readonly string[] UnresolvedSymbolFragments =
     {
         "unknown type ",
@@ -63,9 +38,8 @@ public static class PapyrusCompile
         "is not a function or does not exist",
     };
 
-    /// <summary>Tests whether a diagnostic indicates a missing import rather than a syntax error.</summary>
-    /// <param name="message">Compiler message.</param>
-    /// <returns>True when a known unresolved symbol or type fragment occurs.</returns>
+    /// <summary>True if a diagnostic is the missing-import class rather than a syntax error, case-insensitively; pinned
+    /// by <c>compile-ergonomics-guard</c>.</summary>
     public static bool IsUnresolvedSymbol(string? message)
     {
         if (string.IsNullOrEmpty(message)) return false;
@@ -74,9 +48,7 @@ public static class PapyrusCompile
         return false;
     }
 
-    /// <summary>Parses location-bearing diagnostics from compiler stderr.</summary>
-    /// <param name="stderr">Complete captured stderr.</param>
-    /// <returns>Matching diagnostics in stream order; unrelated lines are ignored.</returns>
+    /// <summary>Parse Creation Kit or Caprica diagnostics, ignoring non-diagnostic banner and progress lines.</summary>
     public static IReadOnlyList<PapyrusDiagnostic> ParseDiagnostics(string? stderr)
     {
         var list = new List<PapyrusDiagnostic>();
@@ -86,6 +58,7 @@ public static class PapyrusCompile
             var line = raw.TrimEnd('\r');
             if (line.Length == 0) continue;
             var m = DiagLine.Match(line);
+            if (!m.Success) m = CapricaDiagLine.Match(line);
             if (!m.Success) continue;
             list.Add(new PapyrusDiagnostic(
                 m.Groups["file"].Value.Trim(),
@@ -96,25 +69,32 @@ public static class PapyrusCompile
         return list;
     }
 
-    /// <summary>Compiles one Papyrus object while preserving any previous output.</summary>
-    /// <param name="compilerExe">Directly executable compiler path.</param>
-    /// <param name="objectName">Script object name without an extension.</param>
-    /// <param name="importDirs">Import directories passed as one semicolon-delimited compiler argument.</param>
-    /// <param name="outputDir">Native output directory.</param>
-    /// <param name="flagsFile">Compiler flags filename or path.</param>
-    /// <param name="timeoutMs">Process timeout in milliseconds.</param>
-    /// <returns>A result that captures start, timeout, diagnostics, streams, and output production.</returns>
+    /// <summary>Compile ONE object to a .pex in <paramref name="outputDir"/>, non-destructively and without throwing;
+    /// the success signal and the stream handling are in docs/architecture/papyrus.md.</summary>
     public static CompileResult CompileObject(
         string compilerExe, string objectName, IReadOnlyList<string> importDirs, string outputDir,
-        string flagsFile = "TESV_Papyrus_Flags.flg", int timeoutMs = 120_000)
+        string flagsFile = "TESV_Papyrus_Flags.flg", int timeoutMs = 120_000, SteamProtonSelection? proton = null)
     {
         var pexPath = Path.Combine(outputDir, objectName + ".pex");
-        // Record the prior PEX write time to distinguish this run's output from an existing successful build.
-        DateTime? pexBeforeUtc = File.Exists(pexPath) ? File.GetLastWriteTimeUtc(pexPath) : null;
+        if (File.Exists(pexPath))
+            return new CompileResult(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
+                $"refusing to compile because '{pexPath}' already exists; use a newly created empty output directory so stale output cannot be mistaken for this run.");
+        if (OperatingSystem.IsLinux() && proton is null)
+            return new CompileResult(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
+                WindowsProgramGuard.Refusal(compilerExe, "PapyrusCompiler.exe") ?? "Creation Kit execution on Linux requires a selected Proton runner.");
+        if (OperatingSystem.IsWindows() && WindowsProgramGuard.Refusal(compilerExe, "PapyrusCompiler.exe") is { } refusal)
+            return new CompileResult(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1, refusal);
+        if (FindSemicolonImport(importDirs) is { } badImport)
+            return new CompileResult(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
+                $"Papyrus import directory '{badImport}' contains ';', which the compiler treats as an import-path separator; refusing to split this path silently.");
 
+        var effectiveFlags = proton?.TranslatePath(flagsFile) ?? flagsFile;
+        var effectiveImports = proton is null ? importDirs : importDirs.Select(proton.TranslatePath).ToArray();
+        var effectiveOutput = proton?.TranslatePath(outputDir) ?? outputDir;
+        var effectiveCompiler = proton?.TranslatePath(compilerExe) ?? compilerExe;
         var psi = new ProcessStartInfo
         {
-            FileName = compilerExe,
+            FileName = effectiveCompiler,
             WorkingDirectory = Path.GetDirectoryName(compilerExe) ?? Environment.CurrentDirectory,
             RedirectStandardOutput = true,
             RedirectStandardError = true,
@@ -122,12 +102,11 @@ public static class PapyrusCompile
             CreateNoWindow = true,
         };
         psi.ArgumentList.Add(objectName);
-        psi.ArgumentList.Add($"-f={flagsFile}");
-        // One arg: ';' is the CK compiler's import-dir LIST separator, not a path char. .NET quotes the whole value so
-        // paths-with-spaces survive; a literal ';' INSIDE a path is the one thing that does NOT (it would split that
-        // path at the separator) — but import directories effectively never contain one, so it's not a real concern.
-        psi.ArgumentList.Add($"-i={string.Join(";", importDirs)}");
-        psi.ArgumentList.Add($"-o={outputDir}");
+        psi.ArgumentList.Add($"-f={effectiveFlags}");
+        // One arg: ';' is the compiler's import-dir list separator, and .NET quotes the whole value.
+        psi.ArgumentList.Add($"-i={string.Join(";", effectiveImports)}");
+        psi.ArgumentList.Add($"-o={effectiveOutput}");
+        if (proton is not null) proton.Configure(psi);
 
         Process proc;
         try { proc = Process.Start(psi)!; }
@@ -146,31 +125,208 @@ public static class PapyrusCompile
             return new CompileResult(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
                 $"the Papyrus compiler did not finish within {timeoutMs / 1000}s (killed).");
         }
-        // The PROCESS exited, but a grandchild inheriting the stdout/stderr pipe could keep it open and hang the stream
-        // reads forever (WaitForExit(int) does NOT flush async readers, unlike the parameterless overload). Bound the
-        // post-exit drain: on a stuck pipe kill the tree to force the handles closed and use what was captured rather
-        // than blocking indefinitely. Output production is decided from PEX mtime, independently of the streams.
-        bool drained;
-        try { drained = Task.WaitAll(new Task[] { outTask, errTask }, StreamDrainMs); }
-        catch { drained = false; }
+        // The post-exit drain is bounded, because a grandchild holding the pipe would hang the stream reads.
+        bool drained; try { drained = Task.WaitAll(new Task[] { outTask, errTask }, StreamDrainMs); } catch { drained = false; }
         if (!drained) { try { proc.Kill(entireProcessTree: true); } catch { /* already gone */ } }
         var stdout = outTask.IsCompletedSuccessfully ? outTask.Result : "";
         var stderr = errTask.IsCompletedSuccessfully ? errTask.Result : "";
 
         var diags = ParseDiagnostics(stderr);
-        // Success = THIS run WROTE the .pex. Warnings are NON-FATAL: if the compiler still emitted a .pex it's "good
-        // enough" and the diagnostics ride along as warnings. NOT proc.ExitCode (unreliable, measured) and NOT
-        // "no diagnostics" (that wrongly failed a compiled-with-warnings build).
-        bool producedNow = File.Exists(pexPath)
-            && (pexBeforeUtc is null || File.GetLastWriteTimeUtc(pexPath) > pexBeforeUtc.Value);
-        return new CompileResult(
-            producedNow,
-            objectName,
-            producedNow ? pexPath : null,
-            diags,
-            stdout,
-            stderr,
-            proc.ExitCode,
-            null);
+        // Success = THIS run WROTE the .pex; warnings ride along.
+        bool producedNow = File.Exists(pexPath);
+        return new CompileResult(producedNow, objectName, producedNow ? pexPath : null, diags, stdout, stderr, proc.ExitCode, null);
+    }
+
+    /// <summary>Run Caprica with an explicit Skyrim target, flags, imports and isolated config/output paths.</summary>
+    public static CompileResult CompileCaprica(string executable, string sourcePath, string objectName,
+        IReadOnlyList<string> importDirs, string flagsFile, string outputDir, string privateConfigFile, int timeoutMs = 120_000)
+    {
+        if (!OperatingSystem.IsLinux())
+            return new(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1, "Caprica backend is supported only on Linux.");
+        if (!File.Exists(flagsFile))
+            return new(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
+                $"the selected Skyrim Papyrus flags file is missing: '{flagsFile}'");
+        if (FindSemicolonImport(importDirs) is { } badImport)
+            return new(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
+                $"Papyrus import directory '{badImport}' contains ';', which Caprica treats as an import-path separator; refusing to split this path silently.");
+        var psi = new ProcessStartInfo
+        {
+            FileName = executable,
+            WorkingDirectory = outputDir,
+            RedirectStandardOutput = true,
+            RedirectStandardError = true,
+            UseShellExecute = false,
+            CreateNoWindow = true,
+        };
+        psi.ArgumentList.Add(Path.GetFullPath(sourcePath));
+        psi.ArgumentList.Add("--game=skyrim");
+        psi.ArgumentList.Add("--ignorecwd");
+        psi.ArgumentList.Add("--enable-language-extensions=false");
+        psi.ArgumentList.Add("--config-file=" + Path.GetFullPath(privateConfigFile));
+        psi.ArgumentList.Add("--flags=" + Path.GetFullPath(flagsFile));
+        psi.ArgumentList.Add("--import=" + string.Join(";", importDirs.Select(Path.GetFullPath)));
+        psi.ArgumentList.Add("--output=" + Path.GetFullPath(outputDir));
+        Process proc;
+        try { proc = Process.Start(psi)!; }
+        catch (Exception ex)
+        { return new(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1, $"could not run Caprica at '{executable}': {ex.Message}"); }
+        var outTask = proc.StandardOutput.ReadToEndAsync();
+        var errTask = proc.StandardError.ReadToEndAsync();
+        if (!proc.WaitForExit(timeoutMs))
+        {
+            try { proc.Kill(entireProcessTree: true); } catch { }
+            return new(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
+                $"Caprica did not finish within {timeoutMs / 1000}s (its process tree was killed).");
+        }
+        bool drained; try { drained = Task.WaitAll(new Task[] { outTask, errTask }, 5000); } catch { drained = false; }
+        if (!drained) { try { proc.Kill(entireProcessTree: true); } catch { } }
+        var stdout = outTask.IsCompletedSuccessfully ? outTask.Result : "";
+        var stderr = errTask.IsCompletedSuccessfully ? errTask.Result : "";
+        var diagnostics = ParseDiagnostics(stderr + "\n" + stdout);
+        var pexPath = Path.Combine(outputDir, objectName + ".pex");
+        var success = proc.ExitCode == 0 && File.Exists(pexPath) && new FileInfo(pexPath).Length > 0;
+        return new(success, objectName, success ? pexPath : null, diagnostics, stdout, stderr, proc.ExitCode,
+            drained ? null : "Caprica exited but its output streams could not be drained completely.");
+    }
+
+    internal static string? FindSemicolonImport(IEnumerable<string> importDirs) =>
+        importDirs.FirstOrDefault(path => path.Contains(';', StringComparison.Ordinal));
+
+    /// <summary>Caprica has no --version option; its no-argument banner is the supported version probe (exit 255 is expected).</summary>
+    public static string? ProbeCapricaVersion(string executable, int timeoutMs = 5000)
+    {
+        if (!OperatingSystem.IsLinux()) return null;
+        var psi = new ProcessStartInfo { FileName = executable, UseShellExecute = false, RedirectStandardOutput = true,
+            RedirectStandardError = true, CreateNoWindow = true, WorkingDirectory = Path.GetTempPath() };
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc is null) return null;
+            var stdout = proc.StandardOutput.ReadToEndAsync();
+            var stderr = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(timeoutMs))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                try { Task.WaitAll(new Task[] { stdout, stderr }, 1000); } catch { }
+                return null;
+            }
+            // Process exit and completion of the async pipe readers are separate events. Drain briefly so a fast
+            // banner is not lost to a scheduling race; a child holding either pipe cannot stall the probe forever.
+            try { Task.WaitAll(new Task[] { stdout, stderr }, 1000); } catch { }
+            var banner = (stdout.IsCompletedSuccessfully ? stdout.Result : "") + "\n" + (stderr.IsCompletedSuccessfully ? stderr.Result : "");
+            var match = Regex.Match(banner, @"Caprica Papyrus Compiler\s+(v?\d+(?:\.\d+)+)");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+        catch { return null; }
+    }
+
+    /// <summary>Run Champollion once against a prevalidated PEX, with only an explicit PSC destination.</summary>
+    public static ChampollionResult DecompileChampollion(string executable, string inputPex, IReadOnlyList<string> objectNames,
+        string outputDir, int timeoutMs = 120_000)
+    {
+        if (!OperatingSystem.IsLinux())
+            return new(false, Array.Empty<string>(), "", "", -1, "Champollion backend is supported only on Linux.", null);
+        if (objectNames.Count == 0 || objectNames.Any(name => !IsPlainScriptName(name)) ||
+            objectNames.Distinct(StringComparer.OrdinalIgnoreCase).Count() != objectNames.Count)
+            return new(false, Array.Empty<string>(), "", "", -1,
+                "the PEX has no script objects or an object name is not a safe plain script basename; Champollion was not launched.", null);
+        var psi = new ProcessStartInfo { FileName = executable, WorkingDirectory = outputDir, UseShellExecute = false,
+            RedirectStandardOutput = true, RedirectStandardError = true, CreateNoWindow = true };
+        psi.ArgumentList.Add("--psc");
+        psi.ArgumentList.Add(Path.GetFullPath(outputDir));
+        psi.ArgumentList.Add(Path.GetFullPath(inputPex));
+        Process proc;
+        try { proc = Process.Start(psi)!; }
+        catch (Exception ex)
+        { return new(false, Array.Empty<string>(), "", "", -1, $"could not run Champollion at '{executable}': {ex.Message}", null); }
+        using (proc)
+        {
+            var stdoutTask = ReadBoundedAsync(proc.StandardOutput, 1_000_000);
+            var stderrTask = ReadBoundedAsync(proc.StandardError, 1_000_000);
+            if (!proc.WaitForExit(timeoutMs))
+            {
+                try { proc.Kill(entireProcessTree: true); } catch { }
+                try { Task.WaitAll(new Task[] { stdoutTask, stderrTask }, 5000); } catch { }
+                return new(false, Array.Empty<string>(), stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : "",
+                    stderrTask.IsCompletedSuccessfully ? stderrTask.Result : "", -1,
+                    $"Champollion did not finish within {timeoutMs / 1000}s (its process tree was killed).", null);
+            }
+            try { Task.WaitAll(new Task[] { stdoutTask, stderrTask }, 5000); } catch { }
+            var stdout = stdoutTask.IsCompletedSuccessfully ? stdoutTask.Result : "";
+            var stderr = stderrTask.IsCompletedSuccessfully ? stderrTask.Result : "";
+            string? error = !stdoutTask.IsCompletedSuccessfully || !stderrTask.IsCompletedSuccessfully
+                ? "Champollion output streams could not be drained completely."
+                : null;
+            var expected = objectNames.Select(n => Path.GetFullPath(Path.Combine(outputDir, n + ".psc")))
+                .ToHashSet(StringComparer.Ordinal);
+            string[] produced;
+            try { produced = Directory.EnumerateFiles(outputDir, "*", SearchOption.AllDirectories).Select(Path.GetFullPath).ToArray(); }
+            catch (Exception ex) { produced = Array.Empty<string>(); error ??= $"could not validate Champollion output: {ex.Message}"; }
+            if (produced.Any(path => (File.GetAttributes(path) & FileAttributes.ReparsePoint) != 0))
+                error ??= "Champollion produced a symlink/reparse-point output, which is not allowed.";
+            if (produced.Length != expected.Count || produced.Any(path => !expected.Contains(path)))
+                error ??= "Champollion did not produce exactly the expected source files in its private output directory.";
+            foreach (var path in produced)
+            {
+                try
+                {
+                    var text = File.ReadAllText(path);
+                    var declared = Regex.Match(text, @"(?im)^\s*Scriptname\s+([^\s;]+)");
+                    if (!declared.Success || !objectNames.Contains(declared.Groups[1].Value, StringComparer.OrdinalIgnoreCase))
+                    { error ??= $"Champollion output '{Path.GetFileName(path)}' has no matching Scriptname declaration."; break; }
+                }
+                catch (Exception ex) { error ??= $"could not validate Champollion source '{Path.GetFileName(path)}': {ex.Message}"; break; }
+            }
+            var combined = stdout + "\n" + stderr;
+            if (combined.Contains("[diagnostics truncated after", StringComparison.Ordinal))
+                error ??= "Champollion diagnostics exceeded the capture limit; refusing to infer that the run had no reported failures.";
+            if (Regex.IsMatch(combined, @"(?im)\b(error|failed|failure)\b"))
+                error ??= "Champollion reported a failure in its captured diagnostics.";
+            var version = ProbeChampollionVersion(executable);
+            if (proc.ExitCode != 0) error ??= $"Champollion exited with code {proc.ExitCode}.";
+            return new(error is null, error is null ? produced : Array.Empty<string>(), stdout, stderr, proc.ExitCode, error, version);
+        }
+    }
+
+    static bool IsPlainScriptName(string name) => !string.IsNullOrWhiteSpace(name) && name is not ("." or "..") &&
+        name.IndexOfAny(new[] { '/', '\\', ':' }) < 0 && !name.Any(char.IsControl) && !name.Contains(Path.DirectorySeparatorChar) &&
+        !name.Contains(Path.AltDirectorySeparatorChar);
+
+    /// <summary>Bound memory while draining a native tool's output; excess text is consumed and explicitly marked.</summary>
+    static async Task<string> ReadBoundedAsync(StreamReader reader, int maxChars)
+    {
+        var buffer = new char[8192];
+        var output = new StringBuilder(Math.Min(maxChars, 8192));
+        var truncated = false;
+        int read;
+        while ((read = await reader.ReadAsync(buffer.AsMemory()).ConfigureAwait(false)) > 0)
+        {
+            var keep = Math.Min(read, Math.Max(0, maxChars - output.Length));
+            if (keep > 0) output.Append(buffer, 0, keep);
+            if (keep < read) truncated = true;
+        }
+        if (truncated) output.Append("\n[diagnostics truncated after 1000000 characters]");
+        return output.ToString();
+    }
+
+    /// <summary>Champollion supports --version as a direct version probe.</summary>
+    public static string? ProbeChampollionVersion(string executable, int timeoutMs = 5000)
+    {
+        if (!OperatingSystem.IsLinux()) return null;
+        var psi = new ProcessStartInfo { FileName = executable, UseShellExecute = false, RedirectStandardOutput = true,
+            RedirectStandardError = true, CreateNoWindow = true, WorkingDirectory = Path.GetTempPath() };
+        psi.ArgumentList.Add("--version");
+        try
+        {
+            using var proc = Process.Start(psi);
+            if (proc is null) return null;
+            var stdout = proc.StandardOutput.ReadToEndAsync(); var stderr = proc.StandardError.ReadToEndAsync();
+            if (!proc.WaitForExit(timeoutMs)) { try { proc.Kill(entireProcessTree: true); } catch { } return null; }
+            try { if (!Task.WaitAll(new Task[] { stdout, stderr }, 2000)) return null; } catch { return null; }
+            var text = (stdout.IsCompletedSuccessfully ? stdout.Result : "") + "\n" + (stderr.IsCompletedSuccessfully ? stderr.Result : "");
+            var match = Regex.Match(text, @"(?im)Champollion.*?(\d+\.\d+(?:\.\d+)*)");
+            return match.Success ? match.Groups[1].Value : null;
+        }
+        catch { return null; }
     }
 }

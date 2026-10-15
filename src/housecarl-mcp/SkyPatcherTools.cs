@@ -6,89 +6,58 @@ using Mutagen.Bethesda.Plugins;
 
 namespace HousecarlMcp;
 
-/// <summary>
-/// houseCARL's SkyPatcher DISTRIBUTOR-layer readers (Wave 2 of the distributor subsystem; plan
-/// dev/plans/SKYPATCHER_DISTRIBUTOR_TOOL_PLAN_2026-07-08.md — reader-only scope, locked 2026-07-09).
-/// Read-only. The record tools answer what the PLUGINS say; these answer what the SkyPatcher INI layer
-/// DOES to those records at load: <c>housecarl_skypatcher_layer</c> is the whole-layer inventory +
-/// INI-vs-INI conflict report, <c>housecarl_skypatcher_read</c> is one record's TRUE post-SkyPatcher
-/// state (the ordered, stateful replay). Authoring stays with the skypatcher-authoring skill; these
-/// readers are its verifier (a typo'd op classifies Unknown loud; the computed post-state confirms an
-/// authored INI does what was intended).
-/// </summary>
+/// <summary>Read-only view of the SkyPatcher distributor layer: a whole-layer inventory plus the INI-vs-INI conflict report; one record's post-SkyPatcher state is the overlay source pole on <c>housecarl_records</c> instead.</summary>
 [McpServerToolType]
 public static class SkyPatcherTools
 {
-    /// <summary>Reports SkyPatcher discovery, apply order, duplicate writes, and conflicts.</summary>
-    [McpServerTool(Name = "housecarl_skypatcher_layer", ReadOnly = true, Title = "SkyPatcher layer (INIs, apply order, conflicts)"),
+    [McpServerTool(Name = ToolNames.SkypatcherLayer, ReadOnly = true, Title = "SkyPatcher layer (INIs, apply order, conflicts)"),
      Description(
-         "Inventory the SkyPatcher distributor layer of the ACTIVE load order — the runtime record edits the record " +
-         "tools are otherwise blind to. Scans Data\\SKSE\\Plugins\\SkyPatcher exactly as the DLL reads it: every " +
-         "LOOSE INI (BSA-packed ones are flagged NOT applied), per type folder in filename apply order, with the mod " +
-         "that wins the VFS for each file, same-path collisions (the loser's content is never read — flagged), " +
-         "Plugin.esp.ini filename gates evaluated against the load order, and SkyPatcher.ini per-type toggles. Then " +
-         "reports the INI-vs-INI CONFLICTS: two files setting the SAME field of the SAME record to different values " +
-         "(the later-sorted file wins; add/remove ops accumulate and are not conflicts), plus the three ITM " +
-         "classes: intra-file DEAD WRITES (a later line of the SAME file unconditionally re-covers every target " +
-         "of an earlier set — dead regardless of value; partial or conditional-only overwrites are NOT flagged), " +
-         "cross-INI DUPLICATES (two files set the same field/target to the SAME value — one copy is redundant), " +
-         "and NO-OP WRITES (true ITM — the replay shows the SET writes the value the record already has). " +
-         "Entries whose applicability " +
-         "also hangs on other filters are flagged conditional rather than guessed. Pass filter= a type folder, mod, " +
-         "or filename substring to expand matching files to their patch lines. For ONE record's computed " +
-         "post-SkyPatcher state use housecarl_skypatcher_read. Read-only.")]
+         "Inventory the SkyPatcher layer of the active load order: the runtime record edits the record tools otherwise " +
+         "miss. Scans Data\\SKSE\\Plugins\\SkyPatcher as the DLL reads it: every loose INI per type folder in filename " +
+         "apply order (BSA-packed INIs are flagged as not applied), the mod that wins each file, same-path collisions " +
+         "(the loser's content is never read; flagged), Plugin.esp.ini filename gates evaluated against the load " +
+         "order, and SkyPatcher.ini per-type toggles. Then reports conflicts between INIs: two files setting the same " +
+         "field of the same record to different values (the later-sorted file wins; add and remove ops accumulate and " +
+         "are not conflicts), and three ITM classes: dead writes (a later line of the same file unconditionally " +
+         "re-covers every target of an earlier set, whatever the value; partial or conditional-only overwrites are not " +
+         "flagged), cross-INI duplicates (two files set the same field and target to the same value), and no-op writes " +
+         "(the replay shows the set writes the value the record already has). An entry whose applicability also " +
+         "depends on other filters is flagged conditional, not guessed. filter= narrows to the type folders holding a " +
+         "match. For records' computed post-SkyPatcher state use " + ToolNames.Records + " with " +
+         "source={\"overlay\": \"skypatcher\", \"state\": \"post\"} over formids= or a scan. Read-only.")]
     public static string SkyPatcherLayer(
         LoadOrderService svc,
         [Description("Optional. A type-folder (e.g. 'weapon'), providing-mod, or INI filename substring (case-insensitive). " +
-            "Expands the matching files to their individual patch lines. Omit for the whole-layer overview.")]
+            "Lists only the type folders holding a match, each in full apply order so the files sorting around a match " +
+            "stay visible, with the matching files expanded to their individual patch lines. Omit for the whole-layer overview.")]
             string? filter = null,
-        [Description("Optional. Max characters before lists are cut with an explicit notice. 0 = the server default (~80k).")]
-            int max_chars = 0) => Guard.Tool("housecarl_skypatcher_layer", () =>
+        [Description("Optional. Max characters before lists are cut with an explicit notice. 0 = the server default (~40k).")]
+            int max_chars = 0) => Guard.Tool(ToolNames.SkypatcherLayer, () =>
     {
         if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        var data = svc.SkyPatcherLayer();
-        return SkyPatcherWire.RenderLayer(data, filter?.Trim(), max_chars > 0 ? max_chars : 80_000);
-    });
-
-    /// <summary>Computes one record's static post-SkyPatcher state where operations are tractable.</summary>
-    [McpServerTool(Name = "housecarl_skypatcher_read", ReadOnly = true, Title = "A record's true post-SkyPatcher state"),
-     Description(
-         "Compute one record's TRUE state after the SkyPatcher layer applies — the answer neither the plugins nor " +
-         "xEdit show. Replays every applicable loose INI's lines in the DLL's apply order (filename sort) onto the " +
-         "record's load-order winner: same-field sets overwrite, …Mult/…ToAdd run on the RUNNING value, collection " +
-         "add/remove accumulate, and the full filter surface is evaluated (primary/keyword/enum/flag/slot/override-" +
-         "aware; the player matches only a lone bare primary). Returns each applied op as field: before → after with " +
-         "its file:line provenance. TIERED HONESTY: ops with no static resolution (runtime math, non-deterministic " +
-         "visual styles, copy-from-form) are returned as flagged DIRECTIVES — never a silently-wrong value — and " +
-         "every unknown key, unevaluable filter, or unresolvable form is a named warning. A record type SkyPatcher " +
-         "can't patch, or that no INI touches, is a named outcome. A FormID is 'XXXXXX:Plugin.esp'. For the " +
-         "whole-layer inventory + conflicts use housecarl_skypatcher_layer. Read-only.")]
-    public static string SkyPatcherRead(
-        LoadOrderService svc,
-        [Description("The record's FormID as 'XXXXXX:Plugin.esp' — 6 hex digits, a colon, then the defining master's filename. Example: '012EB7:Skyrim.esm'.")]
-            string formid,
-        [Description("Optional. Max characters before lists are cut with an explicit notice. 0 = the server default (~80k).")]
-            int max_chars = 0) => Guard.Tool("housecarl_skypatcher_read", () =>
-    {
-        if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        FormKey fk;
-        try { fk = FormKey.Factory(formid.Trim()); }
-        catch (Exception ex) { return $"error: bad FormID '{formid}': {ex.Message}. Expected 'XXXXXX:Plugin.esp', e.g. '012EB7:Skyrim.esm'."; }
-        var data = svc.SkyPatcherPostState(fk);
-        return SkyPatcherWire.RenderPostState(data, max_chars > 0 ? max_chars : 80_000);
+        return svc.SkyPatcherLayer(data => SkyPatcherWire.RenderLayer(data, filter, Wire.Cap(max_chars)));
     });
 }
 
-/// <summary>Renders the SkyPatcher reader DTOs as compact, scannable text — bounded by max_chars with
-/// explicit cut notices (Q3 — never silent truncation), caveats always rendered.</summary>
+/// <summary>Renders the SkyPatcher reader DTOs as text, bounded by max_chars with explicit cut notices; the caveats are always rendered.</summary>
 static class SkyPatcherWire
 {
     // ---- housecarl_skypatcher_layer ------------------------------------------------------------------
 
-    public static string RenderLayer(SkyPatcherLayerData d, string? filter, int cap)
+    /// <summary>The layer render, inside max_chars; a cap too small for its header, owed notices and caveats says so.</summary>
+    public static string RenderLayer(SkyPatcherLayerData d, string? filter, int cap) => RenderCap.Settle(Render(d, filter, cap), cap);
+
+    static string Render(SkyPatcherLayerData d, string? filter, int maxChars)
     {
         var sb = new StringBuilder();
+        // The caveats close the render, so their room is held back before the body is laid.
+        var caveats = Caveats(d, maxChars);
+        int cap = maxChars - caveats.Length;
         var folders = d.Scan.Folders;
+        filter = string.IsNullOrWhiteSpace(filter) ? null : filter.Trim();   // a blank filter is no filter, never a match-everything
+        // A filter matching nothing must never fall through to the unfiltered overview — that reads as the whole layer.
+        if (filter is { } zero && !folders.Any(f => f.Files.Any(x => Matches(zero, f, x))))
+            return ZeroMatch(d, zero, cap, caveats);   // the block is composed ONCE; charging it twice spends it twice
         int files = folders.Sum(f => f.Files.Count);
         int applied = folders.Sum(f => f.PatchingEnabled ? f.Files.Count(x => x.NotApplied is null) : 0);
         int lines = folders.Sum(f => f.Files.Sum(x => x.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch)));
@@ -98,223 +67,232 @@ static class SkyPatcherWire
         sb.Append("SkyPatcher layer — profile '").Append(d.ProfileName).Append("' — ")
           .Append(folders.Count).Append(" type folder(s), ").Append(files).Append(" INI(s) (")
           .Append(applied).Append(" applied), ").Append(lines).Append(" patch line(s)");
-        if (appliedLines != lines) sb.Append(" (").Append(appliedLines).Append(" in applied files)");   // files vs lines units — don't let a gated file's lines read as live
-        int deadWrites = d.Itms.Sum(m => m.Entries.Count);   // entries ARE the dead writes — exact units
+        if (appliedLines != lines) sb.Append(" (").Append(appliedLines).Append(" in applied files)");   // a gated file's lines must not read as live
+        int deadWrites = d.Itms.Sum(m => m.Entries.Count);   // one entry per dead write, not one per finding
         sb.Append(", ").Append(d.Conflicts.Count).Append(" set-conflict(s); ITM: ")
           .Append(deadWrites).Append(" intra-file dead write(s), ")
           .Append(d.Duplicates.Count).Append(" cross-INI duplicate(s), ")
           .Append(d.NoOps.Count).Append(" no-op write(s)\n");
         if (folders.Count == 0)
             sb.Append("\nno SkyPatcher INIs in the active order (no Data\\SKSE\\Plugins\\SkyPatcher content, or SkyPatcher itself is not installed).\n");
+        // filter= selects at the FOLDER level, so a late-sorting match is never cut by the cap and a matching folder still lists every file in apply order.
+        if (filter is { } hdr)
+            sb.Append("filter '").Append(hdr).Append("' — ")
+              .Append(folders.Sum(f => f.Files.Count(x => Matches(hdr, f, x)))).Append(" of ").Append(files)
+              .Append(" INI(s) match, in ").Append(folders.Count(f => f.Files.Any(x => Matches(hdr, f, x))))
+              .Append(" of ").Append(folders.Count)
+              .Append(" type folder(s); only those folders are listed below, each in full apply order with the matching " +
+                      "files expanded to their lines (the counts above are the whole layer).\n");
 
-        bool In(string? s) => filter is null || (s is not null && s.Contains(filter, StringComparison.OrdinalIgnoreCase));
-
+        string folderCut = filter is null
+            ? "... [remaining folders omitted at max_chars — raise it or pass filter=]\n"
+            : "... [remaining matching folders omitted at max_chars — raise it or narrow filter=]\n";
+        // The header above is already in sb; the hint is advice, so it is written only where it fits beside what is owed.
+        int sectionsOwed = SectionsMissed(ReportNames, maxChars).Length;
+        int owed = sectionsOwed + (folders.Count > 0 ? folderCut.Length : 0);
+        // The notes close the body but take a quarter of what the caveats leave, charged before the report sections so
+        // they cannot spend it, and never more than the header and owed notices leave.
+        var notes = NoteLines(d, Math.Min(cap / BatchRender.CaveatShare, cap - sb.Length - owed));
+        cap -= notes.Length;
+        string hint = sb.Length + owed + Hint.Length <= cap ? Hint : "";
+        int budget = cap - hint.Length - sectionsOwed;
+        // Each line is admitted by the width it writes, with its cut notice's room held back.
+        int listRoom = budget - folderCut.Length - FileCut.Length - (filter is null ? 0 : LineCut.Length);
+        bool listCut = false;
         foreach (var f in folders)
         {
-            if (sb.Length >= cap) { sb.Append("... [remaining folders omitted at max_chars — raise it or pass filter=]\n"); break; }
-            int fLines = f.Files.Sum(x => x.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch));
-            sb.Append("\n").Append(f.Subfolder).Append(": ").Append(f.Files.Count).Append(" INI(s), ").Append(fLines).Append(" patch line(s)");
-            if (!f.PatchingEnabled) sb.Append("  [!] toggled OFF in SkyPatcher.ini — the DLL skips this whole folder");
-            if (f.Catalog is null) sb.Append("  [!] not a documented SkyPatcher record type — content listed, not interpreted");
-            sb.Append('\n');
+            if (filter is { } sel && !f.Files.Any(x => Matches(sel, f, x))) continue;
+            if (listCut) { sb.Append(folderCut); break; }
+            var head = FolderHead(f, filter);
+            if (sb.Length + head.Length > listRoom) { sb.Append(folderCut); break; }
+            sb.Append(head);
             foreach (var file in f.Files)
             {
-                if (sb.Length >= cap) { sb.Append("  ... [cut at max_chars]\n"); break; }
-                int n = file.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch);
-                sb.Append("  - ").Append(file.SortKey).Append("  (").Append(n).Append(" line(s)) ← ").Append(file.WinningProvider ?? "(no provider)");
-                if (file.GatePlugin is not null && file.NotApplied is null) sb.Append("  [gated on ").Append(file.GatePlugin).Append(": active]");
-                if (file.NotApplied is not null) sb.Append("  [!] NOT applied: ").Append(file.NotApplied);
-                if (file.ShadowedProviders.Count > 0) sb.Append("  [!] shadows same-path copies from ").Append(string.Join(", ", file.ShadowedProviders));
-                sb.Append('\n');
-                // filter= match (folder, provider, or filename) expands the file to its patch lines.
-                bool expand = filter is not null && (In(f.Subfolder) || In(file.WinningProvider) || In(file.RelPath));
-                if (expand)
-                    for (int i = 0; i < file.Lines.Count; i++)
-                    {
-                        if (sb.Length >= cap) { sb.Append("      ... [lines cut at max_chars]\n"); break; }
-                        var l = file.Lines[i];
-                        if (l.Kind != SkyPatcherLineKind.Patch) continue;
-                        sb.Append("      :").Append(i + 1).Append("  ").Append(l.Raw.Trim()).Append('\n');
-                        if (l.Note is not null) sb.Append("          [!] ").Append(l.Note).Append('\n');
-                    }
-            }
-        }
-
-        if (d.Conflicts.Count > 0)
-        {
-            sb.Append("\nINI-vs-INI set conflicts (").Append(d.Conflicts.Count)
-              .Append(") — same field, same target, different values; the LAST write wins:\n");
-            int shown = 0;
-            foreach (var c in d.Conflicts)
-            {
-                if (sb.Length >= cap) { sb.Append("  ... [showing ").Append(shown).Append(" of ").Append(d.Conflicts.Count).Append("; raise max_chars]\n"); break; }
-                sb.Append("  - [").Append(c.Subfolder).Append("] ").Append(c.Field).Append(" @ ").Append(c.Target).Append(":\n");
-                for (int i = 0; i < c.Entries.Count; i++)
+                if (listCut) { sb.Append(FileCut); break; }
+                var row = FileRow(file);
+                if (sb.Length + row.Length > listRoom) { sb.Append(FileCut); listCut = true; break; }
+                sb.Append(row);
+                // Every file of a selected folder is listed — a match's neighbours are where it sorts; only a match expands.
+                if (filter is not { } q || !Matches(q, f, file)) continue;
+                for (int i = 0; i < file.Lines.Count; i++)
                 {
-                    if (sb.Length >= cap) { sb.Append("      ... [entries cut at max_chars]\n"); break; }
-                    var e = c.Entries[i];
-                    sb.Append("      ").Append(Path.GetFileName(e.File)).Append(':').Append(e.Line)
-                      .Append("  ").Append(e.Op).Append('=').Append(e.Value)
-                      .Append(i == c.Entries.Count - 1 ? "   ← WINS (last in apply order)" : "")   // by INDEX — value-equal entries must not both claim the win
-                      .Append(e.Conditional ? "   [conditional — the line carries further filters]" : "")
-                      .Append('\n');
+                    var l = file.Lines[i];
+                    if (l.Kind != SkyPatcherLineKind.Patch) continue;
+                    var line = "      :" + (i + 1) + "  " + l.Raw.Trim() + "\n"
+                               + (l.Note is null ? "" : "          [!] " + l.Note + "\n")
+                               + string.Concat((d.Lint?.Invoke(f, file, i) ?? Array.Empty<string>())
+                                   .Select(n => "          [!] " + n + "\n"));
+                    if (sb.Length + line.Length > listRoom) { sb.Append(LineCut); listCut = true; break; }
+                    sb.Append(line);
                 }
-                shown++;
             }
-            sb.Append("  (report-only: which value SHOULD win is a merge decision — resolve by authoring a later-sorted INI via the skypatcher-authoring skill, then re-run this tool to confirm.)\n");
         }
 
-        if (deadWrites > 0)
-        {
-            sb.Append("\nintra-file dead writes (").Append(deadWrites)
-              .Append(") — ITM-class: later line(s) of the SAME file unconditionally re-cover EVERY target of the write, so it is dead weight regardless of value:\n");
-            int shownItms = 0;
-            foreach (var m in d.Itms)
-            {
-                if (sb.Length >= cap) { sb.Append("  ... [showing ").Append(shownItms).Append(" of ").Append(d.Itms.Count).Append(" finding(s); raise max_chars]\n"); break; }
-                sb.Append("  - [").Append(m.Subfolder).Append("] ").Append(Path.GetFileName(m.File))
-                  .Append(": ").Append(m.Field).Append(":\n");
-                foreach (var e in m.Entries)
-                {
-                    if (sb.Length >= cap) { sb.Append("      ... [entries cut at max_chars]\n"); break; }
-                    sb.Append("      :").Append(e.Line).Append("  ").Append(e.Op).Append('=').Append(e.Value)
-                      .Append("  @ ").Append(e.Targets)
-                      .Append("   ← DEAD (overwritten by ")
-                      .Append(string.Join(", ", e.KillerLines.Select(k => k == e.Line ? $":{k} (a later op on the same line)" : $":{k}")))
-                      .Append(')')
-                      .Append(e.Conditional ? "   [carries further filters — dead regardless: the overwrite is unconditional]" : "")
-                      .Append('\n');
-                }
-                shownItms++;
-            }
-            sb.Append("  (report-only: in YOUR ini a dead write is an authoring slip to fix at the source; in a downloaded mod's it is usually harmless — the last write is what applies. A write partially overwritten, or overwritten only by a conditional line, is NOT listed — it may still fire.)\n");
-        }
+        var missed = new List<string>();
+        if (d.Conflicts.Count > 0 && !Section(sb, budget,
+                "\nINI-vs-INI set conflicts (" + d.Conflicts.Count + ") — same field, same target, different values; the LAST write wins:\n",
+                "  (report-only: which value SHOULD win is a merge decision — resolve by authoring a later-sorted INI via the skypatcher-authoring skill, then re-run this tool to confirm.)\n",
+                d.Conflicts, "",
+                c => "  - [" + c.Subfolder + "] " + c.Field + " @ " + c.Target + ":\n",
+                c => c.Entries.Select((e, i) => "      " + Path.GetFileName(e.File) + ":" + e.Line + "  " + e.Op + "=" + e.Value
+                    + (i == c.Entries.Count - 1 ? "   ← WINS (last in apply order)" : "")   // by index: value-equal entries must not both claim the win
+                    + (e.Conditional ? "   [conditional — the line carries further filters]" : "") + "\n")))
+            missed.Add(ReportNames[0]);
 
-        if (d.Duplicates.Count > 0)
-        {
-            sb.Append("\ncross-INI duplicate writes (").Append(d.Duplicates.Count)
-              .Append(") — ITM-class: two or more files set the same field of the same target to the SAME value; one copy is redundant (keep either — the LAST would win if they ever diverge):\n");
-            int shownDups = 0;
-            foreach (var c in d.Duplicates)
-            {
-                if (sb.Length >= cap) { sb.Append("  ... [showing ").Append(shownDups).Append(" of ").Append(d.Duplicates.Count).Append("; raise max_chars]\n"); break; }
-                sb.Append("  - [").Append(c.Subfolder).Append("] ").Append(c.Field).Append(" @ ").Append(c.Target).Append(":\n");
-                foreach (var e in c.Entries)
-                {
-                    if (sb.Length >= cap) { sb.Append("      ... [entries cut at max_chars]\n"); break; }
-                    sb.Append("      ").Append(Path.GetFileName(e.File)).Append(':').Append(e.Line)
-                      .Append("  ").Append(e.Op).Append('=').Append(e.Value)
-                      .Append(e.Conditional ? "   [conditional — the line carries further filters]" : "")
-                      .Append('\n');
-                }
-                shownDups++;
-            }
-            sb.Append("  (report-only: which copy to drop is a judgment call — a BROAD line also patches every other record of the type, so removing it loses those; prefer dropping the narrower duplicate.)\n");
-        }
+        if (deadWrites > 0 && !Section(sb, budget,
+                "\nintra-file dead writes (" + deadWrites + ") — ITM-class: later line(s) of the SAME file unconditionally re-cover EVERY target of the write, so it is dead weight regardless of value:\n",
+                "  (report-only: in YOUR ini a dead write is an authoring slip to fix at the source; in a downloaded mod's it is usually harmless — the last write is what applies. A write partially overwritten, or overwritten only by a conditional line, is NOT listed — it may still fire.)\n",
+                d.Itms, " finding(s)",
+                m => "  - [" + m.Subfolder + "] " + Path.GetFileName(m.File) + ": " + m.Field + ":\n",
+                m => m.Entries.Select(e => "      :" + e.Line + "  " + e.Op + "=" + e.Value + "  @ " + e.Targets
+                    + "   ← DEAD (overwritten by "
+                    + string.Join(", ", e.KillerLines.Select(k => k == e.Line ? $":{k} (a later op on the same line)" : $":{k}")) + ")"
+                    + (e.Conditional ? "   [carries further filters — dead regardless: the overwrite is unconditional]" : "") + "\n")))
+            missed.Add(ReportNames[1]);
 
-        if (d.NoOps.Count > 0)
-        {
-            sb.Append("\nno-op writes (").Append(d.NoOps.Count)
-              .Append(") — true ITM: the SET writes the value the record already has at that point in the replay, so the op changes nothing:\n");
-            int shownNoOps = 0;
-            foreach (var n in d.NoOps)
-            {
-                if (sb.Length >= cap) { sb.Append("  ... [showing ").Append(shownNoOps).Append(" of ").Append(d.NoOps.Count).Append("; raise max_chars]\n"); break; }
-                sb.Append("  - [").Append(n.Subfolder).Append("] ").Append(Path.GetFileName(n.File)).Append(':').Append(n.Line)
-                  .Append("  ").Append(n.Op).Append('=').Append(n.Value)
-                  .Append(" @ ").Append(n.FormKey).Append(n.EditorId is null ? "" : $" ({n.EditorId})")
-                  .Append(" — ").Append(n.FieldPath).Append(" is already ").Append(n.Already)
-                  .Append('\n');
-                shownNoOps++;
-            }
-            sb.Append("  (report-only, and relative to THIS load order: the same line matters in an order where the record's winner differs — unlike dead writes and duplicates, a no-op is not an authoring slip in the INI itself unless you author for this order.)\n");
-        }
-        foreach (var note in d.NoOpNotes)
-        {
-            if (sb.Length >= cap) break;
-            sb.Append("[!] ").Append(note).Append('\n');
-        }
+        if (d.Duplicates.Count > 0 && !Section(sb, budget,
+                "\ncross-INI duplicate writes (" + d.Duplicates.Count + ") — ITM-class: two or more files set the same field of the same target to the SAME value; one copy is redundant (keep either — the LAST would win if they ever diverge):\n",
+                "  (report-only: which copy to drop is a judgment call — a BROAD line also patches every other record of the type, so removing it loses those; prefer dropping the narrower duplicate.)\n",
+                d.Duplicates, "",
+                c => "  - [" + c.Subfolder + "] " + c.Field + " @ " + c.Target + ":\n",
+                c => c.Entries.Select(e => "      " + Path.GetFileName(e.File) + ":" + e.Line + "  " + e.Op + "=" + e.Value
+                    + (e.Conditional ? "   [conditional — the line carries further filters]" : "") + "\n")))
+            missed.Add(ReportNames[2]);
 
-        foreach (var note in d.Scan.Notes)
-        {
-            if (sb.Length >= cap) break;
-            sb.Append("[!] ").Append(note).Append('\n');
-        }
-        AppendCaveats(sb, d.ReadIncomplete, d.AssetWarnings);
-        sb.Append("\n→ housecarl_skypatcher_read '<FormID>' for one record's computed post-SkyPatcher state; filter='<folder/mod/file>' to expand files to their lines.");
+        if (d.NoOps.Count > 0 && !Section(sb, budget,
+                "\nno-op writes (" + d.NoOps.Count + ") — true ITM: the SET writes the value the record already has at that point in the replay, so the op changes nothing:\n",
+                "  (report-only, and relative to THIS load order: the same line matters in an order where the record's winner differs — unlike dead writes and duplicates, a no-op is not an authoring slip in the INI itself unless you author for this order.)\n",
+                d.NoOps, "",
+                n => "  - [" + n.Subfolder + "] " + Path.GetFileName(n.File) + ":" + n.Line + "  " + n.Op + "=" + n.Value
+                    + " @ " + n.FormKey + (n.EditorId is null ? "" : $" ({n.EditorId})")
+                    + " — " + n.FieldPath + " is already " + n.Already + "\n"))
+            missed.Add(ReportNames[3]);
+        if (missed.Count > 0) sb.Append(SectionsMissed(missed, maxChars));
+
+        sb.Append(notes);
+        sb.Append(caveats);
+        sb.Append(hint);
         return sb.ToString().TrimEnd('\n');
     }
 
-    // ---- housecarl_skypatcher_read -------------------------------------------------------------------
+    /// <summary>The line every layer render closes with, spelled once so it is charged before the body.</summary>
+    const string Hint = "\n→ " + ToolNames.Records + " formids=['<FormID>'] source={\"overlay\": \"skypatcher\", \"state\": \"post\"} for one record's computed post-SkyPatcher state; filter='<folder/mod/file>' for just the type folders holding a match, each listed in full apply order with the matching files expanded to their lines.";
 
-    public static string RenderPostState(SkyPatcherPostStateData d, int cap)
+    /// <summary>The replay notes and the scan notes as one list, cut to <paramref name="room"/> and counted by the shared caveat cut.</summary>
+    static string NoteLines(SkyPatcherLayerData d, int room) =>
+        BatchRender.CutLines(new BatchRender.CaveatList(d.NoOpNotes.Concat(d.Scan.Notes).ToList(), "[!] ", "note(s)"), room);
+
+    const string FileCut = "  ... [cut at max_chars]\n";
+    const string LineCut = "      ... [lines cut at max_chars]\n";
+    const string EntryCut = "      ... [entries cut at max_chars]\n";
+
+    /// <summary>The four report sections, in render order, as the omitted-sections line names them.</summary>
+    static readonly string[] ReportNames = { "set conflicts", "dead writes", "cross-INI duplicates", "no-op writes" };
+
+    /// <summary>The line naming the report sections the budget could not start, and the max_chars the caller passed.</summary>
+    static string SectionsMissed(IReadOnlyList<string> missed, int cap) =>
+        "  ... [" + missed.Count + " section(s) omitted at max_chars=" + cap + " (" + string.Join(", ", missed) + "); raise max_chars to see them]\n";
+
+    /// <summary>A type folder's heading line, with its counts and flags.</summary>
+    static string FolderHead(SkyPatcherDiscovery.FolderScan f, string? filter)
     {
-        if (d.Error is not null) return $"error: {d.Error}";
-
+        int fLines = f.Files.Sum(x => x.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch));
+        int fMatched = filter is { } fq ? f.Files.Count(x => Matches(fq, f, x)) : f.Files.Count;
         var sb = new StringBuilder();
-        sb.Append("post-SkyPatcher state — ").Append(d.RecordTypeName).Append(' ').Append(d.FormKey)
-          .Append(d.EditorId is null ? "" : $" ({d.EditorId})")
-          .Append("  [winner ").Append(d.WinnerPlugin).Append(", profile '").Append(d.ProfileName).Append("']\n");
+        sb.Append("\n").Append(f.Subfolder).Append(": ").Append(f.Files.Count).Append(" INI(s)");
+        if (fMatched != f.Files.Count) sb.Append(" (").Append(fMatched).Append(" matching, expanded)");   // the header must describe the listing under it
+        sb.Append(", ").Append(fLines).Append(" patch line(s)");
+        if (!f.PatchingEnabled) sb.Append("  [!] toggled OFF in SkyPatcher.ini — the DLL skips this whole folder");
+        if (f.Catalog is null) sb.Append("  [!] not a documented SkyPatcher record type — content listed, not interpreted");
+        return sb.Append('\n').ToString();
+    }
 
-        int touched = d.Folders.Sum(f => (f.Result?.Applied.Count ?? 0) + (f.Result?.Directives.Count ?? 0));
-        if (touched == 0 && d.Folders.All(f => f.Result is null || f.Result.LinesMatched == 0))
-            sb.Append("\nno SkyPatcher line in the active order touches this record — its plugin-resolved values ARE its in-game values (as far as this layer goes).\n");
+    /// <summary>One INI's row in its folder's apply-order listing.</summary>
+    static string FileRow(SkyPatcherDiscovery.IniFile file)
+    {
+        int n = file.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch);
+        var sb = new StringBuilder();
+        sb.Append("  - ").Append(file.SortKey).Append("  (").Append(n).Append(" line(s)) ← ").Append(file.WinningProvider ?? "(no provider)");
+        if (file.GatePlugin is not null && file.NotApplied is null) sb.Append("  [gated on ").Append(file.GatePlugin).Append(": active]");
+        if (file.NotApplied is not null) sb.Append("  [!] NOT applied: ").Append(file.NotApplied);
+        if (file.ShadowedProviders.Count > 0) sb.Append("  [!] shadows same-path copies from ").Append(string.Join(", ", file.ShadowedProviders));
+        return sb.Append('\n').ToString();
+    }
 
-        foreach (var f in d.Folders)
+    /// <summary>One report section, started only where its heading, cut notices and closing line fit; false if it did not start.</summary>
+    static bool Section<T>(StringBuilder sb, int budget, string head, string close, IReadOnlyList<T> items, string noun,
+                           Func<T, string> item, Func<T, IEnumerable<string>>? entries = null)
+    {
+        string Showing(int shown) => "  ... [showing " + shown + " of " + items.Count + noun + "; raise max_chars]\n";
+        int room = budget - close.Length - Showing(items.Count).Length - (entries is null ? 0 : EntryCut.Length);
+        if (sb.Length + head.Length > room) return false;
+        sb.Append(head);
+        int shown = 0;
+        foreach (var x in items)
         {
-            if (sb.Length >= cap) { sb.Append("... [cut at max_chars]\n"); break; }
-            sb.Append("\nfolder '").Append(f.Subfolder).Append("': ").Append(f.IniCount).Append(" applied INI(s), ")
-              .Append(f.LineCount).Append(" line(s) replayed");
-            if (!f.Enabled) { sb.Append("  [!] toggled OFF in SkyPatcher.ini — the DLL skips this folder\n"); continue; }
-            if (f.Result is null) { sb.Append("  (no INIs for this folder)\n"); continue; }
-            var r = f.Result;
-            sb.Append(" — ").Append(r.LinesMatched).Append(" matched this record");
-            if (r.LinesSkippedUnresolvedFilter > 0) sb.Append(", ").Append(r.LinesSkippedUnresolvedFilter).Append(" skipped UNRESOLVED");
-            sb.Append('\n');
-
-            if (r.Applied.Count > 0)
+            var row = item(x);
+            if (sb.Length + row.Length > room) { sb.Append(Showing(shown)); break; }
+            sb.Append(row);
+            bool cut = false;
+            foreach (var e in entries?.Invoke(x) ?? Enumerable.Empty<string>())
             {
-                sb.Append("  APPLIED (").Append(r.Applied.Count).Append(") — file:line  op=value  →  field: before → after\n");
-                foreach (var a in r.Applied)
-                {
-                    if (sb.Length >= cap) { sb.Append("  ... [cut at max_chars]\n"); break; }
-                    sb.Append("    ").Append(Path.GetFileName(a.File)).Append(':').Append(a.LineNumber)
-                      .Append("  ").Append(a.Op).Append('=').Append(a.RawValue)
-                      .Append("  →  ").Append(a.FieldPath).Append(": ").Append(a.Before ?? "-").Append(" → ").Append(a.After ?? "-");
-                    if (a.Note is not null) sb.Append("   [").Append(a.Note).Append(']');
-                    sb.Append('\n');
-                }
+                if (sb.Length + e.Length > room) { sb.Append(EntryCut); cut = true; break; }
+                sb.Append(e);
             }
-            if (r.Directives.Count > 0)
-            {
-                sb.Append("  NOT RESOLVED — directives (").Append(r.Directives.Count).Append("), no static answer exists (tiered honesty):\n");
-                foreach (var dr in r.Directives)
-                {
-                    if (sb.Length >= cap) { sb.Append("  ... [cut at max_chars]\n"); break; }
-                    sb.Append("    ").Append(Path.GetFileName(dr.File)).Append(':').Append(dr.LineNumber)
-                      .Append("  ").Append(dr.Op).Append('=').Append(dr.RawValue).Append("   [").Append(dr.Reason).Append("]\n");
-                }
-            }
-            foreach (var w in r.Warnings)
-            {
-                if (sb.Length >= cap) break;
-                sb.Append("  [!] ").Append(w).Append('\n');
-            }
+            shown++;
+            if (cut) { if (shown < items.Count) sb.Append(Showing(shown)); break; }
         }
+        sb.Append(close);
+        return true;
+    }
 
-        foreach (var note in d.LayerNotes)
+    /// <summary>The filter's match domain: the file's type folder, its providing mod, or its path/filename.</summary>
+    static bool Matches(string filter, SkyPatcherDiscovery.FolderScan folder, SkyPatcherDiscovery.IniFile file)
+    {
+        bool In(string? s) => s is not null && s.Contains(filter, StringComparison.OrdinalIgnoreCase);
+        return In(folder.Subfolder) || In(file.WinningProvider) || In(file.RelPath);
+    }
+
+    /// <summary>What a filter matching no INI returns: the zero count, what the filter is matched against, and the folders that are there — never the unfiltered overview.</summary>
+    static string ZeroMatch(SkyPatcherLayerData d, string filter, int cap, string caveats)
+    {
+        var folders = d.Scan.Folders;
+        int files = folders.Sum(f => f.Files.Count);
+        var sb = new StringBuilder();
+        sb.Append("SkyPatcher layer — filter '").Append(filter).Append("' — 0 of ").Append(files)
+          .Append(" INI(s) match [profile '").Append(d.ProfileName).Append("']\n\n");
+        if (folders.Count == 0)
+            sb.Append(d.ReadIncomplete
+                ? "nothing matched: no SkyPatcher INIs were found, and the read was incomplete (below), so the layer is not necessarily empty.\n"
+                : "nothing matched: the active order has no SkyPatcher INIs at all (no Data\\SKSE\\Plugins\\SkyPatcher content, or SkyPatcher itself is not installed).\n");
+        else
         {
-            if (sb.Length >= cap) break;
-            sb.Append("[!] ").Append(note).Append('\n');
+            sb.Append("nothing matched: no type folder, providing mod, or INI filename contains '").Append(filter).Append("'.")
+              .Append(PluginNameSuggest.DidYouMean(filter, folders.Select(f => f.Subfolder)
+                  .Concat(folders.SelectMany(f => f.Files).Select(x => x.WinningProvider).Where(p => p is not null)!)
+                  .Concat(folders.SelectMany(f => f.Files).Select(x => x.SortKey))))
+              .Append(" The type folder(s) present are: ").Append(string.Join(", ", folders.Select(f => f.Subfolder)))
+              .Append(". Omit filter= for the whole-layer overview.\n");
         }
-        AppendCaveats(sb, d.ReadIncomplete, d.AssetWarnings);
+        // The scan notes (shadowed copies, undocumented subfolders) are often why the filter matched nothing.
+        // With no caveats the notes close the reply, and their last newline is trimmed, so it is not charged.
+        sb.Append(NoteLines(d, cap - sb.Length + (caveats.Length == 0 ? 1 : 0)));
+        sb.Append(caveats);   // always rendered, as in the filtered and unfiltered renders
         return sb.ToString().TrimEnd('\n');
     }
 
-    static void AppendCaveats(StringBuilder sb, bool readIncomplete, IReadOnlyList<string> assetWarnings)
+    /// <summary>The build-level caveats as one string, so the render can charge them before its body is laid. The
+    /// hedge sentence is written whatever the budget — it IS the alarm — and the lists under it are cut and counted
+    /// like the note lists, since a lost archive drive or a blocked tree makes any of them long.</summary>
+    static string Caveats(SkyPatcherLayerData d, int cap)
     {
-        if (readIncomplete)
-            sb.Append("[!] a BSA failed to read this build, so an INI present only in it may be missing from this scan (Q3).\n");
-        foreach (var w in assetWarnings) sb.Append("[!] ").Append(w).Append('\n');
+        var sb = new StringBuilder();
+        if (d.ReadIncomplete)
+            sb.Append("[!] a BSA or a loose mod folder failed to read this build, so an INI present only in it may be missing from this scan (Q3).\n");
+        // The warnings, and which mod folder would not read so the hedge names a source — bounded to a share of
+        // max_chars and counted by the shared renderer, so they never take the layer's own room.
+        sb.Append(BatchRender.CaveatBlockLines(cap, BatchRender.WarningList(d.AssetWarnings),
+            BatchRender.RootFailureList(d.RootFailures)));
+        return sb.ToString();
     }
 }

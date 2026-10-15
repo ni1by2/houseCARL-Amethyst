@@ -5,43 +5,26 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>
-/// Builds and inspects Skyrim SEQ files, which tell the game which Start-Game-Enabled quests to start.
-/// </summary>
-/// <remarks>
-/// A SEQ file is a headerless array of four-byte little-endian FormIDs. These are master-relative values stored
-/// in the plugin, not runtime load-order or light-plugin addresses. The high byte is the defining master's
-/// zero-based header slot, or the master count for a record defined by the plugin itself; the low 24 bits are
-/// the object ID. Adding or removing a master can therefore make an existing SEQ stale.
-/// </remarks>
+/// <summary>SEQ-file builder — the <c>Data\SEQ\&lt;plugin&gt;.seq</c> the engine reads to actually START a plugin's
+/// Start-Game-Enabled quests; the SGE flag alone does nothing without it. Format: a flat array of 4-byte
+/// little-endian plugin-local, master-relative on-disk FormIDs, no header or footer, one per SGE quest — the
+/// master-INDEX encoding Mutagen writes into the record header, never the runtime 0xFE light-space address.</summary>
 public static class SeqFile
 {
-    /// <summary>Converts a FormKey to the master-relative FormID stored in a plugin and its SEQ file.</summary>
-    /// <param name="fk">Record identity to encode.</param>
-    /// <param name="masters">Defining plugin's master list in exact header order.</param>
-    /// <returns>
-    /// The master slot in the high byte and the FormKey's low 24-bit object ID in the remaining bytes.
-    /// </returns>
-    /// <remarks>
-    /// When the FormKey's ModKey is absent from <paramref name="masters"/>, this method treats the record as
-    /// plugin-owned and uses the slot immediately after the final master. The caller owns ensuring that an absent
-    /// ModKey really is the defining plugin rather than an undeclared foreign master.
-    /// </remarks>
+    /// <summary>The plugin-local, master-relative on-disk FormID for <paramref name="fk"/> given the defining plugin's
+    /// ORDERED master list: high byte is the master's index in that list, or the master COUNT for the plugin's own
+    /// records.</summary>
     public static uint OnDiskFormId(FormKey fk, IReadOnlyList<ModKey> masters)
     {
         int slot = -1;
         for (int i = 0; i < masters.Count; i++)
             if (masters[i] == fk.ModKey) { slot = i; break; }
-        // A plugin never lists itself as a master, so its own records occupy the next slot.
-        if (slot < 0) slot = masters.Count;
+        if (slot < 0) slot = masters.Count;                 // own/new record: its ModKey is the plugin's, never in its masters
         return ((uint)slot << 24) | (fk.ID & FormIdRange.ObjectIdMask);
     }
 
-    /// <summary>Serializes master-relative FormIDs into the headerless SEQ byte layout.</summary>
-    /// <param name="formIds">FormIDs to write in desired quest order.</param>
-    /// <returns>
-    /// Four little-endian bytes per input value, or an empty array when no quest requires a SEQ entry.
-    /// </returns>
+    /// <summary>Serialize SEQ FormIDs to the on-disk byte layout: each as a 4-byte little-endian uint, concatenated,
+    /// with no header or footer. An empty sequence yields zero bytes.</summary>
     public static byte[] Serialize(IReadOnlyList<uint> formIds)
     {
         var bytes = new byte[formIds.Count * 4];
@@ -50,62 +33,44 @@ public static class SeqFile
         return bytes;
     }
 
-    /// <summary>Describes one Start-Game-Enabled quest included in a generated SEQ.</summary>
-    /// <param name="FormKey">Stable quest identity.</param>
-    /// <param name="EditorId">Human-readable quest EditorID, or null when the record has none.</param>
-    /// <param name="OnDiskFormId">Master-relative value written to the SEQ.</param>
+    /// <summary>One Start-Game-Enabled quest destined for the .seq: its identity, its EditorID for the report, and the
+    /// on-disk FormID actually written into the file.</summary>
     public readonly record struct SeqQuest(FormKey FormKey, string? EditorId, uint OnDiskFormId);
 
-    /// <summary>Contains a generated SEQ and the context needed to report and name it.</summary>
-    /// <param name="Bytes">Complete headerless SEQ content ready to write.</param>
-    /// <param name="Quests">Included quests in plugin record order.</param>
-    /// <param name="PluginFileName">Defining plugin filename, including extension; its basename names the SEQ.</param>
+    /// <summary>The built .seq: the bytes to write, the SGE quests it covers, and the defining plugin's filename, which
+    /// the .seq is named after.</summary>
     public readonly record struct SeqBuild(byte[] Bytes, IReadOnlyList<SeqQuest> Quests, string PluginFileName);
 
-    /// <summary>Builds SEQ content from all live Start-Game-Enabled quests in a plugin.</summary>
-    /// <param name="pluginPath">Native host path to the plugin file.</param>
-    /// <returns>Generated bytes, included quest metadata, and the plugin filename.</returns>
-    /// <exception cref="Exception">
-    /// Mutagen could not open or enumerate the plugin. The method deliberately does not turn a read failure into an
-    /// empty SEQ.
-    /// </exception>
-    /// <remarks>
-    /// Deleted quests and quests without the Start-Game-Enabled flag are excluded. The binary overlay is disposed
-    /// before return, so the method retains no plugin file handle.
-    /// </remarks>
+    /// <summary>Open <paramref name="pluginPath"/> as a binary overlay and build the .seq bytes from every
+    /// Start-Game-Enabled quest it contains, deleted quests excluded, in the plugin's own record order. Read-only,
+    /// holds no handle past the <c>using</c>, and THROWS on an unreadable plugin rather than yielding an empty
+    /// .seq.</summary>
     public static SeqBuild Build(string pluginPath)
     {
-        using var mod = SkyrimMod.CreateFromBinaryOverlay(pluginPath, SkyrimRelease.SkyrimSE);
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(pluginPath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(pluginPath));
         var masters = mod.ModHeader.MasterReferences.Select(m => m.Master).ToList();
         var quests = new List<SeqQuest>();
         foreach (var q in mod.Quests)
         {
-            if (q.IsDeleted) continue;
-            if (!q.Flags.HasFlag(Quest.Flag.StartGameEnabled)) continue;
+            if (q.IsDeleted) continue;                                       // a deleted quest never starts → never in the .seq
+            if (!q.Flags.HasFlag(Quest.Flag.StartGameEnabled)) continue;    // SGE flag is the sole inclusion test (CK/xEdit rule)
             quests.Add(new SeqQuest(q.FormKey, q.EditorID, OnDiskFormId(q.FormKey, masters)));
         }
         var bytes = Serialize(quests.Select(x => x.OnDiskFormId).ToList());
         return new SeqBuild(bytes, quests, mod.ModKey.FileName);
     }
 
-    /// <summary>Reads a plugin's master order and converts one FormKey to its stored FormID.</summary>
-    /// <param name="pluginPath">Native host path to the defining plugin.</param>
-    /// <param name="fk">Record identity to encode against that plugin's master list.</param>
-    /// <returns>The value expected in the plugin's SEQ file.</returns>
-    /// <exception cref="Exception">Mutagen could not open or read the plugin.</exception>
-    /// <remarks>The binary overlay is disposed before return, so the method retains no plugin file handle.</remarks>
+    /// <summary>The on-disk FormID for <paramref name="fk"/> as written into <paramref name="pluginPath"/>, read off
+    /// that plugin's own ordered master list. Read-only; THROWS on an unreadable plugin.</summary>
     public static uint OnDiskFormIdFromPlugin(string pluginPath, FormKey fk)
     {
-        using var mod = SkyrimMod.CreateFromBinaryOverlay(pluginPath, SkyrimRelease.SkyrimSE);
+        using var mod = SkyrimMod.CreateFromBinaryOverlay(pluginPath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(pluginPath));
         var masters = mod.ModHeader.MasterReferences.Select(m => m.Master).ToList();
         return OnDiskFormId(fk, masters);
     }
 
-    /// <summary>Checks whether raw SEQ bytes contain a particular master-relative FormID.</summary>
-    /// <param name="seqBytes">Headerless SEQ content to inspect.</param>
-    /// <param name="onDiskFormId">Four-byte value to find.</param>
-    /// <returns>True when a complete four-byte entry equals the requested value; otherwise false.</returns>
-    /// <remarks>A trailing partial entry is malformed and ignored rather than interpreted or padded.</remarks>
+    /// <summary>Whether a .seq's raw bytes contain <paramref name="onDiskFormId"/>. A trailing partial chunk is
+    /// ignored, never guessed.</summary>
     public static bool SeqContains(ReadOnlySpan<byte> seqBytes, uint onDiskFormId)
     {
         for (int i = 0; i + 4 <= seqBytes.Length; i += 4)
@@ -113,21 +78,12 @@ public static class SeqFile
         return false;
     }
 
-    /// <summary>Finds Start-Game-Enabled quests missing from an existing SEQ after a plugin write.</summary>
-    /// <param name="pluginPath">Native host path to the current plugin.</param>
-    /// <param name="existingSeqBytes">Raw bytes from the SEQ currently associated with that plugin.</param>
-    /// <returns>
-    /// Every live Start-Game-Enabled quest whose current stored FormID is absent, or an empty list when the SEQ is
-    /// consistent or the plugin contains no such quests.
-    /// </returns>
-    /// <exception cref="Exception">The plugin cannot be opened or enumerated; see <see cref="Build"/>.</exception>
-    /// <remarks>
-    /// Master pruning can shift the high byte of plugin-owned record IDs and make a previously correct SEQ stale.
-    /// This report is read-only: the caller decides whether to warn or regenerate the file.
-    /// </remarks>
+    /// <summary>Post-write staleness check: every Start-Game-Enabled quest in <paramref name="pluginPath"/> whose
+    /// current on-disk FormID the existing <c>.seq</c> does not list, through the same <see cref="Build"/> and
+    /// <see cref="SeqContains"/> a regen uses. Read-only; never mutates the <c>.seq</c>.</summary>
     public static IReadOnlyList<SeqQuest> UncoveredSgeQuests(string pluginPath, ReadOnlySpan<byte> existingSeqBytes)
     {
-        var build = Build(pluginPath);
+        var build = Build(pluginPath);                       // SGE quests + their current on-disk FormIDs, off the written plugin
         var uncovered = new List<SeqQuest>();
         foreach (var q in build.Quests)
             if (!SeqContains(existingSeqBytes, q.OnDiskFormId)) uncovered.Add(q);

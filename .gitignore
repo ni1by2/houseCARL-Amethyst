@@ -26,12 +26,19 @@ x86/
 *.snupkg
 packages/
 .nuget/
+## ...except the vendored package source nuget.config adds (packages/local: the NiflySharp fork, issue #926)
+!/packages/
+/packages/*
+!/packages/local/
+!/packages/local/*.nupkg
 
 ## Test / coverage results
 [Tt]est[Rr]esult*/
+/coverage/
 *.trx
 *.coverage
 *.coveragexml
+*.cobertura.xml
 
 ## OS cruft
 Thumbs.db
@@ -55,6 +62,9 @@ write-output/
 ## corpus.json + bundled skills + the plugin/ files). A build ARTIFACT, reproducible on demand;
 ## the plugin SOURCE lives in plugin/ (tracked). Never source-of-truth.
 dist/
+
+## Temporary checkout used by the Linux CI job to build Amethyst's pinned native filegraph.
+_ci/
 
 ## Shippable release zip(s) - release/houseCARL-<ver>.zip, packed from dist/ by
 ## scripts/build-release.sh. (Already matched by the [Rr]elease/ rule above; listed for intent.)
@@ -85,7 +95,4 @@ dev/
 *.user.json
 houseCARL.user.json
 
-## Probe scratch dirs (compile-probe / import-order-guard end-to-end arms create + delete these in
-## the repo root; a swallowed delete failure must not litter the tree as untracked noise).
-.compile-probe-gen/
-.import-order-probe-gen/
+__pycache__/

@@ -1,0 +1,407 @@
+using HousecarlMcp;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+/// <summary>The comparison and traversal forms (delta, tree, chain, info_order), the source/versus poles, and
+/// the compositions between them.</summary>
+[Collection("records")]
+[Trait("tier", "integration")]
+public sealed class RecordsComparisonFormTests : RecordsTestBase
+{
+    public RecordsComparisonFormTests(RecordsFixture f) : base(f) { }
+
+    static RecordsTools.RecordsProject Delta => new() { form = "delta" };
+    static RecordsTools.RecordsProject Chain => new() { form = "chain" };
+    /// <summary>The typed MGEF carrier walk, said outright: no follow is implied under the chain form.</summary>
+    const string CarrierFollow = "Effects[].BaseEffect";
+
+    string DeltaVsPrevious(Mutagen.Bethesda.Plugins.FormKey rec, string subject) =>
+        RecordsTools.Records(Svc, formids: new[] { Fid(rec) }, source: Plugin(subject),
+                             versus: Plugin("previous_provider"), project: Delta);
+
+    // ---- delta over the 3-deep stack on W0 (master < mid < override) ------------------------------
+
+    [Fact]
+    public void DeltaP1_SubjectWins_TheReferenceIsThePluginImmediatelyBelow() =>
+        Served(DeltaVsPrevious(W.Weapons[0], W.OverrideName), "previous provider", W.MidName, "Damage");
+
+    [Fact]
+    public void DeltaP2_AMidStackSubjectMeasuresBelowItselfAndWhatOutranksItIsStatedAsNeutralFact()
+    {
+        var r = DeltaVsPrevious(W.Weapons[0], W.MidName);
+        Served(r, W.MasterName, "stack above the subject", W.OverrideName);
+        Assert.DoesNotContain("consider", r);
+        Assert.DoesNotContain("should", r);
+    }
+
+    [Fact]
+    public void DeltaP3_TheDefiningSubjectRefusesLoud_NeverAnEmptyDiffThatReadsAsNoChanges() =>
+        Assert.Contains("no previous provider", DeltaVsPrevious(W.Weapons[0], W.MasterName));
+
+    [Fact]
+    public void DeltaP3_TheRefusalSaysTheSubjectDefinesTheRecord() =>
+        Assert.Contains("DEFINES", DeltaVsPrevious(W.Weapons[0], W.MasterName));
+
+    [Fact]
+    public void DeltaP4_ASubjectThatDoesNotTouchTheRecordRefusesNamingTheActualTouchers() =>
+        Served(DeltaVsPrevious(W.Weapons[1], W.OverrideName),
+               "does not define or override", "Touched by", W.MasterName);
+
+    [Fact]
+    public void TheDeltaFormRequiresVersus_ADeltaHasTwoPoles() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, project: Delta), "versus");
+
+    [Fact]
+    public void VersusOutsideTheComparisonFormsRefusesNamingThem() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, versus: Plugin("winner")), "delta");
+
+    [Fact]
+    public void TheInvertedCompositionSourcePreviousProviderRefusesNamingTheSubjectRule() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, source: Plugin("previous_provider"),
+                                     versus: Plugin("winner"), project: Delta), "SUBJECT");
+
+    [Fact]
+    public void DeltaVsAnOffOrderReference_TheOnePoleRuleServesTheFilesVersionWithCoverageDeclared() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[1]) }, versus: Plugin(W.OldName), project: Delta),
+               "OUTSIDE the epoch fingerprint", "55");
+
+    [Fact]
+    public void BothPolesResolvingToOneProviderIsSaid_NeverSilent() =>
+        Assert.Contains("SAME provider",
+                        RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, source: Plugin(W.OverrideName),
+                                             versus: Plugin(W.OverrideName), project: Delta));
+
+    // ---- tree -------------------------------------------------------------------------------------
+
+    [Fact]
+    public void TreeInJson_TheCommittedRender_TheOneXTextOnlyRefusalDiedByConstruction() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, format: "json", project: Form("tree")),
+               "\"nodes\"", "\"touchers\"", "\"is_winner\"");
+
+    /// <summary>A versus= pole that holds no version of the record refuses on the TREE form too, naming the pole
+    /// and keeping the record's identity. The suite pinned this refusal only on delta; the tree fill stops its walk
+    /// at the winner when the pole refuses, so the row has no nodes and must not be reported as bodies it could not
+    /// read — they read fine.</summary>
+    [Fact]
+    public void ATreeVersusAPluginThatDoesNotTouchTheRecordRefusesNamingThePoleAndKeepsTheIdentity()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[1]) },
+                                     versus: Plugin(W.OverrideName), project: Form("tree"));
+        Served(r, "versus:", "does not define or override", "Touched by", W.MasterName);
+        Assert.DoesNotContain("could not be read", r);
+
+        // The json lane says the same thing: one error row naming the pole, not a read failure.
+        var row = Je(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[1]) }, format: "json",
+                                          versus: Plugin(W.OverrideName), project: Form("tree")))
+                  .GetProperty("rows")[0];
+        Assert.Contains("does not define or override", row.GetProperty("error").GetString());
+    }
+
+    /// <summary>The whole tree render over a record three plugins touch, pinned character for character. The fill
+    /// reads the providers winner first and holds one at a time (#722); that is a claim about memory the answer
+    /// cannot show, so only a golden catches the render drifting with it — the node order, the winner marker, the
+    /// reference label, the delta lines — while every reading test stays green.</summary>
+    [Fact]
+    public void TheTreeRenderOverThreeProvidersIsCharacterForCharacterWhatItWas()
+    {
+        const string golden = """
+            records  form=tree  versus=winner  source=every provider of each record (the touching stack, winner last)
+            1 record(s): 1 contested, 0 error(s)  epoch=<epoch>
+
+            000800:HcRecMaster.esm  Weapon  HcRecW0
+              3 plugin(s) touch this record (load order, winner last):
+                1. HcRecMaster.esm
+                2. HcRecMid.esp
+                3. HcRecOverride.esp  (winner)
+              diff (field deltas vs HcRecOverride.esp; identical fields omitted; list contents compared by content, element reorders flagged):
+                HcRecMaster.esm: BasicStats.Damage=10 (HcRecOverride.esp 99)
+                HcRecMid.esp: BasicStats.Damage=50 (HcRecOverride.esp 99)
+            """;
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, project: Form("tree"));
+        Assert.Equal(golden.Replace("\r\n", "\n"),
+                     System.Text.RegularExpressions.Regex.Replace(r, @"epoch=\S+", "epoch=<epoch>"));
+    }
+
+    [Fact]
+    public void TreePlusToFile_TreesSpill_TheRowFormExistsNow()
+    {
+        var art = W.Scratch("results", "tree.jsonl");
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, to_file: art, project: Form("tree"));
+        Assert.True(File.Exists(art));
+        Assert.Contains(art, r);
+    }
+
+    [Fact]
+    public void DeltaOnTheScanLane_TheScanSelectsAndTheComparisonRidesTheSelection() =>
+        Served(RecordsTools.Records(Svc, types: new[] { "WEAP" }, where: new[] { $"winner = {W.OverrideName}" },
+                                    source: Plugin(W.OverrideName), versus: Plugin("previous_provider"), project: Delta),
+               "selected by the scan", W.MidName);
+
+    // ---- chain / walk ------------------------------------------------------------------------------
+
+    [Fact]
+    public void ChainForwardWithFollowEffects_TheSpellsEffectLinkIsReachedWithProvenance() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) },
+                                    walk: new RecordsTools.RecordsWalk { follow = "Effects" }, project: Chain),
+               "HcRecMgefFire");
+
+    [Fact]
+    public void ChainForwardClosure_EveryLinkExpandsViaTheGenericEnumeration() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) },
+                                    walk: new RecordsTools.RecordsWalk(), project: Chain),
+               "HcRecMgefFire");
+
+    [Fact]
+    public void WalkWithoutChain_TheReachedSetSeedsIncludedFeedsTheSummaryForm() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) }, walk: new RecordsTools.RecordsWalk()),
+               "HcRecSpellA", "HcRecMgefFire", "selection =");
+
+    [Fact]
+    public void TemplateFlagsInterpreter_InheritedCategoriesNameTheirProviderAndClearFlagsReadLocalActive() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.NpcChild) },
+                                    walk: new RecordsTools.RecordsWalk { follow = "Template" }, project: Chain),
+               "Traits: INHERITED from", "HcRecNpcParent", "Stats: local data ACTIVE");
+
+    [Fact]
+    public void ReverseMgefLane_TheCarriersOfThisEffectWithTheMatchingEntrysPayload()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                     walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = CarrierFollow }, project: Chain);
+        Served(r, "HcRecSpellA");
+        Assert.DoesNotContain("HcRecSpellB", r);
+    }
+
+    [Fact]
+    public void ReverseWithANonMgefSeedFailsLoudNamingTheType_NeverASilentZeroCarriers()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) },
+                                     walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = CarrierFollow }, project: Chain);
+        Assert.Contains("error", r);
+        Assert.True(r.Contains("MagicEffect") || r.Contains("MGEF"), "the refusal names the required type");
+    }
+
+    /// <summary>The carrier lane follows the effect link at every hop, so a depth past 1 reaches nothing — and the
+    /// response says the empty hops rather than answering a depth-3 call with a depth-1 answer and no word.</summary>
+    [Fact]
+    public void ReverseDepthOnTheCarrierLaneNamesTheEmptyHopsRatherThanStoppingSilently()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                     walk: new RecordsTools.RecordsWalk { direction = "reverse", depth = 3, follow = CarrierFollow }, project: Chain);
+        Served(r, "hop 2: 0", "hop 3: 0", "not a magic effect");
+    }
+
+    /// <summary>A plain carrier call asked for no depth, so it is told none: the default 16 must not print fifteen
+    /// empty hops and a paragraph answering a question nobody asked.</summary>
+    [Fact]
+    public void TheCarrierLaneWithNoDepthAskedPrintsNoHopCensus()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                     walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = CarrierFollow }, project: Chain);
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        Assert.DoesNotContain("hop 2: 0", r);
+        Assert.DoesNotContain("hop 16", r);
+    }
+
+    [Fact]
+    public void InfoOrderOnANonDial_IsATypedPerItemRefusalTeachingTheQuestFanOutComposition() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, project: Form("info_order")),
+               "DIAL", "Quest =");
+
+    // ---- the SkyPatcher overlay pole ----------------------------------------------------------------
+
+    [Fact]
+    public void OverlayPostSource_TheReplayedBodyIsReadAndIniContentIsDeclaredOutsideTheFingerprint() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, source: Overlay("post"),
+                                    project: Fields("BasicStats.Damage")),
+               "99", "OUTSIDE the epoch fingerprint");
+
+    [Fact]
+    public void PreVsPostOverlayDelta_NoIniLayerHereSoTheTwoStatesAgree_AnHonestIdentical() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, source: Overlay("pre"),
+                                    versus: Overlay("post"), project: Delta), "identical");
+
+    // ---- scope-vs-pole streams ----------------------------------------------------------------------
+
+    [Fact]
+    public void ScopeVsPole_TheScopesMatchesReadFromThePoleAndUntouchedOnesAreCountedAndNamed() =>
+        Served(RecordsTools.Records(Svc, types: null, plugins: Scope(W.MasterName), source: Plugin(W.OverrideName),
+                                    project: Fields("BasicStats.Damage")), "99", "not_touched");
+
+    [Fact]
+    public void ScopeVsPolePlusSummary_ReadsThePolesRowsAndCountsTheUntouched() =>
+        Served(RecordsTools.Records(Svc, plugins: Scope(W.MasterName), source: Plugin(W.OverrideName)),
+               "this pole's version is read", "not_touched", RecordsWorld.RenamedArmorNewEid);
+
+    // ---- selection, walk and artifact compositions ----------------------------------------------------
+
+    [Fact]
+    public void FoldF1_ConflictsOnlyPlusFormidsEvaluatesWhere_TheContestedButNonMatchingKeyDropsOut()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]), Fid(W.Weapons[1]) }, conflicts_only: true,
+                                     where: new[] { "BasicStats.Damage >= 90" });
+        Served(r, "HcRecW0");
+        Assert.DoesNotContain("HcRecW1", r);
+    }
+
+    [Fact]
+    public void FoldF1_AContestedKeyFailingThePredicateIsExcludedNotReturnedAsAMatch()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, conflicts_only: true,
+                                     where: new[] { "BasicStats.Damage >= 500" });
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal));
+        Assert.DoesNotContain("HcRecW0", r);
+    }
+
+    [Fact]
+    public void FoldF2_ScanPlusWalkPlusAggregateCountsTheReachedSetWithTheWalkDeclared() =>
+        Served(RecordsTools.Records(Svc, types: new[] { "SPEL" }, walk: new RecordsTools.RecordsWalk(),
+                                    project: new RecordsTools.RecordsProject { form = "aggregate", group_by = "type" }),
+               "MagicEffect", "selection =");
+
+    [Fact]
+    public void FoldF3_ReverseWalkPlusToFileWritesTheCarrierArtifact()
+    {
+        var art = W.Scratch("results", "carriers.jsonl");
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                     walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = CarrierFollow }, to_file: art,
+                                     project: Chain);
+        Assert.True(File.Exists(art));
+        Assert.Contains(art, r);
+    }
+
+    [Fact]
+    public void FoldF5_AnOverlayPoleOnAScanComparisonRefusesNamingTheBoundedFormidsLane() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "WEAP" }, source: Overlay("post"), versus: Plugin("winner"),
+                                     project: Delta), "formids=");
+
+    [Fact]
+    public void FoldF8_JsonDeltaCensusCountsTheCompleteListWithRowsWindowed() =>
+        Served(RecordsTools.Records(Svc, formids: AllWeaponIds, versus: Plugin("winner"), format: "json", limit: 1,
+                                    project: Delta), "\"count\": 3", "\"rendered\": 1");
+
+    [Fact]
+    public void FoldF9_OffOrderWhereSourceWithAnUnknownSpellingRefusesByName() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "WEAP" }, source: Plugin(W.OldName),
+                                     where: new[] { "BasicStats.Damage >= 1" }, where_source: "winnner"), "winnner");
+
+    [Fact]
+    public void FoldF10_OffOrderFormidsExpandingToEmptyRefuses() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { "" }, types: new[] { "WEAP" }, source: Plugin(W.OldName)), "empty");
+
+    [Fact]
+    public void ReReview_AnOverlayVersusOnTheOffOrderScanRefusesToo() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "WEAP" }, source: Plugin(W.OldName), versus: Overlay("post"),
+                                     project: Delta), "formids=");
+
+    [Fact]
+    public void ReReview_LimitWindowsTheSeedsOnly_BothCarriersOfTheOneSeedRender() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                    walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = CarrierFollow }, limit: 1, project: Chain),
+               "HcRecSpellA", "HcRecSpellC");
+
+    // ---- json envelopes and fields_source compositions -------------------------------------------------
+
+    [Fact]
+    public void Fold3F1_AScanLaneDeltasJsonEnvelopeCarriesExactlyOneSourceProperty() =>
+        Assert.Equal(1, CountOf(RecordsTools.Records(Svc, types: new[] { "WEAP" }, where: new[] { $"winner = {W.OverrideName}" },
+                                                     source: Plugin(W.OverrideName), versus: Plugin("previous_provider"),
+                                                     format: "json", project: Delta), "\"source\":"));
+
+    [Fact]
+    public void Fold3F1_AScanSeededWalksReEnteredSummaryStatesOneSourceArm()
+    {
+        var r = RecordsTools.Records(Svc, types: new[] { "SPEL" }, walk: new RecordsTools.RecordsWalk());
+        int ep = r.IndexOf("epoch=", StringComparison.Ordinal);
+        Assert.True(ep > 0, "the summary stamps an epoch");
+        Assert.Equal(1, CountOf(r.Substring(0, ep), "source="));
+    }
+
+    [Fact]
+    public void Fold3F3_ResolveNamesUnderTheOverlayPostPoleAnnotatesLinkTargets() =>
+        Served(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) }, source: Overlay("post"),
+                                    project: new RecordsTools.RecordsProject
+                                    { form = "fields", fields = new[] { "Effects" }, depth = 4, resolve_names = true }),
+               "HcRecMgefFire");
+
+    [Fact]
+    public void Fold3F4_FieldsSourcePlusScopeVsPoleRefusesByName_TwoDisplayPolesOnOneCall() =>
+        Refused(RecordsTools.Records(Svc, plugins: Scope(W.MasterName), source: Plugin(W.OverrideName),
+                                     fields_source: "winner", project: Fields("BasicStats.Damage")), "TWO display poles");
+
+    [Fact]
+    public void Fold3F4_FieldsSourcePlusWalkRefusesByName() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) }, fields_source: "winner",
+                                     walk: new RecordsTools.RecordsWalk()), "fields_source");
+
+    [Fact]
+    public void Fold3F4_FieldsSourcePlusChainRefusesByName_NoFieldValuesToRetarget() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) }, fields_source: "winner",
+                                     walk: new RecordsTools.RecordsWalk(), project: Chain), "fields_source");
+
+    [Fact]
+    public void Fold3F7_DensePlusWalkRefusesUpFront() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "SPEL" }, format: "dense", walk: new RecordsTools.RecordsWalk()),
+                "dense");
+
+    // ---- tree envelopes and fields_source under a walk --------------------------------------------------
+
+    [Fact]
+    public void Fold4R31_AnOffOrderTreesEnvelopeKeepsTheSelectionArmInSourceAndTheReferenceInVersus()
+    {
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, source: Plugin(W.OldName), format: "json",
+                                     project: Form("tree"));
+        Served(r, "OUT-OF-LOAD-ORDER", "\"versus\": \"winner\"");
+        Assert.Equal(1, CountOf(r, "\"source\":"));
+    }
+
+    [Fact]
+    public void Fold4R31_SourceOnTheListLaneTreeRefusesByName_ATreeHasNoSubject() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { Fid(W.Weapons[0]) }, source: Plugin(W.OverrideName),
+                                     project: Form("tree")), "no subject");
+
+    [Fact]
+    public void Fold4R33_FieldsSourceScopedTheDocumentedNoOpDefaultStaysAcceptedUnderAWalk() =>
+        Assert.False(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) }, fields_source: "scoped",
+                                          walk: new RecordsTools.RecordsWalk())
+                                 .StartsWith("error:", StringComparison.Ordinal));
+
+    [Fact]
+    public void Fold4R33_AnUnknownFieldsSourceUnderAWalkGetsTheNotAKnownSourceRefusalByValue() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { Fid(W.SpellA) }, fields_source: "winnner",
+                                     walk: new RecordsTools.RecordsWalk()), "winnner");
+}
+
+/// <summary>What a seed says about its WALK — the cycles it recorded, the walk.max_nodes cap it hit, the
+/// TemplateFlags report — survives a max_chars cut of its node list. The two losses are on different axes, and
+/// the nodes notice's remedy (raise max_chars) does not answer a walk that stopped at its own cap. Driven against
+/// a hand-built seed: no fixture makes a capped walk with nodes enough for max_chars to cut.</summary>
+[Trait("tier", "unit")]
+public sealed class ChainSeedTailTests
+{
+    const string WalkCap = "walk truncated: the 2-node cap was reached — what is listed IS reached and proved; raise walk.max_nodes to walk further.";
+
+    static string Render(int cap)
+    {
+        var nodes = Enumerable.Range(0, 6).Select(i =>
+            new RecordReads.WalkNodeRow($"00080{i}:A.esm", "Weapon", "HcRecW" + i, 1, "Effects[].BaseEffect", "reached", null)).ToArray();
+        var row = new RecordReads.WalkSeedResult("000800:A.esm", "Npc", "HcRecNpcChild", nodes,
+            Array.Empty<string>(), WalkCap,
+            new[] { new RecordReads.NpcTemplateCategory("Traits", true, "000900:A.esm", "HcRecNpcParent", null) },
+            null);
+        return RecordsTools.RenderRecordsChain(new[] { row }, 1, nodes.Length, 0, "records  form=chain", null,
+                                               cap, null, out _);
+    }
+
+    /// <summary>One char under what the whole seed takes, so the node list is cut — and both statements the walk
+    /// itself owes are still there under the notice.</summary>
+    [Fact]
+    public void ASeedCutMidListStillSaysItsWalkHitItsOwnCap()
+    {
+        var r = Render(Render(100_000).Length - 1);
+
+        Assert.Contains("[nodes cut at max_chars=", r);
+        Assert.Contains(WalkCap, r);
+        Assert.Contains("Traits: INHERITED from", r);
+    }
+}

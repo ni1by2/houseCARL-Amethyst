@@ -1,0 +1,136 @@
+# Dialogue: what decides which line plays, and where a line lands
+
+A dialogue record can be valid on disk and still fail to play because of its ordering. Two rules
+below were measured in-game. The third concerns bookkeeping filled by `housecarl_create`,
+including one default that can be wrong for the intended use and one flag it never sets.
+
+## Quest priority decides the greeting, before intra-topic order
+
+Which topic the game enters for a generic greeting is decided **across quests by quest priority**, and only then
+is the order inside a topic consulted. Measured in game on 2026-09-09 on the ARR 2.0 order: a `Hello` INFO in
+its own start-game-enabled quest at `Priority = 100`, gated `GetIsID(Hulda) = 1`, with the quest's `.seq` file
+present, played on **every** approach and the vanilla greeting did not. The identical INFO with the quest at
+`Priority = 0` never played, and vanilla greeted as normal. For scale: vanilla `DialogueWhiterun` is
+`Priority = 30` and `DialogueGeneric` is `0`.
+
+This affects the entire greeting pool. A high-priority greeting whose condition passes on every activation replaces the
+NPC's **whole** greeting pool for as long as it is active — the vanilla lines are not merged in behind it, they
+are simply not reached. Gate the line so it passes only sometimes (a quest stage, a time of day, a one-shot
+global), or accept that you have silenced everything else that NPC said.
+
+## A re-listed INFO falls to the bottom unless it carries its PNAM
+
+Any override of an existing INFO is a **re-list** (including an override that only adds a condition) and a
+re-listed INFO moves to the bottom of the merged topic order unless the override carries `PreviousDialog`
+(PNAM) naming the line immediately above it in the merged order. Most lines, vanilla ones included, carry no
+PNAM and there is nothing to preserve — but some do, and on those the PNAM is load-bearing: a PNAM present with
+value zero is the "I am first" marker, which pins the line to the **head** of the topic, and it is a normal shape
+in shipped plugins rather than an edge case. Overwrite one with a position-minus-one FormID and a vanilla line
+that was held ahead of the lines it guards now follows them.
+
+Read the merged order, not the defining plugin's own list, and read the placement it reports before you choose a
+PNAM:
+
+```
+housecarl_records(formids=["02707A:Skyrim.esm"], project={"form":"info_order"})
+```
+
+A line the order marks *pinned first by its own PNAM marker* carries that present-zero PNAM: leave it alone.
+The record read says which shape a line carries: under `project={"form":"everything"}` a present-zero PNAM reads
+`PreviousDialog = (null link, subrecord present)` and an absent one reads `PreviousDialog = (null link)`. The
+placement `info_order` reports is still what tells you where the line actually lands.
+
+Take the line at the target's position minus one and write that FormID into the override's `PreviousDialog`.
+Adding a **new** line re-lists nothing and needs no PNAM for the lines around it.
+
+Two cases the recipe does not cover. If the target is already at position 1 there is no line above it to name —
+and writing no PNAM does not leave it there. Absent is the tail arm: the re-listed line goes to the **bottom**,
+and every line that was beneath it now answers first. The shape that holds a line at the head is the present-zero
+PNAM above, and the two shapes are two different writes: `Set` `PreviousDialog` to `"0"` writes the present zero
+(pinned first), and `Remove` on `PreviousDialog` leaves the subrecord out (the bottom). Each reads back as above,
+in the apply echo and in a record read (#1144; through 2.0.4 `Remove` also wrote the present zero, so a patch that
+used it to send lines to the bottom pinned them first instead: re-run the call with `into=` that patch, which
+fixes it in place, where a plain re-run writes a new `<name>_001.esp` beside the bad one). Either `Set` the
+position-1 line's PNAM to `"0"`, or re-list the run beneath it in the same call, each of those lines carrying the
+FormID of the line above it: the merge places them back in front of the line that fell to the bottom and the
+original sequence is restored. And because `info_order` merges every plugin touching the topic, the line at
+position minus one can be one defined by a plugin your patch does not master. That does not dangle: the patch lane
+is handed the whole load order and Mutagen derives the master list from the records' own FormLinks, so writing
+that FormID **adds that plugin as a master** of your patch — a new hard dependency, one more plugin your patch
+requires and must load after. Decide whether you want it before you write the link; if you do not, name a line
+from a plugin you already master and accept the position it gives you. (A PNAM that truly resolves to nothing (a
+target no active plugin defines) places the line at the HEAD, not the bottom.)
+
+## A topic only one plugin touches: PNAM against file order
+
+Nothing merges on a topic one plugin touches, but that plugin's own PNAM links still place its lines, and a line
+whose PNAM names a line other than the one above it in the file lands somewhere else. When every line stays where
+the file puts it, `info_order` says so in one line: the effective order is that plugin's own list. On a topic past
+400 lines that one line says instead that the PNAM order was not compared with the file order. When one does
+not, it lists the order with PNAM applied, marks each line that changed relative order `MOVED from #N` with its
+file position, and says that which order the game follows within one plugin is **untested**: houseCARL applies
+PNAM there because the merge applies it everywhere else and xEdit's INFO order does the same, not because it was
+measured in game. If such a line matters, check it in game before relying on either order.
+
+## The bookkeeping create fills, and the flags they do not decide
+
+`housecarl_create` fills the Creation Kit's bookkeeping on dialogue records and reports each fill, so nothing
+here is silent. A `DialogBranch`'s `Flags` is the one field it will not fill: a branch created with no `Flags`
+is **refused**, and nothing is written.
+
+That is because the two shapes are both real, and each is fatal in the other's place. `TopLevel` is what
+publishes a branch to the player's menu, so a menu branch without it (and every topic under it) is dead
+(#693). But `0` is exactly what a scripted `Say()` topic needs: a branch left at `TopLevel` when it should
+have been hidden puts a nameless line in the player's menu as a selectable `...` (#212). Skyrim.esm carries
+both on purpose (2117 branches at `TopLevel`, and 203 `Player` branches at exactly `0`) so there is no
+honest default to fill, and houseCARL asks instead of guessing. Pass `TopLevel` for a menu entry the player
+can pick, or `0` for a scripted `Say()` topic that must stay hidden. A value you pass always wins, an
+explicit `0` included.
+
+The other branch flags are authoring choices too, and nothing fills them for you: `Blocking` and `Exclusive`
+are never added to the `Flags` you pass, so a branch that has to block or exclude its siblings needs them
+named there.
+
+On a line, the `Goodbye` flag, which ends the conversation on the line that carries it, and lives inside the
+INFO's own `Flags` struct. The create path materialises that struct to all-zero, and all-zero is not
+`Goodbye` — a line meant to close the conversation needs `Flags.Flags = Goodbye` set explicitly.
+
+## Reading the merged order before the patch is enabled
+
+A patch that is written but not yet ticked in MO2 is not in the active order, so the merge cannot see it. Name it
+on `source=` and `info_order` folds it in where MO2 would load it — the **end** of the order for a regular plugin,
+after the **last master** for an ESM-flagged one or a `.esm`/`.esl`, and in the plugin's **own slot** when the order
+already carries that filename (a shadowed copy named by `{"file", "mod"}`). The response states which, the plugin it
+landed beside, and the flag it read:
+
+```
+housecarl_records(formids=["02707A:Skyrim.esm"], project={"form":"info_order"},
+                  source="MyPatch.esp")
+```
+
+The answer is the order as it **would** be with that file enabled: every line the file places is marked
+`[FOLDED]` and named with the file that placed it, and the response says the whole order is a projection. One
+file per call (two files have no order between them until MO2 sorts them) and a filename that is already
+active is refused, since its lines are in the merge already. A topic only the patch defines has no winner in
+the order, so name it in `formids=`; a scan (`types=["DIAL"]`) selects out of the active order and will not
+reach it.
+
+This is a projection, not a measurement. Report it as what the order would be, and re-read without `source=`
+once the patch is enabled if you need the live order.
+
+## Checking a patch before the patch is enabled
+
+The dialogue findings family takes the same address on its own `source=`, and folds the file in by the same three
+rules — the end of the order, after the last master, or the plugin's own slot when the order already carries that
+filename. Seeds may then name records the patch itself defines:
+
+```
+housecarl_check(findings=["dialogue"], seeds=["000800:MyPatch.esp"], source="MyPatch.esp")
+```
+
+Every seed is validated against the active order's winners plus that file, and what the file carries wins. The
+section says once at the top that the file is not active, so nothing under it reads as the live answer. One part
+does not move with the plugin: its `.fuz`, `.pex` and `.seq` files resolve through the VFS, which serves only the
+mod folders MO2 has enabled — so a voice file shipped beside the patch in a folder that is off reads as absent
+here. Only the dialogue family takes `source=`; the swept families (errors, scripts, facegen) take an off-order
+plugin on `plugins=`, which sweeps that file's own records instead.

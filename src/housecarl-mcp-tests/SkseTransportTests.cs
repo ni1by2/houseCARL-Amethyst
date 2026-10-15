@@ -1,0 +1,911 @@
+using System.Text.Json;
+using HousecarlMcp;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+/// <summary>
+/// The TRANSPORT lane of <c>housecarl_skse</c> (SPEC §2.1): the in-band accounting every answer ends on, the
+/// <c>limit=</c>/<c>offset=</c> window over each family's row list, and the <c>format='json'</c> twin. Driven over
+/// synthetic data straight into the three family renders, which are pure over it — no live MO2 instance, and no
+/// dependence on what a real layer happens to contain.
+/// </summary>
+[Trait("tier", "unit")]
+public sealed class SkseTransportTests
+{
+    // ---- synthetic layers ------------------------------------------------------------------------
+
+    static SkseProvider Mod(string name) => new(name, "loose");
+
+    static SksePluginReader.SkseVersionInfo Version(string name) =>
+        new(name, "author", "", "1.0.0", UsesAddressLibrary: true, UsesSignatureScanning: false,
+            UsesUpdatedStructs: false, DeclaresNoStructs: false, new[] { "1.6.1170.0" }, null);
+
+    static SkseFileEntry Dll(int i) =>
+        new($"SKSE/Plugins/p{i}.dll", $"p{i}.dll", "", new[] { Mod($"Mod{i}") },
+            new SksePluginReader.SksePluginInfo($"p{i}.dll", SksePluginReader.SksePluginKind.Modern, true, Version($"Plugin {i}"), null,
+                                                new[] { "kernel32.dll" }),
+            null);
+
+    static SkseFileEntry Config(int i, string group = "Group") =>
+        new($"SKSE/Plugins/{group}/c{i}.ini", $"c{i}.ini", group, new[] { Mod($"Mod{i}") }, null, null);
+
+    /// <summary>A caveat block big enough to be visible against a tight max_chars — what a reserve has to hold room
+    /// for, and what an unreserved tail overshoots the cap by.</summary>
+    static string[] Warnings(int n) => Enumerable.Range(1, n).Select(i => $"warning {i}: " + new string('w', 180)).ToArray();
+
+    static SkseInventoryData Inventory(int dlls, int configs = 0, int folders = 1, string[]? warnings = null,
+                                      string[]? rootFailures = null, string[]? bsaFailures = null) =>
+        new(Enumerable.Range(1, dlls).Select(Dll).ToList(),
+            Enumerable.Range(1, configs).Select(i => Config(i, $"Group{i % folders}")).ToList(),
+            OtherFileCount: 0, InstalledRuntime: "1.6.1170.0", BsaFailures: bsaFailures ?? Array.Empty<string>(),
+            RootFailures: rootFailures ?? Array.Empty<string>(), ReadIncomplete: false,
+            Warnings: warnings ?? Array.Empty<string>(), ProfileName: "Default");
+
+    static NativeClassEntry Cls(int i) =>
+        new($"scripts/k{i}.pex", $"Klass{i}", new[] { "Fn" }, new[] { Mod($"Mod{i}") },
+            NativeProvenance.ThirdParty, NativePairingRung.SameMod, $"Mod{i}",
+            new[] { new NativePairedDll($"SKSE/Plugins/p{i}.dll", $"p{i}.dll", "", $"Mod{i}",
+                                        new SksePluginReader.SksePluginInfo($"p{i}.dll", SksePluginReader.SksePluginKind.Modern, true, Version($"Plugin {i}"), null,
+                                                                            new[] { "kernel32.dll" }), null) });
+
+    /// <summary>A class whose only candidate DLL is version-locked to a runtime that is not the installed one — the
+    /// PAIRED BUT DEAD finding.</summary>
+    static NativeClassEntry DeadCls(int i) =>
+        new($"scripts/d{i}.pex", $"Dead{i}", new[] { "Fn" }, new[] { Mod($"Other{i}") },
+            NativeProvenance.ThirdParty, NativePairingRung.SameMod, $"Other{i}",
+            new[] { new NativePairedDll($"SKSE/Plugins/d{i}.dll", $"d{i}.dll", "", $"Other{i}",
+                        new SksePluginReader.SksePluginInfo($"d{i}.dll", SksePluginReader.SksePluginKind.Modern, true,
+                            new SksePluginReader.SkseVersionInfo($"Dead {i}", "author", "", "1.0.0",
+                                UsesAddressLibrary: false, UsesSignatureScanning: false, UsesUpdatedStructs: false,
+                                DeclaresNoStructs: false, new[] { "1.5.97.0" }, null), null,
+                            new[] { "kernel32.dll" }), null) });
+
+    /// <summary>A baseline class — carried by an official archive, implemented by the game executable. It is accounted
+    /// for by a count on the "accounted for" line rather than by a section row of its own.</summary>
+    static NativeClassEntry EngineCls(int i) =>
+        new($"scripts/e{i}.pex", $"Engine{i}", new[] { "Fn" }, new[] { Mod("Skyrim.esm") },
+            NativeProvenance.Engine, null, null, Array.Empty<NativePairedDll>());
+
+    /// <summary>A layer whose first <paramref name="engine"/> classes are baseline and whose rest are healthy
+    /// third-party pairings — the two populations the "accounted for" block reconciles.</summary>
+    static NativePairingAuditData EngineThenThirdParty(int engine, int third) =>
+        new(Enumerable.Range(1, engine).Select(EngineCls)
+                .Concat(Enumerable.Range(1, third).Select(Cls)).ToList(),
+            PexScanned: engine + third, Unreadable: Array.Empty<NativeUnreadablePex>(),
+            SkseLoaderSeen: true, InstalledRuntime: "1.6.1170.0", BsaFailures: Array.Empty<string>(),
+            RootFailures: Array.Empty<string>(), ReadIncomplete: false, Warnings: Array.Empty<string>(), ProfileName: "Default");
+
+    static NativePairingAuditData Pairing(int classes, int unreadable = 0, string[]? warnings = null,
+                                         string[]? rootFailures = null, string[]? bsaFailures = null) =>
+        new(Enumerable.Range(1, classes).Select(Cls).ToList(), PexScanned: classes,
+            Unreadable: Enumerable.Range(1, unreadable)
+                .Select(i => new NativeUnreadablePex($"scripts/bad{i}.pex", $"Mod{i}", "not a valid .pex header")).ToList(),
+            SkseLoaderSeen: true, InstalledRuntime: "1.6.1170.0",
+            BsaFailures: bsaFailures ?? Array.Empty<string>(), RootFailures: rootFailures ?? Array.Empty<string>(),
+            ReadIncomplete: false, Warnings: warnings ?? Array.Empty<string>(), ProfileName: "Default");
+
+    static SkseAuditedRef Ref(int i, int n) =>
+        new(new HousecarlCore.SkseConfigRef($"0x{0x800 + n:X6}|Ghost{i}.esp", HousecarlCore.SkseRefShape.FormToken,
+                                            $"Ghost{i}.esp", 0x800u + (uint)n, $"0x{0x800 + n:X6}", n, null),
+            SkseRefVerdict.PluginMissing, $"Ghost{i}.esp is not in the active load order");
+
+    static SkseConfigFileAudit ConfigFile(int i, int refs = 1) =>
+        new($"SKSE/Plugins/Group/f{i}.ini", $"f{i}.ini", "Group", $"Mod{i}", 1, new[] { Mod($"Mod{i}") },
+            Enumerable.Range(1, refs).Select(n => Ref(i, n)).ToList(), ReadError: null);
+
+    static SkseConfigAuditData ConfigAudit(int files, int refs = 1, string[]? warnings = null,
+                                          string[]? rootFailures = null, string[]? bsaFailures = null) =>
+        new(Enumerable.Range(1, files).Select(i => ConfigFile(i, refs)).ToList(), ConfigCount: files,
+            BsaFailures: bsaFailures ?? Array.Empty<string>(), RootFailures: rootFailures ?? Array.Empty<string>(),
+            ReadIncomplete: false, Warnings: warnings ?? Array.Empty<string>(), ProfileName: "Default");
+
+    static string Text(string family, int rows, RowWindow window = default, string? filter = null) => family switch
+    {
+        "inventory" => SkseInventoryWire.Render(Inventory(rows), filter, 80_000, window),
+        "pairing" => NativePairingWire.Render(Pairing(rows), filter, 80_000, window),
+        _ => SkseConfigAuditWire.Render(ConfigAudit(rows), filter, 80_000, window),
+    };
+
+    static JsonDocument Json(string family, int rows, RowWindow window = default, string? filter = null, int cap = 200_000) => family switch
+    {
+        "inventory" => JsonDocument.Parse(SkseInventoryWire.RenderJson(Inventory(rows), filter, cap, window)),
+        "pairing" => JsonDocument.Parse(NativePairingWire.RenderJson(Pairing(rows), filter, cap, window)),
+        _ => JsonDocument.Parse(SkseConfigAuditWire.RenderJson(ConfigAudit(rows), filter, cap, window)),
+    };
+
+    static readonly string[] Families = { "inventory", "pairing", "config" };
+
+    // ---- the accounting block --------------------------------------------------------------------
+
+    /// <summary>SPEC §2.1 makes the accounting required output, so it rides EVERY answer — not only a windowed one.
+    /// Without this a family could quietly go back to counting nothing.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void EveryFamilysTextAnswerEndsOnTheAccountingBlock(string family)
+    {
+        var text = Text(family, 4);
+
+        Assert.Contains("[accounting] total=4 rendered=4 skipped=0 capped=0 truncated=0 offset=0 remaining=0 notes=0", text);
+        // Nothing was left out, so nothing advises a next page.
+        Assert.DoesNotContain("re-call with limit=", text);
+    }
+
+    /// <summary>The filter= view answers over its MATCHES, so its accounting counts those — a filtered response that
+    /// reported the whole layer's total would tell the caller to page through rows the filter already excluded.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void TheFilteredViewAccountsForItsMatchesNotTheWholeLayer(string family)
+    {
+        var text = Text(family, 6, filter: "Mod3");
+
+        Assert.Contains("[accounting] total=1 rendered=1", text);
+    }
+
+    /// <summary>A filter that matches nothing is still an answer, and still says so in numbers.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void AFilterThatMatchesNothingStillCarriesTheAccounting(string family)
+        => Assert.Contains("[accounting] total=0 rendered=0", Text(family, 4, filter: "NoSuchThing"));
+
+    // ---- the paging window -----------------------------------------------------------------------
+
+    /// <summary>offset= steps over rows BEFORE the window and limit= bounds it, and the two omissions are counted
+    /// apart: skipped is what offset passed, capped is what limit left behind.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void LimitAndOffsetWindowTheRowsAndAreCountedApart(string family)
+    {
+        var text = Text(family, 10, new RowWindow(Offset: 2, Limit: 3));
+
+        Assert.Contains("[accounting] total=10 rendered=3 skipped=2 capped=5 truncated=0 offset=2 remaining=5", text);
+        // The next page starts at the first row this response did not show, and keeps the same window size.
+        Assert.Contains("re-call with limit=3 offset=5 for the next page.", text);
+    }
+
+    /// <summary>The census above the rows states the WHOLE layer even when the window shows three of it — the
+    /// AssetStatus contract. A windowed response that renamed the total would read as a smaller load order.</summary>
+    [Fact]
+    public void TheCensusStatesTheWholeLayerWhileTheRowsAreTheWindow()
+    {
+        var text = Text("inventory", 10, new RowWindow(Offset: 0, Limit: 3));
+
+        Assert.Contains("10 DLL(s)", text);
+        Assert.Contains("plugins: 10 with static metadata", text);
+        Assert.Contains("plugins with metadata (3)", text);   // the section lists the window
+    }
+
+    /// <summary>An offset past the end is answered with the fact, not with advice to re-call at the offset that
+    /// already overshot.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void AnOffsetPastTheEndSaysSoInsteadOfAdvisingTheSameOffsetAgain(string family)
+    {
+        var text = Text(family, 3, new RowWindow(Offset: 9, Limit: 0));
+
+        Assert.Contains("offset=9 is past the end of the selection (3 ", text);
+        Assert.DoesNotContain("re-call with limit=", text);
+    }
+
+    /// <summary>Windows tile: paging the whole list one page at a time visits every row exactly once.</summary>
+    [Fact]
+    public void ConsecutiveWindowsTileTheWholeRowList()
+    {
+        var first = Text("pairing", 6, new RowWindow(0, 4));
+        var second = Text("pairing", 6, new RowWindow(4, 4));
+
+        Assert.Contains("Klass1", first);
+        Assert.Contains("Klass4", first);
+        Assert.DoesNotContain("Klass5", first);
+        Assert.Contains("Klass5", second);
+        Assert.Contains("Klass6", second);
+        Assert.Contains("[accounting] total=6 rendered=2 skipped=4 capped=0", second);
+    }
+
+    /// <summary>Both knobs are one refusal, because a caller who got one wrong usually typed the other in the same
+    /// call. It is one plain sentence naming what to pass instead.</summary>
+    [Theory]
+    [InlineData(-1, 0)]
+    [InlineData(0, -5)]
+    public void ANegativeLimitOrOffsetIsOneRefusalNamingBothKnobs(int limit, int offset)
+    {
+        var error = new RowWindow(offset, limit).Error;
+
+        Assert.NotNull(error);
+        Assert.StartsWith("error: ", error);
+        Assert.Contains("limit=0 for no limit", error);
+        Assert.Contains("offset=0", error);
+    }
+
+    // ---- the json twin ---------------------------------------------------------------------------
+
+    /// <summary>Every family's json answer is a valid document that names the family it ran and the two it did not
+    /// — the in-band twin of the text footer, which a json response cannot carry as prose.</summary>
+    [Theory]
+    [InlineData("inventory", "pairing", "config")]
+    [InlineData("pairing", "inventory", "config")]
+    [InlineData("config", "inventory", "pairing")]
+    public void TheJsonTwinNamesTheFamilyThatRanAndTheTwoThatDidNot(string family, string a, string b)
+    {
+        using var doc = Json(family, 3);
+        var root = doc.RootElement;
+
+        Assert.Equal(family, root.GetProperty("family").GetString());
+        Assert.Equal(new[] { a, b }, root.GetProperty("not_run").EnumerateArray().Select(e => e.GetString()).ToArray());
+        Assert.Equal("Default", root.GetProperty("profile").GetString());
+        Assert.Equal(JsonValueKind.Null, root.GetProperty("filter").ValueKind);
+    }
+
+    /// <summary>The accounting rides IN the json document, in named fields — so a json consumer reads the numbers
+    /// off the shape rather than parsing the text line, and json is never the degraded lane.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void TheJsonTwinCarriesTheSameAccountingInNamedFields(string family)
+    {
+        using var doc = Json(family, 10, new RowWindow(Offset: 2, Limit: 3));
+        var a = doc.RootElement.GetProperty("accounting");
+
+        Assert.Equal(10, a.GetProperty("total").GetInt32());
+        Assert.Equal(3, a.GetProperty("rendered").GetInt32());
+        Assert.Equal(2, a.GetProperty("skipped").GetInt32());
+        Assert.Equal(5, a.GetProperty("capped").GetInt32());
+        Assert.Equal(0, a.GetProperty("truncated").GetInt32());
+        Assert.Equal(2, a.GetProperty("offset").GetInt32());
+        Assert.Equal(5, a.GetProperty("remaining").GetInt32());
+        Assert.Equal(0, a.GetProperty("notes").GetInt32());
+    }
+
+    /// <summary>The twin carries the SAME rows the text render lists, so the two lanes can differ only in
+    /// formatting.</summary>
+    [Fact]
+    public void TheJsonTwinCarriesTheWindowedRows()
+    {
+        using var doc = Json("pairing", 6, new RowWindow(4, 4));
+        var names = doc.RootElement.GetProperty("classes").EnumerateArray()
+                       .Select(c => c.GetProperty("class_name").GetString()).ToArray();
+
+        Assert.Equal(new[] { "Klass5", "Klass6" }, names);
+        Assert.Equal(6, doc.RootElement.GetProperty("totals").GetProperty("classes").GetInt32());
+    }
+
+    /// <summary>Over max_chars the twin drops trailing ROWS and counts them — never a cut of the serialized string
+    /// at a byte budget, which would hand the caller malformed json.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void OverMaxCharsTheJsonTwinDropsRowsAndStaysValid(string family)
+    {
+        // Parsing at all is half the assertion: a byte-budget cut would throw here.
+        using var doc = Json(family, 40, cap: 1_500);
+        var a = doc.RootElement.GetProperty("accounting");
+
+        Assert.Equal(40, a.GetProperty("total").GetInt32());
+        Assert.True(a.GetProperty("rendered").GetInt32() < 40, "the cap should have dropped rows");
+        Assert.Equal(40 - a.GetProperty("rendered").GetInt32(), a.GetProperty("truncated").GetInt32());
+    }
+
+    // ---- a window over two concatenated populations ----------------------------------------------
+
+    /// <summary>A limit the FIRST population spends leaves nothing for the second. The inventory filter's row list is
+    /// its DLL matches then its config matches, so a limit=2 that the two DLL matches use up must render no config —
+    /// a spent budget is not "no budget", and an accounting that says the window was honoured while every config
+    /// rendered is the silently wrong answer.</summary>
+    [Fact]
+    public void ALimitTheFirstPopulationSpendsLeavesNothingForTheSecond()
+    {
+        var text = SkseInventoryWire.Render(Inventory(2, 30), "Mod", 80_000, new RowWindow(0, 2));
+
+        Assert.Contains("2 DLL + 30 config match(es)", text);           // the census still states the whole match set
+        Assert.Contains("[accounting] total=32 rendered=2 skipped=0 capped=30 truncated=0", text);
+        Assert.DoesNotContain("matching configs (", text);
+        Assert.Contains("re-call with limit=2 offset=2 for the next page.", text);
+    }
+
+    /// <summary>The json twin windows the two populations the same way — the two lanes may differ only in
+    /// formatting.</summary>
+    [Fact]
+    public void TheJsonTwinAlsoLeavesNothingForTheSecondPopulationOnASpentLimit()
+    {
+        using var doc = JsonDocument.Parse(SkseInventoryWire.RenderJson(Inventory(2, 30), "Mod", 200_000, new RowWindow(0, 2)));
+
+        Assert.Equal(2, doc.RootElement.GetProperty("dlls").GetArrayLength());
+        Assert.Equal(0, doc.RootElement.GetProperty("configs").GetArrayLength());
+        Assert.Equal(2, doc.RootElement.GetProperty("accounting").GetProperty("rendered").GetInt32());
+        Assert.Equal(30, doc.RootElement.GetProperty("accounting").GetProperty("capped").GetInt32());
+    }
+
+    /// <summary>A limit the first population only PARTLY spends still continues into the second — the fix for the
+    /// spent budget must not turn every continuation into an empty one.</summary>
+    [Fact]
+    public void ALimitTheFirstPopulationOnlyPartlySpendsContinuesIntoTheSecond()
+    {
+        using var doc = JsonDocument.Parse(SkseInventoryWire.RenderJson(Inventory(2, 30), "Mod", 200_000, new RowWindow(0, 5)));
+
+        Assert.Equal(2, doc.RootElement.GetProperty("dlls").GetArrayLength());
+        Assert.Equal(3, doc.RootElement.GetProperty("configs").GetArrayLength());
+        Assert.Equal(5, doc.RootElement.GetProperty("accounting").GetProperty("rendered").GetInt32());
+    }
+
+    /// <summary>An offset that lands INSIDE the second population still renders it — the continuation window's offset
+    /// arithmetic is untouched by the spent-limit marker.</summary>
+    [Fact]
+    public void AnOffsetLandingInsideTheSecondPopulationStillRendersIt()
+    {
+        using var doc = JsonDocument.Parse(SkseInventoryWire.RenderJson(Inventory(2, 30), "Mod", 200_000, new RowWindow(4, 3)));
+
+        Assert.Equal(0, doc.RootElement.GetProperty("dlls").GetArrayLength());
+        Assert.Equal(3, doc.RootElement.GetProperty("configs").GetArrayLength());
+        Assert.Equal(new[] { "c3.ini", "c4.ini", "c5.ini" },
+                     doc.RootElement.GetProperty("configs").EnumerateArray()
+                        .Select(c => c.GetProperty("file_name").GetString()).ToArray());
+    }
+
+    // ---- the json census under filter= -----------------------------------------------------------
+
+    /// <summary>The config twin's <c>totals</c> under a filter counts the FILTER'S references, not the whole audit's.
+    /// A caller scoping to one folder and reading <c>totals.broken</c> was being told what the whole layer carries,
+    /// under a name that reads as the folder's — while <c>files</c> and <c>accounting</c> beside it named the
+    /// matches.</summary>
+    [Fact]
+    public void TheConfigTwinsCensusCountsTheFiltersReferencesNotTheWholeAudit()
+    {
+        using var doc = JsonDocument.Parse(SkseConfigAuditWire.RenderJson(ConfigAudit(5, refs: 2), "Mod3", 200_000));
+        var t = doc.RootElement.GetProperty("totals");
+
+        Assert.Equal(1, doc.RootElement.GetProperty("files").GetArrayLength());
+        Assert.Equal(1, doc.RootElement.GetProperty("accounting").GetProperty("total").GetInt32());
+        Assert.Equal(1, t.GetProperty("configs_scanned").GetInt32());
+        Assert.Equal(1, t.GetProperty("files_with_references").GetInt32());
+        Assert.Equal(2, t.GetProperty("references_checked").GetInt32());
+        Assert.Equal(2, t.GetProperty("inert").GetInt32());
+        Assert.Equal(0, t.GetProperty("read_errors").GetInt32());
+    }
+
+    /// <summary>The pairing twin's <c>totals</c> under a filter classifies the FILTER'S classes: a caller scoping to
+    /// one mod must not read other mods' dead pairings as its own. The scan counts that a filter cannot scope —
+    /// <c>pex_scanned</c>, <c>unreadable_pex</c> — are not stated rather than stated out of scope.</summary>
+    [Fact]
+    public void ThePairingTwinsCensusClassifiesTheFiltersClassesNotTheWholeAudit()
+    {
+        var d = Pairing(1) with
+        {
+            Classes = new[] { Cls(3) }.Concat(Enumerable.Range(1, 3).Select(DeadCls)).ToList(),
+            PexScanned = 4,
+        };
+
+        using var doc = JsonDocument.Parse(NativePairingWire.RenderJson(d, "Mod3", 200_000));
+        var t = doc.RootElement.GetProperty("totals");
+
+        Assert.Equal(1, doc.RootElement.GetProperty("classes").GetArrayLength());
+        Assert.Equal(1, t.GetProperty("classes").GetInt32());
+        Assert.Equal(1, t.GetProperty("healthy").GetInt32());
+        Assert.Equal(0, t.GetProperty("dead").GetInt32());          // the three dead ones belong to other mods
+        Assert.False(t.TryGetProperty("pex_scanned", out _));
+        Assert.False(t.TryGetProperty("unreadable_pex", out _));
+
+        // Unfiltered, the same audit states all four and both scan counts.
+        using var whole = JsonDocument.Parse(NativePairingWire.RenderJson(d, null, 200_000));
+        var w = whole.RootElement.GetProperty("totals");
+        Assert.Equal(4, w.GetProperty("classes").GetInt32());
+        Assert.Equal(3, w.GetProperty("dead").GetInt32());
+        Assert.Equal(4, w.GetProperty("pex_scanned").GetInt32());
+    }
+
+    /// <summary>The inventory twin's <c>totals</c> under a filter counts its matches, and the two members a filter
+    /// cannot scope are absent rather than layer-wide: <c>other_files</c> is counted-not-listed, and the folder table
+    /// is omitted instead of written empty — <c>[]</c> reads as "this layer has no config folders" rather than "this
+    /// view does not list them".</summary>
+    [Fact]
+    public void TheInventoryTwinsCensusCountsItsMatchesAndOmitsWhatAFilterCannotScope()
+    {
+        var layer = Inventory(5, configs: 3) with { OtherFileCount = 7 };
+
+        using var doc = JsonDocument.Parse(SkseInventoryWire.RenderJson(layer, "p3", 200_000));
+        var t = doc.RootElement.GetProperty("totals");
+
+        Assert.Equal(1, doc.RootElement.GetProperty("dlls").GetArrayLength());
+        Assert.Equal(1, t.GetProperty("dlls").GetInt32());
+        Assert.Equal(1, t.GetProperty("modern").GetInt32());
+        Assert.Equal(0, t.GetProperty("configs").GetInt32());
+        Assert.Equal(0, t.GetProperty("config_folders").GetInt32());
+        Assert.False(t.TryGetProperty("other_files", out _));
+        Assert.False(doc.RootElement.TryGetProperty("config_folders", out _));
+
+        // Unfiltered, the whole layer — including the folder table and the uncategorized-file count.
+        using var whole = JsonDocument.Parse(SkseInventoryWire.RenderJson(layer, null, 200_000));
+        var w = whole.RootElement.GetProperty("totals");
+        Assert.Equal(5, w.GetProperty("dlls").GetInt32());
+        Assert.Equal(3, w.GetProperty("configs").GetInt32());
+        Assert.Equal(7, w.GetProperty("other_files").GetInt32());
+        Assert.Equal(1, whole.RootElement.GetProperty("config_folders").GetArrayLength());
+    }
+
+    // ---- the pairing family's accounted-for baseline ---------------------------------------------
+
+    /// <summary>The "accounted for" block reconciles THIS PAGE: every row the window held that is not a finding. Its
+    /// engine and SKSE-core counts used to come from the whole audit while the healthy roster beside them came from
+    /// the window, so two different populations sat on adjacent lines with nothing saying which was which.</summary>
+    [Fact]
+    public void TheAccountedForBaselineCountsThePagesRowsNotTheWholeAudit()
+    {
+        var first = NativePairingWire.Render(EngineThenThirdParty(6, 4), null, 80_000, new RowWindow(0, 8));
+
+        Assert.Contains("accounted for: 6 engine class(es)", first);
+        Assert.Contains("paired healthy (2 class(es))", first);
+
+        // The sharp case: a page holding none of the baseline classes must not reprint their count as if it did.
+        var second = NativePairingWire.Render(EngineThenThirdParty(6, 4), null, 80_000, new RowWindow(6, 4));
+
+        Assert.Contains("accounted for: 0 engine class(es)", second);
+        Assert.Contains("paired healthy (4 class(es))", second);
+        // The summary above the sections still states the whole audit, which is where the layer's numbers live.
+        Assert.Contains("10 class(es) declare native functions", second);
+    }
+
+    /// <summary>The missing-loader alarm is a build-level fact, not a row: a window holding none of the SKSE-core
+    /// classes must not silence it.</summary>
+    [Fact]
+    public void TheMissingLoaderAlarmRidesTheWholeAuditNotTheWindow()
+    {
+        var d = EngineThenThirdParty(2, 4) with
+        {
+            Classes = new[] { new NativeClassEntry("scripts/su.pex", "StringUtil", new[] { "Fn" }, new[] { Mod("SKSE") },
+                                                   NativeProvenance.SkseCore, null, null, Array.Empty<NativePairedDll>()) }
+                .Concat(Enumerable.Range(1, 4).Select(Cls)).ToList(),
+            SkseLoaderSeen = false,
+        };
+
+        // The window starts past the one SKSE-core class, so the page carries none of them.
+        var text = NativePairingWire.Render(d, null, 80_000, new RowWindow(1, 4));
+
+        Assert.Contains("0 SKSE-core class(es)", text);   // the page holds none
+        Assert.Contains("no skse64 loader is visible", text);   // the audit does, so the alarm still rides
+    }
+
+    // ---- the json lane's own reserve --------------------------------------------------------------
+
+    /// <summary>The json tail — the caveats object and the accounting object — is paid for INSIDE max_chars, the way
+    /// every text render's reserve pays for its accounting line. What can still overrun is one row, because the cap is
+    /// tested before each row and not after; the tail here is ~12 KB of caveats inside a 20 KB cap, so an unreserved
+    /// one is unmissable.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void TheJsonTailIsPaidForInsideMaxCharsRatherThanAppendedPastIt(string family)
+    {
+        const int cap = 20_000;
+        var warnings = Warnings(60);
+        string json = family switch
+        {
+            "inventory" => SkseInventoryWire.RenderJson(Inventory(40, warnings: warnings), null, cap),
+            "pairing" => NativePairingWire.RenderJson(Pairing(40, warnings: warnings), null, cap),
+            _ => SkseConfigAuditWire.RenderJson(ConfigAudit(40, warnings: warnings), null, cap),
+        };
+
+        using var doc = JsonDocument.Parse(json);   // still a document, never a byte-budget cut
+        int tail = warnings.Sum(x => x.Length);
+        Assert.True(json.Length <= cap,
+                    $"{family}: {json.Length} chars against max_chars={cap} — the ~{tail}-char tail was not reserved.");
+    }
+
+    /// <summary>The TEXT twin of the reserve: a blocked tree's named roots are charged AND bounded to a SHARE of
+    /// max_chars, so the document stays inside it instead of shipping a tail wider than the whole budget. The slack
+    /// here is far under that share, so removing the share fails this too, not only the SkyPatcher test. The lists
+    /// above it are pinned by <see cref="EveryCaveatListIsBoundedInTheText"/>.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void TheTextCaveatsAreBoundedSoABlockedTreeDoesNotOverrunMaxChars(string family)
+    {
+        const int cap = 8_000;
+        var roots = Enumerable.Range(1, 200)
+            .Select(i => $"BlockedMod{i:D3}: could not read 'SKSE\\Plugins' — " + new string('r', 180)).ToArray();
+        string text = family switch
+        {
+            "inventory" => SkseInventoryWire.Render(Inventory(40, rootFailures: roots), null, cap),
+            "pairing" => NativePairingWire.Render(Pairing(40, rootFailures: roots), null, cap),
+            _ => SkseConfigAuditWire.Render(ConfigAudit(40, rootFailures: roots), null, cap),
+        };
+
+        Assert.Contains("BlockedMod001", text);                        // at least one root is NAMED, whatever the budget
+        Assert.Contains("of 200 loose root read failure(s)", text);     // and the rest are counted
+        Assert.True(text.Length <= cap + ShareSlack,
+                    $"{family}: {text.Length} chars against max_chars={cap} — the caveat tail took more than its share.");
+        // And it took THE share, not merely some bound. The numbers are absolute on purpose: a caveat line here is ~250
+        // chars, so a quarter of 8,000 holds 7 of them and a half would hold 15. Deriving the expectation from
+        // CaveatShare would scale with the constant and pin nothing.
+        Assert.InRange(NamedRootsInText(text), 5, 10);
+    }
+
+    /// <summary>The loose-root failures are a caveat array like the warnings, so the reserve has to hold room for them
+    /// too — a block added to a capped document without being counted is what broke the census cap in #825 — and the
+    /// array itself is BOUNDED to a share with its omitted sibling. The fixture carries warnings as well, because the
+    /// caveats written before the array are what a stale, unflushed baseline would charge the array for: the json lane
+    /// then named one root where the text lane named seven.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void TheJsonTailReserveCountsTheRootFailureBlock(string family)
+    {
+        const int cap = 20_000;
+        var roots = Enumerable.Range(1, 200)
+            .Select(i => $"BlockedMod{i:D3}: could not read 'SKSE\\Plugins' — " + new string('r', 180)).ToArray();
+        var warnings = Warnings(40);
+        string json = family switch
+        {
+            "inventory" => SkseInventoryWire.RenderJson(Inventory(40, warnings: warnings, rootFailures: roots), null, cap),
+            "pairing" => NativePairingWire.RenderJson(Pairing(40, warnings: warnings, rootFailures: roots), null, cap),
+            _ => SkseConfigAuditWire.RenderJson(ConfigAudit(40, warnings: warnings, rootFailures: roots), null, cap),
+        };
+        string text = family switch
+        {
+            "inventory" => SkseInventoryWire.Render(Inventory(40, warnings: warnings, rootFailures: roots), null, cap),
+            "pairing" => NativePairingWire.Render(Pairing(40, warnings: warnings, rootFailures: roots), null, cap),
+            _ => SkseConfigAuditWire.Render(ConfigAudit(40, warnings: warnings, rootFailures: roots), null, cap),
+        };
+
+        using var doc = JsonDocument.Parse(json);
+        var caveats = doc.RootElement.GetProperty("caveats");
+        int named = caveats.GetProperty("root_read_failures").GetArrayLength();
+        // Bounded AND counted: some roots are named, the rest are a sibling number, the way json-wire.md states it.
+        Assert.InRange(named, 1, roots.Length - 1);
+        Assert.Equal(roots.Length - named, caveats.GetProperty("root_read_failures_omitted").GetInt32());
+        int tail = roots.Sum(x => x.Length);
+        Assert.True(json.Length <= cap,
+                    $"{family}: {json.Length} chars against max_chars={cap} — the ~{tail}-char root-failure block was not bounded.");
+        // The two lanes bound the SAME list through the SAME cut, so they name the same folders for one call — exactly,
+        // not within a tolerance. They used to differ: the json array was bounded against the json stream, where an
+        // element costs its own length and no 28-char lead, so the same share held about seven where the text held five.
+        int inText = NamedRootsInText(text);
+        Assert.Equal(inText, named);
+    }
+
+    /// <summary>How many roots a text render actually named, off the lines themselves.</summary>
+    static int NamedRootsInText(string text) =>
+        System.Text.RegularExpressions.Regex.Matches(text, @"\[!\] loose root read failure: ").Count;
+
+    /// <summary>A build that lost the drive its archives are on: 200 warnings and 200 archive read failures, each ~195
+    /// chars — the #858 measurement, where the inventory rendered 40,337 chars of warnings alone at max_chars=8000.</summary>
+    static string[] ArchiveFailures(int n) =>
+        Enumerable.Range(1, n).Select(i => $"Archive{i:D3}.bsa: could not open — " + new string('a', 160)).ToArray();
+
+    /// <summary>The warnings and archive failures are cut and counted like the roots under them, so a long list of
+    /// either leaves the rows in the answer and the answer inside max_chars.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void EveryCaveatListIsBoundedInTheText(string family)
+    {
+        const int cap = 8_000;
+        var (warnings, archives) = (Warnings(200), ArchiveFailures(200));
+        string text = family switch
+        {
+            "inventory" => SkseInventoryWire.Render(Inventory(40, warnings: warnings, bsaFailures: archives), null, cap),
+            "pairing" => NativePairingWire.Render(Pairing(40, warnings: warnings, bsaFailures: archives), null, cap),
+            _ => SkseConfigAuditWire.Render(ConfigAudit(40, warnings: warnings, bsaFailures: archives), null, cap),
+        };
+
+        Assert.Contains("warning 1: ", text);                                  // each list names at least one
+        Assert.Contains("Archive001.bsa", text);
+        Assert.Matches(@"showing \d+ of 200 warning\(s\)", text);              // and counts the rest
+        Assert.Matches(@"showing \d+ of 200 archive read failure\(s\)", text);
+        Assert.True(text.Length <= cap + ShareSlack,
+                    $"{family}: {text.Length} chars against max_chars={cap} — a caveat list was not bounded.");
+        // And the rows are still in the answer: a block that ate the budget would pass the length check with none.
+        Assert.Contains(family switch { "inventory" => "p1.dll", "pairing" => "Klass1", _ => "f1.ini" }, text);
+    }
+
+    /// <summary>The json twin: each list is an array plus its sibling count, inside max_chars, naming exactly the
+    /// entries the text render of the same build names.</summary>
+    [Theory]
+    [InlineData("inventory")]
+    [InlineData("pairing")]
+    [InlineData("config")]
+    public void EveryCaveatArrayIsBoundedInTheJson(string family)
+    {
+        const int cap = 8_000;
+        var (warnings, archives) = (Warnings(200), ArchiveFailures(200));
+        string json = family switch
+        {
+            "inventory" => SkseInventoryWire.RenderJson(Inventory(40, warnings: warnings, bsaFailures: archives), null, cap),
+            "pairing" => NativePairingWire.RenderJson(Pairing(40, warnings: warnings, bsaFailures: archives), null, cap),
+            _ => SkseConfigAuditWire.RenderJson(ConfigAudit(40, warnings: warnings, bsaFailures: archives), null, cap),
+        };
+        string text = family switch
+        {
+            "inventory" => SkseInventoryWire.Render(Inventory(40, warnings: warnings, bsaFailures: archives), null, cap),
+            "pairing" => NativePairingWire.Render(Pairing(40, warnings: warnings, bsaFailures: archives), null, cap),
+            _ => SkseConfigAuditWire.Render(ConfigAudit(40, warnings: warnings, bsaFailures: archives), null, cap),
+        };
+
+        Assert.True(json.Length <= cap, $"{family}: {json.Length} chars against max_chars={cap} — a caveat array was not bounded.");
+        using var doc = JsonDocument.Parse(json);
+        var caveats = doc.RootElement.GetProperty("caveats");
+        foreach (var (name, lead) in new[] { ("warnings", @"\[!\] warning \d+: "), ("archive_read_failures", @"\[!\] archive read failure: ") })
+        {
+            int named = caveats.GetProperty(name).GetArrayLength();
+            Assert.InRange(named, 1, 199);
+            Assert.Equal(200 - named, caveats.GetProperty(name + "_omitted").GetInt32());
+            Assert.Equal(System.Text.RegularExpressions.Regex.Matches(text, lead).Count, named);
+        }
+    }
+
+    /// <summary>A healthy document carries the sibling too: a key that comes and goes cannot be checked against
+    /// "the array and the omitted count add up to the whole", and asset_status always writes it.</summary>
+    [Fact]
+    public void TheRootFailureOmittedCountIsWrittenEvenWhenNothingFailed()
+    {
+        using var doc = JsonDocument.Parse(SkseInventoryWire.RenderJson(Inventory(2), null, 20_000));
+        var caveats = doc.RootElement.GetProperty("caveats");
+
+        Assert.Empty(caveats.GetProperty("root_read_failures").EnumerateArray());
+        Assert.Equal(0, caveats.GetProperty("root_read_failures_omitted").GetInt32());
+    }
+
+    /// <summary>What a bounded caveat tail may overrun by — one line plus its marker, far under the quarter of
+    /// max_chars the block is held to, so an unbounded block cannot pass as a bounded one.</summary>
+    const int ShareSlack = 600;
+
+    /// <summary>One config can declare tens of thousands of form tokens — a large SkyPatcher INI is exactly that — so
+    /// max_chars bounds the reference array inside a file too, not only the file rows. The text render already bounds
+    /// references per line; an unbounded twin writes the whole array in one pass past the cap.</summary>
+    [Fact]
+    public void MaxCharsBoundsTheReferenceArrayInsideOneConfigFileToo()
+    {
+        const int cap = 3_000;
+        string json = SkseConfigAuditWire.RenderJson(ConfigAudit(1, refs: 4_000), null, cap);
+
+        using var doc = JsonDocument.Parse(json);
+        // No slack: the row and each of its references are measured before they are admitted (#859).
+        Assert.True(json.Length <= cap, $"{json.Length} chars against max_chars={cap}");
+        var file = doc.RootElement.GetProperty("files").EnumerateArray().Single();
+        // The cut is stated on the file that carries it: the accounting counts files, not references.
+        Assert.Equal(4_000 - file.GetProperty("references").GetArrayLength(),
+                     file.GetProperty("references_truncated").GetInt32());
+    }
+
+    /// <summary>The two json arrays that are NOT row-list rows — the inventory's config folders and the pairing's
+    /// unreadable .pex list — say what the cap cut, the way their text twins do. The accounting cannot: it counts
+    /// rows, and these are not rows.</summary>
+    [Fact]
+    public void TheNonRowJsonArraysMarkWhatMaxCharsCutFromThem()
+    {
+        using var inv = JsonDocument.Parse(SkseInventoryWire.RenderJson(Inventory(1, configs: 400, folders: 400), null, 2_500));
+        var folders = inv.RootElement.GetProperty("config_folders").GetArrayLength();
+        Assert.True(folders < 400, "the cap should have cut folders");
+        Assert.Equal(400 - folders, inv.RootElement.GetProperty("config_folders_truncated").GetInt32());
+
+        using var pair = JsonDocument.Parse(NativePairingWire.RenderJson(Pairing(1, unreadable: 400), null, 2_500));
+        var shown = pair.RootElement.GetProperty("unreadable_pex").GetArrayLength();
+        Assert.True(shown < 400, "the cap should have cut unreadable .pex entries");
+        Assert.Equal(400 - shown, pair.RootElement.GetProperty("unreadable_pex_truncated").GetInt32());
+    }
+
+    /// <summary>Nothing cut, no marker: the two arrays carry the notice only when there is a cut to name.</summary>
+    [Fact]
+    public void TheNonRowJsonArraysCarryNoCutMarkerWhenNothingWasCut()
+    {
+        using var inv = JsonDocument.Parse(SkseInventoryWire.RenderJson(Inventory(1, configs: 4, folders: 4), null, 200_000));
+        Assert.False(inv.RootElement.TryGetProperty("config_folders_truncated", out _));
+
+        using var pair = JsonDocument.Parse(NativePairingWire.RenderJson(Pairing(1, unreadable: 4), null, 200_000));
+        Assert.False(pair.RootElement.TryGetProperty("unreadable_pex_truncated", out _));
+
+        using var cfg = JsonDocument.Parse(SkseConfigAuditWire.RenderJson(ConfigAudit(1, refs: 4), null, 200_000));
+        Assert.False(cfg.RootElement.GetProperty("files").EnumerateArray().Single()
+                        .TryGetProperty("references_truncated", out _));
+    }
+
+    // ---- max_chars is a CEILING, not a test taken before the row that crosses it (#546) ---------------
+
+    /// <summary>Each family's TEXT render, filled well past its cap, comes back inside it. The scope note, the
+    /// caveats and the filter hint each family always writes are charged before its rows are laid, and the row that
+    /// would cross what is left is not written at all.</summary>
+    [Theory]
+    [InlineData("inventory", 2_000)]
+    [InlineData("inventory", 5_000)]
+    [InlineData("inventory", 12_000)]
+    [InlineData("pairing", 2_500)]
+    [InlineData("pairing", 5_000)]
+    [InlineData("pairing", 12_000)]
+    [InlineData("config", 2_500)]
+    [InlineData("config", 5_000)]
+    [InlineData("config", 12_000)]
+    public void EachFamilysTextRenderFilledPastItsCapAnswersInsideIt(string family, int cap)
+    {
+        var text = family switch
+        {
+            "inventory" => SkseInventoryWire.Render(Inventory(300, configs: 300, folders: 60), null, cap),
+            "pairing" => NativePairingWire.Render(Pairing(900), null, cap),
+            _ => SkseConfigAuditWire.Render(ConfigAudit(300, refs: 4), null, cap),
+        };
+
+        Assert.True(text.Length <= cap, $"{family} returned {text.Length} chars at max_chars={cap}");
+        Assert.Contains("raise max_chars", text);
+    }
+
+    /// <summary>A caveat block that alone outgrows a tight cap is what the tail reserve is for: charged first, the
+    /// rows give way to it rather than the caveats landing past the ceiling.</summary>
+    [Fact]
+    public void ACaveatBlockThatOutgrowsTheCapIsChargedBeforeTheRowsNotAppendedPastThem()
+    {
+        var text = SkseInventoryWire.Render(Inventory(200, warnings: Warnings(8)), null, 6_000);
+
+        Assert.True(text.Length <= 6_000, $"returned {text.Length} chars at max_chars=6000");
+        Assert.Contains("warning 1: ", text);
+    }
+
+    /// <summary>Through the family footer, which is what a caller actually gets: the whole response, footer and all,
+    /// is inside max_chars.</summary>
+    [Theory]
+    [InlineData(3_000)]
+    [InlineData(9_000)]
+    public void TheWholeDispatchedResponseFooterAndAllIsInsideMaxChars(int cap)
+    {
+        var renders = new StubRenders(Inventory(300, configs: 300, folders: 60), Pairing(300), ConfigAudit(300, refs: 4));
+
+        foreach (var family in new[] { SkseTools.SkseFamily.Inventory, SkseTools.SkseFamily.Pairing, SkseTools.SkseFamily.Config })
+        {
+            var text = SkseTools.Dispatch(renders, family, filter: null, peek: false, max_chars: cap);
+            Assert.True(text.Length <= cap, $"{family} returned {text.Length} chars at max_chars={cap}");
+        }
+    }
+
+    /// <summary>A window whose rows are all wider than the whole budget still gets a knob that moves it: raising
+    /// max_chars for the row at this offset, or stepping past it. Suppressing the paging advice whenever nothing
+    /// rendered left those rows unreachable through the accounting block's own advice.</summary>
+    [Fact]
+    public void AWindowThatRenderedNothingNamesTheOffsetThatStepsPastTheRowThatDidNotFit()
+    {
+        // A filtered file is cut per reference, so the cap is one too small for a file head and one reference line.
+        var text = SkseConfigAuditWire.Render(ConfigAudit(3, refs: 400), "Mod", 750, new RowWindow(0, 5));
+
+        Assert.Contains("rendered=0", text);
+        Assert.Contains("skip it with offset=1", text);
+    }
+
+    /// <summary>One response quotes ONE max_chars, and it is the number the caller passed: the footer is charged as
+    /// the render's trailer rather than taken off its cap, so a cut notice inside a family cannot name a cap short by
+    /// the footer's length — a number the caller never typed and cannot act on.</summary>
+    [Theory]
+    [InlineData(2_000)]
+    [InlineData(5_000)]
+    public void EveryNoticeQuotesTheMaxCharsTheCallerPassed(int cap)
+    {
+        var renders = new StubRenders(Inventory(300, configs: 300, folders: 60), Pairing(300), ConfigAudit(300, refs: 4));
+
+        foreach (var family in new[] { SkseTools.SkseFamily.Inventory, SkseTools.SkseFamily.Pairing, SkseTools.SkseFamily.Config })
+        {
+            var text = SkseTools.Dispatch(renders, family, filter: null, peek: false, max_chars: cap);
+            foreach (System.Text.RegularExpressions.Match m in
+                     System.Text.RegularExpressions.Regex.Matches(text, @"max_chars=(\d+)"))
+                Assert.Equal(cap.ToString(), m.Groups[1].Value);
+        }
+    }
+
+    /// <summary>The one arm left: a cap too small for what a family carries whatever the budget says so, and names
+    /// the cap that clears it, rather than quietly answering over the ceiling.</summary>
+    [Fact]
+    public void ACapTooSmallForTheFixedPartSaysSoInsteadOfOverrunningSilently()
+    {
+        var renders = new StubRenders(Inventory(300, configs: 300, folders: 60), Pairing(300), ConfigAudit(300, refs: 4));
+
+        var text = SkseTools.Dispatch(renders, SkseTools.SkseFamily.Inventory, filter: null, peek: false, max_chars: 200);
+
+        Assert.Contains("over the max_chars=200 it was given", text);
+        Assert.Contains("raise max_chars to at least ", text);
+    }
+
+    /// <summary>The json twin of the arm above (#809): an over-cap skse json document says so IN the document, as
+    /// every other json document does. It used to have the TEXT notice glued on past its root close by Dispatch's
+    /// shared `RenderCap.Settle`, which stopped it being json at all — the parse here is half the assertion.</summary>
+    [Fact]
+    public void AnOverCapJsonFamilyDocumentStaysJsonAndSaysItOverran()
+    {
+        var renders = new StubRenders(Inventory(300, configs: 300, folders: 60), Pairing(300), ConfigAudit(300, refs: 4));
+
+        foreach (var family in new[] { SkseTools.SkseFamily.Inventory, SkseTools.SkseFamily.Pairing, SkseTools.SkseFamily.Config })
+        {
+            var f = family;
+            string Render(int cap) => SkseTools.Dispatch(renders, f, filter: null, peek: false, max_chars: cap, json: true);
+            JsonOverrun.StatesTheThreeNumbers(Render(200), 200);
+        }
+    }
+
+    /// <summary>The json twin of <see cref="EachFamilysTextRenderFilledPastItsCapAnswersInsideIt"/> (#859): a family
+    /// document filled past its cap comes back INSIDE it. The row loops used to test the length before writing a row,
+    /// so the row that crossed landed whole and the document ended about a row past the ceiling at every cap.
+    /// <para>The fixtures reach both paths the fix adds: the pairing layer carries unreadable .pex, so the row arrays'
+    /// own framing is written past the last row admitted, and each config file declares more references than any cap
+    /// here can hold, so every rendered row has its references cut and closes on its own held-back tail.</para></summary>
+    [Theory]
+    [InlineData(2_680)]
+    [InlineData(4_000)]
+    [InlineData(8_960)]
+    [InlineData(40_000)]
+    [InlineData(200_000)]
+    public void EachFamilysJsonDocumentFilledPastItsCapAnswersInsideIt(int cap)
+    {
+        var renders = new StubRenders(Inventory(300, configs: 300, folders: 60), Pairing(300, unreadable: 50),
+                                      ConfigAudit(300, refs: 200));
+
+        foreach (var family in new[] { SkseTools.SkseFamily.Inventory, SkseTools.SkseFamily.Pairing, SkseTools.SkseFamily.Config })
+        {
+            var json = SkseTools.Dispatch(renders, family, filter: null, peek: false, max_chars: cap, json: true);
+
+            using var doc = JsonDocument.Parse(json);
+            Assert.True(json.Length <= cap, $"{family} returned {json.Length} chars at max_chars={cap}");
+            // The member fires only where the FIXED part does not fit, so a document that fits carries none of it.
+            Assert.False(doc.RootElement.TryGetProperty("max_chars_overrun", out _),
+                         $"{family} claims it overran max_chars={cap} in a {json.Length}-char document");
+        }
+    }
+
+    /// <summary>The pairing family straight into its render, at the cap the row arrays' unreserved framing used to
+    /// carry it over: a non-empty unreadable list leaves nothing to absorb the framing written past the last row.</summary>
+    [Fact]
+    public void ThePairingFamilysUnreadableListDoesNotPushItsDocumentOverTheCap()
+    {
+        int cap = JsonRenderBoundary.First(n => JsonDocument.Parse(NativePairingWire.RenderJson(Pairing(300, unreadable: 50), null, n))
+            .RootElement.GetProperty("unreadable_pex").GetArrayLength() > 0);
+        string json = NativePairingWire.RenderJson(Pairing(300, unreadable: 50), null, cap);
+
+        using var doc = JsonDocument.Parse(json);
+        Assert.True(json.Length <= cap, $"returned {json.Length} chars at max_chars={cap}");
+        Assert.NotEmpty(doc.RootElement.GetProperty("unreadable_pex").EnumerateArray());
+    }
+
+
+    /// <summary>A config row is admitted as soon as it really fits, not a reserve later: the room its own close needs is
+    /// measured as the close alone, so the budget does not turn a row that fits into a rendered=0 answer telling the
+    /// caller to raise max_chars. Composing that reserve loosely — with the row's brace and the array open inside the
+    /// measured span — costs 44 more chars at the boundary and fails this.</summary>
+    [Fact]
+    public void AConfigRowIsAdmittedAtTheNarrowestCapThatReallyHoldsIt()
+    {
+        int narrowest = 0, length = 0;
+        for (int cap = 400; cap <= 6_000 && narrowest == 0; cap++)
+        {
+            string probe = SkseConfigAuditWire.RenderJson(ConfigAudit(1, refs: 400), null, cap);
+            using var d = JsonDocument.Parse(probe);
+            if (d.RootElement.GetProperty("files").GetArrayLength() == 1) (narrowest, length) = (cap, probe.Length);
+        }
+
+        Assert.True(narrowest > 0, "no cap under 6,000 admitted the row at all");
+        Assert.True(length <= narrowest, $"the row that was admitted overran: {length} chars at max_chars={narrowest}");
+        // What the cap held back and no row could use. One close, not a close plus the framing that precedes it.
+        Assert.True(narrowest - length <= 40,
+                    $"{narrowest - length} chars were reserved and never written at the boundary cap {narrowest}");
+    }
+
+    /// <summary>The three families over one set of synthetic data, so Dispatch can be driven without a live
+    /// instance.</summary>
+    sealed class StubRenders(SkseInventoryData inv, NativePairingAuditData pair, SkseConfigAuditData cfg) : SkseTools.IFamilyRenders
+    {
+        public string Inventory(SkseTools.FamilyCall c) =>
+            c.Json ? SkseInventoryWire.RenderJson(inv, c.Filter, c.Cap, c.Window) : SkseInventoryWire.Render(inv, c.Filter, c.Cap, c.Window, c.Trailer);
+
+        public string Pairing(SkseTools.FamilyCall c) =>
+            c.Json ? NativePairingWire.RenderJson(pair, c.Filter, c.Cap, c.Window) : NativePairingWire.Render(pair, c.Filter, c.Cap, c.Window, c.Trailer);
+
+        public string Config(SkseTools.FamilyCall c) =>
+            c.Json ? SkseConfigAuditWire.RenderJson(cfg, c.Filter, c.Cap, c.Window) : SkseConfigAuditWire.Render(cfg, c.Filter, c.Cap, c.Window, c.Trailer);
+    }
+}

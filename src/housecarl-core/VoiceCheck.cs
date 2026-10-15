@@ -4,68 +4,45 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>Reports expected voice files for one dialogue response.</summary>
-/// <param name="Info">Owning INFO FormKey.</param>
-/// <param name="TopicEditorId">Parent topic EditorID used in the filename.</param>
-/// <param name="ResponseNumber">Response number embedded in the filename.</param>
-/// <param name="FuzPath">Expected spoken-audio path.</param>
-/// <param name="FuzPresent">Whether an active provider supplies the FUZ file.</param>
-/// <param name="FuzWinner">Winning FUZ provider, or null when absent.</param>
-/// <param name="FuzAmbiguous">Whether multiple providers contain the FUZ path.</param>
-/// <param name="LipPath">Expected lip-sync path.</param>
-/// <param name="LipPresent">Whether an active provider supplies the LIP file.</param>
-/// <param name="ReadIncomplete">Whether unreadable archives make absence inconclusive.</param>
+// VoiceCheck — the on-disk voice presence check for created dialogue lines: compute each response's expected path,
+// resolve it against the live VFS, and report "will be silent" or a named reason the path could not be computed.
+// Read-only, and the graph it has to resolve to get a path is in docs/architecture/assets.md.
+
+/// <summary>One created INFO response line's voice verdict: the expected .fuz (absence means SILENT) and .lip paths,
+/// each with its presence and winning provider, plus the read-incomplete caveat.</summary>
 public sealed record VoiceLine(
-    FormKey Info,
-    string TopicEditorId,
-    int ResponseNumber,
-    string FuzPath,
-    bool FuzPresent,
-    string? FuzWinner,
-    bool FuzAmbiguous,
-    string LipPath,
-    bool LipPresent,
+    FormKey Info, string TopicEditorId, int ResponseNumber,
+    string FuzPath, bool FuzPresent, string? FuzWinner, bool FuzAmbiguous,
+    string LipPath, bool LipPresent,
     bool ReadIncomplete);
 
-/// <summary>Reports one INFO whose voice path cannot be derived statically.</summary>
-/// <param name="Info">INFO FormKey.</param>
-/// <param name="TopicEditorId">Parent topic EditorID when known.</param>
-/// <param name="Reason">Named missing or runtime-assigned graph dependency.</param>
+/// <summary>A created INFO whose voice path could NOT be computed, with the named reason. Its lines are not checked.</summary>
 public sealed record VoiceUndetermined(FormKey Info, string TopicEditorId, string Reason);
 
-/// <summary>Collects voice presence and undetermined-path results for one create call.</summary>
-/// <param name="Lines">Per-response file checks.</param>
-/// <param name="Undetermined">INFOs whose voice path could not be computed.</param>
+/// <summary>The voice-coverage report for one create call: per-line verdicts and per-INFO undeterminable reasons.</summary>
 public sealed record VoiceReport(IReadOnlyList<VoiceLine> Lines, IReadOnlyList<VoiceUndetermined> Undetermined)
 {
-    /// <summary>Gets the post-write verification error, or null when the check ran.</summary>
+    /// <summary>The voice check itself could not run — surfaced, never a silent skip. The create ALREADY SUCCEEDED
+    /// when this is set: it means "voice coverage unverified", not "the write failed".</summary>
     public string? CheckError { get; init; }
 
-    /// <summary>Gets whether the call produced neither findings nor a check error.</summary>
-    public bool IsEmpty => Lines.Count == 0 && Undetermined.Count == 0 && CheckError is null;
+    /// <summary>The loose roots this scan could not walk or list, each named with the reason, so the "may merely be
+    /// unscanned" note says WHICH folder; empty when every root read.</summary>
+    public IReadOnlyList<string> RootFailures { get; init; } = Array.Empty<string>();
 
-    /// <summary>Reusable clean result for calls that created no INFO records.</summary>
+    public bool IsEmpty => Lines.Count == 0 && Undetermined.Count == 0 && CheckError is null;
     public static readonly VoiceReport Empty = new(Array.Empty<VoiceLine>(), Array.Empty<VoiceUndetermined>());
 }
 
-/// <summary>Checks whether newly written dialogue lines have active FUZ and LIP files.</summary>
-/// <remarks>
-/// This post-write diagnostic derives paths from the written topic, quest, speaker, and voice-type graph. Same-call
-/// records resolve from the patch before active load-order winners. Asset checks use one pinned snapshot so presence
-/// and incomplete-read state are consistent. No write behavior is involved.
-/// </remarks>
 public static class VoiceCheck
 {
-    /// <summary>The catalog name (RecordNaming.StripGetterInterface of IDialogResponsesGetter) the create flow
-    /// stamps on a created INFO — the filter for "which created records are dialogue lines".</summary>
+    /// <summary>The catalog name the create flow stamps on a created INFO — the filter for which created records are dialogue lines.</summary>
     public const string InfoCatalogName = "DialogResponses";
 
-    /// <summary>Runs voice presence checks for the INFOs created by one write call.</summary>
-    /// <param name="patchPath">Native path to the just-written patch.</param>
-    /// <param name="created">Records created by that call.</param>
-    /// <param name="resolver">Active record resolver for pre-existing graph dependencies.</param>
-    /// <param name="assets">Active asset resolver for loose and BSA presence.</param>
-    /// <returns>A complete report; whole-check failures are captured in <see cref="VoiceReport.CheckError"/>.</returns>
+    /// <summary>Run the voice-presence check over the INFOs created by ONE create call. <paramref name="patchPath"/>
+    /// is the just-written patch, re-opened read-only here so the service needs no Mutagen.Skyrim dependency. A
+    /// resolve miss is a named undetermined reason; a whole-check failure rides
+    /// <see cref="VoiceReport.CheckError"/> and is NEVER thrown — the create already succeeded.</summary>
     public static VoiceReport Run(string patchPath, IReadOnlyList<WritePatchBuilder.CreatedRecord> created,
                                   LoadOrderResolver resolver, AssetResolver assets)
     {
@@ -79,7 +56,7 @@ public static class VoiceCheck
         ISkyrimModGetter? patch = null;
         try
         {
-            patch = SkyrimMod.CreateFromBinaryOverlay(patchPath, SkyrimRelease.SkyrimSE);
+            patch = SkyrimMod.CreateFromBinaryOverlay(patchPath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(patchPath));
             return RunOver(patch, infoKeys, resolver, assets);
         }
         catch (Exception ex)
@@ -89,20 +66,14 @@ public static class VoiceCheck
         finally { (patch as IDisposable)?.Dispose(); }
     }
 
-    /// <summary>Walks created INFOs in an already-open written patch.</summary>
-    /// <param name="writtenPatch">Read-only patch overlay owned by the caller.</param>
-    /// <param name="infoKeys">Created INFO keys to inspect.</param>
-    /// <param name="resolver">Active record resolver.</param>
-    /// <param name="assets">Active asset resolver.</param>
-    /// <returns>Per-line and undetermined-path findings.</returns>
+    /// <summary>The walk over the re-opened patch, split out so <see cref="Run"/> can wrap an overlay open or a walk-level throw into CheckError.</summary>
     static VoiceReport RunOver(ISkyrimModGetter writtenPatch, HashSet<FormKey> infoKeys,
                                LoadOrderResolver resolver, AssetResolver assets)
     {
         var lines = new List<VoiceLine>();
         var undetermined = new List<VoiceUndetermined>();
 
-        // Same-call record lookup off the patch (an NPC / quest / topic created in THIS call lives here, not the
-        // load order). One pass; FormKeys are unique within a mod.
+        // Same-call record lookup off the patch: an NPC, quest or topic created in THIS call lives here, not the order.
         var patchByKey = new Dictionary<FormKey, IMajorRecordGetter>();
         foreach (var rec in writtenPatch.EnumerateMajorRecords())
             patchByKey[rec.FormKey] = rec;
@@ -112,15 +83,13 @@ public static class VoiceCheck
         var av = assets.Capture();                           // …and ONE asset build, so presence + ReadIncomplete agree
         var loCache = new Dictionary<FormKey, IMajorRecordGetter?>();
 
-        // Resolve a FormKey to its record getter: the patch first (same-call records), else the load-order winner
-        // (existing records). Cached so a bulk_create sharing a speaker doesn't re-enumerate a master per line.
+        // Resolve a FormKey: the patch first, else the load-order winner. Cached so a bulk_create sharing a speaker
+        // does not re-enumerate a master per line.
         IMajorRecordGetter? Resolve(FormKey fk)
         {
             if (patchByKey.TryGetValue(fk, out var p)) return p;
             if (loCache.TryGetValue(fk, out var c)) return c;
-            IMajorRecordGetter? g = view.ResolveWinner(fk) is { } w
-                ? view.GetRecord(session, w.WinnerPlugin, fk)
-                : null;
+            IMajorRecordGetter? g = view.ResolveWinner(fk) is { } w ? view.GetRecord(session, w.WinnerPlugin, fk) : null;
             loCache[fk] = g;
             return g;
         }
@@ -137,63 +106,46 @@ public static class VoiceCheck
             }
         }
 
-        // A created INFO outside every topic is a structural inconsistency and must remain visible.
+        // A created INFO not found under any topic is a real inconsistency — surfaced, never silently dropped.
         foreach (var fk in infoKeys)
             if (!foundInfos.Contains(fk))
                 undetermined.Add(new VoiceUndetermined(fk, "",
-                    "created but not found under any topic in the written patch — cannot determine its voice path; " +
-                    "inspect the patch in xEdit."));
+                    "created but not found under any topic in the written patch — can't determine its voice path; inspect the patch in xEdit."));
 
-        return new VoiceReport(lines, undetermined);
+        return new VoiceReport(lines, undetermined) { RootFailures = av.RootFailures };
     }
 
-    /// <summary>Resolves one INFO's graph and appends either per-response checks or one undetermined reason.</summary>
-    /// <param name="info">Dialogue response record.</param>
-    /// <param name="topic">Structural parent supplying topic and quest context.</param>
-    /// <param name="resolve">Patch-first record resolver.</param>
-    /// <param name="av">Pinned asset view.</param>
-    /// <param name="lines">Per-response result collector.</param>
-    /// <param name="undetermined">Collector for paths that cannot be derived statically.</param>
-    /// <remarks>
-    /// This method is internal because <see cref="DialogueValidate"/> reuses the exact same voice semantics.
-    /// A link/branch INFO with no own response and no shared response data produces no finding.
-    /// </remarks>
-    internal static void CheckInfo(
-        IDialogResponsesGetter info,
-        IDialogTopicGetter topic,
-        Func<FormKey, IMajorRecordGetter?> resolve,
-        AssetResolver.AssetView av,
-        List<VoiceLine> lines,
-        List<VoiceUndetermined> undetermined)
+    /// <summary>Resolve one INFO's voice graph and emit either a per-line presence verdict for each spoken response,
+    /// or ONE named undetermined reason when the voice folder cannot be computed.</summary>
+    // internal, not private: DialogueValidate reuses this exact walk, so the two cannot drift on what counts as silent.
+    internal static void CheckInfo(IDialogResponsesGetter info, IDialogTopicGetter topic,
+                          Func<FormKey, IMajorRecordGetter?> resolve, AssetResolver.AssetView av,
+                          List<VoiceLine> lines, List<VoiceUndetermined> undetermined)
     {
         var topicEdid = topic.EditorID ?? "";
 
-        // No own response lines: either a link/branch node (no spoken audio — skip silently) or one that BORROWS
-        // another INFO's audio via ResponseData (it IS voiced, but under the OTHER INFO's path, not computable here).
-        // Shared response data is voiced under another INFO's path, so report it instead of claiming no voice.
+        // No own response lines: a link/branch node has no audio, but one that BORROWS another INFO's via ResponseData
+        // IS voiced under the other INFO's path, which is not computable here — so it is named, never silent.
         if (info.Responses.Count == 0)
         {
             var sharedFk = NonNull(info.ResponseData.FormKeyNullable);
             if (sharedFk is { } sfk)
                 undetermined.Add(new VoiceUndetermined(info.FormKey, topicEdid,
-                    $"no own response lines — audio comes from shared response data ({sfk}); " +
-                    "voice is not checked here, so verify that INFO's .fuz."));
+                    $"no own response lines — this line draws its audio from shared response data ({sfk}); voice is not checked here, verify that INFO's .fuz."));
             return;   // ResponseData null ⇒ a genuine link/branch node: no spoken audio to check
         }
 
-        // Null Speaker means the quest alias assigns the voice type at runtime.
+        // Speaker -> the voice type (folder). Null Speaker is the runtime quest-alias case: no computable path.
         var speakerFk = NonNull(info.Speaker.FormKeyNullable);
         if (speakerFk is null)
         {
             undetermined.Add(new VoiceUndetermined(info.FormKey, topicEdid,
-                "no Speaker set — the voice type is assigned at runtime from the quest alias, so the .fuz path " +
-                "cannot be computed. " +
+                "no Speaker set — the voice type (folder) is assigned at runtime from the quest alias, so the .fuz path can't be computed. " +
                 "Set Speaker on this line to make it checkable, or verify the audio yourself."));
             return;
         }
-        // Distinguish a missing record from a record of the wrong type:
-        // FormKey resolves to nothing, vs it resolves to a record that isn't an NPC (Speaker is typed as a FormLink to
-        // an NPC, but real/odd data can point it elsewhere, and the voice type is derived only from an NPC's Voice).
+        // Two distinct misses, two distinct messages: the FormKey resolving to nothing is not the same as resolving
+        // to a record that is not an NPC, and the voice type is derived only from an NPC's Voice.
         var speaker = resolve(speakerFk.Value);
         if (speaker is null)
         {
@@ -204,8 +156,7 @@ public static class VoiceCheck
         if (speaker is not INpcGetter npc)
         {
             undetermined.Add(new VoiceUndetermined(info.FormKey, topicEdid,
-                $"Speaker {speakerFk.Value} resolves to a non-NPC record — the voice type comes from an NPC's " +
-                "Voice field, so this path cannot be computed; verify the audio yourself."));
+                $"Speaker {speakerFk.Value} resolves to a non-NPC record — houseCARL derives the voice type from an NPC's Voice, so it can't compute a voice path here; verify the audio yourself."));
             return;
         }
         var voiceFk = NonNull(npc.Voice.FormKeyNullable);
@@ -227,7 +178,7 @@ public static class VoiceCheck
         var questFk = NonNull(topic.Quest.FormKeyNullable);
         var questEdid = questFk is { } qfk ? (resolve(qfk) as IQuestGetter)?.EditorID ?? "" : "";
 
-        // Check one FUZ/LIP pair per authored response number.
+        // One .fuz/.lip check per spoken response line; its ResponseNumber names the file, used as authored.
         foreach (var resp in info.Responses)
         {
             int num = resp.ResponseNumber;
@@ -243,8 +194,6 @@ public static class VoiceCheck
         }
     }
 
-    /// <summary>Normalizes an unset or explicit null FormKey to null.</summary>
-    /// <param name="fk">Nullable link target.</param>
-    /// <returns>A non-null, nonzero FormKey or null.</returns>
+    /// <summary>A nullable FormLink's target as a real FormKey, or null when the link is unset OR explicitly Null.</summary>
     static FormKey? NonNull(FormKey? fk) => fk is { } v && !v.IsNull ? v : null;
 }

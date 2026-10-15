@@ -1,98 +1,56 @@
 namespace HousecarlCore;
 
-/// <summary>
-/// SkyPatcher INI DISCOVERY (Wave 1 of the distributor subsystem; plan
-/// dev/plans/SKYPATCHER_DISTRIBUTOR_TOOL_PLAN_2026-07-08.md §5.1–5.2): enumerate the SkyPatcher
-/// layer of the ACTIVE load order into the ordered union the overlay replays.
-///
-/// <para><b>Loose-only (plan §5.1).</b> SkyPatcher's DLL reads INIs off the (VFS-projected)
-/// filesystem — a BSA-packed INI is invisible to it. An INI that resolves ONLY to a BSA source is
-/// listed with <see cref="IniFile.NotApplied"/> naming that reason (Q3 visibility), never silently
-/// dropped and never treated as applied.</para>
-///
-/// <para><b>Union, not filename-winner (plan §5.2).</b> Every distinct loose INI path applies. The
-/// VFS winner rule only collapses two mods shipping the IDENTICAL relative path — that collision is
-/// surfaced per file (<see cref="IniFile.ShadowedProviders"/>): the loser's content is NOT read by
-/// the game and NOT parsed here (exactly the mod-manager collision the grammar reference warns
-/// about).</para>
-///
-/// <para><b>Apply order.</b> Within a type folder, files sort <c>0</c>→<c>z</c> by their path
-/// relative to that folder (ordinal, case-insensitive). DECLARED ASSUMPTION (Wave-1 empirical item):
-/// the reference documents filename-sort for a flat folder; how the DLL orders files across NESTED
-/// organisation subfolders is unverified — this sorts by full relative path, which matches flat-folder
-/// filename sort exactly and gives nested files a deterministic, plausible order.</para>
-///
-/// <para><b>Gates.</b> The <c>Plugin.esp.ini</c> filename gate (file loads only when the named plugin
-/// is active) and the <c>SkyPatcher.ini</c> <c>[Patcher]</c> per-type toggles are both evaluated and
-/// carried as flags — a gated-off file keeps its parsed content but is marked
-/// <see cref="IniFile.NotApplied"/>; a toggled-off folder is marked <see cref="FolderScan.PatchingEnabled"/>
-/// = false (its INIs exist but the DLL skips the whole subfolder).</para>
-/// </summary>
+/// <summary>Enumerate the active order's SkyPatcher layer into the ordered union the overlay replays; the loose-only, union, apply-order and gate contracts are in docs/architecture/skypatcher-layer.md.</summary>
 public static class SkyPatcherDiscovery
 {
     /// <summary>The SkyPatcher tree root under Data (backslash, no trailing separator).</summary>
     public const string Root = "SKSE\\Plugins\\SkyPatcher";
 
-    /// <summary>One INI in the layer. <see cref="NotApplied"/> is null when the game reads this file;
-    /// otherwise it NAMES why it doesn't (BSA-only / plugin-gated off / unreadable). Parsed lines are
-    /// kept either way (an inactive patch is still inspectable).</summary>
+    /// <summary>One INI in the layer; <see cref="NotApplied"/> names why the game does not read it, and <see cref="LooseFilePath"/> is the winning loose copy's path (null when there is none).</summary>
     public sealed record IniFile(
         string RelPath,
         string Subfolder,
         string SortKey,
         string? WinningProvider,
+        string? LooseFilePath,
         IReadOnlyList<string> ShadowedProviders,
         string? GatePlugin,
         string? NotApplied,
         IReadOnlyList<SkyPatcherLine> Lines);
 
-    /// <summary>One type subfolder's ordered scan. <see cref="Catalog"/> is null for a subfolder the
-    /// grammar reference doesn't document (loud in <see cref="LayerScan.Notes"/>).</summary>
+    /// <summary>One type subfolder's ordered scan; <see cref="Catalog"/> is null for an undocumented subfolder, which is loud in <see cref="LayerScan.Notes"/>.</summary>
     public sealed record FolderScan(
         string Subfolder,
         SkyPatcherRecordCatalog? Catalog,
         bool PatchingEnabled,
         IReadOnlyList<IniFile> Files);
 
-    /// <summary>The whole layer: per-folder ordered scans + layer-level notes + the build's Q3 caveat.</summary>
+    /// <summary>The whole layer: per-folder ordered scans, notes, whether the read was incomplete, and the whole <c>[Patcher]</c> toggle map (a folder this scan never built still needs its toggle).</summary>
     public sealed record LayerScan(
         IReadOnlyList<FolderScan> Folders,
         IReadOnlyList<string> Notes,
-        bool ReadIncomplete);
+        bool ReadIncomplete,
+        IReadOnlyDictionary<string, bool> PatcherToggles);
 
-    /// <summary>Per-file INI parse cache — the same cheap-mtime freshness discipline the rest of
-    /// houseCARL uses. Keyed on the winning loose file's full path; an entry is fresh while its
-    /// (mtime, length) pair matches, so an edited/replaced INI re-reads on the next scan and an
-    /// untouched layer costs zero re-parses per post-state call. Thread-safe (a post-state call runs
-    /// outside the service gate). Entries for deleted files just stop being hit — bounded by the
-    /// layer's INI count.</summary>
+    /// <summary>Per-file INI parse cache on the shared <see cref="FileStamp"/> key, keyed by the winning loose file's path; thread-safe, bounded by the layer's INI count.</summary>
     public sealed class ParseCache
     {
         readonly object _lock = new();
-        readonly Dictionary<string, (DateTime MtimeUtc, long Length, IReadOnlyList<SkyPatcherLine> Lines)> _byPath = new(StringComparer.OrdinalIgnoreCase);
+        readonly Dictionary<string, (FileStamp Stamp, IReadOnlyList<SkyPatcherLine> Lines)> _byPath = new(StringComparer.OrdinalIgnoreCase);
 
         internal IReadOnlyList<SkyPatcherLine> GetOrParse(string path)
         {
-            var fi = new FileInfo(path);
-            var mtime = fi.LastWriteTimeUtc;
-            var length = fi.Length;
+            var stamp = FileStamp.Of(path);
             lock (_lock)
-                if (_byPath.TryGetValue(path, out var hit) && hit.MtimeUtc == mtime && hit.Length == length)
+                if (_byPath.TryGetValue(path, out var hit) && hit.Stamp == stamp)
                     return hit.Lines;
-            // (If the file changes between the stamp and the read, the stale content is keyed under the
-            //  OLD stamp and the next call's fresh stamp misses it — self-healing, never wedged.)
             var lines = SkyPatcherParse.ParseFile(File.ReadAllText(path));
-            lock (_lock) _byPath[path] = (mtime, length, lines);
+            lock (_lock) _byPath[path] = (stamp, lines);
             return lines;
         }
     }
 
-    /// <summary>
-    /// Scan the SkyPatcher layer off one pinned asset view. <paramref name="pluginPresent"/> answers
-    /// the filename gate (plugin filename incl. extension, case-insensitive). Pure read; the view is
-    /// handle-free, so this can run outside the service gate like the SKSE inventory does.
-    /// <paramref name="cache"/> (optional) skips the read+parse for INIs unchanged since the last scan.
-    /// </summary>
+    /// <summary>Scan the SkyPatcher layer off one pinned asset view; <paramref name="pluginPresent"/> answers the filename gate and <paramref name="cache"/> skips re-parsing unchanged INIs.</summary>
     public static LayerScan Scan(AssetResolver.AssetView view, SkyPatcherCatalog catalog, Func<string, bool> pluginPresent, ParseCache? cache = null)
     {
         var notes = new List<string>();
@@ -102,7 +60,7 @@ public static class SkyPatcherDiscovery
         {
             if (!rel.EndsWith(".ini", StringComparison.OrdinalIgnoreCase)) continue;
 
-            // Subfolder = the first component under the root; deeper nesting is organisation (grammar §2).
+            // Subfolder = the first component under the root; deeper nesting is organisation only.
             var underRoot = rel.Substring(Root.Length + 1);
             int slash = underRoot.IndexOf('\\');
             if (slash < 0)
@@ -146,7 +104,9 @@ public static class SkyPatcherDiscovery
 
             }
 
-            var file = new IniFile(rel, subfolder, sortKey, winner?.ProviderName, shadowed, GatePluginOf(rel), notApplied, lines);
+            var file = new IniFile(rel, subfolder, sortKey, winner?.ProviderName,
+                                   winner?.Kind == AssetKind.Loose ? winner.LooseFilePath : null,
+                                   shadowed, GatePluginOf(rel), notApplied, lines);
             (byFolder.TryGetValue(subfolder, out var list) ? list : byFolder[subfolder] = new()).Add(file);
 
             if (shadowed.Count > 0)
@@ -170,21 +130,18 @@ public static class SkyPatcherDiscovery
                 files.OrderBy(f => f.SortKey, StringComparer.OrdinalIgnoreCase).ToList()));
         }
 
-        return new LayerScan(folders, notes, view.ReadIncomplete);
+        return new LayerScan(folders, notes, view.ReadIncomplete, toggles);
     }
 
-    /// <summary>The plugin a filename gates on: 'Skyrim.esm.ini' → "Skyrim.esm"; 'myEdits.ini' → null.
-    /// The gate is the ini-stripped basename ending in a plugin extension (grammar §2; the ONE
-    /// extension list — <see cref="PluginFile.Extensions"/>).</summary>
+    /// <summary>The plugin a filename gates on: 'Skyrim.esm.ini' to "Skyrim.esm", 'myEdits.ini' to null, off the shared <see cref="PluginFile.Extensions"/> list.</summary>
     public static string? GatePluginOf(string relPath)
     {
-        var stem = Path.GetFileNameWithoutExtension(BethesdaPath.FileName(relPath));
+        var stem = Path.GetFileNameWithoutExtension(BethesdaPath.FileName(relPath));   // strips the '.ini' from the virtual-path leaf
         var ext = Path.GetExtension(stem);
         return PluginFile.Extensions.Any(e => ext.Equals(e, StringComparison.OrdinalIgnoreCase)) ? stem : null;
     }
 
-    /// <summary>The ordered, game-visible line union for one folder — what the overlay replays. Only
-    /// files the game actually reads contribute (NotApplied ones are excluded by construction).</summary>
+    /// <summary>The ordered, game-visible line union for one folder — what the overlay replays; NotApplied files are excluded by construction.</summary>
     public static IReadOnlyList<SkyPatcherOverlay.OrderedLine> OrderedLines(FolderScan folder)
     {
         var lines = new List<SkyPatcherOverlay.OrderedLine>();
@@ -193,15 +150,14 @@ public static class SkyPatcherDiscovery
         {
             if (f.NotApplied is not null) continue;
             for (int i = 0; i < f.Lines.Count; i++)
-                lines.Add(new SkyPatcherOverlay.OrderedLine(f.RelPath, i + 1, f.Lines[i]));
+                lines.Add(new SkyPatcherOverlay.OrderedLine(f.RelPath, i + 1, f.Lines[i], Listed: f.WinningProvider != SkyPatcherDraft.DraftProvider));
         }
         return lines;
     }
 
     // ---- SkyPatcher.ini ------------------------------------------------------------------------------
 
-    /// <summary>Read the winning loose SkyPatcher.ini's [Patcher] section into toggle→bool. Absent file
-    /// (or no loose copy) ⇒ empty map = all types enabled (the DLL's default). Never throws (Q3 note).</summary>
+    /// <summary>Read the winning loose SkyPatcher.ini's [Patcher] section into toggle to bool; an absent or unreadable file leaves the map empty, which means all types enabled.</summary>
     static Dictionary<string, bool> ReadPatcherToggles(AssetResolver.AssetView view, List<string> notes)
     {
         var map = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
@@ -217,8 +173,7 @@ public static class SkyPatcherDiscovery
                 if (line.Length == 0 || line[0] == ';') continue;
                 if (line[0] == '[')
                 {
-                    // The section is the text INSIDE the brackets — '[Patcher] ; note' must still match
-                    // (review finding #9: trailing text silently re-enabled disabled folders).
+                    // The section is the text INSIDE the brackets, so '[Patcher] ; note' still matches.
                     int close = line.IndexOf(']');
                     var section = close > 0 ? line[1..close].Trim() : "";
                     inPatcher = section.Equals("Patcher", StringComparison.OrdinalIgnoreCase);
@@ -228,8 +183,7 @@ public static class SkyPatcherDiscovery
                 int eq = line.IndexOf('=');
                 if (eq <= 0) continue;
                 var key = line[..eq].Trim();
-                // Inline ';' comments strip off the VALUE ('iEnableNpcPatching=0 ; off for testing' is 0,
-                // not '0 ; off…' — the atoi-style read the DLL's INI layer does) — review finding #9.
+                // An inline ';' comment strips off the VALUE, the atoi-style read the DLL's INI layer does.
                 var val = line[(eq + 1)..].Split(';')[0].Trim();
                 if (key.StartsWith("iEnable", StringComparison.OrdinalIgnoreCase) && key.EndsWith("Patching", StringComparison.OrdinalIgnoreCase))
                     map[key["iEnable".Length..^"Patching".Length]] = val != "0";
@@ -242,9 +196,7 @@ public static class SkyPatcherDiscovery
         return map;
     }
 
-    /// <summary>Whether a subfolder's patcher is enabled. The toggle token matches the subfolder
-    /// case-insensitively for every documented type (npc→NPC, formList→Formlist, encounterzone→
-    /// EncounterZone, …), so no hand-kept toggle↔folder table can drift.</summary>
-    static bool ToggleEnabled(Dictionary<string, bool> toggles, string subfolder)
+    /// <summary>Whether a subfolder's patcher is enabled; the toggle token matches the subfolder case-insensitively for every documented type, so no hand-kept table can drift.</summary>
+    public static bool ToggleEnabled(IReadOnlyDictionary<string, bool> toggles, string subfolder)
         => !toggles.TryGetValue(subfolder, out var on) || on;
 }

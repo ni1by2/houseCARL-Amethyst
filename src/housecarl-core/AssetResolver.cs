@@ -4,176 +4,151 @@ using Mutagen.Bethesda.Archives;
 
 namespace HousecarlCore;
 
-/// <summary>How a provider supplies an asset.</summary>
-public enum AssetKind
-{
-    /// <summary>A native file in staging or the vanilla Data root.</summary>
-    Loose,
+// AssetResolver — which source provides a Data-relative asset and which copy wins, through MO2's own precedence
+// extended across active-plugin BSAs; precedence, injected order and the snapshot in docs/architecture/assets.md.
+// Zero archive handles at rest: pinned by AssetResolverTests.TheResolverHoldsNoArchiveHandleAtRest.
 
-    /// <summary>An entry stored inside an active Bethesda archive.</summary>
-    Bsa
-}
+public enum AssetKind { Loose, Bsa }
 
-/// <summary>Identifies one logical source that provides an asset.</summary>
-/// <param name="Source">Mod/provider name, <c>Data</c>, overwrite, or archive filename.</param>
-/// <param name="Kind">Whether the bytes are loose or archived.</param>
-public sealed record AssetProvider(string Source, AssetKind Kind);
+/// <summary>One source that provides an asset: the mod folder name, "overwrite", "Data", or a BSA's filename, plus
+/// the MO2 layer a BSA's archive file lives in (null for a loose source, whose name already IS that layer).</summary>
+public sealed record AssetProvider(string Source, AssetKind Kind, string? OwningMod = null);
 
-/// <summary>Describes logical winner resolution for one asset path.</summary>
-/// <param name="RelPath">Canonical Data-relative Bethesda path.</param>
-/// <param name="Exists">Whether at least one readable provider contains the asset.</param>
-/// <param name="Winner">Highest-precedence provider, or null when <paramref name="Exists"/> is false.</param>
-/// <param name="Providers">All providers in winner-first precedence order.</param>
-/// <param name="Ambiguous">
-/// Whether more than one provider contains the path; this signals contention, not an error.
-/// </param>
-public sealed record AssetHit(
-    string RelPath,
-    bool Exists,
-    AssetProvider? Winner,
-    IReadOnlyList<AssetProvider> Providers,
-    bool Ambiguous);
+/// <summary>One asset path's resolution: the winner (null iff not <see cref="Exists"/>), every provider winner-first,
+/// and <see cref="Ambiguous"/> — contention to verify, never a confirmed problem (docs/architecture/assets.md).</summary>
+public sealed record AssetHit(string RelPath, bool Exists, AssetProvider? Winner, IReadOnlyList<AssetProvider> Providers, bool Ambiguous);
 
-/// <summary>Identifies the physical file or archive entry from which one provider's bytes can be read.</summary>
-/// <param name="ProviderName">Logical provider shown to the user.</param>
-/// <param name="Kind">Loose-file or archive-entry storage.</param>
-/// <param name="LooseFilePath">Native file path for a loose source; otherwise null.</param>
-/// <param name="ArchivePath">Native BSA path for an archived source; otherwise null.</param>
-/// <param name="EntryPath">Canonical Data-relative path and, for a BSA, its internal entry key.</param>
-public sealed record PlacementSource(
-    string ProviderName,
-    AssetKind Kind,
-    string? LooseFilePath,
-    string? ArchivePath,
-    string EntryPath);
+/// <summary>A concrete on-disk source one provider supplies an asset from: a loose file path, or a .bsa path plus the
+/// entry inside it. <see cref="OffOrder"/> marks a copy the game is not loading and <see cref="OwnerEnabled"/> says
+/// which of the two reasons it is; <see cref="OwningMod"/> is a BSA archive's own MO2 layer.</summary>
+public sealed record PlacementSource(string ProviderName, AssetKind Kind, string? LooseFilePath, string? ArchivePath,
+                                     string EntryPath, bool OffOrder = false, string? OwningMod = null,
+                                     bool OwnerEnabled = false);
 
-/// <summary>Describes concrete sources from which an asset-placement operation can read bytes.</summary>
-/// <param name="RelPath">Canonical Data-relative Bethesda path.</param>
-/// <param name="Sources">
-/// Physical sources in winner-first order; empty when no scanned provider contains the path.
-/// </param>
-/// <param name="Ambiguous">Whether the caller must choose among multiple sources.</param>
-/// <param name="ReadIncomplete">Whether an unreadable BSA prevents a conclusive absence result.</param>
-public sealed record PlacementResolution(
-    string RelPath,
-    IReadOnlyList<PlacementSource> Sources,
-    bool Ambiguous,
-    bool ReadIncomplete);
+public sealed record PlacementResolution(string RelPath, IReadOnlyList<PlacementSource> Sources, bool Ambiguous, bool ReadIncomplete);
 
-/// <summary>Binds a physical BSA to its logical owner and injected precedence.</summary>
-/// <param name="Path">Native path to the archive.</param>
-/// <param name="OwningPlugin">Plugin or Skyrim.ini marker responsible for loading it.</param>
-/// <param name="PluginRank">Archive precedence; higher values win.</param>
-public sealed record ActiveArchive(string Path, string OwningPlugin, int PluginRank);
+/// <summary>An active BSA to consider: its path, the plugin it loads with, that plugin's rank (higher wins among
+/// BSAs), and the MO2 layer the archive file lives in. The service derives these.</summary>
+public sealed record ActiveArchive(string Path, string OwningPlugin, int PluginRank, string? OwningMod = null);
 
-/// <summary>
-/// Resolves canonical Data-relative asset paths against authoritative loose winners, vanilla
-/// files, and active BSAs without retaining archive handles.
-/// </summary>
-/// <remarks>
-/// Product mode trusts Amethyst's filemap/mod-index winner map and adds vanilla Data_Core only as the lowest
-/// loose provider. Loose files beat BSAs; higher plugin ranks win among BSAs. The legacy root walker exists for
-/// inherited probes only. Snapshots contain derived file tables and filename caches, never open archive handles.
-/// Manager membership changes rebuild the resolver outside this class; local freshness checks cover changed archive
-/// bytes and vanished authoritative winners.
-/// </remarks>
 public sealed class AssetResolver : IDisposable
 {
-    /// <summary>Legacy overwrite root, empty in authoritative Amethyst mode.</summary>
-    readonly string _overwriteDir;
-    /// <summary>Legacy staging root, empty in authoritative Amethyst mode.</summary>
-    readonly string _modsDir;
-    /// <summary>Validated vanilla Data_Core/Data host root and lowest loose precedence.</summary>
-    readonly string _dataDir;
-    /// <summary>Legacy enabled mod names in highest-first order.</summary>
-    readonly IReadOnlyList<string> _enabledMods;
-    /// <summary>Path-deduplicated active archives with injected precedence ranks.</summary>
-    readonly IReadOnlyList<ActiveArchive> _archives;
-    /// <summary>Legacy loose roots in precedence order, or vanilla only in authoritative mode.</summary>
-    readonly IReadOnlyList<(string Name, string Dir)> _looseRoots;
-    /// <summary>Authoritative Amethyst loose winners, or null in legacy root-walk mode.</summary>
-    readonly IReadOnlyDictionary<string, ManagerFileSource>? _authoritativeLoose;
+    readonly string _overwriteDir;                       // MO2 overwrite layer (top loose source); "" if none
+    readonly string _modsDir;                            // base\mods
+    readonly string _dataDir;                            // game Data (lowest loose source)
+    readonly IReadOnlyList<string> _enabledMods;         // mod folder names, HIGHEST priority FIRST (Mo2Composition.EnabledMods order)
+    readonly IReadOnlyList<ActiveArchive> _archives;     // active BSAs (path-deduped; winner decided by PluginRank)
+    readonly IReadOnlyList<(string Name, string Dir)> _looseRoots;   // loose roots in PRECEDENCE order: overwrite > mods (priority) > Data
 
-    /// <summary>One table-build's whole output, swapped in as a single reference write (the LoadOrderResolver
-    /// snapshot discipline) so a concurrent Resolve never sees a half-rebuilt cache. Holds string sets only.
-    /// internal (not private) so <see cref="AssetView"/>'s ctor can take it; never leaves the assembly.</summary>
+    /// <summary>One build's whole output, swapped in as one reference write so a concurrent Resolve never sees a half-rebuilt cache.</summary>
     internal sealed class Snapshot
     {
-        /// <summary>Canonical case-insensitive entry paths keyed by native archive path.</summary>
-        public readonly Dictionary<string, HashSet<string>> Tables;
-        /// <summary>Archive modification times captured with <see cref="Tables"/>.</summary>
-        public readonly Dictionary<string, DateTime> Mtimes;
-        /// <summary>Named archive-table failures that make absence results incomplete.</summary>
-        public readonly List<string> Failures;
-        /// <summary>Lazily warmed loose-directory caches keyed by canonical parent path.</summary>
+        public readonly Dictionary<string, HashSet<string>> Tables;   // archive path → its file paths (normalized)
+        public readonly Dictionary<string, FileStamp> Stamps;         // archive path → freshness stamp at this build
+        public readonly List<string> Failures;                        // archives that couldn't be read, with the reason
+        public readonly ConcurrentDictionary<string, string> RootFailures;   // "root|dir" → a loose root that could not be walked or listed, with the reason
+        public readonly ConcurrentDictionary<string, bool> Dirs;             // full dir path → Directory.Exists, asked once per build
+        public readonly ConcurrentDictionary<string, Listing?> Children;     // full dir path → its listing; null = would not list
+        public readonly ConcurrentDictionary<string, int> Unlisted;          // full dir path → the last pass begun when it would not list
         public readonly ConcurrentDictionary<string, LooseSubtree> LooseCache;
-        /// <summary>Creates one immutable archive build with an initially empty lazy loose cache.</summary>
-        /// <param name="tables">Copied archive entry tables.</param>
-        /// <param name="mtimes">Parallel archive freshness baselines.</param>
-        /// <param name="failures">Named archive-read failures.</param>
-        public Snapshot(
-            Dictionary<string, HashSet<string>> tables,
-            Dictionary<string, DateTime> mtimes,
-            List<string> failures)
-        { Tables = tables; Mtimes = mtimes; Failures = failures; LooseCache = new(StringComparer.OrdinalIgnoreCase); }
+        public readonly ConcurrentDictionary<string, WatchedDir> DirWatch;   // watched dir → what must not change about it; the whole loose freshness check
+        public int WarmListings;                                             // directory listings the warm took; a test seam, never the check's
+        public int Pass;                                                     // the last read pass begun on this build; each view carries its own id
+        public Snapshot(Dictionary<string, HashSet<string>> tables, Dictionary<string, FileStamp> stamps, List<string> failures)
+        {
+            Tables = tables; Stamps = stamps; Failures = failures;
+            RootFailures = new(StringComparer.OrdinalIgnoreCase);
+            Dirs = new(StringComparer.OrdinalIgnoreCase);
+            Children = new(StringComparer.OrdinalIgnoreCase);
+            Unlisted = new(StringComparer.OrdinalIgnoreCase);
+            LooseCache = new(StringComparer.OrdinalIgnoreCase);
+            DirWatch = new(StringComparer.OrdinalIgnoreCase);
+        }
     }
 
-    /// <summary>
-    /// Stores one lazily warmed legacy directory across roots, including files and freshness baselines.
-    /// </summary>
+    /// <summary>What one watched directory must keep looking like for this build to stay fresh, in NAMES and not in a
+    /// timestamp: a directory's last-write comes off a clock coarser than a write and a delete next to each other, so
+    /// a stamp cannot always tell two different listings apart.</summary>
+    internal sealed class WatchedDir
+    {
+        /// <summary>The whole listing, compared name by name — set only for a directory a warmed subtree resolves FROM.</summary>
+        public volatile HashSet<string>? Entries;
+
+        /// <summary>Names whose APPEARANCE here is a change and nothing else: the first missing component of a subtree
+        /// a root does not have. A byte value because the set is the point; a concurrent dictionary because two
+        /// threads can warm two subtrees answered by the same ancestor.</summary>
+        public readonly ConcurrentDictionary<string, byte> Forbidden = new(StringComparer.OrdinalIgnoreCase);
+
+        /// <summary>Names a plain FILE holds where a subtree wanted a directory — a real absence, so the change to
+        /// look for is the name becoming a directory, or going altogether.</summary>
+        public readonly ConcurrentDictionary<string, byte> FileHeld = new(StringComparer.OrdinalIgnoreCase);
+    }
+
+    /// <summary>One directory's listing: every name, the files among them (dropped for a folder only passed through), and the last pass begun before it.</summary>
+    internal sealed record Listing(HashSet<string> Names, HashSet<string>? Files, int Pass);
+
+    /// <summary>One subtree directory's loose resolution: the filename sets of the roots that have it, in precedence
+    /// order. Its freshness is not held here — warming puts one directory per root under the build's shared
+    /// <see cref="Snapshot.DirWatch"/>, so two subtrees answered by the same directory are read once.</summary>
     internal sealed class LooseSubtree
     {
-        /// <summary>Directory freshness baselines parallel to the resolver's loose-root list.</summary>
-        public readonly DateTime[] DirMtimes;
-        /// <summary>Readable directories and case-preserving top-level filenames, in root precedence order.</summary>
-        public readonly (int RootIndex, string Directory, Dictionary<string, string> Files)[] Present;
-        /// <summary>Stores freshness baselines and readable providers for one canonical directory.</summary>
-        /// <param name="dirMtimes">One timestamp per configured loose root.</param>
-        /// <param name="present">Roots that currently provide at least one file in the directory.</param>
-        public LooseSubtree(DateTime[] dirMtimes, (int, string, Dictionary<string, string>)[] present)
-        { DirMtimes = dirMtimes; Present = present; }
+        public readonly (int RootIndex, string Dir, HashSet<string> Files)[] Present;
+        public LooseSubtree((int, string, HashSet<string>)[] present) { Present = present; }
     }
 
-    /// <summary>Current atomically replaceable cache snapshot.</summary>
     volatile Snapshot _snap;
+    /// <summary>Saved Amethyst selection, or null for the upstream root-discovery adapter.</summary>
+    AmethystSavedSnapshot? _savedSnapshot;
 
-    /// <summary>Archives that could not be read this build, including a concise reason.</summary>
+    /// <summary>The loose roots this resolver was built over, in precedence order. Fixed for its lifetime, so unlike
+    /// the archive tables it needs no snapshot; exposed for consumers that need the VFS ORDER itself.</summary>
+    public IReadOnlyList<(string Name, string Dir)> LooseRoots => _looseRoots;
+
     public IReadOnlyList<string> BsaFailures => _snap.Failures;
 
-    /// <summary>True iff this build had archive-read failures (<see cref="BsaFailures"/> non-empty). The caveat for an
-    /// Exists=false answer: an asset present ONLY in an archive that failed to read is indistinguishable from a truly
-    /// absent one, so a consumer acting on "no facegen → the NPC is fine" must check this — an Exists=false is
-    /// authoritative only when the read was complete. Surfaced at the resolver level (like LoadOrderResolver's
-    /// LoadFailures), never forced into a per-answer field that would diverge from the codebase idiom.</summary>
-    public bool ReadIncomplete => _snap.Failures.Count > 0;
+    /// <summary>The loose roots this build could not walk or list, each named with the reason — the loose twin of
+    /// <see cref="BsaFailures"/>. Filled lazily, because the read that hits the failure is the enumeration itself, and
+    /// kept for the life of the build: a root that would not read stays named until the next rebuild proves otherwise.</summary>
+    public IReadOnlyList<string> RootFailures => SortedRootFailures(_snap);
 
-    /// <summary>Creates either authoritative Amethyst mode or the legacy root-walk probe mode.</summary>
-    /// <param name="overwriteDir">
-    /// Legacy overwrite root; ignored when <paramref name="authoritativeLoose"/> is present.
-    /// </param>
-    /// <param name="modsDir">Legacy mods root; ignored in authoritative mode.</param>
-    /// <param name="dataDir">Vanilla Data_Core/Data root.</param>
-    /// <param name="enabledMods">Legacy mod folders in highest-first priority order.</param>
-    /// <param name="archives">Active archives with injected plugin ranks.</param>
-    /// <param name="authoritativeLoose">Amethyst loose winners, or null to use the legacy root walker.</param>
+    public bool ReadIncomplete => _snap.Failures.Count > 0 || !_snap.RootFailures.IsEmpty || _savedSnapshot?.Provenance.VanillaArchivesOmitted == true;
+
+    /// <summary>How many directories this build's loose freshness check re-lists — the cost <see cref="RefreshIfStale"/>
+    /// pays per call, exposed so a test can assert what that cost grows WITH: one entry per root per directory that
+    /// answers for a subtree, which is not the same as one per root per subtree.</summary>
+    internal int WatchedDirectoryCount => _snap.DirWatch.Count;
+
+    /// <summary>How many directory listings this build's warms have taken, so a test can assert a read pass lists each directory once.</summary>
+    internal int WarmListingCount => Volatile.Read(ref _snap.WarmListings);
+
+    /// <summary>The unread loose roots as ONE short clause, for a per-item reason with no caveat block above it to
+    /// point at: the first root in full and the rest counted, because that sentence repeats per item. Empty string
+    /// when every root read, so a caller can append it unconditionally.</summary>
+    public static string RootFailureBrief(IReadOnlyList<string> failures)
+        => failures.Count == 0
+            ? ""
+            : " (the loose root that would not read: " + failures[0]
+              + (failures.Count > 1 ? $"; and {failures.Count - 1} more" : "") + ")";
+
+    /// <summary>The root failures in a stable order, so two renders of one build read the same.</summary>
+    static IReadOnlyList<string> SortedRootFailures(Snapshot snap) =>
+        snap.RootFailures.IsEmpty
+            ? Array.Empty<string>()
+            : snap.RootFailures.Values.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
+
     AssetResolver(string overwriteDir, string modsDir, string dataDir,
-                  IReadOnlyList<string> enabledMods, IReadOnlyList<ActiveArchive> archives,
-                  IReadOnlyDictionary<string, ManagerFileSource>? authoritativeLoose = null)
+                  IReadOnlyList<string> enabledMods, IReadOnlyList<ActiveArchive> archives)
     {
         _overwriteDir = overwriteDir ?? "";
         _modsDir = modsDir ?? "";
         _dataDir = dataDir ?? "";
         _enabledMods = enabledMods;
-        _archives = DedupeArchives(archives);
-        _authoritativeLoose = authoritativeLoose;
-        _looseRoots = authoritativeLoose is null
-            ? BuildLooseRoots()
-            : _dataDir.Length > 0 ? new[] { ("Data", _dataDir) } : Array.Empty<(string, string)>();
+        _archives = DedupeArchives(archives);    // collapse a path bound by >1 plugin → ONE provider (no double-count → no false Ambiguous)
+        _looseRoots = BuildLooseRoots();         // fixed ordered roots: overwrite > mods (priority) > Data
         _snap = BuildTables();
     }
 
-    /// <summary>Builds the fixed legacy loose-root list in overwrite, mod, then Data precedence.</summary>
-    /// <returns>Provider names and native roots in winner-first order.</returns>
+    /// <summary>The loose roots in precedence order: overwrite, then each enabled mod highest-priority-first, then Data.</summary>
     IReadOnlyList<(string Name, string Dir)> BuildLooseRoots()
     {
         var roots = new List<(string, string)>(_enabledMods.Count + 2);
@@ -183,11 +158,8 @@ public sealed class AssetResolver : IDisposable
         return roots;
     }
 
-    /// <summary>Collapses duplicate physical archive paths without creating false provider contention.</summary>
-    /// <param name="archives">Injected bindings, which may name the same path more than once.</param>
-    /// <returns>
-    /// One binding per case-insensitive path, retaining the highest rank and stable first-seen path order.
-    /// </returns>
+    /// <summary>Collapse the injected archives to one entry per distinct path, keeping the highest plugin rank: the
+    /// same .bsa can arrive under two plugin bindings, which would raise a false <see cref="AssetHit.Ambiguous"/>.</summary>
     static IReadOnlyList<ActiveArchive> DedupeArchives(IReadOnlyList<ActiveArchive> archives)
     {
         var byPath = new Dictionary<string, ActiveArchive>(StringComparer.OrdinalIgnoreCase);
@@ -196,76 +168,44 @@ public sealed class AssetResolver : IDisposable
         {
             if (byPath.TryGetValue(a.Path, out var prev))
             {
-                if (a.PluginRank > prev.PluginRank) byPath[a.Path] = a;
+                if (a.PluginRank > prev.PluginRank) byPath[a.Path] = a;   // keep the max-rank binding + its owning plugin
             }
             else { byPath[a.Path] = a; order.Add(a.Path); }
         }
         return order.Select(p => byPath[p]).ToList();
     }
 
-    /// <summary>Builds a resolver using the legacy root-walk compatibility model.</summary>
-    /// <param name="overwriteDir">Highest-priority native overwrite root.</param>
-    /// <param name="modsDir">Native parent of legacy mod folders.</param>
-    /// <param name="dataDir">Lowest-priority native Data root.</param>
-    /// <param name="enabledModsByPriority">Enabled mod folder names in highest-first order.</param>
-    /// <param name="activeArchives">Active archive bindings with injected ranks.</param>
-    /// <returns>A resolver whose archive tables are loaded and whose loose caches begin empty.</returns>
-    public static AssetResolver Build(
-        string overwriteDir,
-        string modsDir,
-        string dataDir,
-        IReadOnlyList<string> enabledModsByPriority,
-        IReadOnlyList<ActiveArchive> activeArchives)
+    /// <summary>Build a resolver over the given roots, enabled-mod priority list and active archives, reading each archive's table once.</summary>
+    public static AssetResolver Build(string overwriteDir, string modsDir, string dataDir,
+                                      IReadOnlyList<string> enabledModsByPriority, IReadOnlyList<ActiveArchive> activeArchives)
         => new(overwriteDir, modsDir, dataDir, enabledModsByPriority, activeArchives);
 
-    /// <summary>
-    /// Build from Amethyst's authoritative loose-file winner map. The map supplies staged
-    /// winners; vanilla Data remains the lowest-priority loose source.
-    /// </summary>
-    /// <param name="looseWinners">Canonical logical paths mapped to Amethyst's physical winning sources.</param>
-    /// <param name="vanillaDataDir">Validated native Data_Core/Data root.</param>
-    /// <param name="activeArchives">Active archive bindings with injected ranks.</param>
-    /// <returns>An authoritative resolver with copied archive tables and no staged root walking.</returns>
-    public static AssetResolver Build(
-        IReadOnlyDictionary<string, ManagerFileSource> looseWinners,
-        string vanillaDataDir,
-        IReadOnlyList<ActiveArchive> activeArchives)
-        => new("", "", vanillaDataDir, Array.Empty<string>(), activeArchives, looseWinners);
+    /// <summary>Consume Amethyst's recorded providers; staging discovery and winner selection remain with the producer.</summary>
+    public static AssetResolver BuildSavedSnapshot(AmethystSavedSnapshot snapshot)
+        => new(snapshot.OverwriteDir, snapshot.ModsDir, snapshot.VanillaDataDir,
+               snapshot.Composition.EnabledMods, snapshot.SavedArchives()) { _savedSnapshot = snapshot };
 
-    /// <summary>Copies every active archive table into a new atomically swappable snapshot.</summary>
-    /// <returns>
-    /// A snapshot containing table data, freshness baselines, named failures, and an empty loose cache.
-    /// </returns>
     Snapshot BuildTables()
     {
         var tables = new Dictionary<string, HashSet<string>>(StringComparer.OrdinalIgnoreCase);
-        var mtimes = new Dictionary<string, DateTime>(StringComparer.OrdinalIgnoreCase);
+        var stamps = new Dictionary<string, FileStamp>(StringComparer.OrdinalIgnoreCase);
         var failures = new List<string>();
 
-        // Archives are already path-deduplicated, so each physical table is read once.
-        foreach (var a in _archives)
+        foreach (var a in _archives)                              // _archives is already path-deduped (DedupeArchives) — read each once
         {
-            mtimes[a.Path] = SafeMtime(a.Path);
+            stamps[a.Path] = FileStamp.Of(a.Path);
             try { tables[a.Path] = ReadArchiveTable(a.Path); }
             catch (Exception ex)
             {
-                tables[a.Path] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-                failures.Add(
-                    $"{Path.GetFileName(a.Path)} (loaded by {a.OwningPlugin}): " +
-                    $"could not read the archive table — {Concise(ex)}");
+                tables[a.Path] = new HashSet<string>(StringComparer.OrdinalIgnoreCase);   // empty = contributes nothing
+                failures.Add($"{Path.GetFileName(a.Path)} (loaded by {a.OwningPlugin}): could not read the archive table — {Concise(ex)}");
             }
         }
-        return new Snapshot(tables, mtimes, failures);
+        return new Snapshot(tables, stamps, failures);
     }
 
-    /// <summary>Copies one BSA file table into canonical case-insensitive keys.</summary>
-    /// <param name="archivePath">Native path to an active BSA.</param>
-    /// <returns>A detached entry set; no archive reader or handle is retained.</returns>
-    /// <exception cref="Exception">Mutagen cannot open or enumerate the archive.</exception>
-    /// <remarks>
-    /// Mutagen 0.53.1 readers are not disposable and do not retain a mapped handle after enumeration.
-    /// The defensive disposable cast supports a future implementation without changing the ownership contract.
-    /// </remarks>
+    /// <summary>Read one BSA's file table with Mutagen's native reader into a string set. IArchiveReader is not
+    /// IDisposable in Mutagen 0.53.1, so the finally's cast disposes nothing and is not the release mechanism.</summary>
     static HashSet<string> ReadArchiveTable(string archivePath)
     {
         var set = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
@@ -273,57 +213,59 @@ public sealed class AssetResolver : IDisposable
         try
         {
             foreach (var file in reader.Files)
-                set.Add(BethesdaPath.NormalizeArchiveEntry(file.Path));
+                set.Add(Normalize(file.Path));
         }
-        finally { (reader as IDisposable)?.Dispose(); }
+        finally { (reader as IDisposable)?.Dispose(); }           // disposes nothing in 0.53.1 — see the summary
         return set;
     }
 
-    /// <summary>Reads one BSA entry through Mutagen without invoking BSArch.</summary>
-    /// <param name="archivePath">Native path to the BSA.</param>
-    /// <param name="entryPath">Untrusted Data-relative path matched case-insensitively after normalization.</param>
-    /// <returns>Fresh decompressed bytes, or null when the readable archive does not contain the entry.</returns>
-    /// <exception cref="ArgumentException"><paramref name="entryPath"/> is not safely Data-relative.</exception>
-    /// <exception cref="Exception">Mutagen cannot open, enumerate, or read the archive.</exception>
+    /// <summary>Read ONE entry's bytes out of a BSA with Mutagen's native reader. Returns a fresh array, null when
+    /// the entry is not in the archive, and THROWS when the archive cannot be read so the caller reports it.</summary>
     public static byte[]? TryReadArchiveEntry(string archivePath, string entryPath)
     {
-        var want = BethesdaPath.Normalize(entryPath);
+        var want = Normalize(entryPath);
         var reader = Archive.CreateReader(GameRelease.SkyrimSE, archivePath);
         try
         {
             foreach (var file in reader.Files)
-                // Archive tables commonly lowercase paths; logical Bethesda matching is case-insensitive.
-                if (string.Equals(
-                    BethesdaPath.NormalizeArchiveEntry(file.Path),
-                    want,
-                    StringComparison.OrdinalIgnoreCase))
-                    return file.GetBytes();
-            return null;
+                // OrdinalIgnoreCase — BSA tables store paths lowercased, so a case-sensitive compare would miss the entry.
+                if (string.Equals(Normalize(file.Path), want, StringComparison.OrdinalIgnoreCase))
+                    return file.GetBytes();                        // fresh array; no held handle (see the summary)
+            return null;                                           // archive read fine, entry simply not present
         }
-        finally { (reader as IDisposable)?.Dispose(); }
+        finally { (reader as IDisposable)?.Dispose(); }           // disposes nothing in 0.53.1 — see ReadArchiveTable
     }
 
-    /// <summary>Reads multiple entries with one archive open and one table scan.</summary>
-    /// <param name="archivePath">Native path to the BSA.</param>
-    /// <param name="entryPaths">Untrusted Data-relative paths to request.</param>
-    /// <returns>Fresh bytes keyed by each found caller-supplied path; missing entries are omitted.</returns>
-    /// <exception cref="ArgumentException">Any requested path is not safely Data-relative.</exception>
-    /// <exception cref="Exception">Mutagen cannot open, enumerate, or read the archive.</exception>
-    public static Dictionary<string, byte[]> TryReadArchiveEntries(
-        string archivePath,
-        IReadOnlyCollection<string> entryPaths)
+    /// <summary>Is <paramref name="entryPath"/> inside this archive? The existence half of <see cref="TryReadArchiveEntry"/> — same match, no GetBytes.</summary>
+    public static bool ArchiveHasEntry(string archivePath, string entryPath)
+    {
+        var want = Normalize(entryPath);
+        var reader = Archive.CreateReader(GameRelease.SkyrimSE, archivePath);
+        try
+        {
+            foreach (var file in reader.Files)
+                if (string.Equals(Normalize(file.Path), want, StringComparison.OrdinalIgnoreCase))
+                    return true;
+            return false;
+        }
+        finally { (reader as IDisposable)?.Dispose(); }           // disposes nothing in 0.53.1 — see ReadArchiveTable
+    }
+
+    /// <summary>Read many entries out of ONE archive in a single table walk, where the single-entry call costs an
+    /// open and a full table scan each. A wanted key missing from the result means the entry is not in the archive;
+    /// an archive that cannot be opened THROWS, never a silent empty map.</summary>
+    public static Dictionary<string, byte[]> TryReadArchiveEntries(string archivePath, IReadOnlyCollection<string> entryPaths)
     {
         var wanted = new Dictionary<string, string>(entryPaths.Count, StringComparer.OrdinalIgnoreCase);
-        foreach (var p in entryPaths) wanted[NormalizeQueryPath(p)] = p;
+        foreach (var p in entryPaths) wanted[Normalize(p)] = p;                 // normalized key → the caller's original string
         var result = new Dictionary<string, byte[]>(entryPaths.Count, StringComparer.OrdinalIgnoreCase);
         var reader = Archive.CreateReader(GameRelease.SkyrimSE, archivePath);
         try
         {
             foreach (var file in reader.Files)
             {
-                if (result.Count == wanted.Count) break;
-                if (wanted.TryGetValue(BethesdaPath.NormalizeArchiveEntry(file.Path), out var original)
-                    && !result.ContainsKey(original))
+                if (result.Count == wanted.Count) break;                        // everything found — stop walking the table
+                if (wanted.TryGetValue(Normalize(file.Path), out var original) && !result.ContainsKey(original))
                     result[original] = file.GetBytes();
             }
             return result;
@@ -331,11 +273,7 @@ public sealed class AssetResolver : IDisposable
         finally { (reader as IDisposable)?.Dispose(); }
     }
 
-    /// <summary>Reads one already-resolved loose file or BSA entry.</summary>
-    /// <param name="s">Concrete source returned by placement resolution.</param>
-    /// <returns>
-    /// Fresh bytes and null error on success; otherwise null bytes and a named race, absence, or read error.
-    /// </returns>
+    /// <summary>Read the bytes of ONE resolved provider — the shared home for the loose-vs-BSA winner read.</summary>
     public static (byte[]? Bytes, string? Error) ReadPlacementSource(PlacementSource s)
     {
         if (s.Kind == AssetKind.Loose)
@@ -348,343 +286,614 @@ public sealed class AssetResolver : IDisposable
         try
         {
             var b = s.ArchivePath is null ? null : TryReadArchiveEntry(s.ArchivePath, s.EntryPath);
-            return b is null
-                ? (null, $"entry '{s.EntryPath}' not found inside '{Path.GetFileName(s.ArchivePath ?? "?")}'")
-                : (b, null);
+            return b is null ? (null, $"entry '{s.EntryPath}' not found inside '{Path.GetFileName(s.ArchivePath ?? "?")}'") : (b, null);
         }
-        catch (Exception ex)
-        {
-            return (null, $"could not read archive '{Path.GetFileName(s.ArchivePath ?? "?")}': {ex.Message}");
-        }
+        catch (Exception ex) { return (null, $"could not read archive '{Path.GetFileName(s.ArchivePath ?? "?")}': {ex.Message}"); }
     }
 
-    /// <summary>Resolves one Data-relative asset against the current snapshot.</summary>
-    /// <param name="relPath">Untrusted slash- or backslash-separated path relative to Data.</param>
-    /// <returns>Canonical path, existence, winner, and all contenders in precedence order.</returns>
-    /// <exception cref="ArgumentException"><paramref name="relPath"/> is not safely Data-relative.</exception>
-    /// <exception cref="InvalidOperationException">An authoritative Amethyst winner vanished from staging.</exception>
-    /// <remarks>
-    /// Use <see cref="Capture"/> when several answers and failure diagnostics must share one snapshot.
-    /// </remarks>
-    public AssetHit Resolve(string relPath) => Resolve(relPath, _snap);
+    /// <summary>Resolve one Data-relative asset path. Single-shot — a caller making many reads in one operation <see cref="Capture"/>s once instead.</summary>
+    public AssetHit Resolve(string relPath) { var (snap, pass) = BeginPass(); return Resolve(relPath, snap, pass); }
 
-    /// <summary>Resolves one path against a caller-pinned snapshot.</summary>
-    /// <param name="relPath">Canonical or slash-separated path relative to Data.</param>
-    /// <param name="snap">Single archive/cache build to query.</param>
-    /// <returns>Winner-first provider information for the normalized path.</returns>
-    AssetHit Resolve(string relPath, Snapshot snap)
+    AssetHit Resolve(string relPath, Snapshot snap, int pass)
     {
         var rel = NormalizeQueryPath(relPath);
-        var sources = ResolveProviders(rel, snap);
+        var sources = ResolveProviders(rel, snap, pass);           // ONE precedence path, winner first (shared with placement)
         if (sources.Count == 0)
             return new AssetHit(rel, false, null, Array.Empty<AssetProvider>(), false);
         // Project the concrete sources down to the display providers — the on-disk paths are placement-only.
-        var providers = sources.Select(s => new AssetProvider(s.ProviderName, s.Kind)).ToList();
-        // Ambiguous when >1 source provides it (contention), or a loose copy coexists with a BSA copy (the edge the
-        // common-rule model cannot promise exactly for manager-controlled archives).
+        var providers = sources.Select(s => new AssetProvider(s.ProviderName, s.Kind, s.OwningMod)).ToList();
         return new AssetHit(rel, true, providers[0], providers, providers.Count > 1);
     }
 
-    /// <summary>Applies the single precedence algorithm shared by display and placement resolution.</summary>
-    /// <param name="rel">Already normalized canonical Data-relative path.</param>
-    /// <param name="snap">Pinned archive and legacy loose-cache snapshot.</param>
-    /// <returns>Concrete sources in winner-first order: loose providers, then ranked BSAs.</returns>
-    /// <exception cref="InvalidOperationException">An authoritative Amethyst winner vanished from staging.</exception>
-    List<PlacementSource> ResolveProviders(string rel, Snapshot snap)
+    /// <summary>The ONE precedence resolution both <see cref="Resolve"/> and <see cref="ResolveForPlacement"/> ride,
+    /// so the two cannot drift. Each provider comes back with its concrete on-disk descriptor, winner first.</summary>
+    List<PlacementSource> ResolveProviders(string rel, Snapshot snap, int pass)
     {
+        if (_savedSnapshot is { } saved)
+        {
+            var recorded = saved.ResolveAssets(rel).ToList();
+            // The native snapshot remains authoritative for every managed provider. Vanilla archives are the
+            // only entries added here, in the engine order captured from effective Skyrim.ini and plugin state.
+            foreach (var archive in _archives.Where(a => string.Equals(a.OwningMod, "Data", StringComparison.Ordinal)))
+                if (snap.Tables.TryGetValue(archive.Path, out var table) && table.Contains(rel))
+                    recorded.Add(new PlacementSource(Path.GetFileName(archive.Path), AssetKind.Bsa,
+                        null, archive.Path, rel, OwningMod: "Data"));
+            return recorded;
+        }
+        // ---- loose, in MO2 precedence order — via the per-subtree cache (warmed on first touch) ----
+        var opened = AsWindowsOpens(rel);
+        var subtreeDir = BethesdaPath.DirectoryName(opened);
+        var fname = BethesdaPath.FileName(opened);
+        var st = snap.LooseCache.GetOrAdd(subtreeDir, d => WarmSubtree(d, snap, pass));
         var loose = new List<PlacementSource>();
-        if (_authoritativeLoose is not null)
-        {
-            if (_authoritativeLoose.TryGetValue(rel, out var source))
-            {
-                if (!File.Exists(source.HostPath))
-                    throw new InvalidOperationException(
-                        $"Amethyst filemap winner '{rel}' from '{source.Provider}' is missing at " +
-                        $"'{source.HostPath}'; refresh Amethyst and rebuild the filemap");
-                loose.Add(new PlacementSource(source.Provider, AssetKind.Loose,
-                    LooseFilePath: source.HostPath, ArchivePath: null, EntryPath: rel));
-            }
-            if (_dataDir.Length > 0
-                && BethesdaPath.TryResolveExisting(_dataDir, rel, out var vanillaPath)
-                && File.Exists(vanillaPath)
-                && !loose.Any(x => string.Equals(x.LooseFilePath, vanillaPath, StringComparison.Ordinal)))
-                loose.Add(new PlacementSource("Data", AssetKind.Loose,
-                    LooseFilePath: vanillaPath, ArchivePath: null, EntryPath: rel));
-        }
-        else
-        {
-            // Legacy root walk: overwrite > enabled mods > Data.
-            var subtreeDir = BethesdaPath.DirectoryName(rel);
-            var fname = BethesdaPath.FileName(rel);
-            var st = snap.LooseCache.GetOrAdd(subtreeDir, WarmSubtree);
-            foreach (var (rootIndex, directory, files) in st.Present)
-                if (files.TryGetValue(fname, out var rawName))
-                    loose.Add(new PlacementSource(_looseRoots[rootIndex].Name, AssetKind.Loose,
-                        LooseFilePath: Path.Combine(directory, rawName), ArchivePath: null, EntryPath: rel));
-        }
+        foreach (var (rootIndex, dir, files) in st.Present)           // Present is already in precedence order
+            if (files.TryGetValue(fname, out var actualName))
+                loose.Add(new PlacementSource(_looseRoots[rootIndex].Name, AssetKind.Loose,
+                    LooseFilePath: Path.Combine(dir, actualName), ArchivePath: null, EntryPath: rel));
 
         // ---- BSA, highest plugin rank first ----
         var bsa = new List<(PlacementSource source, int rank)>();
         foreach (var a in _archives)
             if (snap.Tables.TryGetValue(a.Path, out var t) && t.Contains(rel))
                 bsa.Add((new PlacementSource(Path.GetFileName(a.Path), AssetKind.Bsa,
-                    LooseFilePath: null, ArchivePath: a.Path, EntryPath: rel), a.PluginRank));
-        // Higher plugin rank wins; the archive filename is a DETERMINISTIC tie-break so equal-rank BSAs (a plugin can
-        // ship more than one) order stably across runs rather than by hash/enumeration order.
+                    LooseFilePath: null, ArchivePath: a.Path, EntryPath: rel, OwningMod: a.OwningMod), a.PluginRank));
+        // Higher plugin rank wins; the archive filename is a deterministic tie-break for a plugin's equal-rank archives.
         var bsaOrdered = bsa.OrderByDescending(b => b.rank)
                             .ThenBy(b => b.source.ProviderName, StringComparer.OrdinalIgnoreCase)
                             .Select(b => b.source);
 
-        // winner: loose beats BSA; the list is winner first, then the rest in precedence.
         var providers = new List<PlacementSource>(loose);
         providers.AddRange(bsaOrdered);
         return providers;
     }
 
-    /// <summary>Resolves one asset to concrete sources that a placement operation can read.</summary>
-    /// <param name="relPath">Untrusted slash- or backslash-separated path relative to Data.</param>
-    /// <returns>Physical sources in winner-first order plus ambiguity and incomplete-read caveats.</returns>
-    /// <exception cref="ArgumentException"><paramref name="relPath"/> is not safely Data-relative.</exception>
-    /// <exception cref="InvalidOperationException">An authoritative Amethyst winner vanished from staging.</exception>
-    public PlacementResolution ResolveForPlacement(string relPath) => ResolveForPlacement(relPath, _snap);
+    /// <summary>Resolve one Data-relative asset path to its concrete on-disk sources for placement: exactly one source is an unambiguous copy to re-assert.</summary>
+    public PlacementResolution ResolveForPlacement(string relPath) { var (snap, pass) = BeginPass(); return ResolveForPlacement(relPath, snap, pass); }
 
-    /// <summary>Resolves concrete sources against a caller-pinned snapshot.</summary>
-    /// <param name="relPath">Untrusted Data-relative path.</param>
-    /// <param name="snap">Snapshot shared with the caller's other asset reads.</param>
-    /// <returns>Physical sources and caveats from that exact snapshot.</returns>
-    internal PlacementResolution ResolveForPlacement(string relPath, Snapshot snap)
+    internal PlacementResolution ResolveForPlacement(string relPath, Snapshot snap, int pass)
     {
         var rel = NormalizeQueryPath(relPath);
-        var sources = ResolveProviders(rel, snap);
-        return new PlacementResolution(rel, sources, sources.Count > 1, snap.Failures.Count > 0);
+        var sources = ResolveProviders(rel, snap, pass);
+        return new PlacementResolution(rel, sources, sources.Count > 1, snap.Failures.Count > 0 || !snap.RootFailures.IsEmpty || _savedSnapshot?.Provenance.VanillaArchivesOmitted == true);
     }
 
-    /// <summary>Resolves several paths against one internally pinned current snapshot.</summary>
-    /// <param name="relPaths">Untrusted Data-relative paths in desired result order.</param>
-    /// <returns>One result per input path in the same order.</returns>
-    /// <remarks>Use <see cref="Capture"/> to pair results with the same snapshot's failure list.</remarks>
+    public const string OverwriteLayerName = "overwrite";
+
+    public const string DataLayerName = "Data";
+
+    /// <summary>Is <paramref name="name"/> one of the two LAYER names — the half of the reserved set that needs no built resolver? Stated once, here.</summary>
+    public static bool IsReservedLayerName(string name) =>
+        string.Equals(OverwriteLayerName, name, StringComparison.OrdinalIgnoreCase)
+        || string.Equals(DataLayerName, name, StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>Is <paramref name="name"/> a RESERVED provider name — "overwrite", "Data", or an active archive's
+    /// filename? An enabled mod folder name is deliberately not reserved (docs/architecture/assets.md).</summary>
+    public bool IsReservedProviderName(string name)
+    {
+        if (_savedSnapshot is { } saved && saved.SavedArchives().Any(a => Path.GetFileName(a.Path).Equals(name, StringComparison.OrdinalIgnoreCase))) return true;
+        if (_overwriteDir.Length > 0 && string.Equals(OverwriteLayerName, name, StringComparison.OrdinalIgnoreCase)) return true;
+        if (_dataDir.Length > 0 && string.Equals(DataLayerName, name, StringComparison.OrdinalIgnoreCase)) return true;
+        foreach (var a in _archives)
+            if (string.Equals(Path.GetFileName(a.Path), name, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    bool IsEnabledMod(string name)
+    {
+        foreach (var mod in _enabledMods)
+            if (string.Equals(mod, name, StringComparison.OrdinalIgnoreCase)) return true;
+        return false;
+    }
+
+    /// <summary>The copy of <paramref name="relPath"/> inside the mod folder <paramref name="providerName"/> names,
+    /// when the built universe has no answer for that name at that path. <see cref="OffOrderAssetSource"/> owns the
+    /// lane; the <see cref="PlacementSource.OwnerEnabled"/> qualifier for a BSA in an enabled mod is set here.</summary>
+    public OffOrderLookup TryResolveOffOrderProvider(string? providerName, string relPath)
+    {
+        if (_savedSnapshot is not null)
+            throw new InvalidOperationException("Off-order asset discovery is unavailable in Amethyst saved-snapshot mode; use an explicit file tool or refresh the selected profile in Amethyst");
+        var look = OffOrderAssetSource.Resolve(_modsDir, IsReservedProviderName, providerName, relPath);
+        return look.Source is { } s && s.Kind == AssetKind.Bsa && IsEnabledMod(s.ProviderName)
+            ? look with { Source = s with { OwnerEnabled = true } }
+            : look;
+    }
+
+    /// <summary>Resolve many paths against ONE pinned build, so a refresh landing mid-scan cannot split the scan.</summary>
     public IReadOnlyList<AssetHit> ResolveMany(IEnumerable<string> relPaths)
     {
-        var snap = _snap;                                         // pin ONE build for the whole scan
-        return relPaths.Select(p => Resolve(p, snap)).ToList();
+        var (snap, pass) = BeginPass();                           // pin ONE build for the whole scan
+        return relPaths.Select(p => Resolve(p, snap, pass)).ToList();
     }
 
-    /// <summary>Enumerates distinct paths supplied by any source below one Data-relative directory.</summary>
-    /// <param name="prefix">Untrusted Data-relative directory prefix.</param>
-    /// <returns>Case-insensitively distinct canonical paths; winner resolution remains a separate operation.</returns>
-    /// <exception cref="ArgumentException"><paramref name="prefix"/> is not safely Data-relative.</exception>
+    /// <summary>Every distinct Data-relative path that exists anywhere under <paramref name="prefix"/>, across all
+    /// loose roots and all active BSAs. Every returned path is re-rooted on the NORMALIZED prefix, so one answer
+    /// never carries two spellings of one folder; a loose root that will not enumerate contributes nothing and is
+    /// named in <see cref="RootFailures"/>, which sets <see cref="ReadIncomplete"/>.</summary>
     public IReadOnlyCollection<string> EnumerateUnder(string prefix) => EnumerateUnder(prefix, _snap);
 
-    /// <summary>Enumerates distinct paths below a prefix using one pinned snapshot.</summary>
-    /// <param name="prefix">Safe directory path relative to Data.</param>
-    /// <param name="snap">Single archive/cache build to query.</param>
-    /// <returns>Case-insensitively distinct canonical Bethesda paths.</returns>
+    /// <summary>As <see cref="EnumerateUnder(string)"/>, with the walk BOUNDED: <paramref name="keep"/> filters
+    /// inside the walk so the cap counts matches, and the walk stops at <paramref name="max"/> of them, setting
+    /// <paramref name="stopped"/>. 0 is no cap, null keeps everything.</summary>
+    public IReadOnlyCollection<string> EnumerateUnder(string prefix, Func<string, bool>? keep, int max, out bool stopped)
+        => EnumerateUnder(prefix, _snap, keep, max, out stopped);
+
     IReadOnlyCollection<string> EnumerateUnder(string prefix, Snapshot snap)
+        => EnumerateUnder(prefix, snap, null, 0, out _);
+
+    IReadOnlyCollection<string> EnumerateUnder(string prefix, Snapshot snap, Func<string, bool>? keep, int max, out bool stopped)
     {
-        var pre = NormalizeQueryPath(prefix);
-        // The trailing separator prevents a prefix such as "Sound" from matching a sibling named "Sound2".
-        var withSep = pre + "\\";
+        stopped = false;
+        var pre = NormalizeQueryPath(prefix).TrimEnd('\\');      // drive-root / '..' rejected loud, backslash-normalized
+        // Match a SUBTREE, not a sibling whose name starts with 'pre'. An empty prefix is the Data root.
+        var withSep = pre.Length == 0 ? "" : pre + "\\";
         var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        bool Full() => max > 0 && found.Count >= max;
+        void Take(string rel) { if (keep is null || keep(rel)) found.Add(rel); }
 
-        if (_authoritativeLoose is not null)
-            foreach (var path in _authoritativeLoose.Keys)
-                if (path.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))
-                    found.Add(path);
+        if (_savedSnapshot is { } saved)
+            foreach (var entry in saved.AssetPaths)
+                if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))
+                {
+                    Take(entry);
+                    if (Full()) { stopped = true; return found; }
+                }
 
-        // Legacy roots, or vanilla Data in authoritative mode.
-        foreach (var (_, rootDir) in _looseRoots)
+        // loose: recurse each root's copy of the prefix dir (set-UNION across roots — the per-path winner is decided later).
+        foreach (var (rootName, rootDir) in _looseRoots)
         {
-            if (!BethesdaPath.TryResolveExisting(rootDir, pre, out var baseDir) || !Directory.Exists(baseDir)) continue;
+            if (_savedSnapshot is not null && rootDir != _dataDir) continue;
+            var baseDir = pre.Length == 0 ? rootDir : BethesdaPath.Under(rootDir, pre);
+            try
+            {
+                if (pre.Length > 0 && BethesdaPath.TryResolveExisting(rootDir, pre, out var actualDir)) baseDir = actualDir;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                RecordRootFailure(rootName, pre, "resolve", ex, snap);
+            }
+            // A "not there" is only an absence when it can be proved one; unreadable is named inside.
+            if (!Directory.Exists(baseDir)) { AbsenceIsReal(rootName, rootDir, pre, baseDir, snap); continue; }
             try
             {
                 foreach (var f in Directory.EnumerateFiles(baseDir, "*", SearchOption.AllDirectories))
-                    found.Add(BethesdaPath.FromHostRelative(Path.GetRelativePath(rootDir, f)));
+                {
+                    // Re-rooted on the NORMALIZED prefix, not sliced off rootDir, which would carry the caller's casing.
+                    Take(withSep + BethesdaPath.FromHostRelative(Path.GetRelativePath(baseDir, f)));
+                    if (Full()) { stopped = true; return found; }
+                }
             }
-            catch { /* a root that won't enumerate contributes nothing; not silently trusted (see the summary) */ }
+            catch (Exception ex)
+            {
+                // A root that won't enumerate contributes nothing, so it is NAMED on the build: it sets ReadIncomplete
+                // and the answer says which root was not walked, never a silent half-answer.
+                RecordRootFailure(rootName, pre, "walk", ex, snap);
+            }
+            if (Full()) { stopped = true; return found; }
         }
 
-        // Cached BSA tables are detached and therefore safe to enumerate without archive handles.
+        // BSA: every table entry under the prefix (the cached tables ARE the authoritative archive listing, zero handle at rest).
         foreach (var t in snap.Tables.Values)
             foreach (var entry in t)
                 if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))
-                    found.Add(entry);
+                {
+                    // Re-rooted on the same prefix as the loose lane, so one answer does not mix two spellings of a folder.
+                    Take(withSep + entry.Substring(withSep.Length));
+                    if (Full()) { stopped = true; return found; }
+                }
 
         return found;
     }
 
-    /// <summary>Captures the current snapshot for a logically consistent multi-read operation.</summary>
-    /// <returns>A handle-free value view that remains valid if the resolver later refreshes.</returns>
-    public AssetView Capture() => new(this, _snap);
+    /// <summary>Capture the CURRENT build as a pinned read view, so a bulk scan and its read-failure list answer from one build.</summary>
+    public AssetView Capture() { var (snap, pass) = BeginPass(); return new(this, snap, pass); }
 
-    /// <summary>A read view pinned to ONE captured build (see <see cref="Capture"/>). Resolve / ResolveMany and
-    /// BsaFailures / ReadIncomplete all answer from the SAME snapshot, so they can never disagree about which build
-    /// they describe. No handles — safe to hold for a call.</summary>
-    public readonly struct AssetView
+    /// <summary>The current build and a new read pass on it, so no listing taken before this call answers it.</summary>
+    (Snapshot Snap, int Pass) BeginPass()
     {
-        /// <summary>Owning resolver whose pure query helpers interpret the snapshot.</summary>
-        readonly AssetResolver _r;
-        /// <summary>Exact immutable snapshot captured for this view.</summary>
-        readonly Snapshot _s;
-        /// <summary>Creates a view over one resolver snapshot; only <see cref="Capture"/> calls this.</summary>
-        /// <param name="r">Owning resolver.</param>
-        /// <param name="s">Snapshot to pin.</param>
-        internal AssetView(AssetResolver r, Snapshot s) { _r = r; _s = s; }
-
-        /// <summary>Archives that could not be read in this snapshot.</summary>
-        public IReadOnlyList<string> BsaFailures => _s.Failures;
-
-        /// <summary>The Exists=false caveat for THIS build — see <see cref="AssetResolver.ReadIncomplete"/>.</summary>
-        public bool ReadIncomplete => _s.Failures.Count > 0;
-
-        /// <summary>Resolves one asset against this view's pinned build.</summary>
-        /// <param name="relPath">Untrusted Data-relative path.</param>
-        /// <returns>Logical winner and contender information from the pinned snapshot.</returns>
-        public AssetHit Resolve(string relPath) => _r.Resolve(relPath, _s);
-
-        /// <summary>Resolves concrete placement sources against this view's pinned build.</summary>
-        /// <param name="relPath">Untrusted Data-relative path.</param>
-        /// <returns>Physical sources and caveats from the pinned snapshot.</returns>
-        public PlacementResolution ResolveForPlacement(string relPath) => _r.ResolveForPlacement(relPath, _s);
-
-        /// <summary>Resolves every supplied path against this view's single pinned build.</summary>
-        /// <param name="relPaths">Untrusted Data-relative paths in desired result order.</param>
-        /// <returns>One logical resolution per input path.</returns>
-        public IReadOnlyList<AssetHit> ResolveMany(IEnumerable<string> relPaths)
-        {
-            var r = _r; var s = _s;                              // locals — a struct's lambda can't capture 'this'
-            return relPaths.Select(p => r.Resolve(p, s)).ToList();
-        }
-
-        /// <summary>Enumerates every supplied path below a prefix using this view's pinned build.</summary>
-        /// <param name="prefix">Untrusted Data-relative directory prefix.</param>
-        /// <returns>Case-insensitively distinct canonical paths from any provider.</returns>
-        public IReadOnlyCollection<string> EnumerateUnder(string prefix) => _r.EnumerateUnder(prefix, _s);
+        var snap = _snap;
+        return (snap, Interlocked.Increment(ref snap.Pass));
     }
 
-    /// <summary>
-    /// Refreshes derived tables when an archive, warmed legacy subtree, or authoritative source changed.
-    /// </summary>
-    /// <returns>True when a new snapshot replaced the old one; false when all tracked inputs were unchanged.</returns>
-    /// <remarks>
-    /// Manager membership/order changes rebuild the entire resolver outside this method. Existing views keep their
-    /// pinned snapshot while the replacement starts with an empty lazy loose cache.
-    /// </remarks>
+    /// <summary>A read view pinned to ONE captured build (see <see cref="Capture"/>). No handles — safe to hold for a call.</summary>
+    public readonly struct AssetView
+    {
+        readonly AssetResolver _r;
+        readonly Snapshot _s;
+        readonly int _pass;                                                     // this view's own read pass
+        internal AssetView(AssetResolver r, Snapshot s, int pass) { _r = r; _s = s; _pass = pass; }   // only Capture() constructs
+
+        public IReadOnlyList<string> BsaFailures => _s.Failures;
+
+        /// <summary>The loose roots this view's walks could not enumerate — see <see cref="AssetResolver.RootFailures"/>.</summary>
+        public IReadOnlyList<string> RootFailures => SortedRootFailures(_s);
+
+        /// <summary>This view's unread roots as one short clause — see <see cref="AssetResolver.RootFailureBrief"/>.</summary>
+        public string RootFailureBrief => AssetResolver.RootFailureBrief(RootFailures);
+
+        public bool ReadIncomplete => _s.Failures.Count > 0 || !_s.RootFailures.IsEmpty || _r._savedSnapshot?.Provenance.VanillaArchivesOmitted == true;
+
+        public AssetHit Resolve(string relPath) => _r.Resolve(relPath, _s, _pass);
+
+        /// <summary>The files at the top of one loose root by its name; null when it would not list, which is named in <see cref="RootFailures"/>.</summary>
+        public IReadOnlyCollection<string>? LooseRootFiles(string rootName) => _r.LooseRootFiles(rootName, _s);
+
+        public PlacementResolution ResolveForPlacement(string relPath) => _r.ResolveForPlacement(relPath, _s, _pass);
+
+        /// <summary>The off-order source lane — see <see cref="AssetResolver.TryResolveOffOrderProvider"/>.
+        /// Deliberately NOT pinned to this view's build: an off-order folder contributes to no build.</summary>
+        public OffOrderLookup TryResolveOffOrderProvider(string? providerName, string relPath)
+            => _r.TryResolveOffOrderProvider(providerName, relPath);
+
+        public IReadOnlyList<AssetHit> ResolveMany(IEnumerable<string> relPaths)
+        {
+            var r = _r; var s = _s; var pass = _pass;            // locals — a struct's lambda can't capture 'this'
+            return relPaths.Select(p => r.Resolve(p, s, pass)).ToList();
+        }
+
+        public IReadOnlyCollection<string> EnumerateUnder(string prefix) => _r.EnumerateUnder(prefix, _s);
+
+        public IReadOnlyCollection<string> EnumerateUnder(string prefix, Func<string, bool>? keep, int max, out bool stopped)
+            => _r.EnumerateUnder(prefix, _s, keep, max, out stopped);
+    }
+
+    /// <summary>Re-read the inputs — the active archives and every directory the warmed loose subtrees put under
+    /// watch — and rebuild in one reference swap if any changed. A changed archive or mod SET is an order change
+    /// instead. The watch set holds each directory ONCE however many subtrees answer from it, so the check costs one
+    /// listing per watched directory rather than one per root per warmed subtree.</summary>
     public bool RefreshIfStale()
     {
         var snap = _snap;
         bool stale = false;
         foreach (var a in _archives)
-            if (!snap.Mtimes.TryGetValue(a.Path, out var m) || SafeMtime(a.Path) != m) { stale = true; break; }
+            if (!snap.Stamps.TryGetValue(a.Path, out var s) || FileStamp.Of(a.Path) != s) { stale = true; break; }
         if (!stale)
-        {
-            if (_authoritativeLoose is not null)
-            {
-                // Filemap/index membership changes rebuild the whole resolver in the manager layout.
-                // Here only a vanished staged winner requires a local refresh signal.
-                stale = _authoritativeLoose.Values.Any(x => !File.Exists(x.HostPath));
-            }
-            else
-                foreach (var kv in snap.LooseCache)
-                    if (LooseSubtreeStale(kv.Key, kv.Value)) { stale = true; break; }
-        }
+            foreach (var kv in snap.DirWatch)                          // one listing per watched directory
+                if (WatchedDirStale(kv.Key, kv.Value)) { stale = true; break; }
         if (!stale) return false;
-        _snap = BuildTables();
+        _snap = BuildTables();                                        // BSA tables re-read; loose cache starts empty, re-warms lazily
         return true;
     }
 
-    /// <summary>Checks whether any root's copy of one warmed legacy directory changed.</summary>
-    /// <param name="subtreeDir">Canonical parent path used as the loose-cache key.</param>
-    /// <param name="st">Cached directories and parallel timestamp baselines.</param>
-    /// <returns>True when a directory changed, appeared, disappeared, or became unreadable.</returns>
-    bool LooseSubtreeStale(string subtreeDir, LooseSubtree st)
+    /// <summary>Has one watched directory changed? Names, never a timestamp: a directory's last-write comes off a
+    /// clock coarser than a write and a delete next to each other, so a stamped check reads two different listings as
+    /// no change at all. One fresh listing answers for every subtree that watches this directory.</summary>
+    static bool WatchedDirStale(string dir, WatchedDir w)
+    {
+        // Only a directory that answered is ever watched, so one that will not answer now has vanished or stopped
+        // reading — both are changes.
+        var now = FreshNames(dir);
+        if (now is null) return true;
+        // A directory a subtree resolves FROM: any name coming or going changes what that subtree provides.
+        if (w.Entries is { } baseline && !now.SetEquals(baseline)) return true;
+        // A directory watched only as an ancestor: ONLY the missing name appearing is a change, so an unrelated file
+        // landing in a mod folder does not throw the build away.
+        foreach (var name in w.Forbidden.Keys) if (now.Contains(name)) return true;
+        // A name a file was holding: gone, or now a directory, and the root may provide the subtree after all. One
+        // stat per such name, and only a mod with a FILE called `meshes` (or the like) has one at all.
+        foreach (var name in w.FileHeld.Keys)
+            if (!now.Contains(name) || Directory.Exists(Path.Combine(dir, name))) return true;
+        return false;
+    }
+
+    /// <summary>One directory's entry names read fresh, never off the memo that is the baseline; null when it will not list.</summary>
+    static HashSet<string>? FreshNames(string dir) => TryFreshListing(dir, 0)?.Names;
+
+    /// <summary>The one enumeration every listing, baseline and freshness check rides; throws when the directory will not list.</summary>
+    static Listing FreshListing(string dir, int pass)
+    {
+        var names = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        var files = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        // Only FILES may resolve: a directory reported as an asset is the silently wrong answer.
+        foreach (var entry in new DirectoryInfo(dir).EnumerateFileSystemInfos())
+        {
+            names.Add(entry.Name);
+            if ((entry.Attributes & FileAttributes.Directory) == 0) files.Add(entry.Name);
+        }
+        return new Listing(names, files, pass);
+    }
+
+    static Listing? TryFreshListing(string dir, int pass)
+    {
+        try { return FreshListing(dir, pass); }
+        catch { return null; }
+    }
+
+    /// <summary>Warm one subtree against the build that asked for it, so a root that will not list is named on that
+    /// build the way a root that will not walk is.</summary>
+    LooseSubtree WarmSubtree(string subtreeDir, Snapshot snap, int pass)
     {
         var roots = _looseRoots;
+        var present = new List<(int, string, HashSet<string>)>();
         for (int i = 0; i < roots.Count; i++)
         {
-            var dir = ResolveSubtree(roots[i].Dir, subtreeDir);
-            if (SafeMtime(dir) != st.DirMtimes[i]) return true;
+            var dir = subtreeDir.Length == 0 ? roots[i].Dir : BethesdaPath.Under(roots[i].Dir, subtreeDir);
+            try
+            {
+                if (subtreeDir.Length > 0 && BethesdaPath.TryResolveExisting(roots[i].Dir, subtreeDir, out var actualDir)) dir = actualDir;
+            }
+            catch (UnauthorizedAccessException ex)
+            {
+                RecordRootFailure(roots[i].Name, subtreeDir, "resolve", ex, snap);
+            }
+            // Reuse the current pass's listings while keeping the real host spelling on Linux.
+            var segments = subtreeDir.Length == 0 ? Array.Empty<string>()
+                : Path.GetRelativePath(roots[i].Dir, dir).Split(Path.DirectorySeparatorChar);
+            if (TryDescend(roots[i].Dir, segments, snap, pass, out var listedDir, out var listed))
+            {
+                if (listed is { Count: > 0 }) present.Add((i, listedDir, listed));
+                continue;
+            }
+            // ONE read of this root's copy: the whole listing is the watch baseline, the filenames in it are what the
+            // subtree resolves from. Two reads of one directory would only differ by the split second between them.
+            var (names, files, absent) = SafeListing(dir, roots[i].Name, roots[i].Dir, subtreeDir, snap);
+            Watch(dir, roots[i].Dir, snap, names, absent);           // the baseline for an appear/disappear, on the build's shared watch set
+            if (files is { Count: > 0 }) present.Add((i, dir, files));
+        }
+        return new LooseSubtree(present.ToArray());
+    }
+
+    /// <summary>One root's copy of a subtree off listings no older than the pass, top down; false sends it to <see cref="SafeListing"/>.</summary>
+    static bool TryDescend(string rootDir, string[] segments, Snapshot snap, int pass,
+                           out string resolvedDir, out HashSet<string>? files)
+    {
+        files = null;
+        var dir = rootDir;
+        resolvedDir = rootDir;
+        for (int i = 0; ; i++)
+        {
+            bool leaf = i == segments.Length;
+            if (CurrentListing(dir, snap, pass, leaf) is not { } listing) return false;
+            if (leaf)
+            {
+                snap.DirWatch.GetOrAdd(dir, _ => new WatchedDir()).Entries = listing.Names;
+                files = listing.Files;
+                resolvedDir = dir;
+                return true;
+            }
+            var name = segments[i];
+            // The first name a listing lacks, or a file holds, proves the absence and is watched there.
+            if (!listing.Names.Contains(name))
+            {
+                snap.DirWatch.GetOrAdd(dir, _ => new WatchedDir()).Forbidden[name] = 0;
+                return true;
+            }
+            if (listing.Files?.Contains(name) == true)
+            {
+                snap.DirWatch.GetOrAdd(dir, _ => new WatchedDir()).FileHeld[name] = 0;
+                return true;
+            }
+            if (!listing.Names.TryGetValue(name, out var actualName)) return false;
+            dir = Path.Combine(dir, actualName);                       // preserve host casing after the case-insensitive lookup
+        }
+    }
+
+    /// <summary>A listing taken since <paramref name="pass"/> began, memo or fresh; null, once per pass, when it will not list.</summary>
+    static Listing? CurrentListing(string dir, Snapshot snap, int pass, bool leaf)
+    {
+        if (snap.Children.TryGetValue(dir, out var memo) && memo is not null && memo.Pass >= pass && (!leaf || memo.Files is not null))
+            return memo;
+        if (snap.Unlisted.TryGetValue(dir, out var failed) && failed >= pass) return null;
+        var tag = Volatile.Read(ref snap.Pass);                             // the latest pass begun; this read serves it and every older one
+        Interlocked.Increment(ref snap.WarmListings);
+        if (TryFreshListing(dir, tag) is not { } fresh)
+        {
+            snap.Unlisted.AddOrUpdate(dir, tag, (_, old) => Math.Max(old, tag));   // apart from the memo, which a failure never replaces
+            return null;
+        }
+        var kept = leaf ? fresh : fresh with { Files = null };              // a folder passed through keeps only its names
+        snap.Children.AddOrUpdate(dir, kept, (_, old) => old is not null && old.Pass > tag ? old : kept);
+        return fresh;
+    }
+
+    /// <summary>Watch this root's copy of a subtree, off reads taken at this warm: its own listing, else the missing name on
+    /// the deepest ancestor that stats; nothing where the absence was not proved (a root failure already named).</summary>
+    static void Watch(string dir, string rootDir, Snapshot snap, HashSet<string>? entries, bool provedAbsent)
+    {
+        if (entries is not null)                                       // the warm's own listing of this root's copy
+        {
+            snap.DirWatch.GetOrAdd(dir, _ => new WatchedDir()).Entries = entries;
+            return;
+        }
+        if (!provedAbsent) return;                                     // not proved: a name listed that will not stat, or an ancestor that will not list
+        // One level above the root, because the root's own folder can be the missing one.
+        var floor = (Path.GetDirectoryName(rootDir.TrimEnd('\\')) ?? "").Length;
+        var child = dir;
+        for (var up = Path.GetDirectoryName(child); up is not null; child = up, up = Path.GetDirectoryName(up))
+        {
+            // Exists first, then the listing: a level that is simply not there is the common case on the way up, and
+            // asking the enumeration to throw for it costs an exception per missing level per root.
+            if (!Directory.Exists(up))
+            {
+                if (up.Length <= floor) break;                         // walked past the root with nothing there
+                continue;
+            }
+            var name = Path.GetFileName(child);                          // stats as no directory: the walk climbed past it
+            if (File.Exists(child))                                      // a FILE holds the name: watched for becoming a directory
+                snap.DirWatch.GetOrAdd(up, _ => new WatchedDir()).FileHeld[name] = 0;
+            else                                                         // neither: watched for appearing
+                snap.DirWatch.GetOrAdd(up, _ => new WatchedDir()).Forbidden[name] = 0;
+            break;
+        }
+    }
+
+    /// <summary>One root's copy of a subtree in ONE read: every name in it, which is the watch baseline, and the
+    /// filenames among them, which is what the subtree resolves from. A dir that is not there is simply absent; a dir
+    /// that THROWS is named on the build, so the single-path lanes hedge an "absent" the same way a sweep does.
+    /// <c>ProvedAbsent</c> is whether a dir that is not there was proved absent rather than named as a failure.</summary>
+    (HashSet<string>? Names, HashSet<string>? Files, bool ProvedAbsent) SafeListing(string dir, string rootName,
+                                                                                   string rootDir, string subtreeDir, Snapshot snap)
+    {
+        try
+        {
+            // The same rule the walk makes: a "not there" this account cannot prove is a read failure, not an absence.
+            if (!Directory.Exists(dir)) return (null, null, AbsenceIsReal(rootName, rootDir, subtreeDir, dir, snap));
+            Interlocked.Increment(ref snap.WarmListings);
+            var listing = FreshListing(dir, 0);                       // the watch baseline and the resolvable filenames off one enumeration
+            return (listing.Names, listing.Files, false);
+        }
+        catch (Exception ex)
+        {
+            RecordRootFailure(rootName, subtreeDir, "read", ex, snap);
+            return (null, null, false);
+        }
+    }
+
+    /// <summary>One loose root's top-level files, not a warm listing; empty when absent or no root, null (and named) when it would not list.</summary>
+    IReadOnlyCollection<string>? LooseRootFiles(string rootName, Snapshot snap)
+    {
+        if (_savedSnapshot is { } saved && !rootName.Equals(DataLayerName, StringComparison.OrdinalIgnoreCase))
+            return saved.LooseRootFiles(rootName);
+        var at = RootIndex(rootName);
+        if (at < 0) return Array.Empty<string>();                     // no loose root by that name, so nothing ships there
+        var (name, dir) = _looseRoots[at];
+        try
+        {
+            if (Directory.Exists(dir)) return new DirectoryInfo(dir).EnumerateFiles().Select(f => f.Name).ToList();
+            if (WalkProvesAbsent(dir, dir, Directory.Exists, FreshNames)) return Array.Empty<string>();
+            RecordRootFailure(name, "", snap);
+            return null;
+        }
+        catch (Exception ex)
+        {
+            RecordRootFailure(name, "", "read", ex, snap);
+            return null;
+        }
+    }
+
+    /// <summary>Where one root name sits in <see cref="_looseRoots"/>: overwrite and Data by position, so a mod folder named either cannot shadow them.</summary>
+    int RootIndex(string rootName)
+    {
+        bool hasOverwrite = _overwriteDir.Length > 0, hasData = _dataDir.Length > 0;
+        if (rootName.Equals(OverwriteLayerName, StringComparison.OrdinalIgnoreCase)) return hasOverwrite ? 0 : -1;
+        if (rootName.Equals(DataLayerName, StringComparison.OrdinalIgnoreCase)) return hasData ? _looseRoots.Count - 1 : -1;
+        for (int i = hasOverwrite ? 1 : 0; i < _looseRoots.Count - (hasData ? 1 : 0); i++)
+            if (_looseRoots[i].Name.Equals(rootName, StringComparison.OrdinalIgnoreCase)) return i;
+        return -1;
+    }
+
+    /// <summary>Is a directory Directory.Exists calls absent really absent? On Windows it answers "not there" for a
+    /// directory the account cannot stat through — a mod folder denied at its top, or a denial inherited down from
+    /// meshes\ — so the deepest ancestor that does answer is asked whether the name is present. Really absent is the
+    /// common case, and it stays cheap: the ancestor stats and that ancestor's own child names are read once per
+    /// build, so a sweep over many missing subtrees pays syscalls per DIRECTORY, not per root per subtree. The answer
+    /// itself is not cached — with those two memoized the walk is a handful of dictionary lookups.</summary>
+    bool AbsenceIsReal(string rootName, string rootDir, string subtreeDir, string dir, Snapshot snap)
+    {
+        // A memo never makes a failure: a memoized walk that cannot prove the absence is walked again off the disk.
+        if (WalkProvesAbsent(rootDir, dir, d => DirExists(d, snap), d => ChildNames(d, snap))
+            || WalkProvesAbsent(rootDir, dir, Directory.Exists, d => { Interlocked.Increment(ref snap.WarmListings); return FreshNames(d); }))
+            return true;
+        RecordRootFailure(rootName, subtreeDir, snap);
+        return false;
+    }
+
+    /// <summary>One walk up from a directory that does not stat: true when the deepest ancestor that answers lists the
+    /// name as missing, or a FILE holds it, or a second look finds it gone; false when that cannot be proved.</summary>
+    static bool WalkProvesAbsent(string rootDir, string dir, Func<string, bool> exists, Func<string, HashSet<string>?> list)
+    {
+        // One level above the root, because the root's own folder can be the unreadable one.
+        var floor = (Path.GetDirectoryName(rootDir.TrimEnd('\\')) ?? "").Length;
+        var child = dir;
+        for (var up = Path.GetDirectoryName(child); up is not null; child = up, up = Path.GetDirectoryName(up))
+        {
+            if (!exists(up))
+            {
+                if (up.Length <= floor) return false;      // walked past the root with nothing readable on the way
+                continue;
+            }
+            var names = list(up);
+            if (names is null) return false;               // the readable-looking ancestor would not list
+            // A parent that lists its children and does not hold this name settles it: the directory is not on disk.
+            if (!names.Contains(Path.GetFileName(child))) return true;
+            if (File.Exists(child)) return true;           // a FILE where a directory was asked for — the directory is absent
+            return GoneOnASecondLook(up, child);           // listed, yet it would not stat: gone since, or a real failure
         }
         return false;
     }
 
-    /// <summary>
-    /// Reads one legacy parent directory across every loose root and captures its freshness baseline.
-    /// </summary>
-    /// <param name="subtreeDir">Canonical Data-relative parent path.</param>
-    /// <returns>Parallel timestamps and case-preserving top-level filename maps in precedence order.</returns>
-    LooseSubtree WarmSubtree(string subtreeDir)
+    /// <summary>The rare verdict pays for a fresh syscall: is the name still in its parent, uncached? Gone means the
+    /// directory really is absent; still there (or a parent that now refuses) means the read failure is real.</summary>
+    static bool GoneOnASecondLook(string parent, string child)
     {
-        var roots = _looseRoots;
-        var mtimes = new DateTime[roots.Count];
-        var present = new List<(int, string, Dictionary<string, string>)>();
-        for (int i = 0; i < roots.Count; i++)
-        {
-            var dir = ResolveSubtree(roots[i].Dir, subtreeDir);
-            mtimes[i] = SafeMtime(dir);
-            var files = SafeListFilenames(dir);
-            if (files is { Count: > 0 }) present.Add((i, dir, files));
-        }
-        return new LooseSubtree(mtimes, present.ToArray());
+        try { return !Directory.EnumerateFileSystemEntries(parent, Path.GetFileName(child)).Any(); }
+        catch (DirectoryNotFoundException) { return true; }   // the parent went too, so the child is gone with it
+        catch { return false; }                               // the parent refuses to list now: a real read failure
     }
 
-    /// <summary>Reads case-preserving immediate filenames from one native directory.</summary>
-    /// <param name="dir">Native directory to enumerate without recursion.</param>
-    /// <returns>A case-insensitive logical-name map, or null when absent or unreadable.</returns>
-    static Dictionary<string, string>? SafeListFilenames(string dir)
-    {
-        try
-        {
-            if (!Directory.Exists(dir)) return null;
-            var set = new Dictionary<string, string>(StringComparer.OrdinalIgnoreCase);
-            foreach (var f in Directory.EnumerateFiles(dir)) set.TryAdd(Path.GetFileName(f), Path.GetFileName(f));
-            return set;
-        }
-        catch { return null; }
-    }
+    /// <summary>Directory.Exists, remembered for this build: the ancestor walk asks about the same few directories
+    /// for every root and every prefix.</summary>
+    static bool DirExists(string dir, Snapshot snap) => snap.Dirs.GetOrAdd(dir, Directory.Exists);
 
-    /// <summary>Applies the shared canonical Data-path validation used by resolution and placement.</summary>
-    /// <param name="relPath">Untrusted slash- or backslash-separated Data-relative path.</param>
-    /// <returns>Canonical backslash-separated Bethesda path.</returns>
-    /// <exception cref="ArgumentException"><paramref name="relPath"/> violates the Data-relative contract.</exception>
+    /// <summary>One directory's child names, remembered for this build; null when it would not list.</summary>
+    static HashSet<string>? ChildNames(string dir, Snapshot snap) =>
+        snap.Children.GetOrAdd(dir, d =>
+        {
+            Interlocked.Increment(ref snap.WarmListings);
+            return TryFreshListing(d, Volatile.Read(ref snap.Pass)) is { } l ? l with { Files = null } : null;
+        })?.Names;
+
+    static void RecordRootFailure(string rootName, string dir, string verb, Exception ex, Snapshot snap) =>
+        snap.RootFailures[RootFailureKey(rootName, dir)] = RootFailureLine(rootName, dir, verb, ex);
+
+    /// <summary>The failure with no exception to carry: nothing threw, the directory simply would not answer, so the
+    /// line says what was observed and not why — permissions, a dangling junction and a path past MAX_PATH all land here.</summary>
+    static void RecordRootFailure(string rootName, string dir, Snapshot snap) =>
+        snap.RootFailures[RootFailureKey(rootName, dir)] =
+            $"{rootName}: could not reach '{(dir.Length == 0 ? "\\" : dir)}' — the folder does not stat and this build cannot prove it absent, so what it provides is unknown";
+
+    /// <summary>One entry per root per directory, so a root blocked everywhere is named once for each place it was asked about.</summary>
+    static string RootFailureKey(string rootName, string dir) => rootName + "|" + dir;
+
+    static string RootFailureLine(string rootName, string dir, string verb, Exception ex) =>
+        $"{rootName}: could not {verb} '{(dir.Length == 0 ? "\\" : dir)}' — {Concise(ex)}";
+
+    /// <summary>Normalize an asset path for matching: forward slashes to backslashes, drop a leading separator. Lenient — never throws.</summary>
+    static string Normalize(string p) => (p ?? "").Replace('/', '\\').TrimStart('\\');
+
+    /// <summary>The public form of the one path gate — normalize and validate a Data-relative path — so the place lane's destination rides this validator.</summary>
     public static string ValidateRelPath(string relPath) => NormalizeQueryPath(relPath);
 
-    /// <summary>Rejects any query path that is not safely relative to Data.</summary>
-    /// <param name="relPath">Untrusted path.</param>
-    /// <returns>Canonical Bethesda path.</returns>
-    static string NormalizeQueryPath(string relPath) => BethesdaPath.Normalize(relPath);
-
-    /// <summary>
-    /// Maps a canonical Bethesda directory below a native root using real Linux casing when available.
-    /// </summary>
-    /// <param name="root">Trusted native root.</param>
-    /// <param name="subtree">Canonical Data-relative directory, or empty for the root itself.</param>
-    /// <returns>Existing case-preserved path, or a safely combined expected path when absent.</returns>
-    static string ResolveSubtree(string root, string subtree) => subtree.Length == 0
-        ? root
-        : BethesdaPath.TryResolveExisting(root, subtree, out var resolved)
-            ? resolved
-            : BethesdaPath.Under(root, subtree);
-
-    /// <summary>Reads a UTC modification time without turning an inaccessible path into a refresh exception.</summary>
-    /// <param name="path">Native file or directory path.</param>
-    /// <returns>UTC modification time, or <see cref="DateTime.MinValue"/> when absent or unreadable.</returns>
-    static DateTime SafeMtime(string path)
+    /// <summary>Normalize AND validate a Data-relative QUERY path: a drive-rooted or '..'-carrying path is refused
+    /// naming the input, and no-op segments are collapsed so the loose walk and the BSA-table match answer alike.</summary>
+    static string NormalizeQueryPath(string relPath)
     {
-        try { return File.GetLastWriteTimeUtc(path); } catch { return DateTime.MinValue; }
+        if (relPath is null || relPath.StartsWith('/') || relPath.StartsWith(@"\\")
+            || (relPath.Length >= 2 && char.IsAsciiLetter(relPath[0]) && relPath[1] == ':')
+            || relPath.Contains('\0'))
+            throw new ArgumentException($"expected a Data-relative asset path: '{relPath}'");
+        var rel = Normalize(relPath);
+        var kept = new List<string>();
+        foreach (var seg in rel.Split('\\'))
+        {
+            if (seg == "..")
+                throw new ArgumentException($"expected a Data-relative asset path, got a parent-escaping ('..') path: '{relPath}'");
+            if (seg.Length > 0 && seg != ".") kept.Add(seg);
+        }
+        for (int i = 0; i < kept.Count; i++)
+            if (AsWindowsOpens(kept[i], last: i == kept.Count - 1).Length == 0)
+                throw new ArgumentException($"expected a Data-relative asset path, got a segment of only dots or spaces, which Windows opens as no name: '{relPath}'");
+        return string.Join('\\', kept);
     }
 
-    /// <summary>Flattens and bounds an archive exception for a user-visible failure list.</summary>
-    /// <param name="ex">Exception to summarize without a stack trace.</param>
-    /// <returns>Single-line message capped at 200 characters plus an ellipsis.</returns>
+    /// <summary>A normalized path spelt segment by segment as Windows opens it, for the loose lookup.</summary>
+    static string AsWindowsOpens(string rel)
+    {
+        var segs = rel.Split('\\');
+        for (int i = 0; i < segs.Length; i++) segs[i] = AsWindowsOpens(segs[i], last: i == segs.Length - 1);
+        return string.Join('\\', segs);
+    }
+
+    /// <summary>One segment as Windows opens it: the last loses trailing dots and spaces, any other one trailing dot not after a dot.</summary>
+    static string AsWindowsOpens(string seg, bool last) =>
+        last ? seg.TrimEnd('.', ' ')
+             : seg.Length > 1 && seg[^1] == '.' && seg[^2] != '.' ? seg[..^1] : seg;
+
     static string Concise(Exception ex)
     {
         var s = ex.Message.Replace("\r", "").Replace("\n", " ").Trim();
         return s.Length > 200 ? s.Substring(0, 200) + "…" : s;
     }
 
-    /// <summary>
-    /// Releases no resources because snapshots retain only managed derived data;
-    /// retained for uniform service ownership.
-    /// </summary>
+    /// <summary>Holds no handles at rest, so Dispose is a no-op; kept so a call site can treat the resolver as disposable.</summary>
     public void Dispose() { }
 }

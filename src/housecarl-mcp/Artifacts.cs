@@ -1,0 +1,526 @@
+using System.Text;
+using System.Text.Json;
+using HousecarlCore;
+using Mutagen.Bethesda.Plugins;
+
+namespace HousecarlMcp;
+
+/// <summary>What the response says when its full result lives in an artifact file: the path, its parsed-back manifest, and why it was written — <c>to_file</c> or <c>ceiling</c> — carried in-band in both formats.</summary>
+internal sealed record SpillInfo(string Path, ResultArtifact.Manifest Manifest, string Reason)
+{
+    public bool ToFile => Reason == "to_file";
+
+    /// <summary>Rows exist that <see cref="ResultArtifact.Manifest.Total"/> cannot count (a seed the call never tried); the manifest's notes say which.</summary>
+    public bool Partial { get; init; }
+
+    /// <summary>The file holds every row there is.</summary>
+    public bool Complete => !Partial && Manifest.Total == Manifest.RowCount;
+
+    /// <summary>What writing this artifact's DETAIL rows cost, in milliseconds; null when its rows read no body, so a render states a cost only where one was incurred (#582).</summary>
+    public long? RenderMs { get; init; }
+
+    /// <summary>Why this artifact carries NO epoch fingerprint, when it carries none; null on every lane but the asset one, which answers off the VFS.</summary>
+    public string? EpochUnavailable { get; init; }
+}
+
+/// <summary>A call's artifact disposition as one value: a successful spill, with whether the rows are omitted, or a failed one. Null means an ordinary inline response.</summary>
+internal sealed record SpillState(SpillInfo? Spill, string? Failure, bool ManifestOnly)
+{
+    public static SpillState Spilled(SpillInfo s, bool manifestOnly) => new(s, null, manifestOnly);
+
+    /// <summary>The spill write failed: the artifact was promised and could not be produced. Rendered verbatim, so it carries the recovery moves itself.</summary>
+    public static SpillState WriteFailed(string error) => new(null,
+        "the response is truncated and the auto-spill artifact could NOT be written — " + error +
+        " The complete result exists NOWHERE; re-run with a narrower filter, a higher max_chars, or to_file= at a writable path.", false);
+
+    /// <summary>The result has no spillable row form, so no artifact was attempted: thinner rows under a completeness claim would misrepresent the file.</summary>
+    public static SpillState NoRowForm() => new(null,
+        "the response is truncated and was NOT auto-spilled: conflict_tree=true has no JSONL row form (the same reason " +
+        "to_file= refuses it), and spilling thinner tree-less rows under a completeness claim would misrepresent the file. " +
+        "The complete trees exist only inline — raise max_chars, narrow the set, or drop conflict_tree (plain rows spill fine).", false);
+}
+
+/// <summary>The artifact layer for the bulk read lanes: per-lane builders writing the rows their json renders emit through the same row writers, plus the shared in-band emitter for the <c>spilled</c> marker.</summary>
+internal static class Artifacts
+{
+    // ---- the shared spilled-marker emitter (text) ---------------------------------------------------
+
+    /// <summary>Append the <c>spilled</c> block to a text response: the artifact path, plus the manifest facts needed to pick the next move without opening the file.</summary>
+    public static void AppendSpillText(StringBuilder sb, SpillInfo s)
+    {
+        var m = s.Manifest;
+        // "complete result" is claimed only when the file holds every match; the sentence names the WINDOW, since
+        // offset= alone makes one too and there the missing matches are the ones before it.
+        bool whole = s.Complete, counted = m.Total == m.RowCount;
+        sb.Append('\n')
+          .Append(whole ? "spilled: complete result (" : "spilled: the returned WINDOW (")
+          .Append(m.RowCount).Append(m.RowCount == 1 ? " row" : " rows")
+          .Append(counted ? "" : $" of {m.Total} total matches")
+          .Append(") -> ").Append(s.Path).Append('\n')
+          .Append(s.ToFile
+              ? "  written at your request (to_file=): only this manifest is rendered inline.\n"
+              : whole
+                  ? "  the inline render hit max_chars, so the COMPLETE result was auto-spilled (nothing is lost; the rows above are a prefix).\n"
+                  : $"  the inline render hit max_chars; the spilled WINDOW is complete in the file, but the {m.Total - m.RowCount} matches outside the returned window are in NO file — widen the window with limit= and offset=, or use to_file= for the full result.\n")
+          .Append("  manifest: rows=").Append(m.RowCount)
+          .Append(counted ? "" : $" of total={m.Total}")
+          .Append("  identity=").Append(m.Identity ?? "<none>")
+          .Append("  epoch=").Append(m.Epoch.Length > 0 ? m.Epoch : "<none>").Append('\n');
+        // The stamp's caveats beside it, not only inside the file: this block is all a to_file= caller sees (§2.1.1).
+        if (s.EpochUnavailable is { Length: > 0 } why)
+            sb.Append("  epoch: NONE — the load order could not be read for a fingerprint right now. ").Append(why)
+              .Append(" The rows are unaffected — they are read off the VFS, not off the record index — but nothing ")
+              .Append("here says which build they sit beside; re-run once the order reads to stamp one.\n");
+        if (m.EpochCoversAllInputs is false && m.EpochUncovered is { Count: > 0 } unc)
+            sb.Append("  epoch_covers_all_inputs=false — the fingerprint does not describe: ")
+              .Append(string.Join("; ", unc)).Append('\n');
+        // Through the shared sentence, which caps the roster; the FILE's manifest keeps every name.
+        if (m.OrderDegraded)
+            sb.Append("  order_degraded=true — ").Append(OrderDegraded.Sentence(m.ExcludedPlugins!))
+              .Append(" The file's manifest lists them all.\n");
+        sb.Append("  row_schema: ").Append(string.Join(", ", m.RowSchema)).Append('\n')
+          .Append("  sort: ").Append(m.Sort).Append('\n');
+        if (m.TypeCounts is { Count: > 0 })
+            sb.Append("  type_counts: ")
+              .Append(string.Join(", ", m.TypeCounts.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal)
+                                                    .Select(kv => $"{kv.Key}={kv.Value}"))).Append('\n');
+        sb.Append("  the file is JSONL (line 1 = this manifest, one row per line) — grep/read it with your own file tools, ")
+          .Append(m.Identity is null
+              ? "or re-run the producing query for fresh values.\n"
+              // The re-entry spelling follows the IDENTITY column, and only a formid lane is epoch-checked.
+              : m.Identity.Equals("formid", StringComparison.OrdinalIgnoreCase)
+                  ? $"or re-enter it server-side via formids=@{s.Path} / where=[\"formid in @{s.Path}\"] (epoch-checked against the current build).\n"
+                  : $"or re-enter it server-side wherever a '{m.Identity}' list is taken, as @{s.Path} (not epoch-checked — a '{m.Identity}' names no record, so every value is re-read live).\n");
+    }
+
+    // ---- the shared spilled-marker emitter (json) ---------------------------------------------------
+
+    /// <summary>Write the <c>spilled</c> member into an open json object — the same facts as the text block. The
+    /// presence of <c>spilled.path</c> is itself the marker.</summary>
+    public static void WriteSpillJson(Utf8JsonWriter w, SpillInfo s)
+    {
+        var m = s.Manifest;
+        w.WriteStartObject("spilled");
+        w.WriteString("path", s.Path);
+        w.WriteString("reason", s.ToFile ? "to_file" : "over_inline_ceiling");
+        w.WriteNumber("row_count", m.RowCount);
+        w.WriteNumber("total", m.Total);
+        // Stated, not left derivable: false means the file is a window and the matches beyond it are in no file.
+        w.WriteBoolean("complete", s.Complete);
+        if (m.Identity is null) w.WriteNull("identity"); else w.WriteString("identity", m.Identity);
+        w.WriteStartArray("row_schema");
+        foreach (var c in m.RowSchema) w.WriteStringValue(c);
+        w.WriteEndArray();
+        w.WriteString("sort", m.Sort);
+        if (m.TypeCounts is { Count: > 0 })
+        {
+            w.WriteStartObject("type_counts");
+            foreach (var kv in m.TypeCounts.OrderByDescending(kv => kv.Value).ThenBy(kv => kv.Key, StringComparer.Ordinal))
+                w.WriteNumber(kv.Key, kv.Value);
+            w.WriteEndObject();
+        }
+        w.WriteString("epoch", m.Epoch);
+        // The text twin's caveats as data: the flag and roster a consumer branches on, plus the no-fingerprint sentence.
+        if (s.EpochUnavailable is { Length: > 0 } why) w.WriteString("epoch_unavailable", why);
+        if (m.EpochCoversAllInputs is { } covers)
+        {
+            w.WriteBoolean("epoch_covers_all_inputs", covers);
+            if (m.EpochUncovered is { Count: > 0 })
+            {
+                w.WriteStartArray("epoch_uncovered");
+                foreach (var u in m.EpochUncovered) w.WriteStringValue(u);
+                w.WriteEndArray();
+            }
+        }
+        if (m.OrderDegraded)
+        {
+            w.WriteBoolean("order_degraded", true);
+            w.WriteStartArray("excluded_plugins");
+            foreach (var p in m.ExcludedPlugins!) w.WriteStringValue(p);
+            w.WriteEndArray();
+        }
+        w.WriteEndObject();
+    }
+
+    // ---- per-lane artifact builders -----------------------------------------------------------------
+
+    /// <summary>Build and save the artifact for a scan result — group_by count, detail or summary rows, off the same pinned view the response's epoch names. <paramref name="rowCap"/> is the per-row field budget, uncapped in production.</summary>
+    public static (SpillInfo? Spill, string? Error) WriteCrossQuery(
+        LoadOrderService svc, CrossQueryOutcome q, IReadOnlyList<string>? fields,
+        bool resolveNames, bool winnerFields, int depth,
+        ArtifactTarget target, string reason, IReadOnlyList<KeyValuePair<string, string>> query,
+        LeverNames? levers = null, int rowCap = int.MaxValue, FoldPlan? fold = null,
+        CancellationToken ct = default)
+    {
+        using var writer = new ResultArtifact.Writer();
+        string[] schema;
+        string? identity;
+        string sort;
+        System.Diagnostics.Stopwatch? renderClock = null;   // detail rows only: what reading their bodies cost
+        var annotated = new SortedDictionary<string, bool>(StringComparer.Ordinal);   // which fields the rows carry annotated, and in which TIER
+
+        if (q.Groups is not null)                                             // group_by= → count-table rows
+        {
+            identity = null;                                                  // aggregate rows carry no per-record identity
+            schema = new[] { "key", "count" };
+            sort = "count desc, then key asc";
+            foreach (var g in q.Groups)
+                writer.WriteRow((w, _) => { w.WriteStartObject(); w.WriteString("key", g.Key); w.WriteNumber("count", g.Count); w.WriteEndObject(); });
+        }
+        else if (fields is { Count: > 0 })                                    // detail rows — full record objects
+        {
+            renderClock = System.Diagnostics.Stopwatch.StartNew();
+            identity = "formid";
+            schema = new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "winner", "override_depth", "source", "matches?", "fields" };
+            sort = "load-order scan order (deterministic within one epoch)";
+            var foldDepths = fold?.Read().Depths;   // the quantified paths' depth, and the caller's own for the rest
+            // The same reader the inline renders use; a cancel throws before Save, so no half artifact reaches disk.
+            using var reader = new ScanDetailReader(svc, q, fields, depth, resolveNames, winnerFields,
+                                                    (levers ?? LeverNames.Legacy).ContainerHint, foldDepths, ct);
+            for (int i = 0; i < q.Keys.Count; i++)
+            {
+                var fk = q.Keys[i];
+                string? matches = q.MatchedTargets is { } mt && i < mt.Count ? mt[i] : null;
+                var o = reader.Row(i);   // an artifact row is read by the same caller
+                if (fold is not null) o = fold.Apply(o);   // an artifact row carries the same folded fields the render does
+                if (o.Error is null && o.OwnedChildFields is { } af)   // the rows' labels need their clause on line 1
+                {
+                    foreach (var kv in af) annotated[kv.Key] = kv.Value is not null;
+                }
+                if (o.Error is not null)
+                    writer.WriteRow((w, _) =>
+                    {
+                        w.WriteStartObject(); w.WriteString("formid", FormIdToken.Of(fk)); w.WriteString("error", o.Error);
+                        if (matches is not null) w.WriteString("matches", matches);
+                        w.WriteEndObject();
+                    });
+                else
+                    // The row writer's own truncation note needs the caller's vocabulary, never a parameter that tool lacks.
+                    writer.WriteRow((w, ms) => JsonWire.WriteReadRecord(w, o, ms, rowCap, matches, levers: levers), o.Record!.Type);
+            }
+        }
+        else                                                                  // summary rows
+        {
+            identity = "formid";
+            schema = new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "name?", "winner", "override_depth", "matches?" };
+            sort = "load-order scan order (deterministic within one epoch)";
+            for (int i = 0; i < q.Keys.Count; i++)
+            {
+                var fk = q.Keys[i];
+                string? matches = q.MatchedTargets is { } mt && i < mt.Count ? mt[i] : null;
+                var m = q.Prefilled is not null ? q.Prefilled[i] : svc.ResolveSummaryOn(q, fk);   // pinned to the scan's build
+                writer.WriteRow((w, _) => JsonWire.WriteSummaryRow(w, m, matches), m.Error is null ? m.Type : null);
+            }
+        }
+
+        renderClock?.Stop();
+        // The manifest stamps which tool wrote the artifact; a re-entry refusal prints it back.
+        var (manifest, err) = writer.Save(target, ToolNames.Records, query, identity, schema, sort,
+                                          q.Groups is not null ? q.Groups.Count : q.Total, q.Epoch ?? "",
+                                          CrossQueryNotes(q, fields, winnerFields, annotated, levers));
+        return err is not null
+            ? (null, err)
+            : (new SpillInfo(target.Path, manifest!, reason) { RenderMs = renderClock?.ElapsedMilliseconds }, null);
+    }
+
+    /// <summary>The response-level statement an artifact's annotated rows depend on, naming the annotated fields, one clause per TIER the rows actually stated. The precise tier's note is <see cref="PreciseChildNotes"/>.</summary>
+    static IReadOnlyList<string>? OwnedChildNotes(IReadOnlyDictionary<string, bool> annotatedFields) =>
+        annotatedFields.Count == 0 ? null
+            : ReadSentences.OwnedChildClauses(ReadSentences.Tier(annotatedFields, true), ReadSentences.Tier(annotatedFields, false));
+
+    /// <summary>The manifest notes a scan artifact carries: the scoped-vs-winner field-source note, then the owned-child clause. The scoped test is <see cref="JsonWire.AnyScopedFieldRow"/> itself, never a copy, so the two cannot disagree.</summary>
+    static IReadOnlyList<string>? CrossQueryNotes(CrossQueryOutcome q, IReadOnlyList<string>? fields, bool winnerFields,
+                                                  IReadOnlyDictionary<string, bool> annotatedFields,
+                                                  LeverNames? levers) =>
+        ManifestNotes(q, JsonWire.AnyScopedFieldRow(q, fields) ? new[] { JsonWire.ScopedFieldsNote(winnerFields, q.WhereWinner, levers) } : null,
+                      OwnedChildNotes(annotatedFields));
+
+    /// <summary>A manifest's notes: what the scan that selected its rows owes, every unmatched member named, then the writer's own; null when none.</summary>
+    static IReadOnlyList<string>? ManifestNotes(CrossQueryOutcome? scan, params IReadOnlyList<string>?[] own)
+    {
+        var notes = (scan?.ManifestNotes() ?? Array.Empty<string>()).Concat(own.SelectMany(o => o ?? Array.Empty<string>())).ToList();
+        return notes.Count > 0 ? notes : null;
+    }
+
+    /// <summary>The precise tier's response-level note for a tree artifact: <see cref="ReadSentences.DeclarersLead"/>
+    /// stated once rather than per row, when any row's <c>child_declarers</c> reached the file.</summary>
+    static IReadOnlyList<string>? PreciseChildNotes(IReadOnlyList<RecordReads.TreeRow> rows) =>
+        rows.Any(r => r.Error is null && r.ChildDeclarers.Count > 0) ? new[] { ReadSentences.DeclarersLead } : null;
+
+    /// <summary>The annotated field paths an artifact's rows actually carry, collected from the rows themselves so the manifest cannot state a clause over an annotation no row wrote.</summary>
+    static SortedDictionary<string, bool> AnnotatedFields(IEnumerable<ReadOutcome> outcomes)
+    {
+        var s = new SortedDictionary<string, bool>(StringComparer.Ordinal);
+        foreach (var o in outcomes)
+            if (o.Error is null && o.OwnedChildFields is { } f)
+                foreach (var kv in f) s[kv.Key] = kv.Value is not null;
+        return s;
+    }
+
+    /// <summary>Build and save the artifact for a batch read — one row per input, in input order, per-item errors included. <paramref name="matches"/> is parallel to <paramref name="outcomes"/> and carries the references= un-merge (#576).</summary>
+    public static (SpillInfo? Spill, string? Error) WriteBatch(
+        IReadOnlyList<ReadOutcome> outcomes, ArtifactTarget target, string reason, IReadOnlyList<KeyValuePair<string, string>> query,
+        LeverNames? levers = null, int rowCap = int.MaxValue, IReadOnlyList<string?>? matches = null, bool summary = false,
+        CrossQueryOutcome? scan = null)
+    {
+        using var writer = new ResultArtifact.Writer();
+        for (int i = 0; i < outcomes.Count; i++)
+        {
+            var o = outcomes[i];
+            string? hit = matches is { } mt && i < mt.Count ? mt[i] : null;
+            if (summary)   // the summary form's row, written by the one writer its inline render and the scan's rows use
+                writer.WriteRow((w, _) => JsonWire.WriteSummaryRow(w, RecordSummary.Of(o), hit), o.Error is null ? o.Record!.Type : null);
+            else if (o.Error is not null)
+                writer.WriteRow((w, _) =>
+                {
+                    w.WriteStartObject(); w.WriteString("formid", FormIdToken.Of(o.FormKey)); w.WriteString("error", o.Error);
+                    if (hit is not null) w.WriteString("matches", hit);
+                    w.WriteEndObject();
+                });
+            else
+                writer.WriteRow((w, ms) => JsonWire.WriteReadRecord(w, o, ms, rowCap, hit, levers: levers), o.Record!.Type);
+        }
+        // The batch's one build; a batch of pure parse failures carries "", which refuses re-entry against any build.
+        var epoch = outcomes.FirstOrDefault(o => o.Epoch is not null)?.Epoch ?? "";
+        // The manifest stamps which tool wrote the artifact; a re-entry refusal prints it back.
+        var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
+                                          summary
+                                              ? new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "name?", "source", "winner?", "override_depth", "matches?" }
+                                              : new[] { "formid", "runtime_formid", "type", "editorid", "editorid_note?", "winner", "override_depth", "source", "matches?", "fields" },
+                                          "input order", outcomes.Count, epoch, ManifestNotes(scan, OwnedChildNotes(AnnotatedFields(outcomes))));
+        return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
+    }
+
+    /// <summary>Build and save the artifact for a delta result — one row per input, in input order, per-item refusals included.</summary>
+    public static (SpillInfo? Spill, string? Error) WriteDelta(
+        IReadOnlyList<RecordReads.DeltaRow> rows, string? epoch, ArtifactTarget target, string reason,
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
+    {
+        using var writer = new ResultArtifact.Writer();
+        foreach (var row in rows)
+            writer.WriteRow((w, ms) => JsonWire.WriteDeltaRow(w, row, ms, int.MaxValue),
+                            row.Error is null ? row.Subject?.RecordType : null);
+        var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
+                                          new[] { "formid", "type", "editorid", "editorid_note?", "subject", "reference", "stack_above?", "note?", "complete", "deltas", "delta_count", "no_verdict_count", "agreed_count" },
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan));
+        return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
+    }
+
+    /// <summary>Build and save the artifact for a tree result — one row per record, the provider stack with per-node deltas.</summary>
+    public static (SpillInfo? Spill, string? Error) WriteTree(
+        IReadOnlyList<RecordReads.TreeRow> rows, string? epoch, ArtifactTarget target, string reason,
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
+    {
+        using var writer = new ResultArtifact.Writer();
+        foreach (var row in rows)
+            writer.WriteRow((w, ms) => JsonWire.WriteTreeRow(w, row, ms, int.MaxValue, LeverNames.Records),
+                            row.Error is null ? row.Type : null);   // a records-only artifact: the rows speak the records vocabulary
+        var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
+                                          new[] { "formid", "type", "editorid", "editorid_note?", "reference", "touchers", "child_declarers?", "nodes" },
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan, PreciseChildNotes(rows)));
+        return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
+    }
+
+    /// <summary>Build and save the artifact for a chain result — one row per seed, in input order: nodes with provenance, cycles, truncation notes, the template report.</summary>
+    public static (SpillInfo? Spill, string? Error) WriteChain(
+        IReadOnlyList<RecordReads.WalkSeedResult> rows, string? epoch, ArtifactTarget target, string reason,
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
+    {
+        using var writer = new ResultArtifact.Writer();
+        foreach (var row in rows)
+            writer.WriteRow((w, ms) => { JsonWire.WriteChainRow(w, row, ms, int.MaxValue); },
+                            row.Error is null ? row.Type : null);
+        var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
+                                          new[] { "formid", "type", "editorid", "nodes", "cycles?", "truncation?", "template_inheritance?" },
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan));
+        return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
+    }
+
+    /// <summary>Build and save the artifact for the reverse MGEF walk — one row per (seed, carrier) with the
+    /// matching entry's payload. A failed seed is an identity-less error row.</summary>
+    public static (SpillInfo? Spill, string? Error) WriteEffectChains(
+        IReadOnlyList<(string Seed, EffectChainResult Result)> results, string? epoch, ArtifactTarget target, string reason,
+        IReadOnlyList<KeyValuePair<string, string>> query)
+    {
+        using var writer = new ResultArtifact.Writer();
+        int total = 0;
+        foreach (var (seed, r) in results)
+        {
+            if (r.Error is not null)
+            {
+                writer.WriteRow((w, _) => { w.WriteStartObject(); w.WriteString("seed", seed); w.WriteString("error", r.Error); w.WriteEndObject(); });
+                total++;
+                continue;
+            }
+            foreach (var row in r.Rows)
+            {
+                writer.WriteRow((w, _) =>
+                {
+                    w.WriteStartObject();
+                    w.WriteString("seed", seed);
+                    w.WriteString("formid", FormIdToken.Of(row.Carrier));
+                    w.WriteString("type", row.Type);
+                    if (row.EditorId is not null) w.WriteString("editorid", row.EditorId);
+                    w.WriteString("winner", row.Winner);
+                    w.WriteNumber("effect_index", row.EffectIndex);
+                    w.WriteNumber("effect_count", row.EffectCount);
+                    w.WriteNumber("magnitude", row.Magnitude);
+                    w.WriteNumber("area", row.Area);
+                    w.WriteNumber("duration", row.Duration);
+                    w.WriteEndObject();
+                }, row.Type);
+                total++;
+            }
+        }
+        var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
+                                          new[] { "seed", "formid", "type", "editorid", "winner", "effect_index", "effect_count", "magnitude", "area", "duration" },
+                                          "seed order, then carrier scan order", total, epoch ?? "");
+        return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
+    }
+
+    /// <summary>Build and save the artifact for an info_order result — one row per topic, in input order, the confidence gates as data and per-item errors included.</summary>
+    public static (SpillInfo? Spill, string? Error) WriteInfoOrder(
+        IReadOnlyList<RecordReads.InfoOrderRow> rows, string? epoch, ArtifactTarget target, string reason,
+        IReadOnlyList<KeyValuePair<string, string>> query, CrossQueryOutcome? scan = null)
+    {
+        using var writer = new ResultArtifact.Writer();
+        foreach (var row in rows)
+            writer.WriteRow((w, ms) => JsonWire.WriteInfoOrderRow(w, row, ms, int.MaxValue),
+                            row.Error is null ? row.Type : null);
+        var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
+                                          new[] { "formid", "type", "editorid", "winner", "contested", "complete", "folded_plugin?", "folded_contributed?", "moves_computed", "baseline_trusted", "contributing", "unread?", "note?", "moved_count", "order" },
+                                          "input order", rows.Count, epoch ?? "", ManifestNotes(scan));
+        return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
+    }
+
+    /// <summary>Append the whole SpillState to a text response: the spilled block, or the failed-spill warning.</summary>
+    public static void AppendSpillStateText(StringBuilder sb, SpillState s)
+    {
+        if (s.Spill is not null) AppendSpillText(sb, s.Spill);
+        else if (s.Failure is not null)
+            sb.Append('\n').Append("WARNING: ").Append(s.Failure).Append('\n');
+    }
+
+    /// <summary>The json twin of <see cref="AppendSpillStateText"/>, written into an open object.</summary>
+    public static void WriteSpillStateJson(Utf8JsonWriter w, SpillState s)
+    {
+        if (s.Spill is not null) WriteSpillJson(w, s.Spill);
+        else if (s.Failure is not null) w.WriteString("spill_error", s.Failure);
+    }
+
+    /// <summary>Split a plain list file's content into tokens, the same grammar the where-grammar's @file uses: commas and newlines separate, never bare spaces, and brackets and quotes are stripped per token.
+    /// <para><paramref name="commaSeparates"/> is false for a list of PATHS or plugin filenames, where a comma, a bracket and an apostrophe are legal filename characters; that lane parses content opening with '[' as a JSON array before falling through to line splitting, and strips only double quotes and blanks per line.</para></summary>
+    public static IEnumerable<string> SplitListTokens(string content, bool commaSeparates = true)
+    {
+        if (!commaSeparates && JsonArrayOrNull(content) is { } parsed)
+        {
+            foreach (var t in parsed) if (t.Length > 0) yield return t;
+            yield break;
+        }
+        foreach (var t in content.Split(commaSeparates ? ListSeparators : LineSeparators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tok = commaSeparates ? t.Trim('[', ']', '"', '\'', ' ', '\t') : t.Trim('"', ' ', '\t');
+            if (tok.Length > 0) yield return tok;
+        }
+    }
+
+    /// <summary>The file's content read as a JSON array of strings, or null when it does not open with '[' or does not parse as one.</summary>
+    static IReadOnlyList<string>? JsonArrayOrNull(string content)
+    {
+        var trimmed = content.TrimStart('﻿', ' ', '\t', '\r', '\n');
+        if (!trimmed.StartsWith("[", StringComparison.Ordinal)) return null;
+        try
+        {
+            var arr = JsonSerializer.Deserialize<string[]>(trimmed);
+            return arr?.Select(t => (t ?? "").Trim()).ToList();
+        }
+        catch (JsonException) { return null; }
+    }
+
+    static readonly char[] ListSeparators = { ',', '\r', '\n' };
+    static readonly char[] LineSeparators = { '\r', '\n' };
+
+    /// <summary>Expand a list-valued tool input under the <c>@file</c> convention: one <c>"@&lt;absolute path&gt;"</c> element stands in place of the whole list, never splicing, and an artifact also yields the epoch demand the consuming call must check.
+    /// <para><paramref name="identity"/> is the column this parameter's list is made of — "formid" on the record lanes' FormID lists, "path" on the asset lane, "plugin" on a plugin-filename list. Only a "formid" list splits on commas; every other identity is a list of names in which a comma is legal, so it splits on line breaks. Re-entry contract in docs/architecture/output-and-artifacts.md.</para>
+    /// <para><paramref name="spelling"/> is how a caller writes the parameter, <c>{0}</c> standing for the list, when that is not <c>name=[…]</c>; a refusal's remedy names it so it is a spelling the tool accepts.</para></summary>
+    public static (string[]? Tokens, ArtifactDemand? Demand, string? EchoSource, string? Error) ExpandListInput(
+        string[] items, string paramName, string identity = "formid", string? spelling = null)
+    {
+        // The null/length guards keep a whitespace-only element on the per-item "not a FormID" path.
+        int atCount = items.Count(i => i is not null && i.TrimStart() is { Length: > 0 } t && t[0] == '@');
+        if (atCount == 0) return (items, null, null, null);
+        var label = paramName + "=";
+        var alone = spelling is null ? $"{paramName}=[\"@<path>\"]" : string.Format(spelling, "\"@<path>\"");
+        if (items.Length > 1)
+            return (null, null, null, $"error: {label} mixes an '@file' entry with inline entries — '@<path>' stands IN PLACE OF the whole list. " +
+                                      $"Pass {alone} alone, or put every entry in the file.");
+        var path = items[0].TrimStart().Substring(1).Trim().Trim('"', '\'');
+        if (path.Length == 0)
+            return (null, null, null, $"error: {label} '@' names a list file but no path follows it — pass {alone}.");
+        if (PathArguments.NotAbsolute(path, $"{label} list file", "the file the list is in",
+                identity.Equals("formid", StringComparison.OrdinalIgnoreCase) ? "C:\\work\\list.jsonl" : "C:\\work\\list.txt") is { } notAbsolute)
+            return (null, null, null, "error: " + notAbsolute);
+        string content;
+        try { content = File.ReadAllText(path); }
+        catch (Exception ex) { return (null, null, null, $"error: could not read {label} list file '{path}' — {ex.GetType().Name}: {ex.Message}"); }
+
+        if (ResultArtifact.LooksLikeArtifact(content))
+        {
+            var (manifest, tokens, aerr) = ResultArtifact.ReadIdentity(path, content);
+            if (aerr is not null) return (null, null, null, "error: " + aerr);
+            if (!manifest!.Identity!.Equals(identity, StringComparison.OrdinalIgnoreCase))
+                return (null, null, null, $"error: artifact '{path}' (from {manifest.Tool}) carries '{manifest.Identity}' identities, " +
+                                          $"not '{identity}' ones — there is no {identity} list in it for {label}.");
+            return (tokens!.ToArray(), new ArtifactDemand(path, manifest.Epoch), "@" + path, null);
+        }
+
+        // Only a FormID list splits on commas; a path or plugin list splits on line breaks ONLY — see SplitListTokens.
+        bool commaSeparates = identity.Equals("formid", StringComparison.OrdinalIgnoreCase);
+        var plain = SplitListTokens(content, commaSeparates).ToArray();
+        if (plain.Length == 0)
+            return (null, null, null, $"error: {label} list file '{path}' is empty — give one entry per line"
+                                      + (commaSeparates ? " (or comma-separated)." : "."));
+        return (plain, null, "@" + path, null);
+    }
+
+    /// <summary>Expand a plugin-filename list under the <c>@file</c> convention, one filename per line, for every tool that takes one.
+    /// <para>A filename that itself starts with '@' is written '@@' inline; a list file's own lines are read as written.</para></summary>
+    public static (string[]? Names, string? EchoSource, string? Error) ExpandPluginList(
+        string[] items, string paramName, string? spelling = null)
+    {
+        static bool Escaped(string? i) => i is not null && i.TrimStart().StartsWith("@@", StringComparison.Ordinal);
+        bool anyFile = items.Any(i => i is not null && i.TrimStart().StartsWith('@') && !Escaped(i));
+        if (!anyFile)
+            return (items.Select(i => Escaped(i) ? i.TrimStart().Substring(1) : i).ToArray(), null, null);
+        var (names, _, echo, err) = ExpandListInput(items, paramName, identity: "plugin", spelling: spelling);
+        return (names, echo, err);
+    }
+
+    // ---- to_file validation -------------------------------------------------------------------------
+
+    /// <summary>The one refusal for <c>counts_only=</c> beside <c>to_file=</c>, spelled once for every surface that takes both.</summary>
+    public const string CountsOnlyWithToFile =
+        "error: counts_only= returns the census with no rows, and to_file= writes the rows — the two contradict; drop one.";
+
+    /// <summary>Validate a caller-named <c>to_file=</c> target: absolute, .jsonl-suffixed, and not inside the auto-spill results directory the server prunes by age. Null means fine; else the named refusal.</summary>
+    public static string? ValidateToFile(string toFile, string resultsDir)
+    {
+        var p = toFile.Trim();
+        if (p.Length == 0) return "error: to_file= is empty — give the ABSOLUTE path the artifact should be written to (e.g. 'C:\\work\\weapons.jsonl').";
+        if (PathArguments.NotAbsolute(p, "to_file", "the .jsonl the artifact should be written to", "C:\\work\\weapons.jsonl") is { } notAbsolute)
+            return "error: " + notAbsolute;
+        if (!p.EndsWith(".jsonl", StringComparison.OrdinalIgnoreCase))
+            return $"error: to_file='{toFile}' — the artifact is a JSONL file (line 1 = manifest, one JSON row per line); name it with a .jsonl extension so the file says what it is.";
+        try
+        {
+            var dir = Path.GetFullPath(Path.GetDirectoryName(p) ?? "");
+            var results = Path.GetFullPath(resultsDir);
+            if (string.Equals(dir.TrimEnd('\\', '/'), results.TrimEnd('\\', '/'), StringComparison.OrdinalIgnoreCase))
+                return $"error: to_file='{toFile}' points into the server's auto-spill results directory ('{results}'), " +
+                       $"which is pruned by age after {ResultsStore.PruneAfterDays} days — your artifact would be silently deleted by that hygiene. " +
+                       "Name a path outside it; the server owns that folder's lifecycle.";
+        }
+        catch (Exception) { /* an unnormalizable path fails later with the writer's own named error */ }
+        return null;
+    }
+}

@@ -4,6 +4,26 @@
 
 ---
 
+## Contents
+
+Entry blocks are reached from `index.jsonl` at their `line_start`..`line_end`;
+this table is for a fallback read, not the lookup path.
+
+| Section | Entries | Line |
+|---|---|---|
+| Global Functions | 5 | 27 |
+| `JsonUtil` | 0 | 96 |
+| Global Functions | 135 | 102 |
+| `MiscUtil` | 0 | 1717 |
+| Global Functions | 18 | 1723 |
+| `ObjectUtil` | 0 | 1981 |
+| `PapyrusUtil` | 0 | 1988 |
+| Global Functions | 97 | 1994 |
+| `StorageUtil` | 0 | 3131 |
+| Global Functions | 282 | 3137 |
+
+---
+
 ## Global Functions
 
 ### `AddPackageOverride(targetActor, targetPackage, priority, flags)`

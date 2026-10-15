@@ -4,40 +4,31 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>Describes world content that remains to be authored for one newly created cell.</summary>
-/// <param name="Cell">Cell FormKey.</param>
-/// <param name="EditorId">Cell EditorID.</param>
-/// <param name="Interior">Whether this is an interior cell.</param>
-/// <param name="MustProvide">Lighting, terrain, water, or navigation work still required.</param>
+/// <summary>One created Cell's structural-shell note: its kind (interior vs exterior) and the world content houseCARL
+/// does NOT author for it.</summary>
 public sealed record CellShell(FormKey Cell, string EditorId, bool Interior, IReadOnlyList<string> MustProvide);
 
-/// <summary>Collects structural-shell notes for cells created by one write call.</summary>
-/// <param name="Cells">Created cell notes.</param>
+/// <summary>The structural-shell report for one create call: one entry per created Cell.</summary>
 public sealed record CellShellReport(IReadOnlyList<CellShell> Cells)
 {
-    /// <summary>Gets a post-write inspection error, or null when the check ran.</summary>
+    /// <summary>The shell check itself could not run (the patch wouldn't re-open); null on a clean run. The create
+    /// already succeeded when this is set.</summary>
     public string? CheckError { get; init; }
 
-    /// <summary>Gets whether the report has neither cell notes nor an inspection error.</summary>
     public bool IsEmpty => Cells.Count == 0 && CheckError is null;
-
-    /// <summary>Reusable result for a write that created no cells.</summary>
     public static readonly CellShellReport Empty = new(Array.Empty<CellShell>());
 }
 
-/// <summary>Reports the world-building work that remains after a cell record is created.</summary>
-/// <remarks>
-/// This is a post-write diagnostic and cannot turn a successful cell write into a failed transaction.
-/// </remarks>
+/// <summary>Post-write structural-shell report for created cells: a created cell is a structural shell, and houseCARL
+/// does not author world content. The overlay re-open lives in core so the service needs no Mutagen.Skyrim dependency.</summary>
 public static class CellShellCheck
 {
-    /// <summary>Record catalog name used to identify created cells.</summary>
+    /// <summary>The catalog name the create flow stamps on a created cell — the filter for "which created records are
+    /// cells".</summary>
     public const string CellCatalogName = "Cell";
 
-    /// <summary>Inspects cells created by one completed write call.</summary>
-    /// <param name="patchPath">Native path to the just-written patch.</param>
-    /// <param name="created">Records created by that call.</param>
-    /// <returns>Cell notes, or a report carrying a fault-isolated inspection error.</returns>
+    /// <summary>Run the structural-shell report over the cells created by one create call. A whole-check failure is
+    /// surfaced on <see cref="CellShellReport.CheckError"/>, never thrown.</summary>
     public static CellShellReport Run(string patchPath, IReadOnlyList<WritePatchBuilder.CreatedRecord> created)
     {
         var cellEdids = new Dictionary<FormKey, string>();
@@ -49,7 +40,7 @@ public static class CellShellCheck
         ISkyrimModGetter? patch = null;
         try
         {
-            patch = SkyrimMod.CreateFromBinaryOverlay(patchPath, SkyrimRelease.SkyrimSE);
+            patch = SkyrimMod.CreateFromBinaryOverlay(patchPath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(patchPath));
             var shells = new List<CellShell>();
             // EnumerateMajorRecords<ICellGetter> finds cells in BOTH the interior Cells group AND worldspace blocks.
             foreach (var cell in patch.EnumerateMajorRecords<ICellGetter>())
@@ -67,9 +58,8 @@ public static class CellShellCheck
         finally { (patch as IDisposable)?.Dispose(); }
     }
 
-    /// <summary>Gets the standing world-content requirements for an interior or exterior cell.</summary>
-    /// <param name="interior">Whether the cell is interior.</param>
-    /// <returns>Requirements that cannot be inferred from individual record fields.</returns>
+    /// <summary>The world content houseCARL does not author for a freshly-created cell — a standing list fixed by
+    /// kind, not a field-state check.</summary>
     static IReadOnlyList<string> MustProvide(bool interior) => interior
         ? new[]
         {

@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Globalization;
 using System.Reflection;
 using Mutagen.Bethesda;
@@ -7,165 +8,80 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>One field read off a record: a round-trippable <see cref="Token"/> when <see cref="HasValue"/> is
-/// true, else a <see cref="Note"/> explaining why there is no value (absent optional, no such field, a non-leaf
-/// container, or an isolated read fault). The public, structured form of the internal <c>LeafRead</c> — what the
-/// MCP server's read tools emit.
-///
-/// <para><see cref="Display"/> is a DISPLAY-ONLY annotation the render layer appends in parentheses after the
-/// value — NOT part of the round-trip token (the write surface reads <see cref="Token"/>, the round-trip oracle
-/// drives the internal <c>LeafRead</c>, and <c>FieldsDiff</c> compares Token/Note), so it is invisible to write,
-/// read-proof, and diff. Used to decode a value that is correct but opaque — a biped-slot bitmask into its slot
-/// numbers (HCBR-2026-07-12) — without disturbing the token that must round-trip. Null on every leaf that needs
-/// no annotation.</para>
-///
-/// <para><see cref="Link"/> is the resolve_names annotation (Wave 2 / P7): when a leaf's <see cref="Token"/> is a
-/// form reference (a token that round-trips to a FormKey), the SERVICE layer resolves its target's identity
-/// (editorid/name) against the load order and hangs it here. Like <see cref="Display"/> it is DISPLAY-ONLY — never
-/// part of the round-trip <see cref="Token"/>, so it is invisible to write, read-proof, and diff. Populated by the
-/// service (which holds the resolver), never by the core read (which reads one record's bytes and cannot resolve a
-/// target). Null unless resolve_names was requested and the leaf carries a resolvable FormKey.</para></summary>
-/// <param name="Path">The canonical dotted/bracketed record-field path that was requested or discovered.</param>
-/// <param name="HasValue">True only when <paramref name="Token"/> contains a writable round-trip value.</param>
-/// <param name="Token">The write-compatible value text, or null when the field has no readable scalar value.</param>
-/// <param name="Note">A human-readable absence, container, or read-failure explanation when no token exists.</param>
-/// <param name="Display">Optional human-only decoding that never changes the token.</param>
-/// <param name="Link">Optional resolved identity for a FormKey token, populated outside the core reader.</param>
-public sealed record FieldValue(string Path, bool HasValue, string? Token, string? Note, string? Display = null, ResolvedRef? Link = null);
+/// <summary>One field read off a record: a round-trippable <see cref="Token"/> when <see cref="HasValue"/> is true,
+/// else a <see cref="Note"/> saying why there is no value.</summary>
+public sealed record FieldValue(string Path, bool HasValue, string? Token, string? Note, string? Display = null, ResolvedRef? Link = null,
+                                bool Present = true, int? Count = null, bool Readable = true,
+                                IReadOnlyList<FieldValue>? Cells = null, string? NoteRef = null, int? Bytes = null,
+                                ushort? BytesFormVersion = null, IReadOnlyList<int>? Slots = null);
 
-/// <summary>The resolved identity of a form reference — the shared contract behind housecarl_resolve (P3, a full
-/// row) and the resolve_names field annotation (P7). <see cref="Resolved"/> false ⇒ the FormKey is valid but not
-/// present in the active order (a dangling target — named, never dropped or guessed, Q3). <see cref="Error"/> is set
-/// only on the housecarl_resolve path when the INPUT string is not a legal FormID at all. When used for the P7
-/// annotation it is DISPLAY-ONLY: it never replaces the leaf's round-trip <see cref="FieldValue.Token"/>.</summary>
-/// <param name="Token">The original FormKey-like text being resolved.</param>
-/// <param name="Resolved">True when the FormKey exists in the active load-order snapshot.</param>
-/// <param name="Type">The resolved record type, or null for a dangling/invalid reference.</param>
-/// <param name="EditorId">The target record's optional EditorID.</param>
-/// <param name="Name">The target record's optional translated display name.</param>
-/// <param name="Winner">The plugin filename supplying the resolved winning record.</param>
-/// <param name="Error">An input-validation error; null for valid-but-dangling FormKeys.</param>
+/// <summary>The resolved identity of a form reference, behind the resolve_names annotation.</summary>
 public sealed record ResolvedRef(
     string Token, bool Resolved, string? Type = null, string? EditorId = null,
     string? Name = null, string? Winner = null, string? Error = null);
 
-/// <summary>A located record read out as structured fields — the public (params)->(result) result the MCP
-/// server's read tools return (the §8.4 read cleave). Identity (<see cref="Type"/> / <see cref="FormKey"/> /
-/// <see cref="EditorId"/>) plus the requested (or all modeled) field reads.</summary>
-/// <param name="Type">The normalized Mutagen record type.</param>
-/// <param name="FormKey">The canonical record identifier.</param>
-/// <param name="EditorId">The record's optional EditorID.</param>
-/// <param name="Fields">Field results in requested or modeled enumeration order.</param>
-public sealed record RecordFields(string Type, string FormKey, string? EditorId, IReadOnlyList<FieldValue> Fields);
+/// <summary>A located record read out as structured fields: identity plus the requested (or all modeled) reads.</summary>
+public sealed record RecordFields(string Type, string FormKey, string? EditorId, IReadOnlyList<FieldValue> Fields, string? Name = null);
 
-/// <summary>
-/// Step 6 — the reflection-driven READ surface. The symmetric partner to <see cref="WriteEngine"/>.
-///
-/// Where the write engine coerces a string token INTO a typed value and Sets it
-/// (<c>WriteEngine.Coerce</c>), the read engine reflects a record's modeled field OUT to a string
-/// token that is the faithful <b>inverse of Coerce</b> — so reading a value and writing that exact
-/// token straight back is a byte-level no-op. That inverse is enforced by construction, not by
-/// inspection: <c>ReadProof</c>'s round-trip oracle drives every coercible leaf the write surface
-/// drives and asserts read→write-back is byte-identical, so any drift between this emitter and
-/// Coerce fails loud (the read analog of write-proof).
-///
-/// Scope (Aaron 2026-06-01): PER-PLUGIN read — "read record R exactly as plugin P defines it", the
-/// mirror of <c>set_field</c>. Load-order winning-record resolution waits for the load-order
-/// simulation layer (a later wave; the conflict tree builds on it).
-///
-/// Navigation is REUSED from the write engine (<c>ParseSegment</c> / <c>ResolveProperty</c> /
-/// <c>StepIntoElement</c>) so read and write can never disagree on how a path resolves — but the
-/// read walk never materialises an absent substruct (reading must not mutate; an absent optional
-/// is surfaced, not created). Per-record/per-leaf fault isolation: a Mutagen-unparseable field
-/// names itself loud and never crashes the read (Q3; the product-read-path requirement logged at
-/// the write-surface completion sweep).
-///
-/// Modes: <c>read</c> (resolve a record + emit its fields as round-trippable tokens).
-/// </summary>
+/// <summary>The reflection-driven READ surface, symmetric partner to <see cref="WriteEngine"/>: a record's modeled
+/// field OUT to a token that is the faithful inverse of Coerce, per PLUGIN. Navigation is the write engine's own
+/// walk, but the read never materialises an absent optional substruct — reading must not mutate. Contracts and
+/// pins in docs/architecture/read-engine.md.</summary>
 public static class ReadEngine
 {
-    /// <summary>The outcome of reading one leaf. <see cref="HasValue"/> ⇒ <see cref="Token"/> is a
-    /// round-trippable value (the inverse of Coerce). Otherwise <see cref="Note"/> explains why there
-    /// is no value to round-trip (absent optional, no such field, a non-leaf container, or an
-    /// isolated read fault). The round-trip oracle drives ONLY <see cref="HasValue"/> reads.
-    ///
-    /// <para><see cref="Flags"/> is additive METADATA carried only for a <c>[Flags]</c> enum leaf: the underlying
-    /// bit pattern + enum type, so the query predicate (<c>where=</c>) can bit-test (<c>has</c>) and compare
-    /// numerically WITHOUT tripping over the name/number rendering split that <c>[Flags].ToString()</c> produces
-    /// (named bits → "Body"; an unnamed modder slot → "8388608"). The <see cref="Token"/> is unchanged — the
-    /// round-trip oracle still drives the same display token — so this is invisible to read/write/diff.</para></summary>
-    /// <param name="HasValue">True only for a scalar token the write engine accepts.</param>
-    /// <param name="Token">The round-trip token, or an empty string for a no-value result.</param>
-    /// <param name="Note">The no-value explanation, or null when a token exists.</param>
-    /// <param name="Flags">Optional numeric metadata for a flags-enum token.</param>
-    /// <param name="ContainerCount">List/dictionary element count; null for scalars and substructs.</param>
-    internal readonly record struct LeafRead(bool HasValue, string Token, string? Note, FlagBits? Flags = null, int? ContainerCount = null)
+    /// <summary>The outcome of reading one leaf: a round-trippable <see cref="Token"/>, else the <see cref="Note"/>
+    /// saying why there is none.</summary>
+    internal readonly record struct LeafRead(bool HasValue, string Token, string? Note, FlagBits? Flags = null, int? ContainerCount = null,
+                                             bool Present = true, bool Readable = true, int? ByteLength = null, Enum? EnumBox = null,
+                                             Type? ContainerType = null, IConditionGetter? Condition = null)
     {
-        /// <summary>Creates a successful scalar leaf from its write-compatible token.</summary>
-        /// <param name="token">The exact text accepted by the corresponding write coercion.</param>
         public static LeafRead Value(string token) => new(true, token, null);
-
-        /// <summary>Creates a successful flags-enum leaf while retaining its bit-test metadata.</summary>
-        /// <param name="token">The unchanged enum token accepted by the write engine.</param>
-        /// <param name="bits">The numeric/type view used only by predicates and display annotations.</param>
         public static LeafRead FlagsValue(string token, FlagBits bits) => new(true, token, null, bits);
+        /// <summary>An opaque BLOB leaf: the hex token plus its byte length — the one family houseCARL renders
+        /// without ever parsing, which a verify must not call clean.</summary>
+        public static LeafRead Bytes(string token, int length) => new(true, token, null, null, null, ByteLength: length);
+        /// <summary>NOTHING is there. The ONE no-value shape that is not <see cref="Container"/>.</summary>
+        public static LeafRead None(string note) => new(false, "", note, null, null, Present: false);
 
-        /// <summary>Creates a no-value leaf whose note explains the absence or read limitation.</summary>
-        /// <param name="note">A display-ready explanation; it is never treated as a writable token.</param>
-        public static LeafRead None(string note) => new(false, "", note);
+        /// <summary>The read FAILED. Absent-looking, but not evidence of ABSENCE.</summary>
+        public static LeafRead Unreadable(string note) => new(false, "", note, null, null, Present: false, Readable: false);
         /// <summary>A no-value CONTAINER/substruct summary carrying its element <paramref name="count"/>: null for a
-        /// substruct (present by being non-null — no element count), a number for a list/dict (0 = present-but-EMPTY).
-        /// The count is additive metadata for the presence predicate (<c>exists</c>/<c>missing</c>), which must tell
-        /// an EMPTY list from a carried one WITHOUT re-parsing the display note. The Token is empty and the oracle
-        /// never drives a no-value read, so this is invisible to read/write/diff, exactly like <see cref="Flags"/>.</summary>
-        /// <param name="note">The load-bearing container/substructure summary.</param>
-        /// <param name="count">Collection size, or null for a non-collection substructure.</param>
-        public static LeafRead Container(string note, int? count) => new(false, "", note, null, count);
-
-        /// <summary>Returns the token when present, otherwise the explanatory note.</summary>
+        /// substruct, a number for a list/dict (0 = present-but-EMPTY), for the presence predicate.</summary>
+        public static LeafRead Container(string note, int? count, Type? type = null) => new(false, "", note, null, count, ContainerType: type);
         public override string ToString() => HasValue ? Token : Note ?? "(none)";
     }
 
-    /// <summary>The bit-test view of a <c>[Flags]</c> enum leaf — the unsigned bit pattern plus the enum
-    /// <see cref="Type"/> (so a predicate's operand given as a flag NAME, e.g. <c>has Body</c>, resolves against
-    /// the same enum). Populated by <see cref="EmitToken"/> for flags enums only; null for every other leaf.</summary>
-    /// <param name="Bits">The enum's unsigned two's-complement bit pattern.</param>
-    /// <param name="EnumType">The concrete enum type used to resolve named operands.</param>
+    /// <summary>The bit-test view of a <c>[Flags]</c> enum leaf — the bit pattern plus the enum type.</summary>
     internal readonly record struct FlagBits(ulong Bits, Type EnumType);
 
-    /// <summary>A modeled leaf that exists but holds no value on this record (absent optional substruct,
-    /// empty optional). Distinct from a real token; the oracle skips it — write-proof owns the absent
-    /// surface.</summary>
-    internal const string AbsentNote = "(absent)";
+    /// <summary>A modeled leaf that exists but holds no value.</summary>
+    public const string AbsentNote = "(absent)";
 
-    /// <summary>A present-but-null FormLink (FormKey.Null) — modeled, but carrying no target. Not a
-    /// round-trippable token (the write surface sets links to a real FormKey, never "Null"), so surfaced as
-    /// a note. Distinct from <see cref="AbsentNote"/> (a wholly absent optional); the conflict diff treats
-    /// both as "no value here" (see <c>FieldsDiff.IsAbsentSentinel</c>).</summary>
-    internal const string NullLinkNote = "(null link)";
+    /// <summary>The absent note, carrying the step's detail when it has one: <c>(absent: list has 3 element(s))</c>.</summary>
+    static string AbsentWith(ExpectedApplyRejectionException ex) => ex.AbsentDetail is { } d ? $"(absent: {d})" : AbsentNote;
 
-    /// <summary>A present <c>TranslatedString</c> (FULL/DESC/…) whose <c>.String</c> resolves to null — a localized
-    /// string whose <c>.STRINGS</c> entry for the target language is not in the workspace. After the
-    /// <see cref="LoadOrderResolver.OpenOverlay"/> strings-source fix this is the genuinely-absent residue (no
-    /// strings anywhere for it), NOT the cleaned-masters case that fix resolves. Surfaced as a no-value NOTE — never
-    /// a blank token — so a value predicate's Q3 accounting fires on it (a `where Name contains …` can't silently
-    /// treat it as a real non-matching value → false "0 matches") and a read renders it loud, not as an empty Name
-    /// indistinguishable from a record that truly has none (HCBR-2026-06-24). Like <see cref="AbsentNote"/> /
-    /// <see cref="NullLinkNote"/>, the conflict diff treats it as "no value here" (<c>FieldsDiff.IsAbsentSentinel</c>).</summary>
+    /// <summary>True for <see cref="AbsentNote"/> and its detailed form.</summary>
+    public static bool IsAbsentNote(string? note) =>
+        note == AbsentNote || note?.StartsWith("(absent: ", StringComparison.Ordinal) == true;
+
+    /// <summary>A FormLink carrying no target: a NON-nullable link holding FormID zero, or a NULLABLE link whose
+    /// subrecord is ABSENT. Not round-trippable, so a note the conflict diff reads as "no value here".</summary>
+    internal const string NullLinkNote = "(" + NullLinkText + ")";
+
+    /// <summary>The bare text of <see cref="NullLinkNote"/>, for a reply that is not a read.</summary>
+    internal const string NullLinkText = "null link";
+
+    /// <summary>A NULLABLE FormLink whose subrecord is PRESENT and carries FormID zero — an INFO's PNAM "I am
+    /// first" marker, told apart from an ABSENT nullable link by <c>FormKeyNullable</c>.</summary>
+    internal const string PresentNullLinkNote = "(" + PresentNullLinkText + ")";
+
+    /// <summary>The bare text of <see cref="PresentNullLinkNote"/>, for a reply that is not a read.</summary>
+    internal const string PresentNullLinkText = "null link, subrecord present";
+
+    /// <summary>A present <c>TranslatedString</c> whose <c>.String</c> resolves to null.</summary>
     internal const string UnresolvedStringNote = "(unresolved localized string)";
 
-    // ======================================================================
-    //  `read` MODE — resolve a record in one plugin and emit its fields.
-    //    dotnet run --project src/housecarl-generator read \
-    //        --source "<plugin>" [--type Weapon] (--formkey 0F1AC1:Skyrim.esm | --editorid X) \
-    //        [--path BasicStats.Damage]...
-    //  With one or more --path: emit exactly those leaves (the get_field primitive + the oracle's
-    //  read). With no --path: a one-level dump of every modeled field on the record.
-    // ======================================================================
-    /// <summary>Runs the developer CLI read command. It opens one supplied plugin, locates one record, prints requested
-    /// or modeled fields, and returns a process exit code without changing the plugin.</summary>
-    /// <param name="args">Command arguments after <c>read</c>; paths are native host paths.</param>
-    /// <returns>Zero on a completed read; one after an actionable validation or lookup error.</returns>
+    // `read` MODE — resolve a record in one plugin and emit its fields; with no --path, a one-level dump.
     public static int RunRead(string[] args)
     {
         var f = WriteEngine.ParseFlags(args);
@@ -182,7 +98,7 @@ public static class ReadEngine
         for (int i = 0; i < args.Length - 1; i++)
             if (string.Equals(args[i], "--path", StringComparison.OrdinalIgnoreCase)) paths.Add(args[i + 1]);
 
-        var sourceMod = SkyrimMod.CreateFromBinaryOverlay(source, SkyrimRelease.SkyrimSE);
+        var sourceMod = SkyrimMod.CreateFromBinaryOverlay(source, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(source));
         Type? iface = type is null ? null : typeof(SkyrimMod).Assembly.GetType("Mutagen.Bethesda.Skyrim.I" + type + "Getter");
         if (type is not null && iface is null) { Console.Error.WriteLine($"error: unknown record type '{type}'"); return 1; }
         FormKey? wantFk = null;
@@ -194,11 +110,9 @@ public static class ReadEngine
         if (target is null) { Console.Error.WriteLine($"error: not found in {Path.GetFileName(source)}"); return 1; }
 
         var typeName = RecordNaming.StripGetterInterface(WriteEngine.PrimaryGetter(target.GetType())?.Name ?? "I?Getter");
-        Console.WriteLine($"{typeName}  {target.FormKey}  ({target.EditorID ?? "<no editorid>"})");
+        Console.WriteLine($"{typeName}  {FormIdToken.Of(target.FormKey)}  ({target.EditorID ?? "<no editorid>"})");
 
-        // --depth N (default 1): depth>=2 expands list/dict/substruct contents (descendable reads). With
-        // --path it expands those targets; without, the whole-record dump. Routes through the SAME ReadFields
-        // the MCP read tools call, so the harness and the product stay in lockstep.
+        // --depth N (default 1) routes through the SAME ReadFields the MCP read tools call.
         var depth = int.TryParse(f.GetValueOrDefault("depth"), out var dN) && dN > 0 ? dN : 1;
         var rf = ReadFields(target, paths.Count > 0 ? paths : null, depth);
         foreach (var fv in rf.Fields)
@@ -206,73 +120,142 @@ public static class ReadEngine
         return 0;
     }
 
-    /// <summary>The depth-1 container hint (HCBR-2026-07-12): appended to an unexpanded container/substruct summary so
-    /// an agent turns the depth= knob instead of inventing a param or hand-rolling a parser. It names <c>depth=2</c>,
-    /// which is only honest on a surface that HAS a depth= parameter (read_record / batch_record_detail /
-    /// read_plugin_file / cross_plugin_query text+json (#231) / the CLI) — a caller whose surface refuses depth
-    /// passes its own redirect via <c>containerHint</c> (cross_plugin_query's DENSE render names the text/json
-    /// format hop — its positional cells refuse depth&gt;1) or null to suppress (write read-backs, where the count
-    /// IS the confirmation and there is no knob to turn).</summary>
+    /// <summary>The depth-1 container hint. It names <c>depth=2</c>, so a surface WITHOUT a depth= parameter
+    /// passes its own redirect as <c>containerHint</c>, or null to suppress it.</summary>
     public const string DepthExpandHint = " — pass depth=2 to expand";
 
-    /// <summary>Read a located record's fields as round-trippable tokens — the public, structured entry the MCP
-    /// server consumes (the §8.4 read cleave; <c>RunRead</c> is the CLI sibling). With <paramref name="paths"/>:
-    /// exactly those leaves (the get_field primitive). Without: a one-level dump of every modeled field. Wraps the
-    /// proven internal <see cref="ReadLeaf"/> (the round-trip oracle drives it), so the server's reads inherit the
-    /// read-proof by construction. Per-leaf fault isolation (Q3): an unreadable field names itself in its
-    /// <see cref="FieldValue.Note"/>, never throws out of the record read.</summary>
-    /// <param name="record">The live Mutagen record getter to inspect.</param>
-    /// <param name="paths">Specific dotted/bracketed paths, or null/empty to enumerate modeled top-level fields.</param>
-    /// <param name="depth">Expansion levels. Values at or below one retain the scalar/container-summary surface.</param>
-    /// <param name="containerHint">Optional text appended to unexpanded container summaries; null suppresses it.</param>
-    /// <returns>The record identity and ordered, fault-isolated field results.</returns>
+    /// <summary>Read a located record's fields as round-trippable tokens — the structured entry the MCP server
+    /// consumes, per-leaf fault isolated.</summary>
+    /// <param name="depths">One depth per entry of <paramref name="paths"/> when they must differ, with the sub-path
+    /// read off each element when that entry is a list read for one field only; every path spends the same
+    /// expansion budget.</param>
     public static RecordFields ReadFields(IMajorRecordGetter record, IReadOnlyList<string>? paths = null, int depth = 1,
-                                          string? containerHint = DepthExpandHint)
+                                          string? containerHint = DepthExpandHint,
+                                          Func<IMajorRecordGetter, (IMajorRecordGetter? Parent, string? Why)>? parentOf = null,
+                                          IReadOnlyList<(int Depth, string[]? Tail)>? depths = null)
     {
         var typeName = RecordNaming.StripGetterInterface(WriteEngine.PrimaryGetter(record.GetType())?.Name ?? "I?Getter");
         var targets = paths is { Count: > 0 } ? (IEnumerable<string>)paths : ModeledFieldNames(typeName, record.GetType());
         var fields = new List<FieldValue>();
         if (depth <= 1)
         {
-            // depth 1 (default) — UNCHANGED one-level read: the proven get_field/dump path the round-trip
-            // oracle drives (ReadLeaf). Descendable expansion (depth>=2) is an additive sibling below, so
-            // the oracle-critical leaf path is never touched.
+            // depth 1 (default) — the one-level read the round-trip oracle drives. Expansion is a separate branch.
             foreach (var p in targets)
             {
                 var seg = p.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-                var r = ReadLeaf(record, seg);
+                var (on, tail, hopNote) = HopToParent(record, seg, parentOf);
+                if (hopNote is not null) { fields.Add(new FieldValue(p, false, null, hopNote, null, Present: false, Count: null, Readable: false)); continue; }
+                var r = ReadLeaf(on, tail);
+                if (r.Condition is { } cond) { fields.Add(ConditionHead(p, cond, containerHint)); continue; }
                 string? note = r.HasValue ? null : r.Note;
-                // An UNEXPANDED container / substruct leaf self-documents the lever that opens it: at the depth-1
-                // default it renders as a count/summary ("[list: 2 item(s)]", "[BodyTemplate]"), and an agent that
-                // doesn't know to raise depth= invents a param and hand-rolls a parser instead of turning the knob
-                // (HCBR-2026-07-12). No-value NOTES are parenthesized ("(absent)", "(null link)"), so the leading-'['
-                // test targets exactly the container/substruct summaries. Depth-1 only (this branch) — the deep read
-                // FieldsDiff runs never sees the hint (it reads at expansion depth, a different summary path).
-                // The hint text is the caller's (containerHint): depth=2 is only a real knob on some surfaces.
+                // An UNEXPANDED container leaf self-documents the lever that opens it; the leading-'[' test targets
+                // exactly the container/substruct summaries, since no-value NOTES are parenthesized.
                 if (note is { Length: > 0 } && note[0] == '[' && !string.IsNullOrEmpty(containerHint)) note += containerHint;
-                fields.Add(new FieldValue(p, r.HasValue, r.HasValue ? r.Token : null, note, FlagDisplay(r)));
+                var (flagDisplay, slots) = FlagDecode(r);
+                fields.Add(new FieldValue(p, r.HasValue, r.HasValue ? r.Token : null, note, flagDisplay,
+                                          Present: r.Present, Count: r.ContainerCount, Readable: r.Readable,
+                                          Bytes: r.ByteLength, Slots: slots));
+                // Annotated off ON, the record the leaf was actually read on — a '*parent' hop rebinds it.
+                AnnotateOpaqueBytes(fields, fields.Count - 1, on.FormVersion);
             }
         }
         else
         {
             int budget = MaxExpandNodes;
-            foreach (var p in targets) EmitWithDepth(record, p, depth, fields, ref budget);
+            // Per-path depths apply only when they line up with the paths the caller named.
+            var perPath = paths is { Count: > 0 } && depths is not null && depths.Count == paths.Count ? depths : null;
+            int at = 0;
+            foreach (var p in targets)
+            {
+                var (d, elementTail) = perPath is not null ? perPath[at] : (depth, null);
+                at++;
+                var seg = p.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                var (on, tail, hopNote) = HopToParent(record, seg, parentOf);
+                if (hopNote is not null) { fields.Add(new FieldValue(p, false, null, hopNote, null, Present: false, Count: null, Readable: false)); continue; }
+                int from = fields.Count;
+                EmitWithDepth(on, string.Join(".", tail), d, fields, ref budget, p,
+                              elementTail is { Length: > 0 } ? new ElementTail(elementTail) : null);
+                // Same rule as the depth-1 branch, over the lines THIS path emitted, on the record the walk ran on.
+                AnnotateOpaqueBytes(fields, from, on.FormVersion);
+            }
         }
-        return new RecordFields(typeName, record.FormKey.ToString(), record.EditorID, fields);
+        return new RecordFields(typeName, FormIdToken.Of(record.FormKey), record.EditorID, fields);
     }
 
-    // ======================================================================
-    //  THE READ PRIMITIVE — navigate a path read-only, emit the leaf token.
-    // ======================================================================
+    /// <summary>A record body's display Name through Mutagen's <c>INamedGetter</c> aspect; null for a type with no Name, or an empty one.</summary>
+    public static string? DisplayName(IMajorRecordGetter body) =>
+        body is Mutagen.Bethesda.Plugins.Aspects.INamedGetter named && !string.IsNullOrEmpty(named.Name) ? named.Name : null;
 
-    /// <summary>Read one leaf path off a located record and return its round-trippable token (or a
-    /// sentinel). Navigation mirrors the write engine's path walk (same <c>ResolveProperty</c> /
-    /// <c>StepIntoElement</c>) but is READ-ONLY — an absent optional substruct is surfaced, never
-    /// materialised. Per-leaf fault isolation (Q3): any refl/parse failure names itself and never
-    /// throws out, so one Mutagen-unparseable field can't crash a record read.</summary>
-    /// <param name="record">The record or nested object at which the path begins.</param>
-    /// <param name="path">Pre-split dotted/bracketed segments; callers provide at least one segment.</param>
-    /// <returns>A scalar token or a named no-value result. Reflection and parse faults are captured in the note.</returns>
+    /// <summary>Hang the opaque-blob annotation on every byte-slice leaf from <paramref name="from"/> onward,
+    /// per PATH with that path's own owning record, because '*parent' rebinds it.</summary>
+    static void AnnotateOpaqueBytes(List<FieldValue> fields, int from, ushort? formVersion)
+    {
+        for (int i = from; i < fields.Count; i++)
+            if (fields[i] is { Bytes: int n, Display: null })
+                fields[i] = fields[i] with { Display = BytesDisplay(n, formVersion), BytesFormVersion = formVersion };
+    }
+
+    /// <summary>The blob annotation in its SHORT form, for a render with no room for the sentence.</summary>
+    public static string BytesShortDisplay(int length, ushort? formVersion) =>
+        "[opaque " + length + "B" + (formVersion is { } fv ? " @FV" + fv : "") + "]";
+
+    /// <summary>The DISPLAY-ONLY annotation on an opaque blob leaf: how many bytes, and the FormVersion of the
+    /// record they were read off — what decides whether the bytes suit the record carrying them.</summary>
+    public static string BytesDisplay(int length, ushort? formVersion) =>
+        "opaque bytes, " + length + " byte(s) — layout follows this record's "
+        + (formVersion is { } fv ? "FormVersion " + fv : "FormVersion, which this record does not carry")
+        + "; not parsed";
+
+    /// <summary>The <c>*parent</c> containment step on a read path, off Mutagen's own containment walk captured at
+    /// index build; a note instead when the step is misspelled, has no parent, or this read carries no index.</summary>
+    static (IMajorRecordGetter On, string[] Tail, string? Note) HopToParent(
+        IMajorRecordGetter record, string[] segs,
+        Func<IMajorRecordGetter, (IMajorRecordGetter? Parent, string? Why)>? parentOf)
+    {
+        var (hops, gerr) = ContainmentIndex.SplitHops(segs, string.Join(".", segs));
+        if (gerr is not null) return (record, segs, $"({gerr})");
+        if (hops == 0) return (record, segs, null);
+        if (parentOf is null)
+            return (record, segs, $"('{ContainmentIndex.ParentToken}' needs the load-order index, which this read does not carry — read the record through the load order instead)");
+        for (int i = 0; i < hops; i++)
+        {
+            var (parent, why) = parentOf(record);
+            if (parent is null) return (record, segs, $"({why ?? "no record contains this one"})");
+            record = parent;
+        }
+        return (record, segs[hops..], null);
+    }
+
+
+    // THE READ PRIMITIVE — navigate a path read-only, emit the leaf token.
+
+    /// <summary>The opening of the note a getter throw emits; separating faults tests <see cref="IsNoSuchFieldNote"/>.</summary>
+    public const string UnreadablePrefix = "(unreadable: ";
+
+    /// <summary>The ONE spelling of a read-fault note, so the sentence cannot drift between the walks that emit it.</summary>
+    static string UnreadableNote(string reason) => $"{UnreadablePrefix}{reason})";
+
+    /// <summary>The opening of the NO-SUCH-FIELD note — the one <c>Readable=false</c> answer that is knowledge
+    /// about the record rather than a fault, so the conflict diff still compares it.</summary>
+    public const string NoFieldPrefix = "(no field ";
+
+    /// <summary>Is this note the no-such-field answer, as opposed to a read fault?</summary>
+    public static bool IsNoSuchFieldNote(string? note) =>
+        note is not null && note.StartsWith(NoFieldPrefix, StringComparison.Ordinal);
+
+    /// <summary>The reason an unreadable note reports — the INNER exception's message, since reflection wraps a
+    /// getter's throw in a <see cref="TargetInvocationException"/> naming nothing a caller can act on.</summary>
+    static string Reason(Exception ex) => (ex as TargetInvocationException)?.InnerException?.Message ?? ex.Message;
+
+    /// <summary>The opening of the no-field note a bracket key the collection can never take emits.</summary>
+    public const string BadKeyPrefix = "(no field — ";
+
+    /// <summary>The note a walk's throw becomes: a bad bracket key is a wrong path, anything else a read fault.</summary>
+    internal static string ThrowNote(Exception ex) =>
+        ex is PathKeyShapeException ? $"{BadKeyPrefix}{ex.Message})" : UnreadableNote(Reason(ex));
+
+    /// <summary>Read one leaf path off a located record and return its token, or a sentinel — the write engine's
+    /// path walk, READ-ONLY: an absent optional substruct is surfaced, never materialised.</summary>
     internal static LeafRead ReadLeaf(object record, string[] path)
     {
         try
@@ -282,7 +265,7 @@ public static class ReadEngine
             {
                 var (segName, segKey) = WriteEngine.ParseSegment(path[i]);
                 var p = WriteEngine.ResolveProperty(current!.GetType(), segName);
-                if (p is null) return LeafRead.None(NoFieldNote(current, segName, i > 0 ? WriteEngine.ParseSegment(path[i - 1]).name : null));
+                if (p is null) return LeafRead.Unreadable(NoFieldNote(current, segName, i > 0 ? WriteEngine.ParseSegment(path[i - 1]).name : null, path[(i + 1)..]));
                 current = segKey is null
                     ? p.GetValue(current)                                  // descend a substruct (read-only)
                     : WriteEngine.StepIntoElement(current, p, segName, segKey); // collnav (handles IReadOnly*)
@@ -291,7 +274,7 @@ public static class ReadEngine
 
             var (leafName, leafKey) = WriteEngine.ParseSegment(path[^1]);
             var leaf = WriteEngine.ResolveProperty(current!.GetType(), leafName);
-            if (leaf is null) return LeafRead.None(NoFieldNote(current, leafName, path.Length >= 2 ? WriteEngine.ParseSegment(path[^2]).name : null));
+            if (leaf is null) return LeafRead.Unreadable(NoFieldNote(current, leafName, path.Length >= 2 ? WriteEngine.ParseSegment(path[^2]).name : null));
             if (leafKey is not null)
             {
                 // The leaf brackets a collection element (Keywords[0]) — step in and emit the element.
@@ -300,18 +283,11 @@ public static class ReadEngine
             }
             return EmitToken(leaf.GetValue(current), leaf.PropertyType, current);
         }
-        catch (Exception ex) { return LeafRead.None($"(unreadable: {ex.Message})"); }
+        catch (ExpectedApplyRejectionException ex) { return LeafRead.None(AbsentWith(ex)); }   // an absent arm, collection, key or index: unset, not a fault
+        catch (Exception ex) { return LeafRead.Unreadable(ThrowNote(ex)); }
     }
 
-    /// <summary>The FormKeys on a record's <c>Keywords</c> list — the ONE keyword walk (previously
-    /// triplicated across the SkyPatcher overlay, the post-state service resolver, and the show CLI,
-    /// with diverging property resolution and non-formlink handling). Resolves the property the same
-    /// way the engines do (<see cref="WriteEngine.ResolveProperty"/>), so explicit-interface getters
-    /// can't hide it. An ABSENT (null) list honestly reads as EMPTY — a record with no keyword list
-    /// carries no keywords. Null is reserved for "no such property / not a formlink list" (surfaced
-    /// loud by callers, never guessed).</summary>
-    /// <param name="record">A Mutagen record getter or mutable record.</param>
-    /// <returns>Keyword FormKeys, an empty list for an absent list, or null when the property is incompatible.</returns>
+    /// <summary>The FormKeys on a record's <c>Keywords</c> list — the ONE keyword walk.</summary>
     public static IReadOnlyList<FormKey>? KeywordKeys(object record)
     {
         var p = WriteEngine.ResolveProperty(record.GetType(), "Keywords");
@@ -320,11 +296,7 @@ public static class ReadEngine
         return FormLinkKeys(list);
     }
 
-    /// <summary>The FormKeys of one formlink-list value — the ONE enumerable→FormKey walk
-    /// (<see cref="KeywordKeys"/> and the SkyPatcher overlay's list ops both ride it, so link-reading
-    /// can't drift between them). Null the moment an element isn't a formlink (loud upstream).</summary>
-    /// <param name="list">The already resolved enumerable keyword/link value.</param>
-    /// <returns>All FormKeys in enumeration order, or null if any element is not a FormLink.</returns>
+    /// <summary>The FormKeys of one formlink-list value; null the moment an element is not a formlink.</summary>
     public static List<FormKey>? FormLinkKeys(System.Collections.IEnumerable list)
     {
         var keys = new List<FormKey>();
@@ -336,112 +308,281 @@ public static class ReadEngine
         return keys;
     }
 
-    /// <summary>A "no such field" note that, when the owner is a collection, points the caller at bracket
-    /// indexing — the common <c>.0</c>-vs-<c>[0]</c> confusion (the read analog of the write pre-flight's
-    /// bracket hint in <c>CorpusRulebook</c>). Brackets are how you step into a list/dict element mid-path;
-    /// a bare dotted <c>.0</c> is parsed as a field name and dead-ends here.</summary>
-    /// <param name="owner">The object on which property resolution failed.</param>
-    /// <param name="segName">The unresolved segment text.</param>
-    /// <param name="precedingField">The previous path field, used only to construct a bracket example.</param>
-    /// <returns>A display-ready, parenthesized failure note.</returns>
-    static string NoFieldNote(object owner, string segName, string? precedingField)
+    /// <summary>Collect every FormKey linked UNDER one field path — the <c>-&gt;</c> link-step's left side.
+    /// A present-but-empty field answers an EMPTY list; null means the path is not link-bearing, and its note
+    /// reuses the leaf-read vocabulary so callers classify it like a leaf miss.</summary>
+    public static (List<FormKey>? Links, string? Note) CollectLinksAt(object record, string[] path)
+    {
+        try
+        {
+            var nav = NavigateValue(record, path);
+            if (!nav.ok) return (null, nav.note);
+            if (nav.val is null) return (null, AbsentNote);
+            return LinksIn(nav.val, string.Join(".", path));
+        }
+        catch (Exception ex) { return (null, ThrowNote(ex)); }
+    }
+
+    /// <summary>The link-shape half of <see cref="CollectLinksAt"/>, over a value already navigated to.</summary>
+    internal static (List<FormKey>? Links, string? Note) LinksIn(object value, string display)
+    {
+        try
+        {
+            var keys = new List<FormKey>();
+            var seen = new HashSet<FormKey>();
+            void Add(FormKey fk) { if (!fk.IsNull && seen.Add(fk)) keys.Add(fk); }
+            switch (value)
+            {
+                case IFormLinkGetter link:
+                    Add(link.FormKey);
+                    break;
+                case string:
+                    return (null, $"(no links: '{display}' is a string, not a link-bearing field)");
+                case System.Collections.IEnumerable list:
+                    foreach (var item in list)
+                    {
+                        if (item is IFormLinkGetter il) Add(il.FormKey);
+                        else if (item is IFormLinkContainerGetter fc)
+                            foreach (var l in fc.EnumerateFormLinks()) Add(l.FormKey);
+                    }
+                    break;
+                case IFormLinkContainerGetter sub:
+                    foreach (var l in sub.EnumerateFormLinks()) Add(l.FormKey);
+                    break;
+                default:
+                    return (null, $"(no links: '{display}' is not a link-bearing field)");
+            }
+            return (keys, null);
+        }
+        catch (Exception ex) { return (null, UnreadableNote(Reason(ex))); }
+    }
+
+    /// <summary>Navigate a path READ-ONLY to its live value — the quantified step's fan-out source.</summary>
+    internal static (bool Ok, object? Value, Type Declared, object Parent, string? Note) NavigateTo(object record, string[] path)
+    {
+        var nav = NavigateValue(record, path);
+        return (nav.ok, nav.val, nav.type, nav.parent, nav.note);
+    }
+
+    /// <summary>A "no such field" note that, off a collection, points the caller at bracket indexing and says WHICH
+    /// of the two dead-end causes this is, off the generated schema.</summary>
+    static string NoFieldNote(object owner, string segName, string? precedingField, string[]? trailing = null)
     {
         bool ownerIsCollection = owner is System.Collections.IDictionary
             || (owner is System.Collections.IEnumerable && owner is not string);
         if (ownerIsCollection)
         {
             var pf = precedingField ?? "<field>";
-            return $"(no field '{segName}': '{pf}' is a list/dict — index an element with brackets, " +
-                   $"e.g. '{pf}[{segName}]', not '{pf}.{segName}')";
+            return $"{NoFieldPrefix}'{segName}': '{pf}' is a list/dict — {ListHopRemedy(owner, segName, pf, trailing)})";
         }
-        return $"(no field {segName})";
+
+        var typeName = RecordNaming.StripGetterInterface(RecordNaming.StripOverlay(owner.GetType().Name));
+        // No corpus (not built / unparseable) ⇒ the bare note. Saying less is not saying something wrong.
+        if (ModeledFieldIndex.Diagnose(typeName, segName) is not { } v) return $"{NoFieldPrefix}{segName})";
+
+        if (v.OnOwner)
+            return $"{NoFieldPrefix}{segName}: {typeName} declares '{segName}' but the read walk cannot resolve it)";
+
+        // The owner's own spelling settles it: DATA is real on DialogResponses and still a typo at a Weapon.
+        if (v.NearIsCaseSlip)
+            return $"{NoFieldPrefix}{segName}: a mistyped name — field names are case-sensitive; " +
+                   $"did you mean '{v.Near}'?)";
+
+        if (v.ModeledOn.Count > 0)
+        {
+            var shown = string.Join(", ", v.ModeledOn.Take(3)) + (v.ModeledOn.Count > 3 ? ", …" : "");
+            // A name modeled elsewhere can still be THIS record's typo, so the owner's own near field outranks it.
+            var lead = v.Near is null ? "not a mistyped name — Mutagen models" : "Mutagen models";
+            var alt = v.Near is { } nm ? $"; did you mean '{nm}'?" : "";
+            return $"{NoFieldPrefix}{segName}: {lead} '{segName}' on " +
+                   $"{v.ModeledOn.Count:N0} other type(s) ({shown}), just not on {typeName}{alt})";
+        }
+
+        var near = v.Near is { } n ? $"; did you mean '{n}'?" : $"; check the name against {typeName}'s schema";
+        return $"{NoFieldPrefix}{segName}: a mistyped name — Mutagen models no field '{segName}' on any type{near})";
     }
 
-    // ======================================================================
-    //  DESCENDABLE READS (depth>=2) — enumerate list/dict/substruct CONTENTS so element indices and
-    //  sub-fields are discoverable without hand-probing each [i]. Additive: navigation reuses the same
-    //  engine walk (ParseSegment/ResolveProperty/StepIntoElement) and EmitToken as the leaf path, but the
-    //  proven depth-1 ReadLeaf is untouched. Bounded by MaxExpandNodes (Q3 — explicit truncation note).
-    // ======================================================================
+    /// <summary>What to actually DO about a path that dotted THROUGH a list/dict — checked against the element
+    /// type, never asserted, because a missing bracket and a wrong leaf name need opposite next moves.</summary>
+    internal static string ListHopRemedy(object owner, string segName, string pf, string[]? trailing = null)
+    {
+        var rest = trailing is { Length: > 0 } ? "." + string.Join(".", trailing) : "";
 
-    /// <summary>Max FieldValue lines one descendable read will GENERATE (separate from the renderer's char
-    /// cap) — a guard so depth-expanding a huge container can't build a runaway result. Over it, a single
-    /// truncation note is emitted (Q3 — bounded, never silent).</summary>
+        // A numeric segment is the '.0'-vs-'[0]' confusion: it is an INDEX, and no element type check applies.
+        if (segName.Length > 0 && segName.All(char.IsDigit))
+            return $"index an element with brackets, e.g. '{pf}[{segName}]{rest}', not '{pf}.{segName}{rest}'";
+
+        var et = ElementType(owner);
+        if (et is null)
+            return $"index an element with brackets, e.g. '{pf}[0].{segName}{rest}', not '{pf}.{segName}{rest}'";
+
+        var v = HopVerdictOf(et, segName);
+        if (v.OnElement)
+            return $"index an element with brackets: '{pf}[0].{segName}{rest}', not '{pf}.{segName}{rest}'";
+
+        return v.Near is { } near
+            ? $"'{segName}' is not a field on its element type {v.TypeName} — did you mean '{pf}[0].{near}{rest}'?"
+            : $"'{segName}' is not a field on its element type {v.TypeName}; index an element with brackets " +
+              $"('{pf}[0].<field>') and name a field {v.TypeName} has";
+    }
+
+    /// <summary>The element-type half of a list-hop diagnosis.</summary>
+    readonly record struct HopVerdict(bool OnElement, string TypeName, string? Near);
+
+    /// <summary>Memoised on (element type, segment): a scan hits the same dead-end once per scanned record.</summary>
+    static readonly CountedMemo<(Type, string), HopVerdict> HopVerdicts = new();
+
+    /// <summary>How many times the list-hop verdict for (element type, segment) has been computed.</summary>
+    internal static int ListHopComputationsOf(Type elementType, string segment) =>
+        HopVerdicts.ComputationsOf((elementType, segment));
+
+    static HopVerdict HopVerdictOf(Type et, string segName) =>
+        HopVerdicts.GetOrAdd((et, segName), static key =>
+        {
+            var (t, seg) = key;
+            var etName = RecordNaming.StripOverlay(t.Name);
+            if (WriteEngine.ResolveProperty(t, seg) is not null) return new HopVerdict(true, etName, null);
+            var near = PluginNameSuggest.Nearest(seg, ElementFieldNames(t), 1);
+            return new HopVerdict(false, etName, near.Count > 0 ? near[0] : null);
+        });
+
+    /// <summary>The element type of a collection; null when the collection is untyped and empty.</summary>
+    static Type? ElementType(object owner)
+    {
+        foreach (var i in owner.GetType().GetInterfaces())
+        {
+            if (!i.IsGenericType) continue;
+            var d = i.GetGenericTypeDefinition();
+            if (d == typeof(IReadOnlyDictionary<,>) || d == typeof(IDictionary<,>)) return i.GetGenericArguments()[1];
+        }
+        foreach (var i in owner.GetType().GetInterfaces())
+            if (i.IsGenericType && i.GetGenericTypeDefinition() == typeof(IEnumerable<>))
+            {
+                var t = i.GetGenericArguments()[0];
+                if (t != typeof(object)) return t;
+            }
+        if (owner is System.Collections.IEnumerable e)
+            foreach (var first in e) { if (first is not null) return first.GetType(); break; }
+        return null;
+    }
+
+    /// <summary>Every public instance property name on an element type — the nearest-name candidate set.</summary>
+    static IEnumerable<string> ElementFieldNames(Type et)
+    {
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var t in new[] { et }.Concat(et.GetInterfaces()))
+            foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance | BindingFlags.DeclaredOnly))
+                if (p.GetIndexParameters().Length == 0 && seen.Add(p.Name)) yield return p.Name;
+    }
+
+    // DESCENDABLE READS (depth>=2) — enumerate container CONTENTS; the depth-1 ReadLeaf is untouched.
+
+    /// <summary>Max FieldValue lines one descendable read will GENERATE; over it, ONE truncation note is emitted.</summary>
     internal const int MaxExpandNodes = 2000;
 
-    /// <summary>Preferred representative fields for compact anonymous element summaries, in priority order.</summary>
     static readonly string[] IdentityFieldNames = { "Name", "EditorID", "Title" };
 
-    /// <summary>Emit one target path, expanding container/substruct contents up to <paramref name="depth"/>
-    /// levels. A miss surfaces the same bracket-aware note the leaf read uses. The body is wrapped in the same
-    /// per-field fault isolation depth-1 <see cref="ReadLeaf"/> gives (Q3): a throw while navigating OR expanding
-    /// this one target (an unparseable nested getter, an enumerator that faults mid-list, an ambiguous identity
-    /// reflection) names itself "(unreadable …)" and never escapes the record read — so one bad field can't crash
-    /// a whole-record depth dump. Lines already emitted before a mid-expansion fault are real reads and are kept.</summary>
-    /// <param name="record">The record at which <paramref name="path"/> begins.</param>
-    /// <param name="path">One requested dotted/bracketed field path.</param>
-    /// <param name="depth">Remaining caller-requested expansion levels.</param>
-    /// <param name="sink">The ordered result list receiving emitted lines.</param>
-    /// <param name="budget">Shared remaining line budget; negative means truncation has already been reported.</param>
-    static void EmitWithDepth(object record, string path, int depth, List<FieldValue> sink, ref int budget)
+    /// <summary>Emit one target path, expanding contents up to <paramref name="depth"/> levels under the same
+    /// per-field fault isolation depth-1 gives. <paramref name="display"/> is how the rows spell the path.</summary>
+    static void EmitWithDepth(object record, string path, int depth, List<FieldValue> sink, ref int budget, string? display = null,
+                              ElementTail? tail = null)
     {
+        var shown = display ?? path;
         try
         {
             var seg = path.Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
             var nav = NavigateValue(record, seg);
-            if (!nav.ok) { Emit(sink, ref budget, new FieldValue(path, false, null, nav.note)); return; }
-            Expand(nav.val, nav.type, nav.parent, path, depth, sink, ref budget);
+            if (!nav.ok) { Emit(sink, ref budget, new FieldValue(shown, false, null, nav.note, Present: false, Readable: nav.readable)); return; }
+            Expand(nav.val, nav.type, nav.parent, shown, depth, sink, ref budget, tail);
+            // A sub-path no element has is a wrong path, not an absence: its note is said once, on the first element.
+            if (tail is { Resolved: false, Miss: { } miss }) Emit(sink, ref budget, miss);
         }
-        catch (Exception ex) { Emit(sink, ref budget, new FieldValue(path, false, null, $"(unreadable: {ex.Message})")); }
+        catch (Exception ex) { Emit(sink, ref budget, Fault(shown, ex)); }
     }
 
-    /// <summary>Recursively emit <paramref name="val"/> at <paramref name="path"/>: a value leaf → its token;
-    /// a link → its note (not opened); a container/substruct → an identity-enriched summary line, then (while
-    /// depth allows) one child line per element (bracketed) or sub-field (dotted), each recursed at depth-1.</summary>
-    /// <param name="val">The live value being classified and possibly expanded; null is an absent leaf.</param>
-    /// <param name="declaredType">The property's declared type, retained when the runtime value is null or polymorphic.</param>
-    /// <param name="parent">The owning object needed for parent-discriminated values such as FormLinkOrIndex.</param>
-    /// <param name="path">The canonical display/read path for this value.</param>
-    /// <param name="depth">Expansion levels remaining at this value.</param>
-    /// <param name="sink">The ordered result list receiving summaries and leaves.</param>
-    /// <param name="budget">Shared remaining line budget.</param>
-    static void Expand(object? val, Type declaredType, object parent, string path, int depth, List<FieldValue> sink, ref int budget)
+    /// <summary>The sub-path a <c>List[*].Sub</c> read takes from each element, so the budget counts those
+    /// lines alone; the list's own line is read as ever.</summary>
+    sealed class ElementTail(string[] segs)
+    {
+        internal string[] Segs { get; } = segs;
+        internal string Text { get; } = string.Join(".", segs);
+        internal bool Resolved;
+        internal FieldValue? Miss;
+    }
+
+    /// <summary>One list element: the whole element, or under a <see cref="ElementTail"/> just its sub-path, read
+    /// at depth 1 because the column renders that one line.</summary>
+    static void ExpandElement(object? item, Type declaredType, object parent, string elemPath, int depth, ElementTail? tail,
+                              List<FieldValue> sink, ref int budget)
+    {
+        if (tail is null) { ExpandChild(item, declaredType, parent, elemPath, depth, sink, ref budget); return; }
+        // An element without the sub-path carries no line, as the whole-element walk gave none.
+        if (item is null) return;
+        var shown = $"{elemPath}.{tail.Text}";
+        var nav = NavigateValue(item, tail.Segs);
+        if (!nav.ok)
+        {
+            if (nav.noField) tail.Miss ??= new FieldValue(shown, false, null, nav.note, Present: false, Readable: false);
+            else if (!nav.readable) Emit(sink, ref budget, new FieldValue(shown, false, null, nav.note, Present: false, Readable: false));
+            return;
+        }
+        tail.Resolved = true;
+        ExpandChild(nav.val, nav.type, nav.parent, shown, 1, sink, ref budget);
+    }
+
+    /// <summary>The ONE unreadable line the deep walk emits — the sentence and flags the depth-1 read carries.</summary>
+    static FieldValue Fault(string path, string reason) =>
+        new(path, false, null, UnreadableNote(reason), Present: false, Readable: false);
+
+    static FieldValue Fault(string path, Exception ex) => Fault(path, Reason(ex));
+
+    /// <summary>A condition element's display line with the FormID it names, or the fault line when a part cannot be read.</summary>
+    internal static FieldValue ConditionHead(string path, IConditionGetter cond, string? hint)
+    {
+        try { return new FieldValue(path, false, null, ConditionLine.Of(cond, out var noteRef) + hint, Present: true, NoteRef: noteRef); }
+        catch (Exception ex) { return Fault(path, ex); }
+    }
+
+    /// <summary>Recurse into ONE child under the same isolation its getter has: a throw beneath it names THAT
+    /// child's path and the sibling walk carries on.</summary>
+    static void ExpandChild(object? val, Type declaredType, object parent, string childPath, int depth,
+                            List<FieldValue> sink, ref int budget)
+    {
+        try { Expand(val, declaredType, parent, childPath, depth, sink, ref budget); }
+        catch (Exception ex) { Emit(sink, ref budget, Fault(childPath, ex)); }
+    }
+
+    /// <summary>Recursively emit <paramref name="val"/>: a value leaf to its token, a link to its note, a
+    /// container to a summary and one child line per element. A child that cannot be read is never skipped.</summary>
+    static void Expand(object? val, Type declaredType, object parent, string path, int depth, List<FieldValue> sink, ref int budget,
+                       ElementTail? tail = null)
     {
         if (budget < 0) return;
         var leaf = EmitToken(val, declaredType, parent);
-        if (leaf.HasValue) { Emit(sink, ref budget, new FieldValue(path, true, leaf.Token, null, FlagDisplay(leaf))); return; }
-        if (val is null) { Emit(sink, ref budget, new FieldValue(path, false, null, leaf.Note)); return; }
-        // a link (incl. a null FormKey, or an FLOI) is a note, not an openable container/substruct.
+        if (leaf.HasValue)
+        {
+            var (flagDisplay, slots) = FlagDecode(leaf);
+            Emit(sink, ref budget, new FieldValue(path, true, leaf.Token, null, flagDisplay, Bytes: leaf.ByteLength, Slots: slots));
+            return;
+        }
+        if (val is null) { Emit(sink, ref budget, new FieldValue(path, false, null, leaf.Note, Present: false)); return; }
+        // a link (incl. a null FormKey, or an FLOI) is a note, not an openable container; both flags travel with it.
         if (val is IFormLinkGetter || WriteEngine.IsFormLinkOrIndex(Nullable.GetUnderlyingType(declaredType) ?? declaredType))
-        { Emit(sink, ref budget, new FieldValue(path, false, null, leaf.Note)); return; }
+        { Emit(sink, ref budget, new FieldValue(path, false, null, leaf.Note, Present: leaf.Present, Readable: leaf.Readable)); return; }
 
-        // Classify dict-vs-list the SAME way the navigation does (StepIntoElement) — by the GENERIC dictionary
-        // interfaces via ClosedInterface, not a separate non-generic System.Collections.IDictionary cast — so the
-        // browse view and the read/write path can't drift (a getter dict need not expose the non-generic interface).
-        // A generic dict enumerates as KeyValuePair<,>; Key/Value come off each pair. Classified BEFORE the
-        // summary line so the summary can carry the dict marker ("pair(s)" vs "item(s)") — the in-band signal
-        // FieldsDiff uses to keep numeric-KEYED dicts (Package.Data) out of positional-list comparison, where
-        // a key rebinding would wrongly compare "identical" (PR #28 review).
+        // Classify dict-vs-list the SAME way navigation does, and BEFORE the summary line, so the summary can carry
+        // the dict marker FieldsDiff keeps numeric-KEYED dicts out of positional comparison by.
         bool isDict = WriteEngine.ClosedInterface(val.GetType(), typeof(IDictionary<,>)) is not null
                    || WriteEngine.ClosedInterface(val.GetType(), typeof(IReadOnlyDictionary<,>)) is not null;
 
-        // a container or substruct — summarise (with an element identity where we can), then maybe open it.
-        if (!Emit(sink, ref budget, new FieldValue(path, false, null, ElementSummary(val, isDict)))) return;
+        // a container or substruct — summarise, then maybe open it. NoteRef carries the FormID the summary spelled.
+        int? deepCount = val is System.Collections.IEnumerable de and not string ? CountOf(de) : null;
+        var head = val is IConditionGetter cond ? ConditionHead(path, cond, null)
+            : new FieldValue(path, false, null, ElementSummary(val, isDict, out var summaryRef), Present: true, Count: deepCount, NoteRef: summaryRef);
+        if (!Emit(sink, ref budget, head)) return;
 
-        // Two POLYMORPHIC-ARM families normally stop here at their identity summary, hiding their VALUE, and both
-        // surface it ONE bounded level deeper even at the depth floor so a read reaches parity with the write
-        // surface and with a direct per-arm path:
-        //   * a VMAD script property (e.g. "[ScriptObjectProperty] Name=DAK_HorseBuyPerk") — its Object FormLink
-        //     (incl. a declared-but-null link, the signal the quest-fragment linter keys on), Data scalar, Alias
-        //     (1.3.1 item 2);
-        //   * a Conditions[].Data arm (e.g. "[GetFactionRankConditionData]") — its parameter fields (Faction,
-        //     Global, Reference, RunOnType…), which otherwise appear ONLY when Data is addressed directly, never
-        //     via a Conditions-list dump (#258 — the arm consumed a "summary-only" level, so depth=3 stopped at the
-        //     bare arm type and you needed depth=4 or a per-row path).
-        // Each family's direct members are leaves/links (a VMAD *ListProperty arm shows as a count at the floor;
-        // raise depth= to enumerate it), so this opens exactly one level and never unbounded-descends. EVERY OTHER
-        // substruct still stops at the floor, byte-for-byte unchanged — the exception is these two arm families
-        // only, matched by their shared getter interface (no per-arm list).
+        // Two POLYMORPHIC-ARM families — a VMAD script property and a Conditions[].Data arm — surface their VALUE
+        // ONE bounded level deeper even at the depth floor, for parity with the write surface.
         int childDepth = depth - 1;
         if (depth <= 1)
         {
@@ -458,64 +599,146 @@ public static class ReadEngine
                 var et = entry.GetType();
                 var key = et.GetProperty("Key", BindingFlags.Public | BindingFlags.Instance)?.GetValue(entry);
                 var ev = et.GetProperty("Value", BindingFlags.Public | BindingFlags.Instance)?.GetValue(entry);
-                Expand(ev, ev?.GetType() ?? typeof(object), val, $"{path}[{key}]", childDepth, sink, ref budget);
+                ExpandElement(ev, ev?.GetType() ?? typeof(object), val, $"{path}[{key}]", childDepth, tail, sink, ref budget);
             }
         }
+        else if (tail is not null && val is not System.Collections.IEnumerable) return;   // not a list: the fold refuses it off the head line
         else if (WriteEngine.GenderedInterface(val.GetType()) is not null)
         {
-            // Gendered pair ([0]=male, [1]=female): render via the SAME index→arm mapping navigation uses
-            // (WriteEngine.GenderedArmNames), NOT raw enumeration order — so the [0]/[1] paths a depth-read SHOWS are
-            // exactly the ones a write/read ACCEPTS, by construction (no drift if Mutagen's enumerator order shifts).
-            // Numeric [0]/[1] keeps this root a positional list to FieldsDiff (gendered halves never reorder), so the
-            // conflict-diff comparison is unchanged (the HCBR PR-H render decision: keep numeric indices).
+            // Gendered pair ([0]=male, [1]=female), via the SAME index-to-arm mapping navigation uses.
             for (int g = 0; g < WriteEngine.GenderedArmNames.Length; g++)
             {
                 if (budget < 0) return;
-                var armProp = WriteEngine.ResolveProperty(val.GetType(), WriteEngine.GenderedArmNames[g]);
-                object? arm; try { arm = armProp?.GetValue(val); } catch { continue; }
-                Expand(arm, armProp?.PropertyType ?? typeof(object), val, $"{path}[{g}]", childDepth, sink, ref budget);
+                var armName = WriteEngine.GenderedArmNames[g];
+                var armProp = WriteEngine.ResolveProperty(val.GetType(), armName);
+                if (armProp is null)
+                {
+                    Emit(sink, ref budget, Fault($"{path}[{g}]", $"gendered type {RecordNaming.StripOverlay(val.GetType().Name)} has no '{armName}' arm"));
+                    continue;
+                }
+                object? arm;
+                try { arm = armProp.GetValue(val); }
+                catch (Exception ex) { Emit(sink, ref budget, Fault($"{path}[{g}]", ex)); continue; }
+                ExpandChild(arm, armProp.PropertyType, val, $"{path}[{g}]", childDepth, sink, ref budget);
             }
         }
         else if (val is System.Collections.IEnumerable seq and not string)
         {
-            int i = 0;
-            foreach (var item in seq)
+            // Plain enumeration. A binary overlay builds an element only when reached, so an element Mutagen
+            // cannot parse throws out of the ENUMERATOR; on that throw the REST is stepped by index instead.
+            var en = seq.GetEnumerator();
+            try
             {
-                if (budget < 0) return;
-                Expand(item, item?.GetType() ?? typeof(object), val, $"{path}[{i}]", childDepth, sink, ref budget);
-                i++;
+                int i = 0;
+                while (true)
+                {
+                    if (budget < 0) return;
+                    object? item;
+                    try { if (!en.MoveNext()) return; item = en.Current; }
+                    catch (Exception ex)
+                    {
+                        Emit(sink, ref budget, ElementFault(parent, path, i, ex));
+                        ExpandRestByIndex(val, parent, path, i + 1, childDepth, sink, ref budget, tail);
+                        return;
+                    }
+                    ExpandElement(item, item?.GetType() ?? typeof(object), val, $"{path}[{i}]", childDepth, tail, sink, ref budget);
+                    i++;
+                }
             }
+            finally { (en as IDisposable)?.Dispose(); }
         }
         else
         {
-            // substruct — open its modeled (Loqui-filtered) fields. Reflection, not the corpus: display-only,
-            // and substructs aren't corpus-keyed by a name we hold here.
-            //
-            // GATE — the expansion boundary is the modeled corpus (cornerstone). Only DESCEND into Mutagen/
-            // Noggog record content; a value that reaches here but is NOT modeled is .NET plumbing — in
-            // practice a System.Type (RuntimeType): a ConditionData arm's Parameter1Type/Parameter2Type are
-            // typed System.Type, and a naive recurse walks .Assembly.DefinedTypes (the whole ~17,900-type
-            // Mutagen assembly), the BaseType→Enum→ValueType chain, StructLayoutAttribute, Module, the cyclic
-            // UnderlyingSystemType — ~50 KB of reflection internals that is never record data (HCBR-2026-06-08-01).
-            // The summary token was already emitted above (e.g. `Parameter1Type = [RuntimeType] Name=ActorValue`,
-            // exactly the clean depth<=4 rendering); we keep it and STOP, regardless of remaining depth budget.
+            // substruct — open its modeled (Loqui-filtered) fields by reflection.
             if (!IsModeledContent(val.GetType())) return;
             foreach (var fname in ReflectedFieldNames(val.GetType()))
             {
                 if (budget < 0) return;
                 var prop = WriteEngine.ResolveProperty(val.GetType(), fname);
-                object? fv; try { fv = prop?.GetValue(val); } catch { continue; }
-                Expand(fv, prop?.PropertyType ?? typeof(object), val, $"{path}.{fname}", childDepth, sink, ref budget);
+                // The name came off this type's own reflection, so a resolve miss or a getter throw is a FAULT.
+                if (prop is null)
+                {
+                    Emit(sink, ref budget, Fault($"{path}.{fname}",
+                        $"{RecordNaming.StripOverlay(val.GetType().Name)} declares '{fname}' but the read walk cannot resolve it"));
+                    continue;
+                }
+                object? fv;
+                try { fv = prop.GetValue(val); }
+                catch (Exception ex) { Emit(sink, ref budget, Fault($"{path}.{fname}", ex)); continue; }
+                ExpandChild(fv, prop.PropertyType, val, $"{path}.{fname}", childDepth, sink, ref budget);
             }
         }
     }
 
-    /// <summary>Append a line, decrementing the generation budget; at exhaustion emit ONE truncation note and
-    /// stop (returns false thereafter so callers unwind). Q3: the cut is named, never silent.</summary>
-    /// <param name="sink">The result list receiving the field or truncation marker.</param>
-    /// <param name="budget">Remaining lines. Zero emits the marker; negative means it was already emitted.</param>
-    /// <param name="fv">The next field result.</param>
-    /// <returns>True when the supplied field was appended; false when expansion must stop.</returns>
+    /// <summary>Emit the elements from <paramref name="from"/> onward one at a time, each isolated — taken only
+    /// after an enumeration already threw.</summary>
+    static void ExpandRestByIndex(object val, object parent, string listPath, int from, int childDepth,
+                                  List<FieldValue> sink, ref int budget, ElementTail? tail = null)
+    {
+        if (IndexedElements(val) is not { } indexed)
+        {
+            Emit(sink, ref budget, new FieldValue($"{listPath}[{from}…]", false, null,
+                UnreadableNote($"the element(s) from {from} on were not read: {RecordNaming.StripOverlay(val.GetType().Name)} "
+                               + "can only be enumerated, and the enumeration stopped at the fault above"),
+                Present: true, Readable: false));
+            return;
+        }
+        for (int i = from; i < indexed.Count; i++)
+        {
+            if (budget < 0) return;
+            object? item;
+            try { item = indexed.At(i); }
+            catch (Exception ex) { Emit(sink, ref budget, ElementFault(parent, listPath, i, ex)); continue; }
+            ExpandElement(item, item?.GetType() ?? typeof(object), val, $"{listPath}[{i}]", childDepth, tail, sink, ref budget);
+        }
+    }
+
+    /// <summary>The line for a list element whose own getter threw: the read fault note, or for an element of a
+    /// PERK's EFFECTS list the lenient decode's marker.</summary>
+    static FieldValue ElementFault(object parent, string listPath, int index, Exception ex)
+    {
+        var elementPath = $"{listPath}[{index}]";
+        if (!IsEffectsList(listPath)) return Fault(elementPath, ex);
+        return PerkEffectDecode.EffectNote(parent, index, Reason(ex)) is { } marker
+            ? new FieldValue(elementPath, false, null, marker, Present: true, Readable: false)
+            : Fault(elementPath, ex);
+    }
+
+    /// <summary>Is this read path the record's own <c>Effects</c> list — the last dotted step, with no bracket?</summary>
+    static bool IsEffectsList(string listPath)
+    {
+        int dot = listPath.LastIndexOf('.');
+        var last = dot < 0 ? listPath : listPath[(dot + 1)..];
+        return string.Equals(last, "Effects", StringComparison.Ordinal);
+    }
+
+    /// <summary>A collection's element count and its indexer when it has one, cached per runtime type.</summary>
+    static (int Count, Func<int, object?> At)? IndexedElements(object val)
+    {
+        if (_itemAccessors.GetOrAdd(val.GetType(), ItemAccessor) is not { } item) return null;
+        if (_countAccessors.GetOrAdd(val.GetType(), CountAccessor) is not { } count) return null;
+        int n;
+        try { n = count(val); }
+        catch { return null; }                                   // a length we cannot read is not a list we can step
+        return (n, i => item(val, i));
+    }
+
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Func<object, int, object?>?> _itemAccessors = new();
+
+    /// <summary>The <c>this[int]</c> accessor of a list type, or null when it has none (a set, a dictionary).</summary>
+    static Func<object, int, object?>? ItemAccessor(Type t)
+    {
+        foreach (var iface in t.GetInterfaces())
+        {
+            if (!iface.IsGenericType || iface.GetGenericTypeDefinition() != typeof(IReadOnlyList<>)) continue;
+            if (iface.GetProperty("Item")?.GetGetMethod() is { } getter)
+                return (o, i) => getter.Invoke(o, new object[] { i });
+        }
+        if (typeof(System.Collections.IList).IsAssignableFrom(t)) return (o, i) => ((System.Collections.IList)o)[i];
+        return null;
+    }
+
+    /// <summary>Append a line, decrementing the generation budget; at exhaustion emit ONE truncation note and stop.</summary>
     static bool Emit(List<FieldValue> sink, ref int budget, FieldValue fv)
     {
         if (budget < 0) return false;
@@ -529,13 +752,9 @@ public static class ReadEngine
         sink.Add(fv); budget--; return true;
     }
 
-    /// <summary>Navigate a path READ-ONLY to its target, returning the live value object (+ declared type +
-    /// owning parent) for recursion, or a miss note. Same walk as <see cref="ReadLeaf"/> but yields the object
-    /// instead of a token, so the expander can descend into it. Fault-isolated (Q3).</summary>
-    /// <param name="record">The record or nested root at which navigation begins.</param>
-    /// <param name="path">Pre-split dotted/bracketed segments; callers provide at least one segment.</param>
-    /// <returns>Success plus value/type/owner, or failure plus a display-ready note.</returns>
-    static (bool ok, object? val, Type type, object parent, string? note) NavigateValue(object record, string[] path)
+    /// <summary>Navigate a path READ-ONLY to its target, yielding the live value object (+ declared type + owning
+    /// parent) or a miss note; the same walk as <see cref="ReadLeaf"/>, fault-isolated.</summary>
+    static (bool ok, object? val, Type type, object parent, string? note, bool readable, bool noField) NavigateValue(object record, string[] path)
     {
         try
         {
@@ -545,41 +764,27 @@ public static class ReadEngine
                 var (segName, segKey) = WriteEngine.ParseSegment(path[i]);
                 var p = WriteEngine.ResolveProperty(current.GetType(), segName);
                 if (p is null) return (false, null, typeof(object), current,
-                    NoFieldNote(current, segName, i > 0 ? WriteEngine.ParseSegment(path[i - 1]).name : null));
+                    NoFieldNote(current, segName, i > 0 ? WriteEngine.ParseSegment(path[i - 1]).name : null, path[(i + 1)..]), false, true);
                 var next = segKey is null ? p.GetValue(current) : WriteEngine.StepIntoElement(current, p, segName, segKey);
-                if (next is null) return (false, null, typeof(object), record, AbsentNote);
+                if (next is null) return (false, null, typeof(object), record, AbsentNote, true, false);
                 current = next;
             }
             var (leafName, leafKey) = WriteEngine.ParseSegment(path[^1]);
             var leaf = WriteEngine.ResolveProperty(current.GetType(), leafName);
             if (leaf is null) return (false, null, typeof(object), current,
-                NoFieldNote(current, leafName, path.Length >= 2 ? WriteEngine.ParseSegment(path[^2]).name : null));
+                NoFieldNote(current, leafName, path.Length >= 2 ? WriteEngine.ParseSegment(path[^2]).name : null), false, true);
             if (leafKey is not null)
             {
                 var elem = WriteEngine.StepIntoElement(current, leaf, leafName, leafKey);
-                return (true, elem, elem.GetType(), current, null);
+                return (true, elem, elem.GetType(), current, null, true, false);
             }
-            return (true, leaf.GetValue(current), leaf.PropertyType, current, null);
+            return (true, leaf.GetValue(current), leaf.PropertyType, current, null, true, false);
         }
-        catch (Exception ex) { return (false, null, typeof(object), record, $"(unreadable: {ex.Message})"); }
+        catch (ExpectedApplyRejectionException ex) { return (false, null, typeof(object), record, AbsentWith(ex), true, false); }
+        catch (Exception ex) { return (false, null, typeof(object), record, ThrowNote(ex), false, ex is PathKeyShapeException); }
     }
 
-    /// <summary>Best-effort COMPACT identity of the element a list/dict verb just acted on — the write-verify's
-    /// "what landed" line (HCBR-2026-06-28-01, the compact in-place readback). For a single list <c>Add</c>, the new
-    /// last element + the new count (<c>now 29 (+1), new [28] = …</c>); for a batch <c>composes=</c> Add of N, the
-    /// whole appended run (<c>now 34 (+6), new [28..33]</c> — <paramref name="added"/> carries how many the op
-    /// appended, #259); for a keyed <c>SetAtIndex</c>/<c>Remove</c>, the touched key + new count; else the new count.
-    /// Names the element as specifically as the model allows — a
-    /// formlink element renders its FormKey, an identity-bearing struct its Name/EditorID, an anonymous struct (a
-    /// condition) its <c>[Type]</c>. Read-only; NEVER throws (null on any difficulty) — a display nicety on an
-    /// ALREADY-succeeded write, never load-bearing. <paramref name="leafPath"/> is the verb's path to the collection
-    /// (the engine's <see cref="WriteRequest.Path"/>); <paramref name="key"/> its list index / dict key, if any.</summary>
-    /// <param name="record">The already modified in-memory record.</param>
-    /// <param name="leafPath">Pre-split path to the affected collection.</param>
-    /// <param name="verb">The completed collection verb.</param>
-    /// <param name="key">Optional list index or dictionary key used by the verb.</param>
-    /// <param name="added">Number of elements appended by an Add operation.</param>
-    /// <returns>A compact verification phrase, or null when it cannot be derived safely.</returns>
+    /// <summary>Best-effort COMPACT identity of the element a list/dict verb just acted on. NEVER throws.</summary>
     internal static string? TouchedElement(object record, string[] leafPath, string verb, string? key, int added = 1)
     {
         try
@@ -593,6 +798,8 @@ public static class ReadEngine
                 "Add"        => AddLanded(record, count, last, added),
                 "ReplaceAll" => $"now {count} item(s) (replaced)",
                 "SetAtIndex" => key is not null ? $"now {count} item(s), set [{key}]" : $"now {count} item(s)",
+                // Insert says INSERTED, not set: the count moved and every element at or after [key] shifted.
+                "InsertAtIndex" => key is not null ? $"now {count} item(s), inserted [{key}]" : $"now {count} item(s)",
                 "Remove"     => key is not null ? $"now {count} item(s), removed [{key}]" : $"now {count} item(s) (-1)",
                 _            => $"now {count} item(s)",
             };
@@ -600,17 +807,8 @@ public static class ReadEngine
         catch { return null; }
     }
 
-    /// <summary>The list-<c>Add</c> "what landed" line, honest about the appended count. A SINGLE append names the
-    /// new element (<c>now 29 (+1), new [28] = …</c>); a BATCH <c>composes=</c> Add of N names the whole appended run
-    /// of indices (<c>now 34 (+6), new [28..33]</c>) instead of reporting only the last element as a "(+1)" — the
-    /// #259 misleading-output bug, where a 6-element compose read as "(+1), new [36]" and cost real mid-session doubt
-    /// that all six landed. <paramref name="added"/> is the op's appended count (composes.Count, else 1), clamped to
-    /// the live count so a display nicety on an already-succeeded write can never throw or under-run the range.</summary>
-    /// <param name="record">The owning record, used to render a single appended element's identity.</param>
-    /// <param name="count">Collection size after the write.</param>
-    /// <param name="last">The final element after the write, or null for an empty/unreadable collection.</param>
-    /// <param name="added">Reported append count before defensive clamping.</param>
-    /// <returns>The display-only post-write summary.</returns>
+    /// <summary>The list-<c>Add</c> "what landed" line: the new element for a single append, the whole appended
+    /// run for a batch, with <paramref name="added"/> clamped to the live count.</summary>
     static string AddLanded(object record, int count, object? last, int added)
     {
         if (last is null) return $"now {count} item(s)";
@@ -620,66 +818,47 @@ public static class ReadEngine
             : $"now {count} (+{n}), new [{count - n}..{count - 1}]";
     }
 
-    /// <summary>The compact identity of ONE element for <see cref="TouchedElement"/>: a value/formlink element via its
-    /// own round-trip token (a keyword → its FormKey), an identity-bearing or anonymous struct via
-    /// <see cref="ElementSummary"/> (<c>[Type] Name=…</c> / <c>[Type]</c>).</summary>
-    /// <param name="elem">The collection element to identify.</param>
-    /// <param name="parent">Its owning record/container for parent-aware token emission.</param>
-    /// <returns>A token or compact structural summary.</returns>
+    /// <summary>The compact identity of ONE element: its own round-trip token, else <see cref="ElementSummary"/>.</summary>
     static string ElementId(object elem, object parent)
     {
         var lr = EmitToken(elem, elem.GetType(), parent);
         return lr.HasValue ? lr.Token : ElementSummary(elem);
     }
 
-    /// <summary>A compact summary for a container/struct value: for a collection, the count form
-    /// (<see cref="SummariseContainer(object,bool)"/>); for a struct, <c>[TypeName]</c> plus a representative identity
-    /// field (Name/EditorID/Title) where present — so a list line like
-    /// <c>Properties[5] = [ScriptObjectProperty] Name=DAK_HorseBuyPerk</c> reveals which element is which.</summary>
-    /// <param name="val">The collection, owned record, or substructure to summarize.</param>
-    /// <param name="isDict">Whether an enumerable is logically key/value rather than positional.</param>
-    /// <returns>A display-only identity/count summary.</returns>
-    static string ElementSummary(object val, bool isDict = false)
+    /// <summary>A compact summary for a container/struct value: the count form, else <c>[TypeName]</c> plus a
+    /// representative identity field where present.</summary>
+    static string ElementSummary(object val, bool isDict = false) => ElementSummary(val, isDict, out _);
+
+    /// <summary>Overload also yielding the form reference the summary RENDERED — the identity FIELD's target.</summary>
+    static string ElementSummary(object val, bool isDict, out string? refToken)
     {
+        refToken = null;
         if (val is System.Collections.IEnumerable && val is not string) return SummariseContainer(val, isDict);
         var t = val.GetType();
         var typeName = RecordNaming.StripGetterInterface(RecordNaming.StripOverlay(t.Name));
-        // An owned child RECORD element (an IMajorRecordGetter — a DIAL's Responses hold DialogResponses/INFO
-        // records, a CELL's references hold placed records; each owns its own FormKey) leads with its FormKey the
-        // way a top-level read does — #252, the #198 family carried to records. Checked BEFORE the Name/EditorID/
-        // Title scan: for an owned record the FormKey IS the canonical identity (an INFO has no Name and usually no
-        // EditorID — the exact case #198's lone-FormLink path can't reach), and EditorID rides along when present,
-        // so a depth=2 owned-record list reads "[DialogResponses 4D9A74:Plugin.esp editorid=…]" — its own id — not
-        // a bare opaque [Type] (or an EditorID-only line) one level longer than the depth "index + identity" implies.
+        // An owned child RECORD element leads with its FormKey, checked BEFORE the Name/EditorID/Title scan.
         if (val is IMajorRecordGetter mr)
-            return $"[{typeName} {mr.FormKey}{(string.IsNullOrEmpty(mr.EditorID) ? "" : $" editorid={mr.EditorID}")}]";
+            return $"[{typeName} {FormIdToken.Of(mr.FormKey)}{(string.IsNullOrEmpty(mr.EditorID) ? "" : $" editorid={mr.EditorID}")}]";
         foreach (var idName in IdentityFieldNames)
         {
             var p = t.GetProperty(idName, BindingFlags.Public | BindingFlags.Instance);
             if (p is null || p.GetIndexParameters().Length != 0) continue;
             object? iv; try { iv = p.GetValue(val); } catch { continue; }
-            var s = iv switch { null => null, string str => str, IFormLinkGetter fl => fl.FormKey.ToString(), _ => iv.ToString() };
-            if (!string.IsNullOrEmpty(s)) return $"[{typeName}] {idName}={s}";
+            var s = iv switch { null => null, string str => str, IFormLinkGetter fl => FormIdToken.Of(fl.FormKey), _ => iv.ToString() };
+            if (string.IsNullOrEmpty(s)) continue;
+            if (iv is IFormLinkGetter) refToken = s;
+            return $"[{typeName}] {idName}={s}";
         }
-        // No Name/EditorID/Title identity. If the struct carries EXACTLY ONE FormLink field, that link IS its
-        // identity (PerkPlacement.Perk, and any other single-link struct) — surface it so a depth=2 element line
-        // reveals which record it points at, the way a Name= identity does, instead of a bare [Type] that reads as
-        // "the FormID isn't surfaced" one level longer than the depth contract implies (#198). Exactly one link
-        // only — 2+ are ambiguous and we don't guess which is the identity (Q3).
-        if (LoneFormLinkIdentity(val, t) is { } linkId) return $"[{typeName}] {linkId}";
+        // A struct carrying EXACTLY ONE FormLink field has that link as its identity; 2+ are ambiguous.
+        if (LoneFormLinkIdentity(val, t, out refToken) is { } linkId) return $"[{typeName}] {linkId}";
         return $"[{typeName}]";
     }
 
-    /// <summary>The <c>Field=FormKey</c> identity of a struct element that has EXACTLY ONE FormLink property and no
-    /// Name/EditorID/Title identity — e.g. PerkPlacement → <c>Perk=03AF81:Skyrim.esm</c>. Null when the struct has no
-    /// FormLink or MORE THAN ONE (ambiguous — don't guess which is the identity, #198). A present-but-null link still
-    /// counts: it names the field and shows the null FormKey, the exact signal a reader chasing a dangling ref wants.
-    /// Display-only, best-effort — any reflection fault yields null (falls back to the bare <c>[Type]</c>).</summary>
-    /// <param name="val">The structural value whose link fields are inspected.</param>
-    /// <param name="t">Its runtime type.</param>
-    /// <returns>A single unambiguous <c>Field=FormKey</c> identity, otherwise null.</returns>
-    static string? LoneFormLinkIdentity(object val, Type t)
+    /// <summary>The <c>Field=FormKey</c> identity of a struct element with EXACTLY ONE FormLink property and no
+    /// Name/EditorID/Title identity; null when it has none or MORE THAN ONE.</summary>
+    static string? LoneFormLinkIdentity(object val, Type t, out string? refToken)
     {
+        refToken = null;
         PropertyInfo? only = null;
         foreach (var p in t.GetProperties(BindingFlags.Public | BindingFlags.Instance))
         {
@@ -689,15 +868,16 @@ public static class ReadEngine
             only = p;
         }
         if (only is null) return null;
-        try { return only.GetValue(val) is IFormLinkGetter fl ? $"{only.Name}={fl.FormKey}" : null; }
+        try
+        {
+            if (only.GetValue(val) is not IFormLinkGetter fl) return null;
+            refToken = FormIdToken.Of(fl.FormKey);
+            return $"{only.Name}={refToken}";
+        }
         catch { return null; }
     }
 
-    /// <summary>Public-instance modeled field names off a runtime type (Loqui infra filtered) — the reflection
-    /// sibling of <see cref="ModeledFieldNames"/> for substructs (which aren't corpus-keyed by a name we hold
-    /// here). Best-effort, display-only.</summary>
-    /// <param name="runtimeType">The concrete overlay/mutable substructure type.</param>
-    /// <returns>Distinct readable content-property names in reflection order.</returns>
+    /// <summary>Modeled field names off a runtime type, for substructs. Best-effort, display-only.</summary>
     static IEnumerable<string> ReflectedFieldNames(Type runtimeType)
     {
         var seen = new HashSet<string>(StringComparer.Ordinal);
@@ -714,11 +894,7 @@ public static class ReadEngine
                     yield return p.Name;
     }
 
-    /// <summary>Drop Loqui/Mutagen plumbing members that aren't real data fields — the translation/registration
-    /// properties the corpus omits but raw reflection surfaces (e.g. a substruct's <c>BinaryWriteTranslator</c>).
-    /// Keeps reflective substruct expansion as clean as the corpus-driven whole-record dump.</summary>
-    /// <param name="p">A reflected public instance property.</param>
-    /// <returns>True when the property is framework machinery rather than modeled record data.</returns>
+    /// <summary>Drop Loqui/Mutagen plumbing members that are not real data fields.</summary>
     static bool IsInfrastructure(PropertyInfo p)
     {
         if (p.Name is "BinaryWriteTranslator" or "Registration" or "StaticRegistration"
@@ -729,16 +905,7 @@ public static class ReadEngine
     }
 
     /// <summary>True if <paramref name="t"/> is MODELED record content the depth walker may descend into — a
-    /// Mutagen or Noggog type. Everything else that reaches the substruct branch is .NET plumbing: in practice a
-    /// <see cref="System.Type"/>/RuntimeType (a ConditionData arm's <c>Parameter1Type</c>/<c>Parameter2Type</c>),
-    /// or an <see cref="Assembly"/>/<see cref="System.Reflection.Module"/>/<see cref="MemberInfo"/>/<see
-    /// cref="Attribute"/> reached through one. Those carry no record data — descending them leaks the assembly's
-    /// whole type metadata — so the expander renders only their one-line summary token and stops. The modeled
-    /// corpus IS the boundary (cornerstone): a type outside Mutagen's own universe is not ours to expand.
-    /// Reflection objects are also blocked explicitly so the intent reads clearly and stays robust if a non-
-    /// modeled support namespace ever appears.</summary>
-    /// <param name="t">The runtime value type considered for recursive field expansion.</param>
-    /// <returns>True only for Mutagen/Noggog model types that belong to the record surface.</returns>
+    /// Mutagen or Noggog type. Everything else is .NET plumbing: the modeled corpus IS the boundary.</summary>
     static bool IsModeledContent(Type t)
     {
         if (typeof(MemberInfo).IsAssignableFrom(t)            // Type : MemberInfo — covers Type/RuntimeType, MethodInfo, …
@@ -751,81 +918,54 @@ public static class ReadEngine
                 || ns.StartsWith("Noggog", StringComparison.Ordinal));
     }
 
-    // ======================================================================
-    //  EMIT — the inverse of WriteEngine.Coerce. The branch order mirrors Coerce's Try* family order
-    //  (primitive → enum → formlink → value-type), so the two surfaces cannot drift on which token a
-    //  type round-trips through. FLOI is checked first (parent-aware, NOT coercible) exactly as the
-    //  write side special-cases it.
-    // ======================================================================
+    // EMIT — the inverse of WriteEngine.Coerce, in Coerce's own Try* branch order; FLOI is checked first.
 
-    /// <summary>Converts one modeled leaf to the exact token accepted by <see cref="WriteEngine"/>. Unsupported
-    /// scalar shapes and containers return a named no-value result rather than an invented token.</summary>
-    /// <param name="val">The live property value; null becomes <see cref="AbsentNote"/>.</param>
-    /// <param name="declaredType">The property's declared type, used for nullable/enum/FLOI classification.</param>
-    /// <param name="parent">The leaf's owning object — needed only for a FormLinkOrIndex condition target, whose
-    /// form-vs-index mode is carried by the parent arm's discriminator booleans.</param>
-    /// <returns>A round-trip token, absence/failure note, or structural container summary.</returns>
+    /// <param name="parent">The leaf's owning object — needed only for a FormLinkOrIndex.</param>
     internal static LeafRead EmitToken(object? val, Type declaredType, object parent)
     {
         if (val is null) return LeafRead.None(AbsentNote);
         var u = Nullable.GetUnderlyingType(declaredType) ?? declaredType;
 
-        // FLOI (wave-4 condition targets) — emit a token ClassifyFloiValue re-accepts (FormKey, or
-        // "alias N" / "packdata N"), inferred from the parent arm's UseAliases/UsePackageData.
+        // FLOI (condition targets) — a token ClassifyFloiValue re-accepts, inferred from the parent arm.
         if (WriteEngine.IsFormLinkOrIndex(u)) return EmitFloi(val, parent);
 
         // primitive (inverse of TryPrimitive)
         if (TryEmitPrimitive(val, out var prim)) return LeafRead.Value(prim);
-        // enum (inverse of TryEnum) — ToString gives the name(s); Enum.Parse(ignoreCase) re-accepts,
-        // including the comma form for a [Flags] combination. For a [Flags] enum we ALSO carry the underlying
-        // bit pattern + type (the display token is unchanged) so the query predicate can bit-test (`has`) and
-        // compare numerically without tripping over the name-vs-number rendering split (HCBR 2026-06-24).
+        // enum (inverse of TryEnum). A [Flags] enum ALSO carries the bit pattern and type, for the predicate.
         if (u.IsEnum || val.GetType().IsEnum)
         {
             var token = val.ToString() ?? "";
             var enumType = u.IsEnum ? u : val.GetType();
             if (enumType.IsDefined(typeof(FlagsAttribute), false) && TryEnumBits(val, enumType, out var bits))
-                return LeafRead.FlagsValue(token, new FlagBits(bits, enumType));
-            return LeafRead.Value(token);
+                return LeafRead.FlagsValue(token, new FlagBits(bits, enumType)) with { EnumBox = val as Enum };
+            return LeafRead.Value(token) with { EnumBox = val as Enum };
         }
-        // formlink (inverse of TryFormLink) — FormKey.ToString() ↔ FormKey.Factory. A present-but-null
-        // link (FormKey.Null) is NOT a round-trippable token (the write surface sets links to a real
-        // FormKey, never "Null"), so surface it as no-value — consistent with what Coerce accepts.
+        // formlink (inverse of TryFormLink). A present-but-null link is not round-trippable, so it is a note.
         if (val is IFormLinkGetter fl)
-            return fl.FormKey.IsNull ? LeafRead.None(NullLinkNote) : LeafRead.Value(fl.FormKey.ToString());
-        // TranslatedString (FULL/DESC) — emit the resolved .String (the inverse of Coerce's implicit
-        // `record.Name = "x"`). A genuinely-empty "" still round-trips as a value; a NULL .String is an
-        // UNRESOLVED localized string (no .STRINGS entry for the target language in the workspace) and is
-        // surfaced LOUD as no-value, never a blank token — so the Q3 accounting fires instead of a silent
-        // non-match (HCBR-2026-06-24). Checked before TryEmitValueType, which previously folded the null
-        // into "" here.
+        {
+            if (!fl.FormKey.IsNull) return LeafRead.Value(FormIdToken.Of(fl.FormKey));
+            // FormKeyNullable is null only when the subrecord is ABSENT; PRESENT with zero means the opposite.
+            bool nullable = FormLinkShape.IsNullable(val.GetType());
+            return LeafRead.None(nullable && fl.FormKeyNullable is not null ? PresentNullLinkNote : NullLinkNote);
+        }
+        // TranslatedString — the resolved .String.
         if (val.GetType().FullName == "Mutagen.Bethesda.Strings.TranslatedString")
         {
             var s = ReflectString(val, "String");
             return s is null ? LeafRead.None(UnresolvedStringNote) : LeafRead.Value(s);
         }
-        // value types (inverse of TryValueType)
-        if (TryEmitValueType(val, out var vt)) return LeafRead.Value(vt);
+        // value types (inverse of TryValueType). A byte-slice blob emits the same hex token, marked as opaque.
+        if (TryEmitValueType(val, out var vt))
+            return IsByteMemorySlice(val.GetType()) ? LeafRead.Bytes(vt, vt.Length / 2) : LeafRead.Value(vt);
 
-        // Not a single-token VALUE leaf: a substruct / collection / arm container. The oracle never
-        // drives these AS leaves — their sub-leaves are driven individually (exactly like write-proof).
-        // Summarise for the read display, with the same dict-vs-list marker the depth walk renders, and carry the
-        // element count STRUCTURALLY (Container) so the presence predicate tells an empty list from a carried one
-        // without re-parsing the display note.
+        // Not a single-token VALUE leaf: summarise for the display, and carry the element count STRUCTURALLY.
         bool isDict = WriteEngine.ClosedInterface(val.GetType(), typeof(IDictionary<,>)) is not null
                    || WriteEngine.ClosedInterface(val.GetType(), typeof(IReadOnlyDictionary<,>)) is not null;
         var summary = SummariseContainer(val, isDict, out var count);
-        return LeafRead.Container(summary, count);
+        return LeafRead.Container(summary, count, val.GetType()) with { Condition = val as IConditionGetter };
     }
 
-    /// <summary>The unsigned bit pattern of a boxed enum value, robust across every underlying integer type
-    /// (signed or unsigned) — the bits a <c>has</c> predicate ANDs against, and the write engine's flags
-    /// Add/Remove OR/AND-NOT operand. Read through the declared underlying type so a high-bit-set signed enum
-    /// yields its two's-complement pattern rather than overflowing.</summary>
-    /// <param name="val">A boxed value belonging to <paramref name="enumType"/>.</param>
-    /// <param name="enumType">The declared concrete enum type.</param>
-    /// <param name="bits">Receives the unsigned bit pattern on success, otherwise zero.</param>
-    /// <returns>False when conversion cannot be performed without throwing.</returns>
+    /// <summary>The unsigned bit pattern of a boxed enum value, masked to the declared underlying type's width.</summary>
     internal static bool TryEnumBits(object val, Type enumType, out ulong bits)
     {
         bits = 0;
@@ -837,11 +977,11 @@ public static class ReadEngine
                 ulong ul => ul,
                 long l => unchecked((ulong)l),
                 uint ui => ui,
-                int i => unchecked((ulong)(long)i),
+                int i => unchecked((uint)i),
                 ushort us => us,
-                short s => unchecked((ulong)(long)s),
+                short s => unchecked((ushort)s),
                 byte b => b,
-                sbyte sb => unchecked((ulong)(long)sb),
+                sbyte sb => unchecked((byte)sb),
                 _ => Convert.ToUInt64(prim, CultureInfo.InvariantCulture),
             };
             return true;
@@ -849,94 +989,104 @@ public static class ReadEngine
         catch { return false; }
     }
 
-    /// <summary>Resolve a flag NAME (or a comma-combo, case-insensitive) against a <c>[Flags]</c> enum type to its
-    /// bit pattern — the name-operand path for the query predicate's <c>has</c>/<c>=</c> (e.g. <c>has Body</c>).
-    /// False if the text is not a member (or combo of members) of the enum. A numeric string also parses here, but
-    /// the caller resolves numerics first, so this only ever sees names.</summary>
-    /// <param name="enumType">The concrete flags-enum type supplying member names.</param>
-    /// <param name="name">One member or comma-separated member combination.</param>
-    /// <param name="bits">Receives the parsed unsigned bit pattern on success.</param>
-    /// <returns>True only when the operand parses and its underlying bits can be represented.</returns>
+    /// <summary>A boxed enum value's underlying integer, sign kept.</summary>
+    internal static Int128 EnumNumber(Enum val)
+        => Enum.GetUnderlyingType(val.GetType()) == typeof(ulong)
+            ? Convert.ToUInt64(val, CultureInfo.InvariantCulture)
+            : Convert.ToInt64(val, CultureInfo.InvariantCulture);
+
+    /// <summary>Resolve a flag NAME, or a comma-combo, against a <c>[Flags]</c> enum type to its bit pattern.</summary>
     internal static bool TryEnumBitsFromName(Type enumType, string name, out ulong bits)
     {
         bits = 0;
-        try { return TryEnumBits(Enum.Parse(enumType, name.Trim(), ignoreCase: true), enumType, out bits); }
-        catch { return false; }
+        // Names only: Enum.TryParse would also take a signed number, and '-1' is every bit.
+        if (!name.Split(',').All(m => m.Trim() is { Length: > 0 } t && (char.IsLetter(t[0]) || t[0] == '_'))) return false;
+        return Enum.TryParse(enumType, name.Trim(), ignoreCase: true, out var v) && TryEnumBits(v!, enumType, out bits);
     }
 
-    /// <summary>The DISPLAY-ONLY biped-slot decode for a <c>BodyTemplate.FirstPersonFlags</c> leaf (enum
-    /// <c>BipedObjectFlag</c>): the equipped SLOT NUMBERS ("slots 32, 34, 53") derived from the bit pattern
-    /// (slot = 30 + bit index). Armor/slot analysis wants the slot numbers, but <c>[Flags].ToString()</c> gives
-    /// enum NAMES when every set bit is named ("Body") and falls back to a bare decimal the moment an unnamed
-    /// modder slot is set (e.g. <c>8388980</c> for a slot-53 addon) — neither is the slot list the modder reasons
-    /// in (HCBR-2026-07-12). This annotation rides <see cref="FieldValue.Display"/>, so the round-trip
-    /// <see cref="LeafRead.Token"/> is untouched (write/read-proof/diff never see it). Gated to BipedObjectFlag by
-    /// name — the slot=30+bit mapping is meaningless for any other <c>[Flags]</c> enum. Null for every non-biped
-    /// leaf, an unset mask, or a non-flags value.</summary>
-    /// <param name="leaf">A previously emitted leaf, optionally carrying flags metadata.</param>
-    /// <returns>A slot-number annotation, or null when the mapping does not apply.</returns>
-    internal static string? FlagSlotDisplay(LeafRead leaf)
+    /// <summary>Whether a container type is a dict and whether its elements are form links, worked out once per type.</summary>
+    internal static (bool Dict, bool Links) ContainerShape(Type t) => ContainerShapes.GetOrAdd(t, static t =>
     {
-        if (!leaf.HasValue || leaf.Flags is not { } fb || fb.EnumType.Name != "BipedObjectFlag") return null;
-        var slots = new List<int>();
-        for (int i = 0; i < 32; i++) if ((fb.Bits & (1UL << i)) != 0) slots.Add(30 + i);
-        if (slots.Count == 0) return null;
-        return (slots.Count == 1 ? "slot " : "slots ") + string.Join(", ", slots);
+        bool dict = WriteEngine.ClosedInterface(t, typeof(IDictionary<,>)) is not null
+                 || WriteEngine.ClosedInterface(t, typeof(IReadOnlyDictionary<,>)) is not null;
+        var el = (WriteEngine.ClosedInterface(t, typeof(IEnumerable<>)))?.GetGenericArguments()[0];
+        return (dict, !dict && el is not null && typeof(IFormLinkGetter).IsAssignableFrom(el));
+    });
+
+    static readonly ConcurrentDictionary<Type, (bool, bool)> ContainerShapes = new();
+
+    /// <summary>The DISPLAY-ONLY decode of a <c>[Flags]</c> enum leaf and, on a biped field, its slot numbers (slot = 30 + bit).</summary>
+    internal static (string? Display, IReadOnlyList<int>? Slots) FlagDecode(LeafRead leaf)
+    {
+        if (!leaf.HasValue || leaf.Flags is not { } fb) return (null, null);
+        List<int>? slots = null;
+        if (IsBipedSlots(fb))
+        {
+            slots = new List<int>();
+            for (int i = 0; i < 32; i++) if ((fb.Bits & (1UL << i)) != 0) slots.Add(30 + i);
+        }
+        var names = FlagNames(fb, out bool anyNamed);
+        // The slot list is dropped from the display when every set bit is already a slotNN token.
+        var slotText = slots is not { Count: > 0 } || (names is not null && !anyNamed) ? null
+                     : (slots.Count == 1 ? "slot " : "slots ") + string.Join(" ", slots);
+        return (names is null ? slotText : slotText is null ? names : $"{names} | {slotText}", slots);
     }
 
-    /// <summary>The DISPLAY-ONLY annotation for a <c>[Flags]</c> enum leaf — the human-readable decode that rides
-    /// <see cref="FieldValue.Display"/> without touching the round-trip <see cref="LeafRead.Token"/>. A biped-slot
-    /// flags leaf gets the slot-number decode (<see cref="FlagSlotDisplay"/>); every OTHER flags enum gets the
-    /// unknown-bits decode (<see cref="FlagBitsDisplay"/>), which fires only when unnamed bits are present. The two
-    /// are mutually exclusive by construction — a biped leaf with any bit set already yields a slot decode, and one
-    /// with no bit set has no unknown bits either — so the <c>??</c> never double-annotates. Null when neither
-    /// applies (a non-flags leaf, or a flags leaf whose every set bit is already named).</summary>
-    /// <param name="leaf">A previously emitted leaf.</param>
-    /// <returns>The one applicable flags annotation, otherwise null.</returns>
-    internal static string? FlagDisplay(LeafRead leaf) => FlagSlotDisplay(leaf) ?? FlagBitsDisplay(leaf);
+    static bool IsBipedSlots(FlagBits fb) => IsBipedSlots(fb.EnumType);
 
-    /// <summary>The DISPLAY-ONLY decode for a <c>[Flags]</c> enum leaf carrying bits the catalog does NOT name — the
-    /// case where <c>[Flags].ToString()</c> abandons the name list and renders a bare decimal (e.g. an NPC
-    /// <c>Configuration.Flags</c> whose value includes an unnamed modder/game-version bit), silently losing even the
-    /// KNOWN bits a consumer needs (gender / uniqueness / ghost state — #255). This surfaces the known bits by NAME
-    /// plus the unnamed remainder as an explicit hex mask — <c>&lt;known flag names&gt; (+unknown bits 0x…)</c> — so
-    /// the common bits stay directly consumable and the presence of unknown bits is STATED, not hidden. Rides
-    /// <see cref="FieldValue.Display"/>, so the round-trip <see cref="LeafRead.Token"/> (the bare decimal, which
-    /// <c>Enum.Parse</c> re-accepts) is untouched — write / read-proof / diff never see it, exactly like the
-    /// biped-slot decode. Null when the leaf is not a flags enum OR every set bit is already named (ToString gave
-    /// the full name list — nothing to recover).</summary>
-    /// <param name="leaf">A flags leaf whose original token remains untouched.</param>
-    /// <returns>A known-name plus unknown-mask annotation, or null when every bit is nameable.</returns>
-    internal static string? FlagBitsDisplay(LeafRead leaf)
+    /// <summary>True for the biped slot enum, whose unnamed bits the decode prints as <c>slotNN</c>.</summary>
+    internal static bool IsBipedSlots(Type enumType) => enumType.Name == "BipedObjectFlag";
+
+    static readonly ConcurrentDictionary<Type, ulong[]> MemberMasks = new();
+
+    /// <summary>An enum type's nonzero member bit patterns, descending (unsigned) so a combo comes before its bits.</summary>
+    static ulong[] SortedMemberMasks(Type enumType) => MemberMasks.GetOrAdd(enumType, t =>
     {
-        if (!leaf.HasValue || leaf.Flags is not { } fb) return null;
-        // Peel the NAMEABLE bits exactly the way .NET's [Flags].ToString() does: greedily apply each named member that
-        // is FULLY contained (largest value first, so a multi-bit COMBO member wins over its constituent bits), and
-        // whatever bits no member can cover are the unknown remainder. Do NOT just OR every member's bits into one
-        // "known" mask: a bit that exists ONLY inside a multi-bit combo member (e.g. Package.Flag.WearSleepOutfit)
-        // would count as "known" yet ToString can't name it on its own, so the "known names" slot would itself render
-        // a bare decimal — the very thing this decode exists to avoid (PR #261 review).
         var members = new List<ulong>();
-        foreach (var member in Enum.GetValues(fb.EnumType))
-            if (TryEnumBits(member, fb.EnumType, out var mb) && mb != 0) members.Add(mb);
-        members.Sort((a, b) => b.CompareTo(a));   // descending (unsigned) — a combo before its constituent bits
-        ulong remainder = fb.Bits;
-        foreach (var mb in members) if ((remainder & mb) == mb) remainder &= ~mb;
-        if (remainder == 0) return null;   // every set bit is nameable — ToString already gave the full name list
-        // The nameable bits are exactly a union of whole members, so ToString renders them as clean names (never a
-        // decimal); state the remainder as an explicit hex mask so nothing is silently dropped.
-        ulong nameable = fb.Bits & ~remainder;
-        var names = nameable == 0 ? null : Enum.ToObject(fb.EnumType, nameable).ToString();
-        return string.IsNullOrEmpty(names) || names == "0"
-            ? $"unknown bits 0x{remainder:X}"
-            : $"{names} (+unknown bits 0x{remainder:X})";
+        foreach (var member in Enum.GetValues(t))
+            if (TryEnumBits(member, t, out var mb) && mb != 0) members.Add(mb);
+        members.Sort((a, b) => b.CompareTo(a));
+        return members.ToArray();
+    });
+
+    /// <summary>The named bits plus one token per unnamed bit (<c>slotNN</c> on a biped field, <c>bitN</c> elsewhere),
+    /// joined by " | ", or null when every set bit is named and the token already lists them.</summary>
+    static string? FlagNames(FlagBits fb, out bool anyNamed)
+    {
+        anyNamed = false;
+        ulong remainder = Unnamed(fb);
+        if (remainder == 0) return null;
+        anyNamed = (fb.Bits & ~remainder) != 0;
+        return string.Join(" | ", FlagParts(fb, remainder));
     }
 
-    /// <summary>Emits invariant, round-trip text for the primitive family accepted by
-    /// <c>WriteEngine.TryPrimitive</c>.</summary>
-    /// <param name="val">The boxed candidate value.</param>
-    /// <param name="token">Receives the token, or an empty string when the type is not primitive.</param>
-    /// <returns>True when the value belongs to the supported primitive family.</returns>
+    /// <summary>The set bits no flag member names, peeled the way .NET's [Flags].ToString() greedily applies each fully contained member.</summary>
+    internal static ulong Unnamed(FlagBits fb) => PeelFlagBits(fb.EnumType, fb.Bits);
+
+    /// <summary>Each set bit's flag name, then one token per unnamed bit (<c>slotNN</c> on a biped field, <c>bitN</c> elsewhere).</summary>
+    internal static List<string> FlagParts(FlagBits fb, ulong remainder)
+    {
+        var parts = new List<string>();
+        ulong nameable = fb.Bits & ~remainder;
+        if (nameable != 0) parts.AddRange(Enum.ToObject(fb.EnumType, nameable).ToString()!.Split(", "));
+        bool biped = IsBipedSlots(fb);
+        for (int i = 0; i < 64; i++)
+            if ((remainder & (1UL << i)) != 0) parts.Add(UnnamedBitToken(i, biped));
+        return parts;
+    }
+
+    /// <summary>The [Flags].ToString() peel: fully contained members largest first, into members when given; returns the unnamed bits.</summary>
+    internal static ulong PeelFlagBits(Type enumType, ulong bits, List<ulong>? members = null)
+    {
+        foreach (var mb in SortedMemberMasks(enumType))
+            if ((bits & mb) == mb) { members?.Add(mb); bits &= ~mb; }
+        return bits;
+    }
+
+    /// <summary>The token for one unnamed bit: <c>slotNN</c> on a biped field, <c>bitN</c> elsewhere.</summary>
+    internal static string UnnamedBitToken(int bit, bool biped) => biped ? $"slot{30 + bit}" : $"bit{bit}";
+
+    // -- primitive family (mirror TryPrimitive) --------------------------------
     static bool TryEmitPrimitive(object val, out string token)
     {
         switch (val)
@@ -953,11 +1103,7 @@ public static class ReadEngine
         return false;
     }
 
-    /// <summary>Emits the structured value-type tokens accepted by <c>WriteEngine.TryValueType</c>, including
-    /// colors, time values, model identifiers, Noggog points/percentages, byte slices, and asset links.</summary>
-    /// <param name="val">The boxed candidate value.</param>
-    /// <param name="token">Receives the token, or an empty string when no supported shape matches.</param>
-    /// <returns>True when a faithful inverse token was produced.</returns>
+    // -- value-type family (mirror TryValueType) -------------------------------
     static bool TryEmitValueType(object val, out string token)
     {
         token = "";
@@ -968,7 +1114,7 @@ public static class ReadEngine
             case TimeOnly t: token = t.ToString("O", CultureInfo.InvariantCulture); return true;
             case char ch: token = ch.ToString(); return true;
             case string[] arr: token = string.Join(",", arr); return true;
-            case FormKey fk: token = fk.ToString(); return true;
+            case FormKey fk: token = FormIdToken.Of(fk); return true;
             case ModKey mk: token = mk.ToString(); return true;
             case RecordType rt: token = rt.ToString(); return true;
         }
@@ -976,12 +1122,7 @@ public static class ReadEngine
         var rt2 = val.GetType();
         var fn = rt2.FullName;
 
-        // (TranslatedString is handled earlier in EmitToken — a null .String surfaces as a loud no-value note,
-        //  not the blank token this branch used to fold it into; see UnresolvedStringNote.)
 
-        // Noggog.Percent — emit the [0..1] fraction its single-arg ctor takes. Find the underlying
-        // numeric member BY TYPE, not a guessed name: Percent stores exactly one double (its ToString
-        // is the "33%" display form, which Coerce can't parse — the round-trip oracle caught that).
         if (fn == "Noggog.Percent")
         { token = NumericComponentInvariant(val) ?? val.ToString() ?? ""; return true; }
 
@@ -992,11 +1133,7 @@ public static class ReadEngine
         // (ReadOnly)MemorySlice<byte> — raw blob as a hex string.
         if (IsByteMemorySlice(rt2)) { token = Convert.ToHexString(MemorySliceBytes(val)); return true; }
 
-        // AssetLink<T> family — the stored path string. Recognised by generic-definition NAME (the mutable
-        // AssetLink<T> Coerce builds, the getter overlay's AssetLinkGetter<T>, or the IAssetLink(Getter)<T>
-        // interfaces) so the value READ off a getter is handled, not only the mutable type — the same
-        // by-name recognition the engine uses for the FLOI family. Shares ONE predicate with the write
-        // coercion (WriteEngine.IsAssetLinkFamily) so read and write can't drift on what an asset link is.
+        // AssetLink<T> family — the stored path string, off the ONE predicate write coercion shares.
         if (WriteEngine.IsAssetLinkFamily(rt2))
         { token = ReflectString(val, "GivenPath", "RawPath", "DataRelativePath") ?? val.ToString() ?? ""; return true; }
 
@@ -1004,47 +1141,30 @@ public static class ReadEngine
     }
 
     // -- FLOI (mirror SetFloi / ClassifyFloiValue) -----------------------------
-    /// <summary>Emit a condition-target FormLinkOrIndex as the token that re-creates it: a FormKey in
-    /// form mode, else "alias N" / "packdata N" per the owning arm's discriminator. The index payload
-    /// accessor is read defensively; if the mode or index can't be read cleanly the leaf is surfaced as
-    /// a note (never a guessed four bytes — Q3). The precise index round-trip is exercised by the
-    /// oracle's FLOI phase.</summary>
-    /// <param name="val">The FormLinkOrIndex value object.</param>
-    /// <param name="parent">The condition-data arm carrying mode discriminator booleans.</param>
-    /// <returns>A FormKey/index token or a named no-value result when the representation is unreadable.</returns>
+    /// <summary>Emit a condition-target FormLinkOrIndex as the token that re-creates it, never a guessed four bytes.</summary>
     static LeafRead EmitFloi(object val, object parent)
     {
         bool? useAliases = ReflectBool(parent, "UseAliases");
         bool? usePackData = ReflectBool(parent, "UsePackageData");
         if (useAliases is null || usePackData is null)
-            return LeafRead.None($"(floi: parent {parent.GetType().Name} has no UseAliases/UsePackageData discriminator)");
+            return LeafRead.Unreadable($"(floi: parent {parent.GetType().Name} has no UseAliases/UsePackageData discriminator)");
 
         if (useAliases == false && usePackData == false)
         {
-            // Form mode. The binary overlay's FLOI is NOT itself a link — it carries the link in its
-            // .Link property, the same accessor the write side reads (ReadFloiFormKey, oracle-proven).
-            // A present-but-null link stays a note, matching plain FormLink leaves (HCBR-2026-06-09-02).
-            if (val is IFormLinkGetter fl) return LeafRead.Value(fl.FormKey.ToString());
-            if (WriteEngine.ReadFloiFormKey(val) is { } fk) return LeafRead.Value(fk.ToString());
-            return LeafRead.None($"(floi: form mode, null or unreadable FormKey on {val.GetType().Name})");
+            // Form mode: the overlay's FLOI carries the link in .Link, the accessor the write side reads.
+            if (val is IFormLinkGetter fl) return LeafRead.Value(FormIdToken.Of(fl.FormKey));
+            if (WriteEngine.ReadFloiFormKey(val) is { } fk) return LeafRead.Value(FormIdToken.Of(fk));
+            return LeafRead.Unreadable($"(floi: form mode, null or unreadable FormKey on {val.GetType().Name})");
         }
 
         // index mode — read the numeric index defensively (FormLinkOrIndex carries it alongside the link).
         var idx = ReflectUInt(val, "Index", "RawIndex", "FormKeyOrIndex");
-        if (idx is null) return LeafRead.None("(floi: index mode, index accessor unresolved — refined in oracle)");
+        if (idx is null) return LeafRead.Unreadable("(floi: index mode, index accessor unresolved — refined in oracle)");
         return LeafRead.Value(useAliases == true ? $"alias {idx}" : $"packdata {idx}");
     }
 
-    // ======================================================================
-    //  Reflection helpers — read an accessor by candidate names, defensively.
-    //  The round-trip oracle validates which accessor is the faithful inverse;
-    //  a wrong guess fails the proof loud + precise rather than silently.
-    // ======================================================================
+    // Reflection helpers, read defensively; the round-trip oracle validates which accessor is the faithful inverse.
 
-    /// <summary>Reads the first named public string property available on an implementation-variant object.</summary>
-    /// <param name="obj">The value whose accessors are inspected.</param>
-    /// <param name="names">Candidate property names in preference order.</param>
-    /// <returns>The first string value found, otherwise null.</returns>
     static string? ReflectString(object obj, params string[] names)
     {
         foreach (var n in names)
@@ -1055,17 +1175,9 @@ public static class ReadEngine
         return null;
     }
 
-    /// <summary>Reads an explicitly named boolean through Mutagen-aware property resolution.</summary>
-    /// <param name="obj">The owner object.</param>
-    /// <param name="name">The modeled property name.</param>
-    /// <returns>The boolean value, or null when the accessor/value is unavailable.</returns>
     static bool? ReflectBool(object obj, string name)
         => WriteEngine.ResolveProperty(obj.GetType(), name)?.GetValue(obj) as bool?;
 
-    /// <summary>Reads the first candidate non-negative integer accessor and normalizes it to unsigned form.</summary>
-    /// <param name="obj">The value whose accessors are inspected.</param>
-    /// <param name="names">Candidate property names in preference order.</param>
-    /// <returns>The normalized value, or null when no supported accessor exists.</returns>
     static uint? ReflectUInt(object obj, params string[] names)
     {
         foreach (var n in names)
@@ -1077,11 +1189,7 @@ public static class ReadEngine
         return null;
     }
 
-    /// <summary>Emit a single-component numeric value object's underlying number, found BY TYPE (the
-    /// first public double/float property, else field) — robust to the member's name. Used for
-    /// Noggog.Percent, whose ToString is a display form Coerce can't re-parse.</summary>
-    /// <param name="val">A single-component numeric wrapper.</param>
-    /// <returns>Invariant round-trip text, or null when no numeric component can be found.</returns>
+    /// <summary>Emit a single-component numeric value object's underlying number, found BY TYPE.</summary>
     static string? NumericComponentInvariant(object val)
     {
         var t = val.GetType();
@@ -1094,11 +1202,8 @@ public static class ReadEngine
         return null;
     }
 
-    /// <summary>Emit a Noggog P2*/P3* point's components in CONSTRUCTOR-PARAMETER order ("x,y,z"),
-    /// reading each via the matching public property — so the token splits back into the same ctor
-    /// args TryValueType's ConstructByCtor consumes.</summary>
-    /// <param name="val">The Noggog point value.</param>
-    /// <returns>Comma-separated invariant components in constructor order.</returns>
+    /// <summary>Emit a Noggog P2*/P3* point's components in CONSTRUCTOR-PARAMETER order, so the token splits back
+    /// into the same ctor args ConstructByCtor consumes.</summary>
     static string PointComponents(object val)
     {
         var t = val.GetType();
@@ -1121,44 +1226,20 @@ public static class ReadEngine
         return string.Join(",", parts);
     }
 
-    /// <summary>Recognizes Noggog mutable/read-only memory slices whose element type is exactly byte.</summary>
-    /// <param name="t">The candidate runtime type.</param>
-    /// <returns>True only for supported generic byte-slice definitions.</returns>
     static bool IsByteMemorySlice(Type t)
         => t.IsGenericType
            && (t.GetGenericTypeDefinition() == typeof(Noggog.MemorySlice<>) || t.GetGenericTypeDefinition() == typeof(Noggog.ReadOnlyMemorySlice<>))
            && t.GetGenericArguments()[0] == typeof(byte);
 
-    // AssetLink-family recognition lives in WriteEngine.IsAssetLinkFamily (ONE predicate, shared with write
-    // coercion — read emits the path, write builds the link from it; they must agree on the family).
+    // AssetLink-family recognition lives in WriteEngine.IsAssetLinkFamily, shared with write coercion.
 
-    /// <summary>True if <paramref name="t"/> is a VMAD script-property arm (ScriptObjectProperty, the scalar
-    /// ScriptInt/Float/Bool/StringProperty arms, and the *ListProperty arms) — recognised by the shared getter
-    /// interface, so every arm matches by construction with no per-arm list, on the overlay getter or the
-    /// mutable type alike. The depth walker opens such a property's direct value members one bounded level past
-    /// the depth floor (1.3.1 item 2 — read parity with the write surface). One of TWO type-targeted exceptions
-    /// to the depth gate (the other is <see cref="IsConditionData"/>); every other substruct stops at the floor.</summary>
-    /// <param name="t">The candidate runtime/declared getter type.</param>
-    /// <returns>True for every VMAD script-property arm.</returns>
+    /// <summary>True if <paramref name="t"/> is a VMAD script-property arm, whose direct value members the depth
+    /// walker opens one bounded level past the floor — one of TWO exceptions to the depth gate.</summary>
     static bool IsScriptProperty(Type t) => typeof(IScriptPropertyGetter).IsAssignableFrom(t);
 
-    /// <summary>True if <paramref name="t"/> is a polymorphic CONDITION-DATA arm (GetActorValueConditionData,
-    /// GetFactionRankConditionData — every <c>ConditionData</c> subtype) — recognised by the shared
-    /// <c>IConditionDataGetter</c> interface, so every arm matches by construction with no per-arm list, on the
-    /// overlay getter or the mutable type alike. Like <see cref="IsScriptProperty"/> the depth walker opens such an
-    /// arm's parameter fields one bounded level past the depth floor so a <c>Conditions</c>-list dump reaches the
-    /// arm's params (Faction/Global/Reference/RunOnType…) without an extra depth level or a per-row <c>Data</c> path
-    /// (#258 — the params surfaced ONLY via a direct arm path before). An arm's direct members are leaves/links, so
-    /// this opens exactly one level and never unbounded-descends; every non-arm substruct still stops at the floor.</summary>
-    /// <param name="t">The candidate runtime/declared getter type.</param>
-    /// <returns>True for every polymorphic condition-data arm.</returns>
+    /// <summary>True if <paramref name="t"/> is a polymorphic CONDITION-DATA arm — the other depth-gate exception.</summary>
     static bool IsConditionData(Type t) => typeof(IConditionDataGetter).IsAssignableFrom(t);
 
-    /// <summary>Copies a Noggog byte slice to an owned array using its direct API or a reflected length/indexer
-    /// fallback. Throws when neither representation is available because returning partial bytes would corrupt the
-    /// round-trip token.</summary>
-    /// <param name="slice">A value already accepted by <see cref="IsByteMemorySlice"/>.</param>
-    /// <returns>An owned byte array containing the complete slice.</returns>
     static byte[] MemorySliceBytes(object slice)
     {
         // Noggog slices expose ToArray() (and a Length + indexer fallback). Reflection-robust either way.
@@ -1176,46 +1257,56 @@ public static class ReadEngine
         throw new InvalidOperationException($"Cannot extract bytes from MemorySlice {slice.GetType().Name}.");
     }
 
-    /// <summary>A short, non-round-trippable description of a container leaf (substruct / list / dict /
-    /// arm) for the read display. Its sub-leaves are the round-trippable surface. A collection renders as a
-    /// clean <c>[list: N item(s)]</c> / <c>[dict: N pair(s)]</c> — the Mutagen overlay class name
-    /// (<c>BinaryOverlayListByStartIndex`1</c>) is container plumbing, NOT the element type, so it is pure noise
-    /// to the reader and is dropped (HCBR-2026-07-12). The <c>item(s)</c>/<c>pair(s)</c> marker is LOAD-BEARING —
-    /// <c>FieldsDiff</c> splits numeric-keyed dicts (Package.Data) out of positional-list comparison on the
-    /// exact <c>" pair(s)]"</c> substring (PR #28 review) — so it is kept verbatim. A substruct keeps its
-    /// <c>[TypeName]</c> (e.g. <c>[BodyTemplate]</c>): there the type name IS informative.</summary>
-    /// <param name="val">A non-null container or substructure.</param>
-    /// <param name="isDict">Whether an enumerable is logically key/value rather than positional.</param>
-    /// <returns>The load-bearing display summary.</returns>
+    /// <summary>How many elements a collection holds, WITHOUT building any of them; the accessor is cached.</summary>
+    internal static int CountOf(System.Collections.IEnumerable en)
+    {
+        if (_countAccessors.GetOrAdd(en.GetType(), CountAccessor) is { } count) return count(en);
+        int n = 0;
+        foreach (var _ in en) n++;
+        return n;
+    }
+
+    static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, Func<object, int>?> _countAccessors = new();
+
+    /// <summary>The Count property of a collection type, or null when it carries none.</summary>
+    static Func<object, int>? CountAccessor(Type t)
+    {
+        if (typeof(System.Collections.ICollection).IsAssignableFrom(t))
+            return o => ((System.Collections.ICollection)o).Count;
+        foreach (var iface in t.GetInterfaces())
+        {
+            if (!iface.IsGenericType) continue;
+            var def = iface.GetGenericTypeDefinition();
+            if (def != typeof(IReadOnlyCollection<>) && def != typeof(ICollection<>)) continue;
+            if (iface.GetProperty("Count")?.GetGetMethod() is { } getter)
+                return o => (int)getter.Invoke(o, null)!;
+        }
+        return null;
+    }
+
+    /// <summary>A short, non-round-trippable description of a container leaf.</summary>
     static string SummariseContainer(object val, bool isDict = false) => SummariseContainer(val, isDict, out _);
 
-    /// <summary>Overload that also yields the element <paramref name="count"/>: a number for a list/dict (0 = empty),
-    /// null for a substruct (no element count — present by being non-null). The presence predicate reads this to
-    /// tell a carried list from an empty one; every display caller keeps the count-free overload above. One
-    /// enumeration, one format source (the <c>item(s)</c>/<c>pair(s)</c> marker stays load-bearing for FieldsDiff).</summary>
-    /// <param name="val">A non-null container or substructure.</param>
-    /// <param name="isDict">Whether an enumerable is logically key/value rather than positional.</param>
-    /// <param name="count">Receives collection size, or null for a non-enumerable substructure.</param>
-    /// <returns>The same load-bearing summary as the count-free overload.</returns>
+    /// <summary>Overload that also yields the element <paramref name="count"/>: a number for a list/dict, null for a substruct.</summary>
     static string SummariseContainer(object val, bool isDict, out int? count)
     {
         count = null;
         if (val is System.Collections.IEnumerable en and not string)
         {
-            int n = 0;
-            foreach (var _ in en) n++;
+            int n = CountOf(en);
             count = n;
             return $"[{(isDict ? "dict" : "list")}: {n} {(isDict ? "pair(s)" : "item(s)")}]";
         }
-        return $"[{RecordNaming.StripGetterInterface(val.GetType().Name)}]";
+        // StripOverlay too, matching ElementSummary: an overlay loads WeaponBasicStatsBinaryOverlay for WeaponBasicStats.
+        return $"[{RecordNaming.StripGetterInterface(RecordNaming.StripOverlay(val.GetType().Name))}]";
     }
 
-    /// <summary>The modeled field names for the whole-record dump. Prefer the CORPUS — the authoritative
-    /// by-construction modeled-field set (exactly what the read-proof drives, infra-free) — and fall back
-    /// to the record's getter interfaces (Loqui-namespace filtered) only when the corpus isn't built.</summary>
-    /// <param name="typeName">Normalized corpus record-type key.</param>
-    /// <param name="recordRuntimeType">Concrete overlay/mutable type used by the reflection fallback.</param>
-    /// <returns>Modeled top-level field names in corpus or stable reflected order.</returns>
+    /// <summary>The modeled field names of one record, for a caller walking it field by field.</summary>
+    public static IEnumerable<string> ModeledFieldsOf(IMajorRecordGetter record) =>
+        ModeledFieldNames(RecordNaming.StripGetterInterface(WriteEngine.PrimaryGetter(record.GetType())?.Name ?? "I?Getter"),
+                          record.GetType());
+
+    /// <summary>The modeled field names for the whole-record dump — the CORPUS, falling back to reflection.</summary>
     static IEnumerable<string> ModeledFieldNames(string typeName, Type recordRuntimeType)
     {
         Corpus? corpus = null;
@@ -1226,8 +1317,7 @@ public static class ReadEngine
             yield break;
         }
 
-        // Fallback (no corpus): the record's getter interfaces, with the Loqui infrastructure filter
-        // (drops plumbing like Registration / BinaryWriteTranslator / Type declared on Loqui base types).
+        // Fallback (no corpus): the record's getter interfaces, Loqui-infrastructure filtered.
         var seen = new HashSet<string>(StringComparer.Ordinal);
         var primary = WriteEngine.PrimaryGetter(recordRuntimeType);
         if (primary is null) yield break;

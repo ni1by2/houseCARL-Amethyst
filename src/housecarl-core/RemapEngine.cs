@@ -7,60 +7,31 @@ using Mutagen.Bethesda.Skyrim;
 
 namespace HousecarlCore;
 
-/// <summary>
-/// Supplies the identity and reference transformations used to compact, merge, and repoint plugins.
-///
-/// <para>
-/// Mutagen's <c>RemapLinks</c> changes outgoing references but does not change a
-/// record's own <c>FormKey</c>. Directly setting that identity
-/// also leaves Mutagen's group indexes stale. Renumbering therefore duplicates each
-/// record under its new key into a fresh mod and then remaps the copied records' links.
-/// </para>
-///
-/// <para>
-/// Reference discovery and repointing work for every record type because they use
-/// <see cref="IFormLinkContainerGetter"/>. <see cref="RenumberRecordsInto"/> accepts
-/// flat top-level records only; <see cref="RenumberModInto"/> is the whole-mod path
-/// that preserves cells, placed records, dialogue responses, and other nesting.
-/// Unsupported structures produce an explicit failure instead of a partial plugin.
-/// </para>
-///
-/// <para>
-/// The engine keeps at most one mutable plugin open at a time. Master overlays are
-/// short-lived and disposed after serialization, so the active load order is not
-/// retained as a graph of mutable objects.
-/// </para>
-/// </summary>
+/// <summary>The shared foundation under compact and merge, the MCP tools being thin policy layers over it; contracts in docs/architecture/write-path.md.</summary>
 public static class RemapEngine
 {
-    /// <summary>
-    /// Smallest object ID that Mutagen permits in a light plugin.
-    /// </summary>
-    public const uint EslFloor = FormIdRange.EslWindowFloor;
-
-    /// <summary>
-    /// Largest object ID that can be encoded in a light plugin.
-    /// </summary>
+    /// <summary>The light-master object-ID window as Mutagen enforces it: 0x800–0xFFF INCLUSIVE, 2048 IDs.</summary>
+    public const uint EslFloor = FormIdRange.EslWindowFloor;      // 0x800 — the single home is FormIdRange (shared with the write-allocation floor)
     public const uint EslCeiling = FormIdRange.EslWindowCeiling;  // 0xFFF
 
-    // Discover dependencies before changing record identities.
+    // ---- 1. IDENTIFY-PASS — the per-operation reverse-walk ----
 
-    /// <summary>One external reference into the transform set: a record in a plugin OUTSIDE the set whose outgoing link
-    /// points at a FormKey being remapped. After the transform that link resolves wrong / dangles unless the referencer
-    /// is repointed too (<see cref="RepointInPlace"/>).</summary>
+    /// <summary>One external reference: a record outside the set whose outgoing link points at a FormKey being remapped.</summary>
     public sealed record ExternalRef(string Plugin, FormKey Source, string SourceType, FormKey Target);
 
-    /// <summary>One external OVERRIDE of a record being remapped: a record in a plugin OUTSIDE the set whose OWN FormKey
-    /// is in the remap set — it OVERRIDES a record about to be renumbered (gap #2). After the renumber that override points
-    /// at a base FormID that no longer exists → orphaned override + missing master. Unlike <see cref="ExternalRef"/> it
-    /// CANNOT be auto-repointed: fixing it means changing the override's OWN identity, not rewriting an outgoing link
-    /// (<see cref="RepointInPlace"/>/RemapLinks only do links), so it is surfaced as a WARN, never routed through the
-    /// repoint path because that would report a false success. <paramref name="Record"/> is the overridden FormKey.</summary>
+    /// <summary>One external OVERRIDE: a record outside the set whose OWN FormKey is in the remap set, so it is a WARN.</summary>
     public sealed record ExternalOverride(string Plugin, FormKey Record, string RecordType);
 
-    /// <summary>The identify-pass result: every external reference found, the DISTINCT referencing plugins (load order,
-    /// the opt-in-rewrite set), the external OVERRIDERS (gap #2 — detect + warn, NOT repointable), how many plugins were
-    /// scanned, and fault-isolation accounting for records whose link walk failed.</summary>
+    /// <summary>One plugin outside the set DECLARING a plugin in it as a master while referencing none of its records.</summary>
+    public sealed record MasterDeclarer(string Plugin, IReadOnlyList<string> Declared);
+
+    /// <summary>Why the identify pass could not read a plugin through — two causes with two different remedies.</summary>
+    public enum UnscannableCause { Unopenable, EnumerationFault }
+
+    /// <summary>One plugin the identify pass could not read through: its name, its cause, and the reason, recorded unconditionally.</summary>
+    public sealed record UnscannablePlugin(string Plugin, UnscannableCause Cause, string Reason);
+
+    /// <summary>The identify-pass result: the references, the referencing and overriding plugins, how many were scanned THROUGH, the fault accounting, the declarers.</summary>
     public sealed record IdentifyResult(
         IReadOnlyList<ExternalRef> Refs,
         IReadOnlyList<string> ExternalPlugins,
@@ -68,76 +39,85 @@ public static class RemapEngine
         int UnscannableRecords,
         IReadOnlyList<string> UnscannableSamples,
         IReadOnlyList<ExternalOverride> Overrides,
-        IReadOnlyList<string> ExternalOverriders)
+        IReadOnlyList<string> ExternalOverriders,
+        IReadOnlyList<UnscannablePlugin>? UnscannablePlugins = null,
+        IReadOnlyList<MasterDeclarer>? MasterDeclarers = null)
     {
-        /// <summary>True when at least one plugin OUTSIDE the transform set references a remapped FormKey — the
-        /// signal that the default new-plugin path must refuse unless the user opts into rewriting them.</summary>
+        /// <summary>True when at least one plugin OUTSIDE the transform set references a remapped FormKey.</summary>
         public bool HasExternalReferencers => ExternalPlugins.Count > 0;
 
-        /// <summary>True when at least one plugin OUTSIDE the transform set OVERRIDES a remapped record (gap #2). Unlike
-        /// <see cref="HasExternalReferencers"/> this does NOT gate the operation — an override can't be auto-fixed, so the
-        /// posture is warn-and-proceed (xEdit parity), never refuse.</summary>
+    /// <summary>True when at least one plugin OUTSIDE the transform set OVERRIDES a remapped record; it gates nothing.</summary>
         public bool HasExternalOverriders => ExternalOverriders.Count > 0;
     }
 
-    /// <summary>
-    /// Walk the whole active order and find which plugins OUTSIDE <paramref name="transformSet"/> reference any FormKey
-    /// in <paramref name="targets"/> (the keys about to be remapped). The method performs one whole-order walk for each
-    /// operation instead of retaining a reverse-reference index.
-    ///
-    /// The exact inverse of <see cref="ErrorCheck"/>'s loop: there, a link is a finding if it does NOT resolve; here, a
-    /// link is a finding if its target is in the remap set. A record Mutagen cannot parse is counted and sampled rather
-    /// than hidden or allowed to abort the entire scan. One <see cref="LoadOrderResolver.Capture"/> pins the view while
-    /// the resolver streams one plugin at a time.
-    /// </summary>
+    /// <summary>Walk the active order for plugins outside <paramref name="transformSet"/> referencing a <paramref name="targets"/> key, under one capture.</summary>
+    /// <param name="readDeclaredMasters">Also read each candidate's HEADER and report the declarer-only dependents.</param>
     public static IdentifyResult IdentifyExternalReferencers(
-        LoadOrderResolver resolver, IReadOnlySet<FormKey> targets, IReadOnlySet<string> transformSet)
+        LoadOrderResolver resolver, IReadOnlySet<FormKey> targets, IReadOnlySet<string> transformSet,
+        bool readDeclaredMasters = false)
     {
+        System.Threading.Interlocked.Increment(ref resolver.Counters.IdentifyPasses);        // the pass's own counter, so a test can say a refusal skipped it
         var view = resolver.Capture();
         var refs = new List<ExternalRef>();
         var externalPlugins = new List<string>();        // load-order order, distinct
-        var overrides = new List<ExternalOverride>();     // gap #2: external plugins that OVERRIDE a remapped record
+        var overrides = new List<ExternalOverride>();     // external plugins that OVERRIDE a remapped record
         var externalOverriders = new List<string>();      // distinct overriding plugins, load-order order
         int scanned = 0, unscannable = 0;
         var unscannableSamples = new List<string>();
-        // A malformed load order can repeat a filename. Scan each logical plugin
-        // once so the public result remains distinct.
+        var unscannablePlugins = new List<UnscannablePlugin>();   // plugins whose scan faulted — NOT counted as scanned
+        var declarers = new List<MasterDeclarer>();               // plugins declaring a transform-set plugin as a master
+        // PluginNames can list a filename twice in a degenerate order, and the listing is by contract DISTINCT.
         var scannedNames = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
 
         foreach (var plugin in resolver.PluginNames)
         {
             if (transformSet.Contains(plugin)) continue;                 // inside the set → its refs are INTERNAL (RemapLinks handles them)
             if (view.ExcludedPlugins.ContainsKey(plugin)) continue;      // unparseable at build — already surfaced by the resolver
-            if (!scannedNames.Add(plugin)) continue;
-            scanned++;
+            if (!scannedNames.Add(plugin)) continue;                     // a duplicate name in the order — scan and list it once, never double-count
             bool pluginListed = false;
             bool pluginListedOverride = false;
+            // The header read faulted: the record walk still runs, but the plugin is named once and never scanned.
+            bool headerFaulted = false;
+
+            // The HEADER read, before the records, in its own try: the declarer-only dependent no link walk sees.
+            if (readDeclaredMasters)
+            {
+                List<string> declares;
+                try { declares = view.DeclaredMasters(plugin).Where(transformSet.Contains).ToList(); }
+                catch (PluginUnreadableException ex)
+                {
+                    // The file would not open, so the record scan would fail the same way: name it and skip.
+                    unscannable++;
+                    var inner = ex.InnerException ?? ex;
+                    unscannablePlugins.Add(new UnscannablePlugin(plugin, UnscannableCause.Unopenable, $"{inner.GetType().Name}: {inner.Message}"));
+                    continue;
+                }
+                catch (Exception ex)
+                {
+                    // It opened and the master table would not parse, so the walk FALLS THROUGH to the records.
+                    unscannable++;
+                    unscannablePlugins.Add(new UnscannablePlugin(plugin, UnscannableCause.EnumerationFault,
+                                                                 $"master table unreadable: {ex.GetType().Name}: {ex.Message}"));
+                    headerFaulted = true;
+                    declares = new List<string>();
+                }
+                if (declares.Count > 0) declarers.Add(new MasterDeclarer(plugin, declares));
+            }
 
             try
             {
                 foreach (var (fk, _, body, _) in view.RecordsIn(new[] { plugin }, null))
                 {
-                    // PER-RECORD fault isolation (twin of cross_plugin_query / ErrorCheck): EnumerateFormLinks lazily
-                    // parses subrecord content, so isolate failure to the current record.
+                    // PER-RECORD fault isolation: one record Mutagen cannot parse is counted and sampled.
                     try
                     {
-                        // OVERRIDER (gap #2): this external plugin's record shares a FormKey being remapped → it OVERRIDES
-                        // a record about to be renumbered. Detected by IDENTITY (fk), independent of outgoing links, so it
-                        // is checked BEFORE the FormLinkContainer guard (an override with no outgoing ref into the set is
-                        // still a dependent the old link-only walk missed). It CANNOT be auto-repointed (identity change,
-                        // not a link rewrite) → collect it as a warning.
+                        // OVERRIDER, by IDENTITY and so before the link test: collected for a warning, never repointed.
                         if (targets.Contains(fk))
                         {
                             overrides.Add(new ExternalOverride(plugin, fk, RecordNaming.StripOverlay(body.GetType().Name)));
                             if (!pluginListedOverride) { externalOverriders.Add(plugin); pluginListedOverride = true; }
                         }
-                        // REFERENCER: an outgoing link whose target is being remapped (after the transform it dangles).
-                        // A DELETED record links to nothing (#279 — the shared rule, see DeletedRecordRule): its
-                        // content is not live, so it is not a referencer to repoint, and an engine-authored deleted
-                        // body can throw on the walk below and land in the unscannable bucket as an untyped skip (Q3).
-                        // Deliberately AFTER the overrider test above: that one is identity-only (the record's own
-                        // FormKey, read from the header), and a deleted override of a record about to be renumbered is
-                        // still a dependent worth warning about — this guard scopes to the link walk, nothing else.
+                        // REFERENCER: an outgoing link into the remap set; a DELETED record links to nothing.
                         if (DeletedRecordRule.HasNoLiveBody(body)) continue;
                         if (body is not IFormLinkContainerGetter flc) continue;
                         foreach (var link in flc.EnumerateFormLinks())
@@ -151,45 +131,50 @@ public static class RemapEngine
                     catch (Exception ex)
                     {
                         unscannable++;
-                        if (unscannableSamples.Count < 5) unscannableSamples.Add($"{plugin} {fk} — {ex.GetType().Name}: {ex.Message}");
+                        if (unscannableSamples.Count < 5) unscannableSamples.Add($"{plugin} {FormIdToken.Of(fk)} — {ex.GetType().Name}: {ex.Message}");
                     }
                 }
+                if (!headerFaulted) scanned++;                           // counted only once the whole plugin has been read through, header included
             }
-            // The plugin enumeration itself faulting (a record that throws on top-level enumeration rather than on a
-            // link walk) is counted per plugin and the pass continues.
+            // The file could not be OPENED at all, and the reason is the INNER exception.
+            catch (PluginUnreadableException ex)
+            {
+                // A plugin whose header already faulted is named once, with the first fault's reason.
+                if (headerFaulted) continue;
+                unscannable++;
+                var inner = ex.InnerException ?? ex;
+                unscannablePlugins.Add(new UnscannablePlugin(plugin, UnscannableCause.Unopenable, $"{inner.GetType().Name}: {inner.Message}"));
+            }
+            // The plugin opened and a record threw on TOP-LEVEL enumeration: counted per-plugin, never scanned.
             catch (Exception ex)
             {
+                if (headerFaulted) continue;                             // already named, for the fault that came first
                 unscannable++;
-                if (unscannableSamples.Count < 5) unscannableSamples.Add($"{plugin} — record enumeration aborted: {ex.GetType().Name}: {ex.Message}");
+                unscannablePlugins.Add(new UnscannablePlugin(plugin, UnscannableCause.EnumerationFault,
+                                                             $"record enumeration aborted: {ex.GetType().Name}: {ex.Message}"));
             }
         }
 
-        return new IdentifyResult(refs, externalPlugins, scanned, unscannable, unscannableSamples, overrides, externalOverriders);
+        // DECLARER-ONLY: the plugins the record walk did not already find, and not one whose walk FAULTED.
+        var alreadyFound = new HashSet<string>(externalPlugins, StringComparer.OrdinalIgnoreCase);
+        alreadyFound.UnionWith(externalOverriders);
+        alreadyFound.UnionWith(unscannablePlugins.Select(u => u.Plugin));
+        var declarerOnly = declarers.Where(d => !alreadyFound.Contains(d.Plugin)).ToList();
+
+        return new IdentifyResult(refs, externalPlugins, scanned, unscannable, unscannableSamples, overrides, externalOverriders,
+                                  unscannablePlugins, declarerOnly);
     }
 
-    // Allocate collision-free identities before copying any records.
+    // ---- 2. BUILD-REMAP-DICT — collision-free new-FormID allocation ----
 
-    /// <summary>
-    /// Describes an old-to-new FormKey allocation, or an error when the requested
-    /// keys cannot fit in the target range.
-    /// </summary>
+    /// <summary>A planned remap: the old→new FormKey map, or a named refusal with no map.</summary>
     public sealed record RemapPlan(IReadOnlyDictionary<FormKey, FormKey> Dict, string? Error)
     {
-        /// <summary>Gets whether the plan was built without an error.</summary>
         public bool Success => Error is null;
-
-        /// <summary>Creates a failed plan with no usable mappings.</summary>
         public static RemapPlan Fail(string error) => new(new Dictionary<FormKey, FormKey>(), error);
     }
 
-    /// <summary>
-    /// Assign each FormKey in <paramref name="sourceKeys"/> a NEW FormKey under <paramref name="targetModKey"/>, object
-    /// IDs running sequentially from <paramref name="floor"/> through <paramref name="ceiling"/> INCLUSIVE, in the
-    /// given order. Collision-free by construction (sequential, distinct). Returns an error if the source count
-    /// exceeds the window capacity — for an ESL compaction that is the real "> 2048 records can't be light-compacted"
-    /// limit (floor/ceiling = <see cref="EslFloor"/>/<see cref="EslCeiling"/>); it is NAMED, never a truncation.
-    /// Duplicate source keys collapse to one mapping (deterministic — first occurrence wins the next ID).
-    /// </summary>
+    /// <summary>Assign each of <paramref name="sourceKeys"/> a NEW FormKey under <paramref name="targetModKey"/>, ids running sequentially from <paramref name="floor"/> through <paramref name="ceiling"/> INCLUSIVE.</summary>
     public static RemapPlan BuildSequentialRemap(
         IReadOnlyList<FormKey> sourceKeys, ModKey targetModKey, uint floor, uint ceiling)
     {
@@ -211,28 +196,16 @@ public static class RemapEngine
         return new RemapPlan(dict, null);
     }
 
-    // Copy records under their allocated identities into a fresh mod.
+    // ---- 3a. RENUMBER INTO A FRESH MOD ----
 
-    /// <summary>The result of building a renumbered mod: how many source records were copied in and how many of those
-    /// were actually renumbered, or an error with no partial result that a caller may ship.</summary>
+    /// <summary>The result of building a renumbered mod: records copied and renumbered, or a named refusal.</summary>
     public sealed record RenumberResult(bool Success, string? Error, int RecordsCopied, int RecordsRenumbered)
     {
-        /// <summary>Creates a failed result with zero committed record counts.</summary>
         public static RenumberResult Fail(string error) => new(false, error, 0, 0);
     }
 
-    /// <summary>
-    /// Copy <paramref name="sources"/> into the (typically fresh) mod <paramref name="target"/>, each under its new
-    /// FormKey from <paramref name="dict"/> (a source NOT in the dict — e.g. an override the compaction leaves at its
-    /// master's FormID — is copied at its OWN key), then <c>RemapLinks(dict)</c> over the whole target so every INTERNAL
-    /// reference among the copied records resolves to the new keys. This is the shared core of compact (one plugin's
-    /// records → P′) and merge (several donors' records → M).
-    ///
-    /// Uses the PUBLIC <c>record.Duplicate(newKey)</c> (Mutagen's deep-copy under a new identity) — NOT the non-public
-    /// FormKey setter (that corrupts the group cache; see the class remark). Placement is via the flat top-level groups;
-    /// a record that has no flat group (a nested-only family such as Cell, Placed*, INFO, navmesh, or landscape) returns
-    /// an error because skipping it would produce an incomplete plugin.
-    /// </summary>
+    /// <summary>Copy <paramref name="sources"/> into the (typically fresh) mod <paramref name="target"/> under their new
+    /// keys — a source not in <paramref name="dict"/> at its OWN key — then <c>RemapLinks</c>; flat groups only.</summary>
     public static RenumberResult RenumberRecordsInto(
         SkyrimMod target, IEnumerable<IMajorRecordGetter> sources, IReadOnlyDictionary<FormKey, FormKey> dict)
     {
@@ -247,13 +220,13 @@ public static class RemapEngine
             catch (Exception ex)
             {
                 return RenumberResult.Fail(
-                    $"could not duplicate {RecordNaming.StripOverlay(rec.GetType().Name)} {rec.FormKey} under {newKey} " +
+                    $"could not duplicate {RecordNaming.StripOverlay(rec.GetType().Name)} {FormIdToken.Of(rec.FormKey)} under {newKey} " +
                     $"({WriteEngine.Describe(ex)}) — the renumber is abandoned with nothing shippable (Q3).");
             }
 
             if (!TryAddToFlatGroup(target, dup))
                 return RenumberResult.Fail(
-                    $"{RecordNaming.StripOverlay(rec.GetType().Name)} {rec.FormKey} lives only in a NESTED group (Cell / placed " +
+                    $"{RecordNaming.StripOverlay(rec.GetType().Name)} {FormIdToken.Of(rec.FormKey)} lives only in a NESTED group (Cell / placed " +
                     "ref / INFO / navmesh / landscape), which has no flat top-level group to place the duplicate into. The nested " +
                     "duplicate-into placement is a later wave — refusing rather than silently dropping the record (Q3).");
 
@@ -261,17 +234,12 @@ public static class RemapEngine
             if (isRenumber) renumbered++;
         }
 
-        // Repoint every internal reference among the copied records to the new keys. Flat AND nested links are remapped
-        // (RemapLinks walks all outgoing links); the nested-group limit above is about PLACING records, not repointing.
+        // Repoint every internal reference, flat AND nested; the nested limit above is about PLACING, not repointing.
         target.RemapLinks(dict);
         return new RenumberResult(true, null, copied, renumbered);
     }
 
-    /// <summary>Place an already-constructed record into the target mod's matching flat top-level group via the group's
-    /// own <c>Add</c>, reusing the single <see cref="WriteEngine.EnumerateFlatGroups"/> enumeration the create/override
-    /// surface derives from (no drift). An abstract group (e.g. <c>SkyrimGroup&lt;Global&gt;</c>) matches its concrete arm
-    /// (<c>GlobalFloat</c>) because <c>tMajor.IsInstanceOfType(dup)</c> holds and <c>Add(Global)</c> accepts the subtype.
-    /// Returns false when no flat group fits (a nested-only record) — the caller fails loud.</summary>
+    /// <summary>Place a record into the target's matching flat top-level group; false when no flat group fits.</summary>
     internal static bool TryAddToFlatGroup(SkyrimMod target, IMajorRecord dup)
     {
         foreach (var (prop, tMajor, _) in WriteEngine.EnumerateFlatGroups(target.GetType()))
@@ -292,29 +260,13 @@ public static class RemapEngine
         return false;
     }
 
-    // Whole-mod renumbering walks the source structure rather than a flat record
-    // stream so each child remains attached to its parent. Duplicate(newKey)
-    // copies nested children under their old identities; the recursive pass below
-    // replaces those children with duplicates under their new identities.
+    // ---- 3a-NESTED. WHOLE-MOD STRUCTURAL RENUMBER — walks the source mod's STRUCTURE, so parentage survives ----
 
-    /// <summary>Per-call accounting for the structural renumber: total records placed (flat + nested) and how many of
-    /// those were actually renumbered (their key was in the dict — i.e. originating, vs an override copied at its own key).</summary>
+    /// <summary>Per-call accounting for the structural renumber: records placed, and how many were renumbered.</summary>
     sealed class RenumberStats { public int Copied; public int Renumbered; }
 
-    /// <summary>
-    /// Copy EVERY record of <paramref name="source"/> into the (fresh) mod <paramref name="target"/> under its remapped
-    /// FormKey from <paramref name="dict"/> (a record NOT in the dict — an override the compaction leaves at its master's
-    /// FormID — is copied at its OWN key), reconstructing the FULL nesting: flat top-level records + their nested children
-    /// (worldspace→exterior cells→placed refs, dialog topic→INFOs) AND the interior-cell block tree. Then
-    /// <c>RemapLinks(dict)</c> over the whole target so every INTERNAL reference resolves to the new keys. This is the
-    /// compact tool's core — the structural superset of the flat <see cref="RenumberRecordsInto"/> (which has no parentage
-    /// and so refuses nested-only records); both share the <c>Duplicate(newKey)</c> mechanism and <see cref="TryAddToFlatGroup"/>.
-    ///
-    /// Handles every record type: flat groups via <see cref="WriteEngine.EnumerateFlatGroups"/>, interior
-    /// cells via the block tree, and any nested child via the generic <see cref="RenumberDescendants"/> walk (no hand-coded
-    /// per-family list). A flat record whose group can't be resolved on the target (an engine inconsistency that should be
-    /// impossible by construction) is REFUSED LOUD with nothing half-shippable, never a silent drop.
-    /// </summary>
+    /// <summary>Copy EVERY record of <paramref name="source"/> into the (fresh) mod <paramref name="target"/> under its
+    /// remapped key, rebuilding the FULL nesting and the interior-cell block tree, then <c>RemapLinks</c>.</summary>
     public static RenumberResult RenumberModInto(
         SkyrimMod target, ISkyrimModGetter source, IReadOnlyDictionary<FormKey, FormKey> dict)
     {
@@ -332,14 +284,12 @@ public static class RemapEngine
                     var dup = RenumberOne(rec, dict, stats);
                     if (!TryAddToFlatGroup(target, dup))
                         return RenumberResult.Fail(
-                            $"{RecordNaming.StripOverlay(rec.GetType().Name)} {rec.FormKey} is a flat top-level record but no matching " +
+                            $"{RecordNaming.StripOverlay(rec.GetType().Name)} {FormIdToken.Of(rec.FormKey)} is a flat top-level record but no matching " +
                             $"group was found on the target mod to place its renumbered copy (engine inconsistency, Q3) — the renumber is abandoned with nothing shippable.");
                 }
             }
 
-            // 2. INTERIOR cells (mod.Cells block tree — the nested-only family that has no flat group). Each cell carries
-            //    its own placed refs / navmesh / landscape; re-file the renumbered cell by its NEW FormID digits (the
-            //    vanilla interior block convention, mirroring WriteEngine.AddInteriorCell).
+            // 2. INTERIOR cells — the nested-only family with no flat group, re-filed by their NEW FormID digits.
             if (source.Cells is { } cellsGroup)
                 foreach (var block in cellsGroup.Records)
                     foreach (var sub in block.SubBlocks)
@@ -349,9 +299,7 @@ public static class RemapEngine
                             FileInteriorCellByNewId(target, renCell);
                         }
 
-            // 3. Repoint every internal reference among the copied records (flat AND nested links) to the new keys.
-            // Keep RemapLinks inside the same error boundary as record placement so
-            // direct callers receive a structured result instead of an exception.
+            // 3. Repoint every internal reference, inside the try so a throw is the same structured refusal.
             target.RemapLinks(dict);
         }
         catch (Exception ex)
@@ -363,12 +311,7 @@ public static class RemapEngine
         return new RenumberResult(true, null, stats.Copied, stats.Renumbered);
     }
 
-    /// <summary>Renumber ONE record: <c>Duplicate(newKey)</c> it under its new-or-same FormKey (Mutagen's deep-copy under
-    /// a new identity — its nested children come along at their OLD keys), then recursively renumber those descendants in
-    /// place. Counted once per record (itself, before its descendants) into <paramref name="stats"/>.
-    /// <paramref name="reg"/> (merge only, null for compact) registers every placed record —
-    /// itself AND each descendant — under its NEW key, so the multi-donor walk can detect cross-donor collisions and
-    /// graft a losing donor's un-relisted children into the winner's copy (<see cref="MergeModsInto"/>).</summary>
+    /// <summary>Renumber ONE record, then its descendants in place; <paramref name="reg"/> (merge only) registers each.</summary>
     static IMajorRecord RenumberOne(IMajorRecordGetter rec, IReadOnlyDictionary<FormKey, FormKey> dict, RenumberStats stats,
         MergePlacement? reg = null)
     {
@@ -384,20 +327,8 @@ public static class RemapEngine
         return dup;
     }
 
-    /// <summary>Walk a container's child records and renumber each in place. A list/property element that IS a record
-    /// (<see cref="IMajorRecordGetter"/>) is REPLACED by its renumbered <see cref="RenumberOne"/>; one that merely CONTAINS
-    /// records (<see cref="IMajorRecordGetterEnumerable"/> but not a record itself — the FormKey-less block-tree structs
-    /// WorldspaceBlock/SubBlock, CellBlock/SubBlock) is recursed THROUGH. Everything else (scalars, FormLinks, value
-    /// structs) is skipped — <c>RemapLinks</c> repoints outgoing links separately. There is no hand-coded record-family
-    /// list; Mutagen's enumerable marker identifies containers.
-    ///
-    /// <para>Two load-bearing Mutagen assumptions (PR #122 review #5), both confirmed for the tested shapes by
-    /// remap-wave2-nested-mech and stable across the corpus by construction: (1) record-container list/property values are
-    /// REFERENCE types, so reflective <c>list[i] = …</c> / <c>prop.SetValue</c> writes the renumbered duplicate back into
-    /// the parent (never into a boxed struct copy); (2) the child collections implement the non-generic
-    /// <see cref="IList"/> (<c>ExtendedList&lt;T&gt;</c> does), so the <c>val is IList</c> gate reaches them. If Mutagen
-    /// ever broke either, the affected records would be SKIPPED (left at old keys) rather than fail loud — which is why the
-    /// guard pins every nesting shape on disk.</para></summary>
+    /// <summary>Walk a container's child records and renumber each in place: a record is REPLACED, a container of
+    /// records is recursed THROUGH, everything else skipped; the tests pin every nesting shape, a skip being silent.</summary>
     static void RenumberDescendants(object container, IReadOnlyDictionary<FormKey, FormKey> dict, RenumberStats stats,
         MergePlacement? reg = null)
     {
@@ -415,12 +346,7 @@ public static class RemapEngine
                     var el = list[i];
                     if (el is IMajorRecordGetter childRec)
                     {
-                        // Merge only (reg != null): a child whose mapped key is ALREADY placed in M — the same record
-                        // carried by two donors under DIFFERENT parents (a moved reference: donor B's cell holds an
-                        // override of donor A's placed ref) — must NOT be duplicated again at the same FormKey. The
-                        // already-placed copy is the load-order winner (winner-first walk); this stale deep-copied
-                        // child is removed from its parent and the conflict is reported, avoiding a silent second
-                        // record under one FormID — the engine/xEdit-invalid shape the review's C-1 finding named).
+                        // Merge only: a child already placed in M wins, so this stale copy is REMOVED and REPORTED.
                         var nk = dict.TryGetValue(childRec.FormKey, out var mapped) ? mapped : childRec.FormKey;
                         if (reg is not null && reg.IsPlaced(childRec, nk, out var placedChild))
                         {
@@ -452,10 +378,7 @@ public static class RemapEngine
         }
     }
 
-    /// <summary>File an already-renumbered INTERIOR cell into <paramref name="target"/>'s top-level Cells block tree by
-    /// its NEW FormID digits (block = id%10, subblock = (id/10)%10 — the vanilla interior convention, mirroring
-    /// <see cref="WriteEngine.AddInteriorCell"/>'s STEP-0-proven math). The renumber re-files by the new id, so a cell
-    /// moved into the ESL window lands in the block its new id selects.</summary>
+    /// <summary>File a renumbered INTERIOR cell into the target's Cells block tree by its NEW FormID digits.</summary>
     static void FileInteriorCellByNewId(SkyrimMod target, Cell cell)
     {
         uint id = cell.FormKey.ID;
@@ -468,48 +391,34 @@ public static class RemapEngine
         sub.Cells.Add(cell);
     }
 
-    // A merge gives every originating donor record the merged plugin's ModKey.
-    // The earliest donor claims an available object ID; later collisions receive
-    // unused IDs. Record conflicts resolve to the load-order winner, while nested
-    // children omitted by that winner are grafted from losing donors.
+    // ---- 3a-MERGE. MULTI-DONOR RENUMBER — build the merged mod. Every donor ORIGINATING record changes identity,
+    //  so the dict covers all of them and collision handling applies only to the OBJECT ID ----
 
-    /// <summary>Per-donor merge-remap accounting: how many originating object IDs the donor KEPT (same 6-hex id under
-    /// the merged ModKey) vs had to be RENUMBERED (the id was already claimed by an earlier-in-load-order donor, or sat
-    /// below the write floor).</summary>
+    /// <summary>Per-donor merge-remap accounting: how many originating object IDs the donor KEPT vs had RENUMBERED.</summary>
     public sealed record MergeDonorRemap(string Donor, int Kept, int Renumbered);
 
-    /// <summary>A planned multi-donor remap: the UNION old→new FormKey dict over every donor's originating records
-    /// (keys are donor-qualified FormKeys, so donors can never collide in the dict itself), per-donor kept/renumbered
-    /// accounting, or a window-overflow error with no map.</summary>
+    /// <summary>A planned multi-donor remap: the UNION old→new dict over every donor's originating records, the
+    /// per-donor accounting, or a named refusal with no map.</summary>
     public sealed record MergeRemapPlan(
         IReadOnlyDictionary<FormKey, FormKey> Dict, IReadOnlyList<MergeDonorRemap> Donors, string? Error)
     {
-        /// <summary>Gets whether the plan was built without an error.</summary>
         public bool Success => Error is null;
-
-        /// <summary>Creates a failed plan with no usable mappings or donor counts.</summary>
         public static MergeRemapPlan Fail(string error) =>
             new(new Dictionary<FormKey, FormKey>(), Array.Empty<MergeDonorRemap>(), error);
     }
 
-    /// <summary>
-    /// Build the merge remap: every donor originating FormKey → a FormKey under <paramref name="targetModKey"/>,
-    /// KEEPING the object ID wherever it is in-window and unclaimed (donors claim in LOAD ORDER, so the first donor
-    /// holding an id keeps it — zMerge's default) and allocating the next free id only for COLLISIONS (an id an
-    /// earlier donor claimed) and for ids below <paramref name="floor"/> (the write floor rejects them). REFUSES
-    /// Returns an error when the combined donors overflow the window; records are never truncated.
-    /// </summary>
+    /// <summary>Build the merge remap: every donor originating FormKey → one under <paramref name="targetModKey"/>,
+    /// KEEPING the object id wherever it is in-window and unclaimed, donors claiming in LOAD ORDER.</summary>
     public static MergeRemapPlan BuildMergeRemap(
         IReadOnlyList<(string Donor, IReadOnlyList<FormKey> Keys)> donorsByLoadOrder,
         ModKey targetModKey, uint floor, uint ceiling)
     {
         if (ceiling < floor) return MergeRemapPlan.Fail($"invalid remap window: ceiling 0x{ceiling:X} < floor 0x{floor:X}.");
 
-        // Pass 1 — keepable ids write straight into the dict, donors in load order (first claim wins); the rest queue
-        // as collisions. Per-donor kept/renumbered tallies here (renumbered = the donor's total − kept).
+        // Pass 1 — keepable ids write straight into the dict, donors in load order; the rest queue as collisions.
         var claimed = new HashSet<uint>();
         var collide = new List<FormKey>();
-        var seen = new HashSet<FormKey>();                                 // defensive intra-donor de-dupe (BuildSequentialRemap parity)
+        var seen = new HashSet<FormKey>();                                 // defensive intra-donor de-dupe, as BuildSequentialRemap does
         var dict = new Dictionary<FormKey, FormKey>();
         var perDonor = new List<MergeDonorRemap>(donorsByLoadOrder.Count);
         foreach (var (donor, keys) in donorsByLoadOrder)
@@ -531,8 +440,7 @@ public static class RemapEngine
                 $"cannot merge {seen.Count} originating records into the window 0x{floor:X}–0x{ceiling:X} ({capacity} IDs): " +
                 "the combined donors overflow it. Named, not truncated (Q3).");
 
-        // Pass 2 — each collision takes the next free id. The capacity precheck guarantees one exists for every
-        // collision, so the in-loop ceiling guard is a defensive invariant check, not a reachable refusal.
+        // Pass 2 — each collision takes the next free id; the in-loop ceiling guard is a defensive invariant.
         uint next = floor;
         foreach (var k in collide)
         {
@@ -547,47 +455,27 @@ public static class RemapEngine
         return new MergeRemapPlan(dict, perDonor, null);
     }
 
-    /// <summary>One cross-donor conflict the merge resolved: the same record (by pre-merge FormKey) carried by two
-    /// donors — the LOAD-ORDER WINNER's version is in the merged plugin, the loser's body is not (its un-relisted
-    /// nested children, if any, were grafted). Reported per losing donor (three donors on one record → two entries).</summary>
+    /// <summary>One cross-donor conflict the merge resolved to the LOAD-ORDER WINNER, reported per losing donor.</summary>
     public sealed record MergeConflict(FormKey Key, string RecordType, string WinnerDonor, string LoserDonor);
 
-    /// <summary>The result of the multi-donor renumber: record accounting + every cross-donor conflict resolved
-    /// (load-order winner), or an error with no partial result that a caller may ship.</summary>
+    /// <summary>The result of the multi-donor renumber: the accounting and every conflict resolved, or a named refusal.</summary>
     public sealed record MergeResult(
         bool Success, string? Error, int RecordsCopied, int RecordsRenumbered, IReadOnlyList<MergeConflict> Conflicts)
     {
-        /// <summary>Creates a failed result with no committed counts or conflicts.</summary>
         public static MergeResult Fail(string error) => new(false, error, 0, 0, Array.Empty<MergeConflict>());
     }
 
-    /// <summary>Merge-walk placement registry: every record placed in M so far, keyed by its NEW (post-remap) FormKey,
-    /// with the donor that placed it — the collision detector and graft target for later (earlier-in-load-order) donors.
-    /// Carries the conflict list too, so EVERY site that resolves a collision (the top-level walk, the graft helpers,
-    /// and the in-flight <see cref="RenumberDescendants"/> drop below) reports through one channel.</summary>
+    /// <summary>Merge-walk placement registry: every record placed in M so far by its NEW FormKey, with the donor
+    /// that placed it, and the conflict list, so every site that resolves a collision reports through one channel.</summary>
     sealed class MergePlacement
     {
-        /// <summary>Records placed so far, indexed by their post-remap key.</summary>
         public readonly Dictionary<FormKey, IMajorRecord> Objects = new();
-
-        /// <summary>The donor responsible for each placed key.</summary>
         public readonly Dictionary<FormKey, string> PlacedBy = new();
-
-        /// <summary>Conflicts resolved while walking donors and nested records.</summary>
         public readonly List<MergeConflict> Conflicts = new();
-
-        /// <summary>The donor currently being copied.</summary>
         public string CurrentDonor = "";
+        public void Register(FormKey key, IMajorRecord obj) { Objects[key] = obj; PlacedBy[key] = CurrentDonor; }
 
-        /// <summary>Records a newly placed object and its source donor.</summary>
-        public void Register(FormKey key, IMajorRecord obj)
-        {
-            Objects[key] = obj;
-            PlacedBy[key] = CurrentDonor;
-        }
-
-        /// <summary>True when the mapped key is already placed in M — records the cross-donor conflict (winner = the
-        /// donor that placed it; the walk runs winner-first) and hands back the placed object for a graft recurse.</summary>
+        /// <summary>True when the mapped key is already placed in M — records the conflict and hands back that object.</summary>
         public bool IsPlaced(IMajorRecordGetter rec, FormKey nk, out IMajorRecord placed)
         {
             if (Objects.TryGetValue(nk, out placed!))
@@ -599,16 +487,9 @@ public static class RemapEngine
         }
     }
 
-    /// <summary>
-    /// Copy EVERY record of every donor into the (fresh) mod <paramref name="target"/> under its remapped FormKey from
-    /// <paramref name="dict"/>, resolving cross-donor conflicts on the same FormKey to the LOAD-ORDER WINNER. Donors
-    /// walk in REVERSE load order so each record's WINNING version places first (via the same structural walk compact
-    /// uses — <see cref="RenumberOne"/> and the interior-cell block tree); an earlier donor's copy of an already-placed
-    /// record is a reported <see cref="MergeConflict"/>, and its NESTED CHILDREN missing from the winner's copy (a base
-    /// mod's INFOs a patch's DIAL override doesn't re-list; its placed refs under an overridden cell) are GRAFTED into
-    /// the winner's placed container. Then <c>RemapLinks(dict)</c> runs over the whole target. Any
-    /// engine fault abandons the merge with nothing shippable.
-    /// </summary>
+    /// <summary>Copy EVERY record of every donor into the (fresh) mod <paramref name="target"/> under its remapped
+    /// FormKey, resolving cross-donor conflicts to the LOAD-ORDER WINNER — donors walk in REVERSE load order so the
+    /// winner places first — grafting a loser's missing nested children in, then <c>RemapLinks(dict)</c>.</summary>
     public static MergeResult MergeModsInto(
         SkyrimMod target,
         IReadOnlyList<(string Name, ISkyrimModGetter Mod)> donorsByLoadOrder,
@@ -640,14 +521,13 @@ public static class RemapEngine
                             var dup = RenumberOne(rec, dict, stats, reg);
                             if (!TryAddToFlatGroup(target, dup))
                                 return MergeResult.Fail(
-                                    $"{RecordNaming.StripOverlay(rec.GetType().Name)} {rec.FormKey} (donor '{name}') is a flat top-level record but no " +
+                                    $"{RecordNaming.StripOverlay(rec.GetType().Name)} {FormIdToken.Of(rec.FormKey)} (donor '{name}') is a flat top-level record but no " +
                                     "matching group was found on the target mod to place its merged copy (engine inconsistency, Q3) — the merge is abandoned with nothing shippable.");
                         }
                     }
                 }
 
-                // 2. INTERIOR cells (the mod-level block tree) — placed cell-by-cell, so a losing donor's cell that the
-                //    winner doesn't carry still merges, and a conflicted cell grafts its missing placed refs.
+                // 2. INTERIOR cells, placed cell-by-cell, so a losing donor's own cell still merges.
                 if (src.Cells is { } cellsGroup)
                     foreach (var block in cellsGroup.Records)
                         foreach (var sub in block.SubBlocks)
@@ -666,9 +546,7 @@ public static class RemapEngine
                             }
             }
 
-            // 3. Repoint every internal reference among the merged records (flat AND nested links) to the new keys —
-            //    including every cross-donor reference (a donor-B link into donor-A resolves because A's originating
-            //    keys are all in the dictionary). A RemapLinks exception uses the same structured failure path.
+            // 3. Repoint every internal reference, cross-donor ones included, inside the try as above.
             target.RemapLinks(dict);
         }
         catch (Exception ex)
@@ -680,13 +558,9 @@ public static class RemapEngine
         return new MergeResult(true, null, stats.Copied, stats.Renumbered, reg.Conflicts);
     }
 
-    /// <summary>Graft a LOSING donor record's nested children into the WINNER's already-placed copy: walk the loser's
-    /// getter with the same discriminators as <see cref="RenumberDescendants"/> (records; the FormKey-less worldspace
-    /// block structs, paired by block NUMBER); a child whose remapped key is already placed recurses (its own children
-    /// may still be missing), an unplaced child is renumbered and APPENDED to the winner's same-named list — the xEdit
-    /// cell/topic merge semantic (the winner's receiving list is resolved ONCE per property, not per element). A
-    /// structural mismatch (no same-named settable list on the winner) THROWS — caught by <see cref="MergeModsInto"/>
-    /// into the all-or-nothing failure path, never a silent child drop.</summary>
+    /// <summary>Graft a LOSING donor record's nested children into the WINNER's already-placed copy, on the same
+    /// discriminators as <see cref="RenumberDescendants"/>: an already-placed child recurses, an unplaced one is
+    /// renumbered and APPENDED to the winner's same-named list, and a structural mismatch THROWS.</summary>
     static void GraftMissingDescendants(IMajorRecordGetter loser, IMajorRecord winner,
         IReadOnlyDictionary<FormKey, FormKey> dict, RenumberStats stats, MergePlacement reg)
     {
@@ -708,7 +582,7 @@ public static class RemapEngine
                     winner.GetType().GetProperty(prop.Name)?.GetValue(winner) as IList
                     ?? throw new InvalidOperationException(
                         $"cannot graft {what}: the winning donor's {RecordNaming.StripOverlay(winner.GetType().Name)} " +
-                        $"{winner.FormKey} has no settable record list '{prop.Name}' to receive it (Q3).");
+                        $"{FormIdToken.Of(winner.FormKey)} has no settable record list '{prop.Name}' to receive it (Q3).");
                 foreach (var el in seq)
                 {
                     if (el is IMajorRecordGetter childRec)
@@ -719,7 +593,7 @@ public static class RemapEngine
                             GraftMissingDescendants(childRec, placed, dict, stats, reg);
                             continue;
                         }
-                        WinnerList($"{RecordNaming.StripOverlay(childRec.GetType().Name)} {childRec.FormKey}")
+                        WinnerList($"{RecordNaming.StripOverlay(childRec.GetType().Name)} {FormIdToken.Of(childRec.FormKey)}")
                             .Add(RenumberOne(childRec, dict, stats, reg));
                     }
                     else if (el is IMajorRecordGetterEnumerable blockStruct)
@@ -732,9 +606,8 @@ public static class RemapEngine
         }
     }
 
-    /// <summary>Graft one singleton-property child (e.g. a cell's Landscape): already placed → recurse; the winner's
-    /// slot empty → renumber + set; the winner's slot held by a DIFFERENT record → the winner's structure stands and
-    /// the loser's child is reported as a resolved conflict.</summary>
+    /// <summary>Graft one singleton-property child: already placed → recurse; the slot empty → renumber and set; the
+    /// slot held by a DIFFERENT record → the winner's structure stands and the loser's child is REPORTED.</summary>
     static void GraftSingleton(IMajorRecordGetter child, IMajorRecord winner, string propName,
         IReadOnlyDictionary<FormKey, FormKey> dict, RenumberStats stats, MergePlacement reg)
     {
@@ -747,12 +620,11 @@ public static class RemapEngine
         var prop = winner.GetType().GetProperty(propName);
         if (prop is null || !prop.CanWrite)
             throw new InvalidOperationException(
-                $"cannot graft {RecordNaming.StripOverlay(child.GetType().Name)} {child.FormKey}: the winning donor's " +
-                $"{RecordNaming.StripOverlay(winner.GetType().Name)} {winner.FormKey} has no settable '{propName}' slot to receive it (Q3).");
+                $"cannot graft {RecordNaming.StripOverlay(child.GetType().Name)} {FormIdToken.Of(child.FormKey)}: the winning donor's " +
+                $"{RecordNaming.StripOverlay(winner.GetType().Name)} {FormIdToken.Of(winner.FormKey)} has no settable '{propName}' slot to receive it (Q3).");
         if (prop.GetValue(winner) is IMajorRecord occupant)
         {
-            // The winner already carries its OWN (different) record in this slot — the winner's structure wins wholesale;
-            // the loser's child is a resolved conflict, reported by the occupant's donor.
+            // The winner's own record holds this slot, so its structure wins and the loser's child is a conflict.
             reg.Conflicts.Add(new MergeConflict(child.FormKey, RecordNaming.StripOverlay(child.GetType().Name),
                 reg.PlacedBy.TryGetValue(occupant.FormKey, out var by) ? by : reg.CurrentDonor, reg.CurrentDonor));
             return;
@@ -760,10 +632,8 @@ public static class RemapEngine
         prop.SetValue(winner, RenumberOne(child, dict, stats, reg));
     }
 
-    /// <summary>Graft through a FormKey-less worldspace block struct: pair the loser's block with the winner's by block
-    /// NUMBER (X/Y for exterior grids), creating the winner-side block when missing, then graft each leaf cell. The
-    /// worldspace family is the only record-nested block tree (interior cells' mod-level tree is walked cell-by-cell in
-    /// <see cref="MergeModsInto"/>); an unrecognized block shape throws instead of silently dropping records.</summary>
+    /// <summary>Graft through a FormKey-less worldspace block struct, pairing blocks by NUMBER and creating the
+    /// winner-side one when missing; an unrecognized block shape THROWS rather than dropping records.</summary>
     static void GraftBlock(IMajorRecordGetterEnumerable loserBlock, IList winnerBlocks, string propName,
         IReadOnlyDictionary<FormKey, FormKey> dict, RenumberStats stats, MergePlacement reg)
     {
@@ -813,36 +683,45 @@ public static class RemapEngine
         }
     }
 
-    // Repointing changes an existing plugin only after its caller has completed
-    // the explicit in-place consent and Amethyst redeployment checks.
+    // ---- 3b. STREAMING APPLIER — repoint an existing plugin's refs IN PLACE ----
 
-    /// <summary>The result of an in-place repoint: success and the on-disk byte size, or an error (target not
-    /// active / excluded / not on disk / a declared master absent / a sub-0x800 originating record / a serialize fault)
-    /// with the file UNTOUCHED.</summary>
-    /// <summary><paramref name="RemapEntries"/> is the size of the remap dict applied — NOT the count of links actually
-    /// rewritten in the file (Mutagen's RemapLinks does not report that); a caller must not read it as "links changed".</summary>
+    /// <summary>The result of an in-place repoint: success plus the on-disk byte size, or a named refusal with the
+    /// file UNTOUCHED. <paramref name="RemapEntries"/> is the size of the dict APPLIED, not links rewritten.</summary>
     public sealed record RepointResult(bool Success, string? Error, long Bytes, int RemapEntries)
     {
-        /// <summary>Creates a failed result with no output or applied mappings.</summary>
         public static RepointResult Fail(string error) => new(false, error, 0, 0);
     }
 
-    /// <summary>
-    /// Repoint plugin <paramref name="pluginName"/>'s outgoing references against <paramref name="dict"/> IN PLACE — the
-    /// streaming applier for an EXTERNAL referencer (a plugin outside the transform set that the identify-pass found
-    /// pointing at a remapped record). This rides the existing in-place write lane (the modder's opt-in: explicit flag
-    /// + per-plugin consent + no backup, enforced by the service before this is reached). The default new-plugin path
-    /// NEVER calls this — only the explicit external-referencer rewrite does.
-    ///
-    /// EAGER-loads the SINGLE plugin mutable (<c>CreateFromBinary</c> — never the order; the legacy RAM trap), applies
-    /// <c>RemapLinks(dict)</c> (every outgoing link, flat AND nested), resolves the target's OWN declared masters to
-    /// overlays, and re-serializes over itself via <see cref="WriteEngine.WriteInPlace"/> (own masters, counter verbatim,
-    /// no baseline force-include — the xEdit-parity re-emit, staged + crash-atomically swapped). All-or-nothing: any
-    /// refusal or serialize fault leaves the original file byte-intact. A sub-0x800 originating record (a vanilla master)
-    /// makes the write throw <c>LowerFormKeyRangeDisallowed</c>, which is surfaced as an error rather than a partial write.
-    /// </summary>
+    /// <summary>Which of <paramref name="pluginNames"/> are flagged LOCALIZED — the pre-flight for a repoint, run
+    /// BEFORE the compaction writes anything. It fails CLOSED on a referencer it could not open: that sentence, and
+    /// the two-class split it forces, are in docs/architecture/write-path.md.</summary>
+    /// <returns>One entry per blocked referencer, each carrying the SHAPE it was blocked on.</returns>
+    public static IReadOnlyList<(string Plugin, LocalizedShape Shape, string Why)> LocalizedAmong(
+        LoadOrderResolver resolver, IEnumerable<string> pluginNames)
+    {
+        var view = resolver.Capture();
+        var hits = new List<(string, LocalizedShape, string)>();
+        foreach (var name in pluginNames)
+        {
+            var path = view.PluginPath(name);
+            if (path is null) continue;
+            try
+            {
+                // The same decision the write itself would make, through the one home for it.
+                if (LocalizedStrings.RefusalShapeFor(path, name, view.DataDir) is { } hit) hits.Add((name, hit.Shape, hit.Why));
+            }
+            // This catch is for a fault in the path handling, best-effort so one bad name cannot end the pre-flight.
+            catch { }
+        }
+        return hits;
+    }
+
+    /// <summary>Repoint plugin <paramref name="pluginName"/>'s outgoing references against <paramref name="dict"/> IN
+    /// PLACE — the applier for an EXTERNAL referencer, riding the in-place write lane the service has already gated.
+    /// It opens the single plugin mutable, remaps, resolves the target's OWN declared masters, and re-serializes over
+    /// itself; any refusal or serialize fault leaves the original file byte-intact.</summary>
     public static RepointResult RepointInPlace(
-        LoadOrderResolver resolver, string pluginName, IReadOnlyDictionary<FormKey, FormKey> dict)
+        LoadOrderResolver resolver, string pluginName, IReadOnlyDictionary<FormKey, FormKey> dict, string? outputPath = null)
     {
         if (dict.Count == 0) return RepointResult.Fail("no remap entries supplied — nothing to repoint.");
         var view = resolver.Capture();
@@ -858,7 +737,7 @@ public static class RemapEngine
             return RepointResult.Fail($"repoint target '{pluginName}' not found on disk at {path ?? "<unresolved>"} — the file is untouched.");
 
         SkyrimMod targetMod;
-        try { targetMod = SkyrimMod.CreateFromBinary(path, SkyrimRelease.SkyrimSE); }
+        try { targetMod = SkyrimMod.CreateFromBinary(path, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(path)); }
         catch (Exception ex)
         {
             return RepointResult.Fail(
@@ -872,12 +751,8 @@ public static class RemapEngine
             return RepointResult.Fail($"RemapLinks failed on '{pluginName}' ({WriteEngine.Describe(ex)}) — the file is untouched.");
         }
 
-        // Resolve the target's OWN declared masters to overlays in load order — the faithful re-serialize set
-        // WriteInPlace hands Mutagen (mirrors WritePatchBuilder.ResolveOwnMasters, which opens them the same way). A
-        // A declared master absent from the active order is an error because serialization could not resolve the
-        // references into it), file untouched. These overlays exist ONLY to resolve FormID/master-table references on
-        // re-serialize — they are not read for localized strings — so the bare CreateFromBinaryOverlay is correct here
-        // and the resolver's strings-wiring OpenOverlay choke point is deliberately not needed (matches the in-place lane).
+        // The target's OWN declared masters as overlays in load order, the faithful re-serialize set WriteInPlace
+        // hands Mutagen. They resolve FormID and master-table references only, never localized strings.
         var overlays = new List<IDisposable>();
         try
         {
@@ -890,23 +765,37 @@ public static class RemapEngine
                     return RepointResult.Fail(
                         $"cannot re-serialize '{pluginName}' in place: its declared master '{mfn}' is not active in the load order, " +
                         "so a faithful re-serialize can't resolve the references into it. Enable that master (or fix the masters in xEdit) first. The file is UNTOUCHED.");
-                var ov = SkyrimMod.CreateFromBinaryOverlay(mpath, SkyrimRelease.SkyrimSE);
+                // Ask before opening: an unopenable declared master would otherwise escape as an unhandled throw.
+                if (view.IsUnopenable(mfn))
+                    return RepointResult.Fail(
+                        $"cannot re-serialize '{pluginName}' in place: its declared master '{mfn}' is ACTIVE but cannot be " +
+                        "opened by houseCARL (see load_order_status for the reason), so a faithful re-serialize can't " +
+                        "resolve the references into it. Repair or remove that plugin in MO2 and retry. The file is UNTOUCHED.");
+                ISkyrimModGetter ov;
+                try { ov = SkyrimMod.CreateFromBinaryOverlay(mpath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(mpath)); }
+                catch (Exception ex)
+                {
+                    return RepointResult.Fail(
+                        $"cannot re-serialize '{pluginName}' in place: its declared master '{mfn}' could not be opened " +
+                        $"({WriteEngine.Describe(ex)}). Repair or remove that plugin in MO2 and retry. The file is UNTOUCHED.");
+                }
                 overlays.Add((IDisposable)ov);
                 resolved.Add(ov);
             }
 
-            try { WriteEngine.WriteInPlace(targetMod, resolved, path); }
+            try { WriteEngine.WriteInPlace(targetMod, resolved, outputPath ?? path, resolver.DataDir); }
+            // The localized-target refusal is its own sentence, and the generic arm below would misattribute it.
+            catch (LocalizedTargetUnsupportedException ex) { return RepointResult.Fail(ex.Message); }
             catch (Exception ex)
             {
                 return RepointResult.Fail(
-                    $"writing '{pluginName}' in place failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}" +
-                    " — note: a sub-0x800 originating record (e.g. a vanilla master) is rejected by the light-/master-aware floor here, not silently written.");
+                    $"writing '{pluginName}' in place failed (serialize or commit; the existing file is untouched): {WriteEngine.Describe(ex)}");
             }
         }
         finally { foreach (var d in overlays) { try { d.Dispose(); } catch { /* best-effort; never mask the write result */ } } }
 
         long bytes = 0;
-        try { bytes = new FileInfo(path).Length; } catch { }
+        try { bytes = new FileInfo(outputPath ?? path).Length; } catch { }
         return new RepointResult(true, null, bytes, dict.Count);
     }
 }

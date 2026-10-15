@@ -14,6 +14,11 @@ per-line tail fields (Count/Index and Chance). The two domain vocabularies live 
 > (`powerof3/Spell-Perk-Item-Distributor`). Where a fact comes from source rather than the
 > article, it's marked **[source]**.
 
+**Sections.** 1 What SPID is · 2 File discovery & load order · 3 When distribution happens, and in
+what order · 4 The distribution line · 5 Input normalization · 6 Referencing a form
+(`FormOrEditorID`) · 7 How filters combine · 8 Type inferring (`Form`) · 9 `CountOrPackageIndex` ·
+10 `Chance` · 11 Note on templated NPCs.
+
 ---
 
 ## 1. What SPID is
@@ -27,8 +32,8 @@ every game launch — think of it as a *virtual plugin that applies last in the 
 any SPID-based mod safe to install or uninstall at any time, leaving no trace.
 
 Because distribution targets NPCs (not records on disk), SPID is the tool for "give X to this group of
-NPCs," not for editing a record's own fields — that's SkyPatcher's job. See the routing skill for the
-cross-tool decision.
+NPCs," not for editing a record's own fields — that's SkyPatcher's job, and its own skill
+(`housecarl:skypatcher-authoring`); a keyword onto item records is `housecarl:kid-authoring`.
 
 ---
 
@@ -43,6 +48,17 @@ cross-tool decision.
 There are no per-type subfolders (unlike SkyPatcher) — all `*_DISTR.ini` live flat in `Data/`
 (commonly shipped inside a mod managed by a mod manager, but resolved from `Data/` at runtime).
 
+**The scan does not descend into subfolders. [source]** SPID reads its configs with
+`distribution::get_configs(R"(Data\)", "_DISTR"sv)` (`Distribution::INI::GetConfigs`,
+`SPID/src/LookupConfigs.cpp`, SPID 7.3.0, commit `31e76d3`). That helper is CLibUtil's
+`clib_util::distribution::get_configs` (`include/CLIBUtil/distribution.hpp`), and it walks a plain
+`std::filesystem::directory_iterator` over the one folder it is given — not
+`recursive_directory_iterator` — keeping entries whose extension is `.ini` and whose path contains
+the `_DISTR` suffix, then sorting them. So only `Data/` itself is read: a `_DISTR.ini` one folder
+down is never found, and never logged as skipped either, because the scan never sees it. **Place the
+file flat in `Data/`**, and when auditing someone else's mod, report a `_DISTR.ini` in a subfolder as
+not read at all.
+
 Comments: standard INI line comments with **`;`** are supported — SPID reads configs through the
 **CSimpleIniA** library, whose default line-comment character is `;`. **[source]** (The `=` split and
 comment stripping are CSimpleIniA's, not SPID's own code.)
@@ -52,7 +68,31 @@ comment stripping are CSimpleIniA's, not SPID's own code.)
 ## 3. When distribution happens, and in what order
 
 **When:** distribution is **lazy** — it runs when NPCs are loaded into the world (typically on cell
-load), not all at once at game start.
+load), not all at once at game start. The configs themselves are read **once per game launch**, so an
+INI edited while the game is running takes effect only after a restart. **[source]**
+(`SPID/src/main.cpp` — configs are read at `kPostLoad` and forms looked up at `kDataLoaded`.)
+
+**Every launch, from scratch.** SPID "distributes everything from scratch each time you launch the
+game" and "doesn't have effect on either loaded plugins nor on save" — article 6617, § General
+Distribution Info, quoted verbatim. Nothing it distributes is written into the save, so a rule added
+to a `_DISTR.ini` after a save was made applies to that save's actors on the next launch, when they
+next load in. The "already handled this NPC" marker is a runtime `SPID_Processed` keyword created
+fresh at each launch, so it carries nothing across sessions. **[source]**
+(`SPID/src/DistributeManager.cpp` — `Setup()` creates the keyword via `IFormFactory`;
+`distribute_on_load` skips an NPC that already has it; declared in `DistributeManager.h`.) The
+practical limit is the once-per-launch config read above: no restart, no new rule.
+
+**Who — not the player.** The ordinary on-load path is gated on `detail::should_process_NPC`, which
+is `!a_npc->IsPlayer() && !a_npc->IsDeleted()`, so a normal distribution never reaches the player
+character. The other paths into `Distribute()` exclude the player their own way rather than through
+that function: the two PC-level-mult redistribution hooks run only for an NPC that already carries
+`SPID_Processed`, and only the on-load path ever adds it; on-death distribution guards its death-event
+handler with `!IsPlayerRef() && !IsSummoned()`. (Its other entry, the `ShouldBackgroundClone` hook,
+carries no explicit player check — the player is not background-cloned, but that is a game fact, not a
+SPID guard.) **[source]** (`SPID/src/DistributeManager.cpp`, `DistributePCLevelMult.cpp`,
+`DeathDistribution.cpp` — all `Distribute()` call sites read.)
+
+Practically: don't assert a SPID distribution on `Game.GetPlayer()`; sample NPCs.
 
 **Order (per-type passes):** SPID processes each form type separately, in this fixed order:
 
@@ -131,9 +171,14 @@ The required first field identifies the form to distribute. Two ways to write it
 
 - **EditorID** — the text identifier from the Creation Kit / xEdit (e.g. `ElvenMace`, `ImperialBow`,
   `NordRace`). **Preferred** — it's stable across mod merging, ESL conversion, and FormID compaction.
+  **It is not stable against a winning override that renames the record**, which is ordinary on a
+  heavily overhauled order (an overhaul renaming a vanilla perk is the common case). SPID resolves
+  the EditorID it is given against the record the order actually carries, so a line naming the
+  pre-overhaul EditorID resolves to nothing and distributes nothing, silently. Read the winner's
+  EditorID before writing the name; where the winner has renamed the record, use the FormID.
 - **FormID** — hex with the source plugin as a **tilde suffix**: `0x12345~MyPlugin.esp`.
   *(Divergence to remember: SPID/KID/CID use suffix-tilde `0x123~Plugin.esp`; SkyPatcher uses
-  prefix-pipe `Plugin.esp|0x123`. See the routing skill.)*
+  prefix-pipe `Plugin.esp|0x123` — `housecarl:skypatcher-authoring`.)*
 
 The form must be one of the supported types in `form-types.md`. The same EditorID/FormID syntax is used
 not just here but anywhere a form is named — including inside Form Filters (§ `filters.md`).

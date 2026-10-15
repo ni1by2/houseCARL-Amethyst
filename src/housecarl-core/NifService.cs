@@ -1,40 +1,18 @@
 using NiflySharp;
 using NiflySharp.Blocks;
-using NiflySharp.Helpers;   // ShaderHelper.ShaderGameType — which game's flag layout a shader block was read as (#272)
+using NiflySharp.Helpers;   // ShaderHelper.ShaderGameType — which game's flag layout a shader block was read as
 
 namespace HousecarlCore;
 
-/// <summary>
-/// The NIF-layer format service (Wave 1: read). Turns the RAW BYTES of a Skyrim mesh into the data model behind
-/// <c>housecarl_nif_inspect</c> — the header/version, the block census, the shapes with their N2-whitelist values
-/// (names, NiAVObject flags + scale, BSDismember partitions, alpha property, texture-set paths, bone lists), the node
-/// tree, and the header string table. PURE format logic: bytes in, model out — it knows nothing of Amethyst, staging, or
-/// which mod won (that seam is <c>LoadOrderService</c>, which resolves the winning bytes and hands them here),
-/// so it is fully testable off a synthetic in-memory mesh with no live workspace (nif-service-guard).
-///
-/// Reads ride NiflySharp 1.0.0 (NuGet <c>Nifly</c>) — pure C#, source-generated from nifxml, spike-proven over 87,937
-/// workspace nifs (SPIKE_NIF_LAYER_2026-07-08: 99.98% loose / 100.00% vanilla parse, zero unknown blocks in any SE
-/// mesh). Library quirks coded around per the spike: the alpha/shader/skin refs are read DIRECTLY
-/// (<see cref="INiShape.AlphaPropertyRef"/> etc.) — NEVER via <c>NifFile.GetPropertyOfType&lt;T&gt;</c>, which NREs on
-/// SE-style shapes whose legacy <c>Properties</c> list is null.
-///
-/// Fail-loud (Q3, PRFAQ N6): a parse failure is a NAMED, recoverable outcome (<see cref="NifInspectOutcome.Error"/>),
-/// not a throw or a half-model — including NiflySharp's one strict-boolean rejection class, which houseCARL surfaces
-/// with the NifSkope remedy rather than hand-patching around. Unknown blocks are REPORTED (count + their real on-disk
-/// type names) and left intact — the model tells the truth about what it could and could not model.
-/// </summary>
+/// <summary>The NIF format layer: raw mesh bytes in, the model behind <c>housecarl_nif_inspect</c> out. Pure format
+/// logic, knowing nothing of MO2 or the VFS; contract in docs/architecture/nif.md.</summary>
 public static class NifService
 {
     // Skyrim SE header identity: NIF 20.2.0.7, user version 12, stream version 100 (LE = stream 83, FO4 = 130).
     const uint SkyrimSeUserVersion = 12;
     const uint SkyrimSeStreamVersion = 100;
 
-    // NiAVObject flag DEFAULTS per concrete type, SSE-effective — transcribed BY CONSTRUCTION from nif.xml's
-    // NiAVObject.Flags <default onlyT=...> table (the SAME nif.xml NiflySharp is generated from): the SSE-specific value
-    // where one exists, else the unversioned value; FO3/FO4-only variants excluded. nif.xml does NOT name the individual
-    // bits (Flags is a plain uint there, and community docs note most are unused), so houseCARL decodes flags by
-    // DEVIATION from these authoritative defaults rather than inventing bit-names — and always states the one bit nif.xml
-    // DOES document: 0x80000 ("Skyrim lacks it sometimes; FO4 lacks it always"), the head-vs-hair-class signal.
+    // NiAVObject flag defaults per concrete type, transcribed from nif.xml's own <default onlyT=...> table.
     internal static readonly IReadOnlyDictionary<string, uint> AvFlagsSseDefaults = new Dictionary<string, uint>(StringComparer.Ordinal)
     {
         ["NiNode"] = 0xE, ["NiLight"] = 0xE, ["BSMultiBoundNode"] = 0xE,
@@ -46,10 +24,7 @@ public static class NifService
         ["BSOrderedNode"] = 0x8200E, ["BSLODTriShape"] = 0x800000E,
     };
 
-    /// <summary>The SSE-effective NiAVObject flag default for a block, resolved UP the type's inheritance chain (a
-    /// BSDynamicTriShape has no own default → its parent BSTriShape's applies, matching nif.xml's onlyT semantics), or
-    /// (null, null) if no ancestor up to <see cref="object"/> has a documented default. Only consulted for SE meshes —
-    /// the table is SSE values, so a non-SE mesh gets no (misleading) default comparison.</summary>
+    /// <summary>The SSE flag default for a block, resolved UP the inheritance chain per nif.xml's onlyT semantics; SE meshes only.</summary>
     static (uint? Value, string? FromType) ResolveAvDefault(Type? t)
     {
         for (var cur = t; cur is not null && cur != typeof(object); cur = cur.BaseType)
@@ -57,9 +32,7 @@ public static class NifService
         return (null, null);
     }
 
-    /// <summary>Inspect a mesh from its raw bytes. Returns the model on success, or a named error (Q3) — a parse the
-    /// library rejects, an empty buffer, or a structure read that failed after a clean load. Never throws for an
-    /// expected bad-file condition; never returns a partial model.</summary>
+    /// <summary>Inspect a mesh from its raw bytes — the model, or a named error; never a throw and never a partial model.</summary>
     public static NifInspectOutcome Inspect(byte[] bytes)
     {
         if (bytes is null || bytes.Length == 0)
@@ -86,19 +59,24 @@ public static class NifService
         }
         catch (Exception ex)
         {
-            // The file loaded but reading its structure threw — a real defect surface, not an expected bad file. Fail
-            // loud with the type + message; never hand back a half-built model (Q3).
+            // The file loaded but reading its structure threw — a real defect, so fail loud with the type and message.
             return new NifInspectOutcome(null, $"the mesh parsed but reading its structure failed — {ex.GetType().Name}: {ex.Message}");
         }
     }
 
-    /// <summary>Turn a load exception into a named, actionable error. NiflySharp's one strict-boolean rejection class
-    /// (the spike's 13 loud failures — "Byte value for boolean is > 2!", a nonstandard byte some exporters write) is
-    /// called out by name with the NifSkope remedy, so the tool never reads as a silent "absent" and houseCARL never
-    /// hand-patches around the strict read.</summary>
+    /// <summary>Turn a load exception into a named, actionable error; the strict-boolean arm is kept against that rejection class returning.</summary>
     static string DescribeLoadException(Exception ex)
     {
         var m = ex.Message ?? "";
+        // A count inside a block, or the block itself, runs past the block's stored size; the key does not say which, so lead with the usual cause.
+        if (NifLoadErrors.IsBlockSizeMismatch(ex))
+            return $"the mesh is malformed and was not read ({m.TrimEnd('.')}) — a count in that block is larger than the block's " +
+                   "stored size allows, which usually means the count is corrupted, so reinstall whatever ships it (the mod, or the " +
+                   "game files for a vanilla mesh) or open it in NifSkope to see where it breaks.";
+        // NiflySharp's bound on a count, length or size that cannot fit in the bytes left in the file.
+        if (ex is InvalidDataException)
+            return $"the mesh is malformed and was not read ({m.TrimEnd('.')}) — the file is damaged or cut short, so reinstall " +
+                   "whatever ships it (the mod, or the game files for a vanilla mesh) or open it in NifSkope to see where it breaks.";
         if (m.Contains("boolean", StringComparison.OrdinalIgnoreCase))
             return "NiflySharp refused this mesh: a boolean field holds a non-0/1 byte, which the library rejects strictly " +
                    "(some exporters write it). The file is otherwise a valid SE mesh — NifSkope can open it — and houseCARL " +
@@ -117,8 +95,7 @@ public static class NifService
         int blockCount = header.BlockCount;
         var blocks = nif.Blocks;   // List<INiObject>, indexed by block id (parallel to Header.GetBlockTypeNameById)
 
-        // Block census by ON-DISK type name (what xEdit/NifSkope show) — this also names unknown blocks faithfully,
-        // where GetType().Name would flatten every one of them to "NiUnknown".
+        // Block census by ON-DISK type name, because GetType().Name flattens every unknown block to "NiUnknown".
         var typeById = new string[blockCount];
         for (int i = 0; i < blockCount; i++) typeById[i] = header.GetBlockTypeNameById(i) ?? "?";
         var blockTypes = typeById
@@ -127,8 +104,7 @@ public static class NifService
             .OrderByDescending(c => c.Count).ThenBy(c => c.Type, StringComparer.Ordinal)
             .ToList();
 
-        // Unknown blocks reported by their real on-disk type (preserved-but-opaque — PRFAQ N6). GetType() on a
-        // NiUnknown is just "NiUnknown"; the informative name lives in the header's block-type table.
+        // Unknown blocks are preserved but opaque, and named from the header's block-type table.
         var unknownTypes = new List<string>();
         for (int i = 0; i < blocks.Count && i < blockCount; i++)
             if (blocks[i] is NiUnknown) unknownTypes.Add(typeById[i]);
@@ -144,9 +120,7 @@ public static class NifService
             shapes, BuildNodeTree(nif, isSe), ReadHeaderStrings(header));
     }
 
-    /// <summary>One shape's N2-whitelist values. Every ref is read DIRECTLY off the shape (the SE-safe path); the
-    /// partition list is present only for a BSDismember skin instance, alpha only when the shape carries an alpha
-    /// property, and a texture slot only when its path is non-empty.</summary>
+    /// <summary>One shape's whitelisted values, every ref read DIRECTLY off the shape (the SE-safe path).</summary>
     static NifShape BuildShape(NifFile nif, INiShape shape, bool isSe)
     {
         string name = shape.Name?.String ?? "";
@@ -181,73 +155,43 @@ public static class NifService
         return new NifShape(name, flags, scale, shape.GetType().Name, defVal, defType, partitions, alpha, textures, bones, shaderInfo);
     }
 
-    /// <summary>Read the shape's SHADER PROPERTY (#272) — the block every visual diagnosis actually asks about: which
-    /// shader is on this shape, and does it emit / scatter / env-map light. Read off <see cref="INiShader"/>, the
-    /// interface <c>NifFile.GetShader</c> already returns, so this covers BSLightingShaderProperty and
-    /// BSEffectShaderProperty (and anything else nifly models as a shader) with no per-block-type wiring.
-    ///
-    /// TWO Q3 calls live here. (1) <see cref="NifShader.ShaderType"/> is reported ONLY for a lighting shader: the
-    /// <c>ShaderType_SK_FO4</c> property sits on the shared base, but a BSEffectShaderProperty never serializes a
-    /// shader type, so reading it there yields a default 0 that renders as a confident "Default" — a wrong answer, not
-    /// a missing one. (2) The flag WORDS are chosen by the shader's own <c>Type</c> (which game's layout the block was
-    /// read as), never assumed to be Skyrim's — decoding an FO4 word against Skyrim names would mislabel every bit.</summary>
+    /// <summary>Read the shape's shader property off <see cref="INiShader"/>, so every block nifly models as a shader
+    /// is covered with no per-type wiring; the layout gates are in docs/architecture/nif.md.</summary>
     static NifShader BuildShader(INiShader shader)
     {
         var blockType = shader.GetType().Name;
         var game = shader.Type;
 
-        // The flag pair that is REAL for this block's game layout. nifly models each game's word as its own named enum,
-        // so the decode below is reflection over that enum — the set of flag names IS the library's, by construction.
+        // The flag pair that is REAL for this block's game layout; nifly names each game's word as its own enum.
         (NifShaderFlagWord? f1, NifShaderFlagWord? f2) = game switch
         {
             ShaderHelper.ShaderGameType.SK    => (DecodeFlagWord("SLSF1", shader.ShaderFlags_SSPF1), DecodeFlagWord("SLSF2", shader.ShaderFlags_SSPF2)),
             ShaderHelper.ShaderGameType.FO4   => (DecodeFlagWord("F4SPF1", shader.ShaderFlags_F4SPF1), DecodeFlagWord("F4SPF2", shader.ShaderFlags_F4SPF2)),
             ShaderHelper.ShaderGameType.FO3NV => (DecodeFlagWord("ShaderFlags", shader.ShaderFlags), DecodeFlagWord("ShaderFlags2", shader.ShaderFlags2)),
-            // FO76/SF (and None) carry no flag word this library exposes as a named enum — report the game type and no
-            // flags, rather than decoding some other game's word and labelling it as this one's (Q3).
+            // FO76/SF (and None) carry no flag word this library names — report the game type and no flags.
             _ => (null, null),
         };
 
-        // Each lighting value is reported ONLY if this block really reads it (see ReallyReads) — otherwise null, and
-        // the renderer names it as unread. RGB, never RGBA: a lighting shader's emissive is a THREE-component colour
-        // on disk, and the interface widens it to Color4, so its 4th component is a synthetic 0 that would render as
-        // "fully transparent emissive" — a fabricated value, the one thing worse than a missing one (Q3).
+        // Two gates, both in docs/architecture/nif.md: the block really reads the value (ReallyReads), and the block
+        // was read as the Skyrim layout. RGB, never RGBA, because the interface widens a Color3 on disk to Color4.
         var t = shader.GetType();
-        NifColor? Rgb3(string prop, Func<System.Numerics.Vector3> read)
-        {
-            if (!ReallyReads(t, prop)) return null;
-            var v = read();
-            return new NifColor(v.X, v.Y, v.Z);
-        }
-        float? Scalar(string prop, Func<float> read) => ReallyReads(t, prop) ? read() : null;
+        var skyrimLayout = game == ShaderHelper.ShaderGameType.SK;
+        NifColor? Rgb3(string prop, Func<NifColor> read) => skyrimLayout && ReallyReads(t, prop) ? read() : null;
+        float? Scalar(string prop, Func<float> read) => skyrimLayout && ReallyReads(t, prop) ? read() : null;
 
-        NifColor? emissive = null;
-        if (ReallyReads(t, nameof(INiShader.EmissiveColor)))
-        {
-            var e = shader.EmissiveColor;
-            emissive = new NifColor(e.R, e.G, e.B);
-        }
         return new NifShader(
             blockType, game.ToString(), ShaderTypeName(shader, blockType, game),
             f1, f2,
-            emissive,
+            Rgb3(nameof(INiShader.EmissiveColor), () => { var e = shader.EmissiveColor; return new NifColor(e.R, e.G, e.B); }),
             Scalar(nameof(INiShader.EmissiveMultiple), () => shader.EmissiveMultiple),
             Scalar(nameof(INiShader.Glossiness), () => shader.Glossiness),
             Scalar(nameof(INiShader.SpecularStrength), () => shader.SpecularStrength),
-            Rgb3(nameof(INiShader.SpecularColor), () => shader.SpecularColor),
+            Rgb3(nameof(INiShader.SpecularColor), () => { var s = shader.SpecularColor; return new NifColor(s.R, s.G, s.B); }),
             Scalar(nameof(INiShader.Alpha), () => shader.Alpha));
     }
 
-    /// <summary>The shader's TYPE enum name, or null when this block doesn't carry one we can read honestly.
-    ///
-    /// TWO independent ways to get this wrong, and both produce a confident DEFAULT rather than a blank:
-    ///   • WRONG BLOCK — a BSEffectShaderProperty never serializes a shader type at all, but the property sits on the
-    ///     shared base, so reading it there yields 0 → a confident "Default".
-    ///   • WRONG FIELD — the type property is LAYOUT-DISPATCHED, not shared. A block read as FO76/SF answers its real
-    ///     type on <c>ShaderType_FO76_SF</c> while <c>ShaderType_SK_FO4</c> reads 0 ("Default"); on an SK block the
-    ///     reverse holds and <c>ShaderType_FO76_SF</c> is garbage. So the field must be picked by the LAYOUT, which is
-    ///     what the block was actually parsed as — not by the block's type name (review of PR #286).
-    /// A layout with no type field of its own reports null, and the renderer says so plainly.</summary>
+    /// <summary>The shader's TYPE enum name, picked by the LAYOUT the block was parsed as, or null where no field
+    /// carries it honestly — the two ways this reads a confident wrong default are in docs/architecture/nif.md.</summary>
     static string? ShaderTypeName(INiShader shader, string blockType, ShaderHelper.ShaderGameType game)
     {
         if (blockType == nameof(BSEffectShaderProperty)) return null;   // serializes no shader type on any layout
@@ -260,24 +204,12 @@ public static class NifService
         };
     }
 
-    // Which INiShader value accessors a concrete shader block ACTUALLY implements — cached per block type (a mesh has
-    // many shapes; the interface map is walked once each).
+    // Which INiShader accessors a concrete block really implements, cached per block type.
     static readonly System.Collections.Concurrent.ConcurrentDictionary<Type, HashSet<string>> RealReads = new();
 
-    /// <summary>Whether <paramref name="blockType"/> REALLY reads <paramref name="property"/>, or merely inherits
-    /// <see cref="INiShader"/>'s DEFAULT INTERFACE IMPLEMENTATION for it.
-    ///
-    /// This is not defensive noise — it is a live upstream gap. In NiflySharp 1.0.0, <c>BSLightingShaderProperty</c>
-    /// overrides <c>EmissiveColor</c> but NOT <c>Glossiness</c>, <c>SpecularStrength</c>, <c>SpecularColor</c>,
-    /// <c>EmissiveMultiple</c> or <c>Alpha</c>; those fall through to the interface's stub, which returns a CONSTANT
-    /// (0, or 1 for Alpha) no matter what the mesh holds. The values are genuinely on disk — the block's private
-    /// fields round-trip a save/load intact — the library just doesn't surface them. Reporting the stub would be a
-    /// confident wrong number on every mesh: exactly the silent-wrong-answer the no-silent-failure rule forbids, and
-    /// the "fail loud about the library's delta, never silently around it" posture the coverage cornerstone names.
-    ///
-    /// Doing it BY CONSTRUCTION rather than by a hand-kept list of "the five nifly stubs" means the day upstream
-    /// implements one, houseCARL starts reporting it with no code change — and if upstream ever stubs another, that
-    /// one goes quiet on its own instead of turning into a wrong answer.</summary>
+    /// <summary>Whether <paramref name="blockType"/> REALLY reads <paramref name="property"/> or merely inherits
+    /// <see cref="INiShader"/>'s stub, off the interface map; contract in docs/architecture/nif.md, pinned by
+    /// NifShaderDecodeTests.EveryLightingValueRoundTripsItsAuthoredValue and .EveryLightingValueABlockOnlyStubsIsReportedUnread.</summary>
     static bool ReallyReads(Type blockType, string property)
     {
         var real = RealReads.GetOrAdd(blockType, static t =>
@@ -295,52 +227,100 @@ public static class NifService
         return real.Contains(property);
     }
 
-    /// <summary>Decode one shader flag word into its NAMED bits plus the unnamed remainder. The names come from
-    /// <see cref="Enum.GetValues(Type)"/> over nifly's own enum, so coverage is the library's coverage — no hand-kept
-    /// bit table to drift. Members are peeled largest-first so a multi-bit combo member wins over its constituent bits
-    /// (the <c>ReadEngine.FlagBitsDisplay</c> algorithm, #255), and whatever no member covers is returned as
-    /// <see cref="NifShaderFlagWord.UnknownBits"/> — surfaced explicitly by the renderer, never silently dropped, which
-    /// is the whole point: an unnamed bit is a real thing the mesh carries.</summary>
-    internal static NifShaderFlagWord DecodeFlagWord(string label, Enum value)
+    /// <summary>The six shader lighting values by wire name, each paired to its library property through <c>nameof</c>
+    /// so an upstream rename is a compile error; <c>Normalized</c> marks the 0–1 convention that warns rather than refuses.</summary>
+    internal static readonly IReadOnlyList<(string Wire, string Property, bool Normalized)> ShaderValueNames = new[]
     {
-        uint raw = Convert.ToUInt32(value);
-        var members = new List<(uint Bits, string Name)>();
-        foreach (Enum m in Enum.GetValues(value.GetType()))
-        {
-            uint mb = Convert.ToUInt32(m);
-            if (mb != 0) members.Add((mb, m.ToString()));
-        }
-        members.Sort((a, b) => b.Bits.CompareTo(a.Bits));        // descending — a combo before its constituent bits
+        ("emissive_color",    nameof(INiShader.EmissiveColor),    true),
+        ("emissive_multiple", nameof(INiShader.EmissiveMultiple), false),
+        ("glossiness",        nameof(INiShader.Glossiness),       false),
+        ("specular_strength", nameof(INiShader.SpecularStrength), false),
+        ("specular_color",    nameof(INiShader.SpecularColor),    true),
+        ("alpha",             nameof(INiShader.Alpha),            true),
+    };
 
-        uint remainder = raw;
-        var hit = new List<(uint Bits, string Name)>();
-        foreach (var m in members)
-            if ((remainder & m.Bits) == m.Bits) { hit.Add(m); remainder &= ~m.Bits; }
-        hit.Sort((a, b) => a.Bits.CompareTo(b.Bits));            // report in bit order — how the word reads on disk
-        return new NifShaderFlagWord(label, raw, hit.Select(h => h.Name).ToList(), remainder);
+    /// <summary>A WARN-and-proceed note when a write lands outside the 0–1 convention, never a refusal.</summary>
+    internal static string? ShaderRangeWarning(string wire, IReadOnlyList<float> nums)
+    {
+        var prop = ShaderValueProperty(wire);
+        if (prop is null) return null;
+        bool normalized = false;
+        foreach (var (_, p, n) in ShaderValueNames) if (p == prop) normalized = n;
+        if (!normalized) return null;
+        var bad = nums.Where(v => v < 0f || v > 1f).ToList();
+        if (bad.Count == 0) return null;
+        return $"{WireName(prop)} was set to {string.Join(", ", bad.Select(v => v.ToString(System.Globalization.CultureInfo.InvariantCulture)))} "
+             + "— outside the 0-1 range Skyrim's shader treats this value as. Written as asked (the format stores the "
+             + "float given, and real meshes do carry out-of-range values), but if this came from NifSkope's 0-255 "
+             + "colour picker, divide by 255.";
     }
 
-    /// <summary>The SEMANTIC name of a BSShaderTextureSet slot, or null when this shape's shader doesn't determine one.
-    ///
-    /// Slot 2 is glow OR skin-subsurface OR soft-lighting; slot 7 is backlight OR specular — the meaning comes from the
-    /// shader TYPE and FLAGS, not from the index. nifly models the slots as a bare path list (the semantics are a
-    /// Skyrim engine convention, not something nif.xml names), so unlike the flag decode above this cannot be
-    /// reflected out of the library — it is a small, explicit interpreter of engine semantics, each arm keyed to the
-    /// flag or type that decides it, in the same posture as <c>effect_chain</c>.
-    ///
-    /// Q3 — returns NULL rather than a best guess whenever the deciding flag/type isn't set. An unnamed slot renders
-    /// as bare <c>tex[N]</c>: "this shader doesn't tell us", never a confident wrong label.
-    ///
-    /// SKYRIM LAYOUT ONLY, and that gate is load-bearing rather than tidiness. The conditions read nifly's
-    /// <c>Has*</c>/<c>IsType*</c> helpers, which DISPATCH on the block's game layout — and for a layout where nifly
-    /// doesn't model the concept they return <c>true</c> unconditionally, not false. On an FO4-layout block with an
-    /// all-zero flag word <c>HasSoftlight</c>, <c>HasBacklight</c> and <c>Parallax</c> are all true; on FO3NV every
-    /// one of the seven helpers is. Left ungated, slots 2/3/7 (and on FO3NV 4/5) would take a confident label derived
-    /// from nothing the mesh carries — precisely the plausible-wrong-label this interpreter exists to refuse, and it
-    /// would ride <c>sections=paths</c> and <c>sections=shapes</c> too. nif_inspect reads non-SE meshes on purpose
-    /// (an unconverted FO4 mesh shipped inside a Skyrim mod is a thing people bring here), so this is reachable, not
-    /// theoretical. These slot semantics are a SKYRIM engine convention; on any other layout the honest answer is
-    /// that we don't model it. (Review of PR #286.)</summary>
+    /// <summary>Resolve a caller's value name to its library property, or null; the British spelling is an alias, and
+    /// the case fold must run BEFORE the colour→color rewrite, which is ordinal.</summary>
+    public static string? ShaderValueProperty(string wire)
+    {
+        var w = (wire ?? "").Trim().Replace('-', '_').ToLowerInvariant().Replace("colour", "color");
+        foreach (var (n, p, _) in ShaderValueNames) if (n == w) return p;
+        return null;
+    }
+
+    /// <summary>Whether <paramref name="blockType"/> can really be WRITTEN at <paramref name="property"/>, and with
+    /// how many float components — reflected off the CONCRETE class, because <see cref="ReallyReads"/> cannot answer
+    /// it; contract in docs/architecture/nif.md, pinned by NifSetGuardProbe (all three states).</summary>
+    internal static NifShaderWritability ReallyWrites(Type blockType, string property)
+    {
+        var p = blockType.GetProperty(property, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance);
+        if (p is null || !p.CanWrite) return NifShaderWritability.NoSetter();
+        if (p.PropertyType == typeof(float)) return NifShaderWritability.Ok(1);
+        if (HasRgbFields(p.PropertyType)) return NifShaderWritability.Ok(3);
+        // Settable, but of a shape houseCARL has no marshalling for — a different fact from "no setter", so a different reason.
+        return NifShaderWritability.UnknownType(p.PropertyType.Name);
+    }
+
+    static bool HasRgbFields(Type t)
+        => t.GetField("R") is not null && t.GetField("G") is not null && t.GetField("B") is not null;
+
+    /// <summary>The accepted shader_value names as one list, built from the table so no refusal can go stale.</summary>
+    public static string ShaderValueList => string.Join(", ", ShaderValueNames.Select(v => v.Wire));
+
+    /// <summary>The WIRE name for a library property, so refusals speak the caller's vocabulary.</summary>
+    static string WireName(string property)
+    {
+        foreach (var (w, p, _) in ShaderValueNames) if (p == property) return w;
+        return property;
+    }
+
+    /// <summary>A shader value rendered for the before/after audit — rgb only, never a component the format does not carry.</summary>
+    static string DescribeShaderValue(object? v, int components)
+    {
+        if (v is null) return "(null)";
+        if (components == 1) return Convert.ToSingle(v).ToString(System.Globalization.CultureInfo.InvariantCulture);
+        var t = v.GetType();
+        var (r, g, b) = ReadRgb(v, t);
+        return $"rgb({r.ToString(System.Globalization.CultureInfo.InvariantCulture)},"
+             + $"{g.ToString(System.Globalization.CultureInfo.InvariantCulture)},"
+             + $"{b.ToString(System.Globalization.CultureInfo.InvariantCulture)})";
+    }
+
+    static (float R, float G, float B) ReadRgb(object v, Type t)
+        => ((float)t.GetField("R")!.GetValue(v)!, (float)t.GetField("G")!.GetValue(v)!, (float)t.GetField("B")!.GetValue(v)!);
+
+    /// <summary>Decode one shader flag word into its named members and unnamed remainder; contract in docs/architecture/nif.md.</summary>
+    internal static NifShaderFlagWord DecodeFlagWord(string label, Enum value)
+    {
+        var type = value.GetType();
+        if (!ReadEngine.TryEnumBits(value, type, out ulong raw))
+            throw new InvalidOperationException($"shader flag word {label} has no integer value.");
+        var members = new List<ulong>();
+        ulong remainder = ReadEngine.PeelFlagBits(type, raw, members);
+        members.Sort();                                          // report in bit order — how the word reads on disk
+        return new NifShaderFlagWord(label, (uint)raw, members.Select(mb => Enum.ToObject(type, mb).ToString()!).ToList(),
+                                     members.Select(mb => (uint)mb).ToList(), (uint)remainder);
+    }
+
+    /// <summary>The SEMANTIC name of a BSShaderTextureSet slot, from the shader TYPE and FLAGS rather than the index,
+    /// or null rather than a best guess. SKYRIM LAYOUT ONLY, and that gate is load-bearing: contract in
+    /// docs/architecture/nif.md, pinned by NifShaderDecodeTests.EverySlotIsUnnamedOnANonSkyrimLayout.</summary>
     internal static string? SlotName(int slot, INiShader shader) =>
         shader.Type != ShaderHelper.ShaderGameType.SK ? null : slot switch
     {
@@ -362,15 +342,12 @@ public static class NifService
         _ => null,                                               // beyond the Skyrim slot set — say nothing
     };
 
-    /// <summary>Whether this shader environment-maps at all — the condition slots 4 and 5 both hang on (a plain env
-    /// map, an eye env map, or the shader type that implies it).</summary>
+    /// <summary>Whether this shader environment-maps at all — the condition slots 4 and 5 both hang on.</summary>
     static bool EnvMapped(INiShader shader)
         => shader.HasEnvironmentMapping || shader.HasEyeEnvironmentMapping
         || shader.IsTypeEnvironmentMap || shader.IsTypeEyeEnvironmentMap;
 
-    /// <summary>Pre-order the NiNode hierarchy from the root(s), depth-annotated, each node with its NiAVObject flags.
-    /// Only NiNode children are walked (shapes are covered by <see cref="NifInspect.Shapes"/>). A reference-identity
-    /// visited set guards against a malformed file's cycle so the walk always terminates.</summary>
+    /// <summary>Pre-order the NiNode hierarchy, depth-annotated; a reference-identity visited set terminates a malformed cycle.</summary>
     static List<NifNode> BuildNodeTree(NifFile nif, bool isSe)
     {
         var nodes = new List<NifNode>();
@@ -390,10 +367,7 @@ public static class NifService
         return nodes;
     }
 
-    /// <summary>The header string table (shape/node/bone names, material and .tri/BODYTRI/physics-xml paths). The table
-    /// is a flat, contiguous list; <c>GetString(i)</c> returns "" — never null — once past the end, so we read from 0
-    /// until the first empty slot. A legitimately-empty entry ends the read early: an HONEST bound (the high-value
-    /// strings sit contiguous at the front), never a silent wrong answer. Capped so a corrupt count cannot spin.</summary>
+    /// <summary>The header string table, read from 0 until the first empty slot — an honest bound, capped so a corrupt count cannot spin.</summary>
     static List<string> ReadHeaderStrings(NiHeader header)
     {
         var strings = new List<string>();
@@ -407,29 +381,11 @@ public static class NifService
         return strings;
     }
 
-    // ======================================================================
-    //  NIF layer Wave 2 — whitelist WRITES (housecarl_nif_set). Pure bytes-in / verified-bytes-out.
-    // ======================================================================
+    // Whitelisted NIF writes (housecarl_nif_set): pure bytes-in / verified-bytes-out.
 
-    /// <summary>Apply the N2-whitelist write op(s) to a mesh's raw bytes and hand back the VERIFIED edited bytes, or a
-    /// named refusal (Q3) — the format-level core behind <c>housecarl_nif_set</c>. Like <see cref="Inspect"/> it knows
-    /// nothing of Amethyst staging; the service layer resolves the winning bytes, calls this, and writes the result.
-    ///
-    /// Refuses (nothing written) when: the mesh won't parse; it is NOT a Skyrim SE stream (a normalized cross-game write
-    /// is untested territory — spike §7); a target shape/node/property named by an op isn't found or is ambiguous; an op
-    /// can't apply (e.g. set_partition on a shape with no dismember skin). Unknown blocks are WARN-and-proceed — they are
-    /// preserved byte-for-byte by construction and the census gate proves it (PRFAQ N6; Wave-2 posture).
-    ///
-    /// Every successful write passes TWO offset-immune gates before its bytes are returned (spike §4, empirically refined
-    /// 2026-07-08 from a position-diff to a block-content diff so a length-changing rename can't false-abort):
-    ///   1. BLOCK-CONTENT DIFF — normalize the unedited mesh and the edited mesh through nifly's canonical writer, slice
-    ///      BOTH by their own block-size tables, and compare block CONTENT by index. Only the block(s)/header the op
-    ///      claims to touch may differ; any other change (a stray block, geometry, the footer) → abort. Content-diff is
-    ///      immune to the file-offset shift a grown/shrunk string table causes, which a raw byte-position diff is not.
-    ///   2. SEMANTIC READ-BACK — reload the written bytes, re-inspect, and assert each op's target now reads as requested
-    ///      (catches a silent no-op write), the block census + unknown-block count are unchanged, the SE stream is intact,
-    ///      and the file reloads clean.
-    /// A gate failure returns the refusal with nothing written — the writer never hands back an unverified mesh.</summary>
+    /// <summary>Apply the whitelisted write op(s) to a mesh's raw bytes and hand back the VERIFIED edited bytes, or a
+    /// named refusal with nothing written. The refusal set and the two offset-immune gates are in
+    /// docs/architecture/nif.md; the writer never hands back an unverified mesh.</summary>
     public static NifSetOutcome Set(byte[] bytes, IReadOnlyList<NifSetOp> ops)
     {
         if (bytes is null || bytes.Length == 0)
@@ -445,13 +401,13 @@ public static class NifService
             if (nif.Load(ms) != 0)
                 return NifSetOutcome.Fail("NiflySharp could not parse this mesh — it may be truncated, not a NIF, or a format the library rejects. Nothing was written.");
         }
-        catch (Exception ex) { return NifSetOutcome.Fail(DescribeLoadException(ex)); }
+        catch (Exception ex) { return NifSetOutcome.Fail(DescribeLoadException(ex).TrimEnd('.', ' ') + ". Nothing was written."); }
 
         NifInspect pre;
         try { pre = Build(nif); }
         catch (Exception ex) { return NifSetOutcome.Fail($"the mesh parsed but reading its structure failed — {ex.GetType().Name}: {ex.Message}. Nothing was written."); }
 
-        // ---- SE-stream gate: nif_set refuses a non-SE mesh by name (plan §2 version guard; spike §7) ----
+        // ---- SE-stream gate: nif_set refuses a non-SE mesh by name ----
         if (!pre.IsSkyrimSE)
             return NifSetOutcome.Fail(
                 $"this is NOT a Skyrim SE mesh (user {pre.UserVersion} / stream {pre.StreamVersion}; SE is user 12 / stream 100). " +
@@ -459,14 +415,14 @@ public static class NifService
 
         // ---- apply each op; record the exact block(s)/header each is allowed to touch ----
         var applied = new List<NifOpResult>(ops.Count);
-        var expectedBlocks = new HashSet<int>();
+        var touched = new List<NiflySharp.INiObject>();
         bool expectHeader = false;
         foreach (var op in ops)
         {
             var r = ApplyOp(nif, op);
             if (r.Error is not null) return NifSetOutcome.Fail(r.Error);   // target-not-found / ambiguous / not-applicable → nothing written
             applied.Add(new NifOpResult(op.Kind.ToString(), r.Target!, r.Before!, r.After!));
-            if (r.TouchedBlock is { } b) expectedBlocks.Add(b);
+            if (r.TouchedBlock is { } b) touched.Add(b);
             if (r.TouchedHeader) expectHeader = true;
         }
 
@@ -480,6 +436,15 @@ public static class NifService
         }
         catch (Exception ex) { return NifSetOutcome.Fail($"saving the edited mesh threw — {ex.GetType().Name}: {ex.Message}. Nothing was written."); }
 
+        // Ids are resolved only AFTER the save, which re-sorts the block list; see docs/architecture/nif.md.
+        var expectedBlocks = new HashSet<int>();
+        foreach (var b in touched)
+        {
+            int id = BlockIndexOf(nif, b);
+            if (id < 0) return NifSetOutcome.Fail("verification could not find an edited block in the saved mesh — refusing to write. Nothing was written.");
+            expectedBlocks.Add(id);
+        }
+
         // ---- GATE 1: block-content diff (offset-immune) ----
         var g1 = VerifyBlockContent(bytes, edited, expectedBlocks, expectHeader);
         if (g1 is not null) return NifSetOutcome.Fail(g1);
@@ -488,18 +453,23 @@ public static class NifService
         var g2 = VerifyReadBack(edited, pre, ops, out var warnings);
         if (g2 is not null) return NifSetOutcome.Fail(g2);
 
+        // The ops' own warn-and-proceed notes, gathered only now: a warning about a failed write would be noise.
+        var allWarnings = new List<string>();
+        foreach (var op in ops)
+            if (op.Kind == NifSetOpKind.SetShaderValue && op.ShaderValue is { } sv
+                && ShaderRangeWarning(sv, op.ShaderNumbers ?? Array.Empty<float>()) is { } rw)
+                allWarnings.Add(rw);
+        allWarnings.AddRange(warnings);
+
         var report = new NifSetReport(applied,
             expectedBlocks.OrderBy(i => i).ToList(), expectHeader,
-            edited.Length - bytes.Length, warnings);
+            edited.Length - bytes.Length, allWarnings);
         return new NifSetOutcome(edited, report, null);
     }
 
-    /// <summary>Apply one op to <paramref name="nif"/>, returning the target's before/after value, the single block index
-    /// it is allowed to change (or header for a rename), or a NAMED error (Q3) that aborts the whole call. The write APIs
-    /// follow the empirically-confirmed NiflySharp rules: bitfield sub-values (alpha flags) are structs (read-modify-write
-    /// then re-assign); a block is resolved and mutated via its OWNING ref, never a freshly-built one (which does not
-    /// persist on save).</summary>
-    static (string? Error, string? Target, string? Before, string? After, int? TouchedBlock, bool TouchedHeader) ApplyOp(NifFile nif, NifSetOp op)
+    /// <summary>Apply one op, returning before/after plus the single block it may change, or a named error that
+    /// aborts the call; the two NiflySharp mutation rules are in docs/architecture/nif.md.</summary>
+    static (string? Error, string? Target, string? Before, string? After, NiflySharp.INiObject? TouchedBlock, bool TouchedHeader) ApplyOp(NifFile nif, NifSetOp op)
     {
         switch (op.Kind)
         {
@@ -508,9 +478,7 @@ public static class NifService
                 if (string.IsNullOrEmpty(op.NewName)) return ("rename_shape needs a new_name.", null, null, null, null, false);
                 var (shape, err) = ResolveShape(nif, op.Target);
                 if (err is not null) return (err, null, null, null, null, false);
-                // Refuse renaming ONTO an existing shape name — it manufactures the ambiguity the resolver refuses, and it
-                // would defeat the read-back check (which confirms a rename by the NEW name existing): if nifly ever
-                // dropped the rename while another shape already bore that name, gate 2 would false-pass.
+                // Refuse renaming ONTO an existing name: it manufactures ambiguity, and gate 2 would false-pass.
                 if (nif.GetShapes().Any(s => !ReferenceEquals(s, shape) && (s.Name?.String ?? "") == op.NewName))
                     return ($"a shape is already named '{op.NewName}' — renaming onto it would create an ambiguous duplicate. Refusing, nothing written.", null, null, null, null, false);
                 var av = (NiflySharp.Blocks.NiAVObject)shape!;
@@ -536,7 +504,7 @@ public static class NifService
                 if (err is not null) return (err, null, null, null, null, false);
                 string before = $"0x{av!.Flags_ui:X}";
                 av.Flags_ui = flags;
-                return (null, op.Target, before, $"0x{flags:X}", BlockIndexOf(nif, av), false);
+                return (null, op.Target, before, $"0x{flags:X}", av, false);
             }
             case NifSetOpKind.SetScale:
             {
@@ -545,7 +513,7 @@ public static class NifService
                 if (err is not null) return (err, null, null, null, null, false);
                 string before = av!.Scale.ToString(System.Globalization.CultureInfo.InvariantCulture);
                 av.Scale = scale;
-                return (null, op.Target, before, scale.ToString(System.Globalization.CultureInfo.InvariantCulture), BlockIndexOf(nif, av), false);
+                return (null, op.Target, before, scale.ToString(System.Globalization.CultureInfo.InvariantCulture), av, false);
             }
             case NifSetOpKind.SetAlpha:
             {
@@ -557,7 +525,7 @@ public static class NifService
                 string before = $"0x{ap.Flags.Value:X4}/thr{ap.Threshold}";
                 if (op.AlphaFlags is { } fw) { var fl = ap.Flags; fl.Value = fw; ap.Flags = fl; }   // AlphaFlags is a STRUCT — reassign
                 if (op.AlphaThreshold is { } th) ap.Threshold = th;
-                return (null, op.Target, before, $"0x{ap.Flags.Value:X4}/thr{ap.Threshold}", BlockIndexOf(nif, ap), false);
+                return (null, op.Target, before, $"0x{ap.Flags.Value:X4}/thr{ap.Threshold}", ap, false);
             }
             case NifSetOpKind.SetPartition:
             {
@@ -574,12 +542,14 @@ public static class NifService
                 else return ($"shape '{op.Target}' has {list.Count} partitions — pass partition_index to say which. Nothing was written.", null, null, null, null, false);
                 string before = $"[{idx}]={(int)list[idx].BodyPart}";
                 var p = list[idx]; p.BodyPart = (NiflySharp.Enums.BSDismemberBodyPartType)bp; list[idx] = p; dis.Partitions = list;   // list of STRUCT — reassign
-                return (null, op.Target, before, $"[{idx}]={bp}", BlockIndexOf(nif, dis), false);
+                return (null, op.Target, before, $"[{idx}]={bp}", dis, false);
             }
             case NifSetOpKind.SetPath:
             {
-                if (op.TextureSlot is not { } slot) return ("set_path needs a texture_slot.", null, null, null, null, false);
                 if (op.Path is null) return ("set_path needs a path.", null, null, null, null, false);
+                // Two addressing forms, one op: a texture-set SLOT on a named shape, or — with no slot — the header
+                // STRING itself, which is how a material (.bgsm), a .tri or a physics-xml ref is carried.
+                if (op.TextureSlot is not { } slot) return SetHeaderString(nif, op);
                 var (shape, err) = ResolveShape(nif, op.Target);
                 if (err is not null) return (err, null, null, null, null, false);
                 var shader = nif.GetShader(shape!);
@@ -590,14 +560,65 @@ public static class NifService
                 var tex = ts.Textures[slot] ?? new NiflySharp.NiString4();
                 string before = tex.Content ?? "";
                 tex.Content = op.Path; ts.Textures[slot] = tex;
-                return (null, op.Target, $"tex[{slot}]={before}", $"tex[{slot}]={op.Path}", BlockIndexOf(nif, ts), false);
+                return (null, op.Target, $"tex[{slot}]={before}", $"tex[{slot}]={op.Path}", ts, false);
+            }
+            case NifSetOpKind.SetShaderValue:
+            {
+                if (string.IsNullOrWhiteSpace(op.ShaderValue)) return ($"set_shader_value needs a shader_value name ({ShaderValueList}).", null, null, null, null, false);
+                if (ShaderValueProperty(op.ShaderValue) is not { } prop)
+                    return ($"unknown shader_value '{op.ShaderValue}'. Use one of: {ShaderValueList}.", null, null, null, null, false);
+                var nums = op.ShaderNumbers ?? Array.Empty<float>();
+                var (shape, err) = ResolveShape(nif, op.Target);
+                if (err is not null) return (err, null, null, null, null, false);
+                if (nif.GetShader(shape!) is not { } shader)
+                    return ($"shape '{op.Target}' has no shader property — no lighting value to set. Nothing was written.", null, null, null, null, false);
+
+                // GATE A — THE LAYOUT, the same scope claim the read path makes; it can only refuse, never fabricate.
+                if (shader.Type != ShaderHelper.ShaderGameType.SK)
+                    return ($"shape '{op.Target}' carries a {shader.Type} shader layout, not Skyrim's — houseCARL models the Skyrim "
+                          + $"shader layout only, and some of these values address a field a {shader.Type} stream never carries "
+                          + "(the write would be accepted and change nothing). Refusing. Nothing was written.", null, null, null, null, false);
+
+                // GATE B — THE BLOCK TYPE; see ReallyWrites, and the refusal names the block whose accessor is a stub.
+                var bt = shader.GetType();
+                var w = ReallyWrites(bt, prop);
+                if (!w.Writable && w.UnknownTypeName is { } badType)
+                    return ($"this NiflySharp version exposes {WireName(prop)} on a {bt.Name} as a {badType}, which houseCARL has no "
+                          + "marshalling for — the value IS settable, but houseCARL will not write a shape it cannot convert "
+                          + "correctly. Refusing rather than guess (Q3). Please file this: it means the bundled library changed "
+                          + "the value's type. Nothing was written.", null, null, null, null, false);
+                if (!w.Writable)
+                    return ($"this NiflySharp version cannot write {WireName(prop)} on a {bt.Name} — the value is not settable on that "
+                          + "block type, so the write would be accepted and change nothing. Refusing (Q3). "
+                          + $"{ToolNames.NifInspect} sections=shader names what it can and cannot see on this block. Nothing was written.", null, null, null, null, false);
+                var components = w.Components;
+                if (nums.Count != components)
+                    return ($"{WireName(prop)} on a {bt.Name} takes {components} number{(components == 1 ? "" : "s")}"
+                          + $"{(components == 3 ? " (r,g,b — conventionally 0-1)" : "")}; got {nums.Count}. Nothing was written.", null, null, null, null, false);
+
+                var pi = bt.GetProperty(prop, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance)!;
+                string before = DescribeShaderValue(pi.GetValue(shader), components);
+                object boxed;
+                if (components == 1) boxed = nums[0];
+                else
+                {
+                    // READ-MODIFY-WRITE: the value is a STRUCT, and any component beyond rgb is carried over, never invented.
+                    boxed = pi.GetValue(shader)!;
+                    var t = boxed.GetType();
+                    t.GetField("R")!.SetValue(boxed, nums[0]);
+                    t.GetField("G")!.SetValue(boxed, nums[1]);
+                    t.GetField("B")!.SetValue(boxed, nums[2]);
+                }
+                pi.SetValue(shader, boxed);
+                return (null, op.Target, $"{WireName(prop)}={before}",
+                        $"{WireName(prop)}={DescribeShaderValue(pi.GetValue(shader), components)}", shader, false);
             }
             default:
                 return ($"unsupported op '{op.Kind}'.", null, null, null, null, false);
         }
     }
 
-    // ---- target resolution (Q3: not-found and ambiguous are NAMED refusals, never a silent first-match write) ----
+    // ---- target resolution: not-found and ambiguous are named refusals, never a silent first-match write ----
 
     static (INiShape? Shape, string? Error) ResolveShape(NifFile nif, string name)
     {
@@ -605,6 +626,59 @@ public static class NifService
         if (matches.Count == 0) return (null, $"no shape named '{name}' in this mesh. Shapes: {ShapeNames(nif)}. Nothing was written.");
         if (matches.Count > 1) return (null, $"more than one shape is named '{name}' — ambiguous, refusing rather than guess which. Nothing was written.");
         return (matches[0], null);
+    }
+
+    /// <summary>set_path's HEADER-STRING form: swap the header string equal to <c>op.Target</c>, addressed by its own
+    /// current VALUE, so every reference to it moves together. Touches the header only; the three refusals that keep
+    /// the whitelist a whitelist are in docs/architecture/nif.md.</summary>
+    static (string? Error, string? Target, string? Before, string? After, NiflySharp.INiObject? TouchedBlock, bool TouchedHeader)
+        SetHeaderString(NifFile nif, NifSetOp op)
+    {
+        var target = op.Target;
+        if (target.Length == 0)
+            return ("set_path with no texture_slot swaps a HEADER STRING, so target must be the string to replace (from "
+                  + "nif_inspect sections=strings). Nothing was written.", null, null, null, null, false);
+        if (target == op.Path)
+            return ($"the header string '{target}' already reads that way — nothing to change. Nothing was written.", null, null, null, null, false);
+
+        var all = HeaderStringRefs(nif).ToList();
+        var refs = all.Where(r => (r.String ?? "") == target).ToList();
+        if (refs.Count == 0)
+            return ($"no header string in this mesh reads '{target}'. Pass the string EXACTLY as {ToolNames.NifInspect} "
+                  + "sections=strings prints it (matching is case-sensitive). Nothing was written.", null, null, null, null, false);
+
+        // A named shape/node has its own op, with guards this form does not repeat.
+        foreach (var av in nif.Blocks.OfType<NiflySharp.Blocks.NiAVObject>())
+            if (av.Name is { } n && refs.Any(r => ReferenceEquals(r, n)))
+                return ($"'{target}' is the NAME of a shape or node, not an asset reference — use op=rename_shape or "
+                      + "op=rename_node, which refuse renaming onto a name already in use. Nothing was written.", null, null, null, null, false);
+
+        // An extra-data block's Name is its KEY, not a path; its VALUE is the asset ref to swap.
+        foreach (var ed in nif.Blocks.OfType<NiflySharp.Blocks.NiExtraData>())
+            if (ed.Name is { } k && refs.Any(r => ReferenceEquals(r, k)))
+                return ($"'{target}' is the KEY an extra-data block is looked up by, not an asset reference — swapping "
+                      + "it would hide the block from the engine. Pass the block's VALUE instead. Nothing was written.", null, null, null, null, false);
+
+        // Renumbering is indistinguishable from a collateral write at gate 1, so it is refused by name.
+        if (all.Any(r => (r.String ?? "") == op.Path))
+            return ($"'{op.Path}' is already a header string in this mesh, and pointing a second reference at it would "
+                  + "renumber the string table — a change the write verification cannot tell from a collateral edit. "
+                  + "Nothing was written.", null, null, null, null, false);
+
+        foreach (var r in refs) r.String = op.Path;
+        return (null, target, target, op.Path, null, true);
+    }
+
+    /// <summary>Every <see cref="NiStringRef"/> a block carries — the authored half, since the table is regenerated on save.</summary>
+    static IEnumerable<NiStringRef> HeaderStringRefs(NifFile nif)
+    {
+        foreach (var b in nif.Blocks)
+        {
+            if (b is null) continue;
+            var refs = b.StringRefs;
+            if (refs is null) continue;
+            foreach (var r in refs) if (r is not null) yield return r;
+        }
     }
 
     static (NiNode? Node, string? Error) ResolveNode(NifFile nif, string name)
@@ -615,8 +689,7 @@ public static class NifService
         return (matches[0], null);
     }
 
-    /// <summary>Resolve a named NiAVObject (a shape OR a node — set_flags/set_scale apply to either). Ambiguity across the
-    /// whole AV-object population is a named refusal.</summary>
+    /// <summary>Resolve a named NiAVObject, a shape OR a node; ambiguity is a named refusal.</summary>
     static (NiflySharp.Blocks.NiAVObject? Av, string? Error) ResolveAvObject(NifFile nif, string name)
     {
         var matches = nif.Blocks.OfType<NiflySharp.Blocks.NiAVObject>().Where(a => (a.Name?.String ?? "") == name).ToList();
@@ -627,20 +700,16 @@ public static class NifService
 
     static string ShapeNames(NifFile nif) => string.Join(", ", nif.GetShapes().Select(s => "'" + (s.Name?.String ?? "") + "'"));
 
-    /// <summary>The block id of a block within the file (parallel to Header.GetBlockSize/TypeName), by reference identity —
-    /// the index the block-content diff will compare. -1 (never expected) if the block isn't in the list.</summary>
-    static int BlockIndexOf(NifFile nif, object block)
+    /// <summary>The block id of a block by reference identity — call it AFTER the save, which re-sorts the list.</summary>
+    static int BlockIndexOf(NifFile nif, NiflySharp.INiObject block)
     {
         var blocks = nif.Blocks;
         for (int i = 0; i < blocks.Count; i++) if (ReferenceEquals(blocks[i], block)) return i;
         return -1;
     }
 
-    /// <summary>GATE 1 — block-content diff. Normalize the ORIGINAL bytes (reload+save) and compare, block-content by
-    /// index, against the edited output (both sliced by their OWN block-size tables so a grown/shrunk header string table
-    /// can't misalign the comparison). Returns null when only the expected block(s)/header changed; else a NAMED refusal.
-    /// If the block layout can't be recovered on either side, it REFUSES (can't verify ⇒ won't write — never a silent
-    /// pass). Internal so the guard can RED-prove it catches a collateral (non-expected-block) change directly.</summary>
+    /// <summary>GATE 1 — block-content diff (docs/architecture/nif.md): null when only the expected block(s)/header
+    /// changed, else a named refusal. Internal so NifSetGuardProbe can feed it a collateral change directly.</summary>
     internal static string? VerifyBlockContent(byte[] original, byte[] edited, HashSet<int> expectedBlocks, bool expectHeader)
     {
         byte[] normBaseline;
@@ -669,11 +738,7 @@ public static class NifService
         if (unexpected.Count > 0)
             return $"the edit changed block(s) [{string.Join(", ", unexpected.Select(i => i + " " + c.Value.types[i]))}] it should not have touched (expected only [{string.Join(", ", expectedBlocks.OrderBy(x => x))}]). Refusing, nothing written.";
 
-        // A header change is legitimate in exactly two cases: a rename (edits the authored string table — the op declares
-        // it via expectHeader), OR a touched block changed SIZE (the header's derived block-SIZE table records each
-        // block's byte length, so growing/shrinking an expected block mechanically updates it — e.g. a longer texture
-        // path). Any OTHER header change is real collateral → refuse. (Found on real facegen data 2026-07-08: the
-        // synthetic same-length ops never resize a block, so only a corpus set_path surfaced the block-size-table path.)
+        // A header change is legitimate in exactly two cases — a rename, or an expected block that changed SIZE.
         bool expectedBlockResized = expectedBlocks.Any(i => i >= 0 && i < a.Value.blocks.Length && a.Value.blocks[i].Length != c.Value.blocks[i].Length);
         if (c.Value.header.AsSpan().SequenceEqual(a.Value.header) == false && !expectHeader && !expectedBlockResized)
             return "the edit changed the header (its string table or a non-touched block's size entry), which no in-place same-size op should. Refusing, nothing written.";
@@ -682,9 +747,7 @@ public static class NifService
         return null;
     }
 
-    /// <summary>Slice a normalized NIF buffer into (header bytes, per-block content bytes, footer bytes) using its OWN
-    /// block-size table + a footer-length recovery (numRoots consistency check — the spike's difftrace layout recovery).
-    /// null if the layout can't be recovered (the caller refuses).</summary>
+    /// <summary>Slice a normalized NIF buffer into header, per-block content and footer bytes; null if the layout cannot be recovered.</summary>
     static (byte[] header, byte[][] blocks, string[] types, byte[] footer)? SliceBlocks(byte[] buf)
     {
         NifFile nif;
@@ -700,12 +763,8 @@ public static class NifService
         long sum = 0; var sizes = new int[bc]; var types = new string[bc];
         for (int i = 0; i < bc; i++) { sizes[i] = nif.Header.GetBlockSize(i); types[i] = nif.Header.GetBlockTypeNameById(i) ?? "?"; sum += sizes[i]; }
 
-        // Recover the header/footer boundary. The footer is [Num Roots : uint][Roots : uint * numRoots]. We scan numRoots
-        // upward and accept the FIRST candidate whose footer both (a) leads with a Num-Roots field equal to the candidate
-        // AND (b) has every root ref a valid block index. Start at 1 — a NIF always has ≥1 root — so the degenerate
-        // numRoots=0 case can't false-match on a mesh whose sole root is block 0 (its trailing root ref reads as 0, which
-        // would spuriously satisfy a numRoots=0 candidate and shift every block window +4). The root-ref validity check
-        // makes a spurious earlier match astronomically unlikely; the true footer always validates.
+        // Recover the header/footer boundary: scan numRoots up from 1, accepting the first candidate whose own
+        // Num-Roots field matches and whose every root ref indexes a real block.
         long headerEnd = -1; long footerLen = 0;
         for (int nRoots = 1; nRoots <= 64; nRoots++)
         {
@@ -739,11 +798,8 @@ public static class NifService
         return (header, blocks, types, footer);
     }
 
-    /// <summary>GATE 2 — semantic read-back. Reload the WRITTEN bytes, re-inspect, and assert: the file reloads clean and
-    /// is still an SE stream; the block census + unknown-block count match the pre-edit inspect (no structural drift); and
-    /// each op's target now reads as REQUESTED (a value that didn't take — a silent no-op — aborts here). Returns null on
-    /// success; else a NAMED refusal. Also emits any WARN-and-proceed notes (unknown blocks preserved). Internal so the
-    /// guard can RED-prove it catches a no-op write directly.</summary>
+    /// <summary>GATE 2 — semantic read-back (docs/architecture/nif.md): null on success, else a named refusal.
+    /// Internal so NifSetGuardProbe can feed it a no-op write directly.</summary>
     internal static string? VerifyReadBack(byte[] edited, NifInspect pre, IReadOnlyList<NifSetOp> ops, out IReadOnlyList<string> warnings)
     {
         warnings = Array.Empty<string>();
@@ -784,9 +840,7 @@ public static class NifService
         return true;
     }
 
-    /// <summary>Re-resolve an op's target in the RELOADED mesh and confirm the written value equals what was requested
-    /// (renames resolve by the NEW name). Returns (matched, actual-as-read) — a false catches a write that silently did
-    /// not persist.</summary>
+    /// <summary>Re-resolve an op's target in the RELOADED mesh and confirm the written value; a false is a write that did not persist.</summary>
     static (bool ok, string actual) ReadBackMatches(NifFile nif, NifSetOp op)
     {
         switch (op.Kind)
@@ -823,6 +877,13 @@ public static class NifService
                 if (idx < 0 || idx >= dis.Partitions.Count) return (false, "(index gone)");
                 return (op.BodyPartId is { } bp && (int)dis.Partitions[idx].BodyPart == bp, $"[{idx}]={(int)dis.Partitions[idx].BodyPart}");
             }
+            case NifSetOpKind.SetPath when op.TextureSlot is null:
+            {
+                // Read off the reloaded mesh's own TABLE, not the block refs the write went through, or a half-done swap verifies green.
+                var strings = ReadHeaderStrings(nif.Header);
+                return (strings.Contains(op.Path ?? "") && !strings.Contains(op.Target),
+                        strings.Contains(op.Target) ? $"'{op.Target}' still present" : "(new string absent)");
+            }
             case NifSetOpKind.SetPath:
             {
                 var s = nif.GetShapes().FirstOrDefault(x => (x.Name?.String ?? "") == op.Target);
@@ -831,22 +892,43 @@ public static class NifService
                 if (ts is null || op.TextureSlot is not { } slot || slot < 0 || slot >= ts.Textures.Count) return (false, "(no texset/slot)");
                 return ((ts.Textures[slot]?.Content ?? "") == op.Path, $"tex[{slot}]={ts.Textures[slot]?.Content}");
             }
+            case NifSetOpKind.SetShaderValue:
+            {
+                // Read back off the CONCRETE property, never INiShader, whose stub constant would false-pass.
+                var s = nif.GetShapes().FirstOrDefault(x => (x.Name?.String ?? "") == op.Target);
+                var shader = s is not null ? nif.GetShader(s) : null;
+                if (shader is null) return (false, "(no shader)");
+                if (op.ShaderValue is null || ShaderValueProperty(op.ShaderValue) is not { } prop) return (false, "(no value name)");
+                var bt = shader.GetType();
+                var w = ReallyWrites(bt, prop);
+                int components = w.Components;
+                var pi = w.Writable ? bt.GetProperty(prop, System.Reflection.BindingFlags.Public | System.Reflection.BindingFlags.Instance) : null;
+                if (pi is null) return (false, $"(not readable back on {bt.Name})");
+                var actual = pi.GetValue(shader);
+                var want = op.ShaderNumbers ?? Array.Empty<float>();
+                if (want.Count != components) return (false, DescribeShaderValue(actual, components));
+                bool ok;
+                if (components == 1) ok = Math.Abs(Convert.ToSingle(actual) - want[0]) < 1e-6f;
+                else
+                {
+                    // RGB ONLY: a Color4's A is synthetic here, so comparing it would fail every colour write.
+                    var (r, g, b) = ReadRgb(actual!, actual!.GetType());
+                    ok = Math.Abs(r - want[0]) < 1e-6f && Math.Abs(g - want[1]) < 1e-6f && Math.Abs(b - want[2]) < 1e-6f;
+                }
+                return (ok, DescribeShaderValue(actual, components));
+            }
             default: return (false, "(unknown op)");
         }
     }
 }
 
-// ======================================================================
-//  NIF-layer data model — the format-level result of an inspect (core; the service layer wraps it with VFS info).
-// ======================================================================
+// NIF-layer data model — the format-level result of an inspect; the service layer wraps it with VFS info.
 
-/// <summary>The outcome of <see cref="NifService.Inspect"/>: exactly one of <see cref="Inspect"/> (success) or
-/// <see cref="Error"/> (a named, recoverable parse/read failure — Q3). Never both, never neither.</summary>
+/// <summary>The outcome of <see cref="NifService.Inspect"/>: exactly one of <see cref="Inspect"/> or <see cref="Error"/>.</summary>
 public sealed record NifInspectOutcome(NifInspect? Inspect, string? Error);
 
-/// <summary>Everything <see cref="NifService.Inspect"/> can model about a mesh, built in full (a single mesh is
-/// sub-second — the renderer chooses which sections to show). <see cref="IsSkyrimSE"/> is the header identity
-/// (user 12 / stream 100); <see cref="UnknownBlockTypes"/> names any preserved-but-opaque block by its on-disk type.</summary>
+/// <summary>Everything <see cref="NifService.Inspect"/> models about a mesh, built in full; <see cref="IsSkyrimSE"/>
+/// is the header identity (user 12 / stream 100) and the renderer chooses which sections to show.</summary>
 public sealed record NifInspect(
     string VersionString,
     uint UserVersion,
@@ -863,12 +945,8 @@ public sealed record NifInspect(
 /// <summary>One block type and how many of it the mesh has, by the on-disk (xEdit/NifSkope) type name.</summary>
 public sealed record NifBlockTypeCount(string Type, int Count);
 
-/// <summary>One shape and its N2-whitelist values. <see cref="Partitions"/> is empty unless the shape has a
-/// BSDismember skin instance; <see cref="Alpha"/> is null unless it carries an alpha property; <see cref="Textures"/>
-/// lists only non-empty texture-set slots; <see cref="Shader"/> is null unless the shape carries a shader property.
-/// <see cref="FlagsDefault"/> is the nif.xml-documented SSE default for the
-/// block's type (via <see cref="FlagsDefaultType"/>, the ancestor it came from), or null when none is documented / the
-/// mesh isn't SE — the renderer decodes <see cref="Flags"/> by deviation from it (nif.xml doesn't name the bits).</summary>
+/// <summary>One shape and its whitelisted values, each absent one null or empty rather than defaulted;
+/// <see cref="FlagsDefault"/> is the nif.xml SSE default the renderer decodes <see cref="Flags"/> by deviation from.</summary>
 public sealed record NifShape(
     string Name,
     uint Flags,
@@ -885,8 +963,7 @@ public sealed record NifShape(
 /// <summary>One BSDismember partition: the body-part id, its decoded enum name (e.g. SBP_30_HEAD), and the part flags.</summary>
 public sealed record NifPartition(int BodyPartId, string BodyPartName, int PartFlags);
 
-/// <summary>An NiAlphaProperty decoded: the raw 16-bit flags word plus the semantic pieces (blend on/off + source and
-/// destination blend functions, alpha test on/off + test function, and the 0–255 threshold).</summary>
+/// <summary>An NiAlphaProperty decoded: the raw 16-bit flags word plus its semantic pieces.</summary>
 public sealed record NifAlpha(
     ushort Flags,
     bool Blend,
@@ -896,24 +973,14 @@ public sealed record NifAlpha(
     string TestFunction,
     byte Threshold);
 
-/// <summary>One embedded texture path at its BSShaderTextureSet slot index (0 diffuse, 1 normal, … 6 tint/detail, …).
-/// <see cref="SlotName"/> is the slot's SEMANTIC name where the shape's shader determines it (#272) — slot 2 is glow
-/// vs skin-subsurface vs soft-lighting depending on type/flags, slot 7 backlight vs specular — and null when it
-/// doesn't. The index is always kept alongside, so an unnamed slot degrades to the old <c>tex[N]</c> form rather than
-/// to a confident wrong name (Q3). See <c>NifService.SlotName</c>.</summary>
+/// <summary>One embedded texture path at its BSShaderTextureSet slot index; <see cref="SlotName"/> is null where the
+/// shader does not determine it, and the index is always kept alongside. See <c>NifService.SlotName</c>.</summary>
 public sealed record NifTexture(int Slot, string Path, string? SlotName = null);
 
-/// <summary>One shape's SHADER PROPERTY (#272) — the block that answers "how is this shape shaded, and does it emit or
-/// scatter light". <see cref="BlockType"/> is the on-disk block name (BSLightingShaderProperty / BSEffectShaderProperty
-/// / …); <see cref="GameType"/> is which game's layout nifly read it as (SK / FO4 / FO3NV / …), which is what selects
-/// the flag words. <see cref="ShaderType"/> is the BSLightingShaderType enum name (Default, EnvironmentMap, SkinTint,
-/// FaceTint, HairTint, Parallax, MultiLayerParallax, …) and is null for any block that does not serialize one — an
-/// effect shader reports NO type rather than a default-valued wrong one. <see cref="Flags1"/> / <see cref="Flags2"/>
-/// are null when the game layout carries no flag word this library names.
-/// <para>Every LIGHTING VALUE below is nullable, and null means "this library version does not read it off this block"
-/// — NOT "the mesh doesn't have it" (see <c>NifService.ReallyReads</c>: NiflySharp 1.0.0 answers several of them from
-/// an interface stub that returns a constant). The renderer names the unread ones explicitly, so a caller is never
-/// handed a stub value as if it were the mesh's.</para></summary>
+/// <summary>One shape's shader property. <see cref="GameType"/> is which game's layout nifly read it as, which selects
+/// the flag words; <see cref="ShaderType"/> and the two flag words are null where no field carries them.
+/// <para>Every LIGHTING VALUE is nullable, and null means this library version does not read it off THIS BLOCK TYPE —
+/// never "the mesh doesn't have it"; see <c>NifService.ReallyReads</c> and docs/architecture/nif.md.</para></summary>
 public sealed record NifShader(
     string BlockType,
     string GameType,
@@ -927,49 +994,48 @@ public sealed record NifShader(
     NifColor? SpecularColor,
     float? Alpha);
 
-/// <summary>One decoded shader flag word: its on-disk <see cref="Label"/> (SLSF1 / SLSF2 / F4SPF1 / …), the
-/// <see cref="Raw"/> value, the <see cref="Names"/> of every set bit the library's enum names (in bit order), and
-/// <see cref="UnknownBits"/> — the bits NO enum member covers, kept as an explicit mask so an unnamed bit is stated
-/// rather than dropped (#255's posture, carried to the shader words).</summary>
-public sealed record NifShaderFlagWord(string Label, uint Raw, IReadOnlyList<string> Names, uint UnknownBits);
-
-/// <summary>A shader colour — RGB, because that is what the format actually carries for both colours reported here
-/// (emissive and specular are each a Color3 on disk). Opacity is a separate scalar, <see cref="NifShader.Alpha"/>.</summary>
-public sealed record NifColor(float R, float G, float B);
-
-/// <summary>One node in the pre-order NiNode tree: its depth (0 = root), name, NiAVObject flags, block type, and the
-/// nif.xml-documented SSE flag default for that type (via <see cref="FlagsDefaultType"/>) — null when none is documented
-/// / the mesh isn't SE. The renderer decodes <see cref="Flags"/> by deviation from the default, like it does for shapes.</summary>
-public sealed record NifNode(int Depth, string Name, uint Flags, string BlockType, uint? FlagsDefault, string? FlagsDefaultType);
-
-// ======================================================================
-//  NIF-layer WRITE model — the N2 whitelist op(s) and the verified outcome (Wave 2).
-// ======================================================================
-
-/// <summary>The seven N2-whitelist write op kinds. Renames edit the header string table; the others edit one block.</summary>
-public enum NifSetOpKind
+/// <summary>One decoded shader flag word: label, raw value, its enum members with their masks, and the unnamed-bit mask.</summary>
+public sealed record NifShaderFlagWord(string Label, uint Raw, IReadOnlyList<string> Names, IReadOnlyList<uint> NameMasks,
+                                       uint UnknownBits)
 {
-    /// <summary>Rename one shape and its header-string-table entry.</summary>
-    RenameShape,
-    /// <summary>Rename one node and its header-string-table entry.</summary>
-    RenameNode,
-    /// <summary>Replace the raw NiAVObject flags on one shape or node.</summary>
-    SetFlags,
-    /// <summary>Replace one shape or node's local scale.</summary>
-    SetScale,
-    /// <summary>Replace one BSDismember partition body-part identifier.</summary>
-    SetPartition,
-    /// <summary>Replace selected NiAlphaProperty flags or threshold values.</summary>
-    SetAlpha,
-    /// <summary>Replace one BSShaderTextureSet path by numeric slot.</summary>
-    SetPath
+    /// <summary>The members and a <c>bitN</c> token per unnamed bit, together in bit order: the rendered flag list.</summary>
+    public IEnumerable<string> Tokens()
+    {
+        int n = 0;
+        for (int i = 0; i < 32; i++)
+        {
+            uint bit = 1u << i;
+            if ((UnknownBits & bit) == 0) continue;
+            for (; n < Names.Count && NameMasks[n] < bit; n++) yield return Names[n];
+            yield return ReadEngine.UnnamedBitToken(i, biped: false);
+        }
+        for (; n < Names.Count; n++) yield return Names[n];
+    }
 }
 
-/// <summary>One write op. <see cref="Target"/> is the shape/node name it addresses (the CURRENT name, for a rename).
-/// The value fields are read per <see cref="Kind"/> and are otherwise null: <see cref="NewName"/> (rename), <see
-/// cref="Flags"/> (set_flags), <see cref="Scale"/> (set_scale), <see cref="BodyPartId"/> + optional
-/// <see cref="PartitionIndex"/> (set_partition), <see cref="AlphaFlags"/> and/or <see cref="AlphaThreshold"/>
-/// (set_alpha), <see cref="TextureSlot"/> + <see cref="Path"/> (set_path — a BSShaderTextureSet slot).</summary>
+/// <summary>A shader colour — RGB, which is what the format carries; opacity is <see cref="NifShader.Alpha"/>.</summary>
+public sealed record NifColor(float R, float G, float B);
+
+/// <summary>One node in the pre-order NiNode tree, carrying the same flag default the renderer decodes shapes by.</summary>
+public sealed record NifNode(int Depth, string Name, uint Flags, string BlockType, uint? FlagsDefault, string? FlagsDefaultType);
+
+// NIF-layer write model — the whitelisted op(s) and the verified outcome.
+
+/// <summary>Whether a shader lighting value can be WRITTEN on a given block, and if not, WHY — three states, because
+/// two different facts refuse the write and each needs its own sentence; see docs/architecture/nif.md.</summary>
+internal readonly record struct NifShaderWritability(bool Writable, int Components, string? UnknownTypeName)
+{
+    public static NifShaderWritability Ok(int components) => new(true, components, null);
+    public static NifShaderWritability NoSetter() => new(false, 0, null);
+    public static NifShaderWritability UnknownType(string typeName) => new(false, 0, typeName);
+}
+
+/// <summary>The whitelisted write op kinds. Renames edit the header string table; the others edit one block.</summary>
+public enum NifSetOpKind { RenameShape, RenameNode, SetFlags, SetScale, SetPartition, SetAlpha, SetPath, SetShaderValue }
+
+/// <summary>One write op. <see cref="Target"/> is the shape/node name it addresses, the CURRENT name for a rename, and
+/// the value fields are read per <see cref="Kind"/> and are otherwise null. <see cref="ShaderNumbers"/> is an
+/// ARITY-FREE list, because how many components a value takes is decided in one place, off the library's own type.</summary>
 public sealed record NifSetOp(
     NifSetOpKind Kind,
     string Target,
@@ -981,20 +1047,18 @@ public sealed record NifSetOp(
     ushort? AlphaFlags = null,
     byte? AlphaThreshold = null,
     int? TextureSlot = null,
-    string? Path = null);
+    string? Path = null,
+    string? ShaderValue = null,
+    IReadOnlyList<float>? ShaderNumbers = null);
 
-/// <summary>The outcome of <see cref="NifService.Set"/>: exactly one of <see cref="WrittenBytes"/>+<see cref="Report"/>
-/// (success — the VERIFIED edited mesh bytes for the service layer to place) or <see cref="Error"/> (a named refusal,
-/// with nothing written — Q3). Never both, never neither.</summary>
+/// <summary>The outcome of <see cref="NifService.Set"/>: exactly one of the VERIFIED bytes plus report, or a named refusal.</summary>
 public sealed record NifSetOutcome(byte[]? WrittenBytes, NifSetReport? Report, string? Error)
 {
-    /// <summary>Creates a named refusal with no candidate bytes or partial report.</summary>
     public static NifSetOutcome Fail(string error) => new(null, null, error);
 }
 
-/// <summary>What a successful <see cref="NifService.Set"/> did: the per-op before→after accounting, the block id(s) the
-/// verification confirmed were the only ones changed (+ whether the header string table changed — a rename), the size
-/// delta, and any WARN-and-proceed notes (e.g. preserved unknown blocks).</summary>
+/// <summary>What a successful <see cref="NifService.Set"/> did: per-op before→after, the block ids verification
+/// confirmed were the only ones changed, the size delta, and any warn-and-proceed notes.</summary>
 public sealed record NifSetReport(
     IReadOnlyList<NifOpResult> Ops,
     IReadOnlyList<int> ChangedBlocks,

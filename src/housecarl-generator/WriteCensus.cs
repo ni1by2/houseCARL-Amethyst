@@ -5,19 +5,16 @@ using Mutagen.Bethesda.Skyrim;
 namespace HousecarlGenerator;
 
 /// <summary>
-/// The write-surface CENSUS (step 7) — the cornerstone-completeness scoreboard.
+/// The write-surface CENSUS — the cornerstone-completeness scoreboard.
 ///
-/// Replaces the originally-planned "breadth sweep" (plan §5.2), which a pre-build audit
-/// (<c>dev/review/STEP7_SWEEP_AUDIT_2026-05-30.md</c>) proved would false-green: iterating the 133
-/// record roots and picking one field per type silently never touches the ~5k writable leaves that
-/// live behind a collection element, on a nested-group record, or on a polymorphic arm — yet would
-/// still report green. That is the exact Q3 failure (a silently degraded mode) the project exists to
-/// prevent.
+/// It must walk EVERY writable non-identity leaf by construction. A sweep that iterates the 133 record
+/// roots and picks one field per type never touches the ~5k writable leaves living behind a collection
+/// element, on a nested-group record, or on a polymorphic arm, and would still report green — a
+/// silently degraded answer, which this census exists to make impossible.
 ///
-/// Instead — the same discipline <c>coerce-audit</c> already proves for the VALUE surface, applied to
-/// the REACHABILITY surface: walk EVERY writable non-identity leaf by construction, classify each by
-/// the EARLIEST engine capability that makes it writable, and loud-list every deferred leaf with a
-/// per-bucket WIRE-WHEN trigger — surfaced every run, never silently skipped.
+/// So: classify each leaf by the EARLIEST engine capability that makes it writable, and loud-list every
+/// deferred leaf with a per-bucket WIRE-WHEN trigger, surfaced every run and never silently skipped.
+/// It is the same discipline <c>CoerceAuditTests</c> applies to the VALUE surface, applied to reachability.
 ///
 /// Classification is by construction, on two axes the live engine code imposes today:
 ///   - record resolution: <see cref="WriteEngine.EnumerateFlatGroups"/> — only flat SkyrimGroup&lt;T&gt;
@@ -72,7 +69,12 @@ internal static class WriteCensus
             {
                 switch (f.Cardinality)
                 {
-                    case "substruct" when f.TypeRef is { } tr:
+                    // …and the same rule on the SUBSTRUCT axis. A substruct TypeRef CAN be a record (Cell.Landscape,
+                    // Worldspace.TopCell), and without this guard the walk crosses Worldspace -> TopCell -> Cell and
+                    // counts the whole nested-group world as reachable today, while axis 1 still prints those same
+                    // fields as deferred — a scoreboard contradicting itself. Descending INTO a present child record
+                    // is not the same capability as resolving the ~60k CELLs the nested-group wave needs.
+                    case "substruct" when f.TypeRef is { } tr && !IsRecord(tr):
                         subAdj[t.Name].Add(tr); navAdj[t.Name].Add(tr); break;
                     // A collection element that is itself a RECORD is NOT unlocked by collection navigation —
                     // a record must be resolved (flat- or nested-group), never reached by walking into a parent's
@@ -121,12 +123,14 @@ internal static class WriteCensus
         { leafCount[b] = 0; typeCount[b] = 0; cardInBucket[b] = new(StringComparer.Ordinal); sampleOwners[b] = new(); }
 
         // Unifies the two completeness instruments: a leaf that is REACHABLE today but whose value type the
-        // engine cannot yet coerce (the coerce-audit deferred surface) must not be counted as writable-today.
+        // engine cannot yet coerce (the CoerceAuditTests deferred surface) must not be counted as writable-today.
         var reachableButCoercionDeferred = new List<string>();
+        // …and the leaves whose field holds an owned child record — reachable, but nothing writes AT them.
+        var ownedChildLeaves = new List<string>();
         int totalWritable = 0;
         // Of the TODAY list/dict fields, those with a STRUCT element are only structurally writable today
-        // (Remove/Clear); ADDING a composed element is wave-1 (element composition), exactly as coerce-audit +
-        // write-proof treat them. Counted here so the "writable today" headline is faithful about that nuance.
+        // (Remove/Clear); ADDING a composed element needs element composition, exactly as CoerceAuditTests and
+        // write-proof treat them. Counted here so the "writable today" headline is faithful about that.
         int todayStructElemColl = 0;
 
         foreach (var t in corpus.Types.Values)
@@ -142,11 +146,25 @@ internal static class WriteCensus
                 totalWritable++;
                 // Coercion cross-check: a leaf we'd otherwise call writable-today whose value type the engine
                 // cannot yet coerce is NOT writable today — pull it out and tally it separately (unifies this
-                // census with coerce-audit so the two completeness instruments can't disagree).
+                // census with CoerceAuditTests so the two completeness instruments can't disagree).
                 if (b == TODAY && IsScalarish(f.Cardinality)
                     && ScalarAq(f) is { } aq && WriteEngine.ResolveType(aq) is { } rt && !WriteEngine.CanCoerce(rt))
                 {
                     reachableButCoercionDeferred.Add($"{t.Name}.{f.Name} ({Pretty(rt)})");
+                    continue;
+                }
+                // The same subtraction for an OWNED CHILD RECORD leaf. Every write AT the field is refused — not built
+                // from parts, not set from a value, and not cleared, since that would delete the record — so counting
+                // it writable-today would inflate the headline by a field nothing can write. What IS writable is the
+                // child record itself, on its own axis, and its leaves are counted under its own type.
+                // NOT gated on the TODAY bucket, unlike the coercion clause above: bucket is a property of the leaf's
+                // OWNER (Worldspace is flat, so TODAY; Cell is nested, so wave_nested), and the two owned-child leaves
+                // are the same field kind in different owners. Gating on TODAY would leave Cell.Landscape in the
+                // nested-wave bucket, promised to a wave that cannot make it writable — no wave changes the answer for
+                // a field that holds a record.
+                if (SchemaClassifier.IsOwnedChildRecord(f, corpus))
+                {
+                    ownedChildLeaves.Add($"{t.Name}.{f.Name} ({f.TypeRef})");
                     continue;
                 }
                 leafCount[b]++;
@@ -157,7 +175,7 @@ internal static class WriteCensus
         }
 
         // ======================================================================
-        //  REPORT — plain-English lay-of-the-land first (for Aaron), then the precise buckets.
+        //  REPORT — plain-English lay-of-the-land first, then the precise buckets.
         // ======================================================================
         Console.WriteLine("================================================================");
         Console.WriteLine(" houseCARL write-surface census");
@@ -175,9 +193,11 @@ internal static class WriteCensus
         Line(ARM,    "DEFERRED  -> polymorphic arm breadth        (condition data + arm sub-fields)");
         Line(ORPHAN, "DEFERRED  -> header / script metadata       (mod header, compiled-script internals)");
         if (coercionDeferred > 0)
-            Console.WriteLine($"  {coercionDeferred,6} fields  (   - types)   DEFERRED  -> reachable but value-type coercion-deferred (see coerce-audit)");
+            Console.WriteLine($"  {coercionDeferred,6} fields  (   - types)   DEFERRED  -> reachable but value-type coercion-deferred (see CoerceAuditTests)");
+        if (ownedChildLeaves.Count > 0)
+            Console.WriteLine($"  {ownedChildLeaves.Count,6} fields  (   - types)   NOT A LEAF -> holds an owned child record; the record is written on its own axis ({string.Join(", ", ownedChildLeaves)})");
         Console.WriteLine("  ------");
-        var grandTotal = leafCount.Values.Sum() + coercionDeferred;
+        var grandTotal = leafCount.Values.Sum() + coercionDeferred + ownedChildLeaves.Count;
         Console.WriteLine($"  {grandTotal,6} fields total   (must equal {totalWritable}: {(grandTotal == totalWritable ? "OK" : "!! MISMATCH")})");
         var pctToday = totalWritable == 0 ? 0 : 100.0 * leafCount[TODAY] / totalWritable;
         Console.WriteLine();
@@ -210,13 +230,13 @@ internal static class WriteCensus
         }
         DumpBucket(COLL,   "the path step can pass THROUGH a list/dict element by key/index to reach a sub-leaf (lift CorpusRulebook's mid-path collection rejection); add oracle cells e.g. Spell -> Effects[0] -> Data.Magnitude.");
         DumpBucket(NESTED, "the lifecycle can GetOrAddAsOverride a record stored in a nested group (Cell/Worldspace/Placed*/INFO/Navmesh/Landscape); add an oracle cell per nested shape.");
-        DumpBucket(ARM,    "a breadth proof sweeps arm-set + arm sub-field coercion across all polymorphic unions (not just the proven MagicEffect->Light). NOTE: condition arms are double-blocked — also behind the Conditions collection AND the typed-value coercion deferral (coerce-audit's 202).");
+        DumpBucket(ARM,    "a breadth proof sweeps arm-set + arm sub-field coercion across all polymorphic unions (not just the proven MagicEffect->Light). NOTE: condition arms are double-blocked — also behind the Conditions collection AND the typed-value coercion deferral (CoerceAuditTests' 202).");
         DumpBucket(ORPHAN, "ModHeader half PROVEN — write-proof Phase 11 (wave 5; see that phase for detail). PEX half (~75 fields) DEFERRED: the " +
             "Mutagen PEX byte-identity gate did NOT clear (pex-probe: 101/400 byte-identical, the rest a benign string-table re-order — not a surgical " +
             "write) — a Mutagen-delta residual; prefer .psc source (project_pex_prefer_source_policy). Bucket does NOT zero (Option A); reconciles at the final sweep.");
 
         // ---- coercion cross-check result (unify the two instruments) ----
-        Console.WriteLine("---- coercion cross-check (vs coerce-audit) ----");
+        Console.WriteLine("---- coercion cross-check (vs CoerceAuditTests) ----");
         if (coercionDeferred == 0)
             Console.WriteLine("     none — every reachable-today leaf's value type is coercible (the two instruments agree).");
         else
@@ -271,8 +291,8 @@ internal static class WriteCensus
         File.WriteAllText(Path.Combine(outDir, "write-census.json"),
             JsonSerializer.Serialize(summary, new JsonSerializerOptions { WriteIndented = true }));
 
-        // The census MEASURES; it does not itself prove the reachable surface byte-true (that is the proof
-        // harness, the next increment). It also never silently passes: it asserts its own partition is total.
+        // The census MEASURES; proving the reachable surface byte-true is the proof harness's job. It never
+        // silently passes: it asserts its own partition is total.
         var partitionOk = grandTotal == totalWritable;
         Console.WriteLine(partitionOk
             ? $"=== CENSUS COMPLETE: {totalWritable} writable leaves fully partitioned; {leafCount[TODAY]} writable today, {totalWritable - leafCount[TODAY]} deferred across named waves. ==="

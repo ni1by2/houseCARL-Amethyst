@@ -1,0 +1,74 @@
+namespace HousecarlMcp;
+
+/// <summary>Path helpers for two jobs: a plugin argument that names a file path (is it a path, do two paths denote one file, which active plugin a path is), and which MO2 layer any physical path is in.</summary>
+internal static class PluginPaths
+{
+    /// <summary>Does the user's `plugin` argument denote a PATH, used verbatim, rather than a bare filename located in the MO2 folders? True if rooted or carrying a directory separator.</summary>
+    internal static bool LooksLikePath(string s) => Path.IsPathRooted(s) || s.Contains('\\') || s.Contains('/');
+
+    /// <summary>Do two paths denote the same plugin file? A full-path compare, never a filename one, since a backup and the live copy share a name.</summary>
+    internal static bool SamePluginFile(string a, string b)
+    {
+        try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+        catch { return false; }
+    }
+
+    /// <summary>If <paramref name="path"/> is the EXACT file the active order loads for its filename, the plugin name
+    /// the order knows it by; else null.</summary>
+    internal static string? ActiveNameForPath(LoadOrderResolver.IndexView view, string path)
+    {
+        string full;
+        try { full = Path.GetFullPath(path.Trim()); } catch { return null; }
+        var name = Path.GetFileName(full);
+        if (name.Length == 0 || !view.ContainsPlugin(name)) return null;
+        // An excluded plugin is still in the name table and the active lane can only refuse it; reading its file
+        // directly is the escape hatch, so a path to one must keep taking the off-order lane.
+        if (view.ExcludedPlugins.ContainsKey(name)) return null;
+        var active = view.PluginPath(name);
+        return !string.IsNullOrEmpty(active) && SamePluginFile(active, full) ? name : null;
+    }
+
+    /// <summary>The MO2 LAYER a physical file path belongs to, as a NAME. A caller that has to say WHICH of the three
+    /// answered takes <see cref="InstallLayerOfPath"/> instead, because a mod folder may itself be called "Data".</summary>
+    internal static string? LayerOfInstallPath(string path, Mo2Roots roots) =>
+        InstallLayerOfPath(path, roots)?.Name;
+
+    /// <summary>The MO2 layer a physical file path belongs to, as the BRANCH that answered plus the name it produced.</summary>
+    internal static SourceLayer? InstallLayerOfPath(string path, Mo2Roots roots)
+    {
+        static bool Under(string candidate, string root, out string remainder)
+        {
+            remainder = "";
+            if (string.IsNullOrWhiteSpace(candidate) || string.IsNullOrWhiteSpace(root)) return false;
+            string fullPath, fullRoot;
+            try
+            {
+                fullPath = Path.GetFullPath(candidate);
+                fullRoot = Path.GetFullPath(root);
+            }
+            catch { return false; }
+
+            string relative;
+            try { relative = Path.GetRelativePath(fullRoot, fullPath); }
+            catch { return false; }
+            if (relative == "." || Path.IsPathRooted(relative) || relative == ".." ||
+                relative.StartsWith(".." + Path.DirectorySeparatorChar, StringComparison.Ordinal) ||
+                (Path.AltDirectorySeparatorChar != Path.DirectorySeparatorChar &&
+                 relative.StartsWith(".." + Path.AltDirectorySeparatorChar, StringComparison.Ordinal)))
+                return false;
+            remainder = relative;
+            return true;
+        }
+        if (Under(path, roots.OverwriteDir, out _))
+            return new SourceLayer(SourceLayerKind.Overwrite, AssetResolver.OverwriteLayerName);
+        if (Under(path, roots.ModsDir, out var rest))
+        {
+            int slash = rest.IndexOfAny(new[] { Path.DirectorySeparatorChar, Path.AltDirectorySeparatorChar }.Distinct().ToArray());
+            // a .bsa directly in mods\ belongs to no mod — no translation
+            return slash > 0 ? new SourceLayer(SourceLayerKind.ModFolder, rest[..slash]) : null;
+        }
+        if (Under(path, roots.DataDir, out _))
+            return new SourceLayer(SourceLayerKind.GameData, AssetResolver.DataLayerName);
+        return null;
+    }
+}

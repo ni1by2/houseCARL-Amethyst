@@ -1,0 +1,513 @@
+using System.Text.Json;
+using System.Text.RegularExpressions;
+using Mutagen.Bethesda.Skyrim;
+using HousecarlCore;
+using HousecarlMcp;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+/// <summary>
+/// The dialogue family's facts, driven against the surfaces that render them: <c>housecarl_records
+/// project=info_order</c> for D1-D3 and D4a, and <c>housecarl_check findings=["dialogue"]</c> for D4b, D4c and V1.
+///
+/// <para>D1/D2 and V1 are driven on the shared <see cref="DialogueWorld"/>. The four lock facts (D3, D4a,
+/// D4b, D4c) each construct their OWN world via <c>new()</c> — never the shared one, per <see cref="DialogueWorld"/>'s
+/// own doc and the <see cref="HeldOpen"/> harness's contract (a held file is unreadable to anything else in
+/// the process).</para>
+/// </summary>
+[Collection("dialogue")]
+[Trait("tier", "integration")]
+public sealed class DialogueFamilyTests
+{
+    readonly DialogueWorld W;
+    public DialogueFamilyTests(DialogueFixture f) => W = f.W;
+
+    LoadOrderService Svc => W.Svc;
+
+    static string Fid(Mutagen.Bethesda.Plugins.FormKey fk) => $"{fk.ID:X6}:{fk.ModKey.FileName}";
+
+    string InfoOrder(Mutagen.Bethesda.Plugins.FormKey topic) =>
+        RecordsTools.Records(Svc, formids: new[] { Fid(topic) },
+                             project: new RecordsTools.RecordsProject { form = "info_order" });
+
+    static SweepFamilySelection DialogueSel()
+    {
+        Assert.True(SweepFamilySelection.TryParse(new[] { "dialogue" }, out var sel, out var err), err);
+        return sel!;
+    }
+
+    string CheckDialogue(LoadOrderService svc, params Mutagen.Bethesda.Plugins.FormKey[] seeds) =>
+        CheckTextRender.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: svc.CheckDialogue(seeds.Select(Fid).ToArray(), 1000)), 20000);
+
+    // ---- fact D1 --------------------------------------------------------------------------------------
+    // The shipped INFO-order render states the merge model (effective INFO order, per-row MOVED from #N) and
+    // never claims lines are "dropped in game".
+
+    [Fact]
+    public void FactD1_TheShippedRenderStatesTheMergeModel()
+    {
+        var r = InfoOrder(W.Topic);
+
+        Served(r, "effective INFO order", "merged across 3 plugins that touch this topic",
+                  "plays the FIRST line whose conditions pass");
+        // The whole composed row, anchored to the record that moved: "MOVED from #1" on its own is a fragment any
+        // row could carry, and this fixture has eight of them.
+        Assert.Contains($"#8  {Fid(W.MovedLine)}  MOVED from #1  placed by {DialogueWorld.LastName}", r);
+        Assert.DoesNotContain("dropped in game", r);
+    }
+
+    // ---- max_chars is a CEILING on the info_order render too (#604) ------------------------------------
+
+    /// <summary>A topic filled well past its cap comes back inside it: the truncation notice and the spilled:
+    /// block are charged before the first topic is laid, and a topic that would cross what is left is taken back
+    /// out whole and counted. The one arm that may still exceed the cap — a max_chars too small for what the
+    /// response carries whatever the budget, its spill block included — says so and names the number that clears
+    /// it, which is what the second branch below asserts.</summary>
+    [Theory]
+    [InlineData(400)]
+    [InlineData(700)]
+    [InlineData(1_600)]
+    [InlineData(2_400)]
+    [InlineData(8_000)]
+    public void AnInfoOrderRenderIsNeverWiderThanItsCap(int cap)
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Topic) },
+                                     project: new RecordsTools.RecordsProject { form = "info_order" },
+                                     max_chars: cap);
+
+        if (r.Length <= cap) return;
+        Assert.Contains($"over the max_chars={cap} it was given", r);
+        var needed = int.Parse(Regex.Match(r, @"raise max_chars to at least (\d+)").Groups[1].Value);
+        Assert.Equal(r.Length, needed);
+    }
+
+    /// <summary>And what the cap held back is counted, not dropped in silence. The cap is derived rather than
+    /// pinned: 100 short of what the render takes uncapped is a cap it cannot hold, whatever this fixture's
+    /// topic happens to weigh.</summary>
+    [Fact]
+    public void AnInfoOrderCutByItsCapSaysHowManyTopicsItHeldBack()
+    {
+        string At(int cap) => RecordsTools.Records(Svc, formids: new[] { Fid(W.Topic) },
+                                                   project: new RecordsTools.RecordsProject { form = "info_order" },
+                                                   max_chars: cap);
+        int cap = At(0).Length - 100;
+        var r = At(cap);
+
+        Assert.Matches(@"\[rendered \d+ of 1 rows at max_chars=" + cap + @"\]", r);
+        Assert.Contains("spilled: complete result", r);
+    }
+
+    /// <summary>The info_order census is a text render too: at a max_chars it cannot fit in it says so and names
+    /// the number that clears it, rather than answering over the cap in silence.</summary>
+    [Fact]
+    public void AnInfoOrderCensusTooBigForItsCapSaysSoAndNamesTheNumberThatClearsIt()
+    {
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.Topic) },
+                                     project: new RecordsTools.RecordsProject { form = "info_order" },
+                                     counts_only: true, max_chars: 50);
+
+        Assert.True(r.Length > 50, "the census fits 50 chars, so it cannot show the overrun arm");
+        Assert.Contains("over the max_chars=50 it was given", r);
+        Assert.Equal(r.Length, int.Parse(Regex.Match(r, @"raise max_chars to at least (\d+)").Groups[1].Value));
+    }
+
+    /// <summary>And the other side: a render whose complete output fits inside max_chars IS that output. The
+    /// reserves the bounded pass holds back are room for notices a complete render never writes, so charging them
+    /// against one that fits cut an answer that fitted — which then spilled and came back short.</summary>
+    [Fact]
+    public void AnInfoOrderRenderThatFitsItsCapIsNotCutByNoticesItNeverWrites()
+    {
+        string At(int cap) => RecordsTools.Records(Svc, formids: new[] { Fid(W.Topic) },
+                                                   project: new RecordsTools.RecordsProject { form = "info_order" },
+                                                   max_chars: cap);
+        int whole = At(0).Length;
+
+        foreach (int cap in new[] { whole, whole + 1, whole + 50, whole + 140 })
+        {
+            var r = At(cap);
+            Assert.Equal(whole, r.Length);
+            Assert.DoesNotContain("spilled:", r);
+            Assert.DoesNotContain("at max_chars=", r);
+        }
+    }
+
+    // ---- fact D2 --------------------------------------------------------------------------------------
+    // The PNAM-zero caveat stays absent.
+
+    [Fact]
+    public void FactD2_TheRetractedCaveatStaysAbsent()
+    {
+        var r = InfoOrder(W.Topic);
+
+        Assert.DoesNotContain("I am first", r);
+        Assert.DoesNotContain("placed LAST where the game places it FIRST", r);
+    }
+
+    // ---- fact D3 --------------------------------------------------------------------------------------
+    // UNREAD-WIRED: a locked contributor yields an INCOMPLETE render naming the unread plugin, over a world
+    // this test constructs itself.
+
+    [Fact]
+    public void FactD3_UnreadWired()
+    {
+        using var w = new DialogueWorld();
+        w.Svc.Stats();   // force the index build while every plugin is still readable
+
+        using var hold = HeldOpen.Hold(w.MidPath);
+        var r = RecordsTools.Records(w.Svc, formids: new[] { Fid(w.Topic) },
+                                     project: new RecordsTools.RecordsProject { form = "info_order" });
+
+        Served(r, "INCOMPLETE", "read from 2 of 3 plugin(s) that touch this topic");
+        Assert.Contains($"1 plugin(s) that TOUCH this topic could not be read ({DialogueWorld.MidName})", r);
+    }
+
+    // ---- fact D4 (a) ------------------------------------------------------------------------------------
+    // DEFINER-LOCK-LOUD on the order: the merge reads the definer (the PNAM-target fetch inside the order code),
+    // so a locked definer makes records project=info_order refuse, naming it.
+
+    // Since #915 the check family never reads the definer here; the fact moved to the shipping info_order path.
+    [Fact]
+    public void FactD4a_DefinerLockIsLoud()
+    {
+        using var w = new DialogueWorld();
+        w.Svc.Stats();
+
+        using var hold = HeldOpen.Hold(w.MasterPath);
+        var r = RecordsTools.Records(w.Svc, formids: new[] { Fid(w.Topic) },
+                                     project: new RecordsTools.RecordsProject { form = "info_order" });
+
+        // Read from the exception on: the refusal has to name the locked plugin, and only the locked one.
+        int i = r.IndexOf("IOException", StringComparison.Ordinal);
+        Assert.True(i >= 0, $"no IOException in the response: {r}");
+        var refusal = r[i..];
+        Assert.StartsWith("error: housecarl_records failed", r);
+        Assert.Contains(DialogueWorld.MasterName, refusal);
+        Assert.DoesNotContain(DialogueWorld.LastName, refusal);
+        Assert.DoesNotContain(DialogueWorld.MidName, refusal);
+    }
+
+    // ---- fact D4 (b) ------------------------------------------------------------------------------------
+    // WINNER-LOCK-LOUD: the TOTAL-drop case is already loud, by a different mechanism — the winner body is
+    // fetched through GetRecord, which throws rather than swallowing.
+
+    [Fact]
+    public void FactD4b_WinnerLockIsLoud()
+    {
+        using var w = new DialogueWorld();
+        w.Svc.Stats();
+
+        using var hold = HeldOpen.Hold(w.LastPath);
+        var result = w.Svc.CheckDialogue(new[] { Fid(w.Topic) }, 1000);
+        var text = CheckTextRender.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000);
+
+        Assert.NotNull(result.Error);
+        // Read past the seed: the sweep echoes it before the refusal, and here it names a DIFFERENT plugin from the
+        // locked one.
+        var refusal = AfterSeed(text, Fid(w.Topic));
+        Assert.Contains("the check did not finish", refusal);
+        Assert.Contains("IOException", refusal);
+        Assert.Contains(DialogueWorld.LastName, refusal);
+        Assert.DoesNotContain(DialogueWorld.MidName, refusal);
+    }
+
+    // ---- fact D4 (c) ------------------------------------------------------------------------------------
+    // DEFINER-LOCK-LOUD on the check: for an overridden topic the SNAM ownership gate reads the definer's own
+    // copy, so a locked definer must stop the check with a named error, never answer from a missing base pair.
+
+    [Fact]
+    public void FactD4c_DefinerLockIsLoudOnTheCheck()
+    {
+        using var w = new DialogueWorld();
+        w.Svc.Stats();
+        var seed = Fid(w.VanillaStaleOverriddenTopic);
+        var vanillaPath = Path.Combine(Path.GetDirectoryName(Path.GetDirectoryName(w.MasterPath))!,
+                                       "VanillaStub", DialogueWorld.VanillaName);
+
+        // Control: unlocked, the same seed finishes.
+        Assert.Null(w.Svc.CheckDialogue(new[] { seed }, 1000).Error);
+
+        using var hold = HeldOpen.Hold(vanillaPath);
+        var result = w.Svc.CheckDialogue(new[] { seed }, 1000);
+        var text = CheckTextRender.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000);
+
+        Assert.NotNull(result.Error);
+        // The seed is "<id>:Skyrim.esm", so the refusal is read past its echo.
+        var refusal = AfterSeed(text, seed);
+        Assert.Contains("the check did not finish", refusal);
+        Assert.Contains("IOException", refusal);
+        Assert.Contains(DialogueWorld.VanillaName, refusal);
+        Assert.DoesNotContain(DialogueWorld.LastName, refusal);
+        Assert.DoesNotContain(DialogueWorld.MasterName, refusal);
+    }
+
+    // ---- fact V1 --------------------------------------------------------------------------------------
+    // Each seed kind's "CK-parity: OK" prose names EVERY subrecord its Missing*Defaults check covers, with
+    // the signature set DERIVED from the check rather than hand-listed.
+
+    static string[] GapSigs(IReadOnlyList<CkParityGap> gaps) =>
+        gaps.SelectMany(g => Regex.Matches(g.Subrecord, @"\b[A-Z]{4}\b").Select(m => m.Value)).Distinct().ToArray();
+
+    [Fact]
+    public void FactV1_ParityOkProseNamesEveryCoveredSubrecord()
+    {
+        // The authoritative signature sets, derived from a BARE record's own gap list — never hand-listed.
+        var pinView = GapSigs(DialogueCkParity.MissingViewDefaults(
+            new DialogView(Mutagen.Bethesda.Plugins.FormKey.Factory("000900:HcDvPin.esm"), SkyrimRelease.SkyrimSE)));
+        var pinBranch = GapSigs(DialogueCkParity.MissingBranchDefaults(
+            new DialogBranch(Mutagen.Bethesda.Plugins.FormKey.Factory("000901:HcDvPin.esm"), SkyrimRelease.SkyrimSE)));
+        var pinQuest2 = new Quest(Mutagen.Bethesda.Plugins.FormKey.Factory("000902:HcDvPin.esm"), SkyrimRelease.SkyrimSE);
+        pinQuest2.Objectives.Add(new QuestObjective { Index = 1 });
+        var pinQuest = GapSigs(DialogueCkParity.MissingQuestDefaults(pinQuest2));
+
+        Assert.NotEmpty(pinView);
+        Assert.NotEmpty(pinBranch);
+        Assert.NotEmpty(pinQuest);
+
+        var r = CheckDialogue(Svc, W.ViewOk, W.BranchOk, W.QuestOk);
+
+        var byViewLine = SeedBlock(r, "dialogue view (DLVW)");
+        Assert.Contains("CK-parity: OK", byViewLine);
+        foreach (var sig in pinView) Assert.Contains(sig, byViewLine);
+
+        var byBranchLine = SeedBlock(r, "dialogue branch (DLBR)");
+        Assert.Contains("CK-parity: OK", byBranchLine);
+        foreach (var sig in pinBranch) Assert.Contains(sig, byBranchLine);
+
+        var byQuestLine = SeedBlock(r, "quest (QUST)");
+        Assert.Contains("quest CK-parity: OK", byQuestLine);
+        foreach (var sig in pinQuest) Assert.Contains(sig, byQuestLine);
+    }
+
+    // ---- fact V2 --------------------------------------------------------------------------------------
+    // The family stamps the record build every seed was validated against, and DECLARES the bound rather than
+    // omitting the stamp: both transports name the three verdict classes the record fingerprint does not describe.
+
+    [Fact]
+    public void FactV2_TheStampDeclaresItsBound()
+    {
+        var result = Svc.CheckDialogue(new[] { Fid(W.Topic) }, 1000);
+        Assert.Null(result.Error);
+        Assert.False(string.IsNullOrEmpty(result.Epoch));
+
+        var text = CheckTextRender.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000);
+        Served(text, $"epoch={result.Epoch}", "does not cover");
+        foreach (var cls in DialogueSweepRender.EpochUncovered) Assert.Contains(cls, text);
+
+        var fam = JsonDocument.Parse(JsonWire.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000))
+                              .RootElement.GetProperty("families")
+                              .GetProperty(SweepFamilySelection.Token(SweepFamily.Dialogue));
+        Assert.Equal(result.Epoch, fam.GetProperty("epoch").GetString());
+        // The stamp is a record-build claim only, so the coverage flag is false and the uncovered set says over what.
+        Assert.False(fam.GetProperty("epoch_covers_all_inputs").GetBoolean());
+        Assert.Equal(DialogueSweepRender.EpochUncovered,
+                     fam.GetProperty("epoch_uncovered").EnumerateArray().Select(e => e.GetString()).ToArray());
+
+        // A refusal reached AFTER the build was read carries the bare stamp, as the sibling families' post-capture
+        // refusals do (EpochCheckSweepTests.FactE5_6): there is a build to name, and nothing was covered by it.
+        var refused = Svc.CheckDialogue(new[] { "not-a-formid" }, 1000);
+        Assert.NotNull(refused.Error);
+        Assert.Equal(result.Epoch, refused.Epoch);
+        Assert.Contains($"epoch={refused.Epoch}",
+                        CheckTextRender.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: refused), 20000));
+        var refusedJson = JsonWire.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: refused), 20000);
+        Assert.Equal(refused.Epoch, JsonDocument.Parse(refusedJson).RootElement.GetProperty("epoch").GetString());
+        Assert.DoesNotContain("epoch_covers_all_inputs", refusedJson);
+
+        // …and a refusal decided on the ARGUMENTS alone names no build, which is the split the siblings keep: it is
+        // answered without reading one, so there is nothing honest to stamp.
+        var unseeded = Svc.CheckDialogue(Array.Empty<string>(), 1000);
+        Assert.NotNull(unseeded.Error);
+        Assert.Null(unseeded.Epoch);
+        Assert.DoesNotContain("epoch=", CheckTextRender.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: unseeded), 20000));
+    }
+
+    // ---- Subtype vs SNAM (#660) -------------------------------------------------------------------------
+    // A topic whose numeric Subtype contradicts its SNAM marker is flagged, and both renders say the marker is
+    // the one to believe. A topic where the two agree says nothing.
+
+    [Fact]
+    public void ATopicWhoseSubtypeContradictsItsMarkerSaysTheMarkerWins()
+    {
+        var r = CheckDialogue(Svc, W.StaleSubtypeTopic);
+        var block = SeedBlock(r, Fid(W.StaleSubtypeTopic));
+
+        Assert.Contains("subtype=RechargeExit (stale)", block);
+        Assert.Contains("subtype_marker=HELO (authoritative)", block);
+        Assert.Contains("the MARKER is authoritative", block);
+        Assert.Contains("Treat this topic's subtype as Hello, not RechargeExit", block);
+    }
+
+    [Fact]
+    public void ATopicWhoseSubtypeMatchesItsMarkerIsNotFlagged()
+    {
+        var r = CheckDialogue(Svc, W.AgreeingSubtypeTopic);
+        var block = SeedBlock(r, Fid(W.AgreeingSubtypeTopic));
+
+        Assert.Contains("subtype=Hello", block);
+        Assert.DoesNotContain("(stale)", block);
+        Assert.DoesNotContain("authoritative", block);
+    }
+
+    /// <summary>The JSON transport carries the same verdict as a flag, so a consumer never parses it out of prose.</summary>
+    [Fact]
+    public void TheJsonSweepFlagsAStaleSubtype()
+    {
+        bool Stale(Mutagen.Bethesda.Plugins.FormKey topic)
+        {
+            var result = Svc.CheckDialogue(new[] { Fid(topic) }, 1000);
+            Assert.Null(result.Error);
+            var json = JsonDocument.Parse(JsonWire.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000));
+            var row = json.RootElement.GetProperty("families")
+                          .GetProperty(SweepFamilySelection.Token(SweepFamily.Dialogue))
+                          .GetProperty("seeds").EnumerateArray()
+                          .SelectMany(s => s.GetProperty("topics").EnumerateArray())
+                          .Single(t => t.GetProperty("topic").GetString() == topic.ToString());
+            return row.GetProperty("subtype_stale").GetBoolean();
+        }
+
+        Assert.True(Stale(W.StaleSubtypeTopic));
+        Assert.False(Stale(W.AgreeingSubtypeTopic));
+    }
+
+    /// <summary>The JSON carries the marker-derived NAME too, so a consumer reading past a stale subtype never has to
+    /// re-implement the marker→name table.</summary>
+    [Fact]
+    public void TheJsonSweepNamesTheSubtypeTheMarkerGives()
+    {
+        var result = Svc.CheckDialogue(new[] { Fid(W.StaleSubtypeTopic) }, 1000);
+        Assert.Null(result.Error);
+        var json = JsonDocument.Parse(JsonWire.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000));
+        var row = json.RootElement.GetProperty("families")
+                      .GetProperty(SweepFamilySelection.Token(SweepFamily.Dialogue))
+                      .GetProperty("seeds").EnumerateArray()
+                      .SelectMany(s => s.GetProperty("topics").EnumerateArray())
+                      .Single(t => t.GetProperty("topic").GetString() == W.StaleSubtypeTopic.ToString());
+
+        Assert.Equal("RechargeExit", row.GetProperty("subtype").GetString());
+        Assert.Equal("Hello", row.GetProperty("subtype_from_marker").GetString());
+    }
+
+    /// <summary>The ownership gate (Aaron's ruling): the disagreement is a WARNING only on a record a mod defines or
+    /// overrides. A base master's own topic, touched by nothing, is Bethesda's stale number — labelled, never warned
+    /// about, so a whole-quest check over vanilla topics stays quiet.</summary>
+    [Fact]
+    public void AVanillaTopicNoPluginTouchesIsLabelledButNotWarnedAbout()
+    {
+        var block = SeedBlock(CheckDialogue(Svc, W.VanillaStaleTopic), Fid(W.VanillaStaleTopic));
+
+        Assert.Contains("subtype=RechargeExit (stale)", block);
+        Assert.Contains("subtype_marker=HELO (authoritative)", block);
+        Assert.DoesNotContain("the MARKER is authoritative", block);
+    }
+
+    /// <summary>…and an override that copies that pair forward UNCHANGED stays quiet too: the override changed
+    /// neither field, so the stale number is still Bethesda's statement and still nothing the modder can act on.
+    /// The labels are ungated, so the render still says which field to believe.</summary>
+    [Fact]
+    public void AnOverrideInheritingAStaleSubtypeIsNotWarnedAbout()
+    {
+        var block = SeedBlock(CheckDialogue(Svc, W.VanillaStaleOverriddenTopic), Fid(W.VanillaStaleOverriddenTopic));
+
+        Assert.Contains("subtype=RechargeExit (stale)", block);
+        Assert.Contains("subtype_marker=HELO (authoritative)", block);
+        Assert.DoesNotContain("the MARKER is authoritative", block);
+    }
+
+    /// <summary>Force-loaded content is not the modder's either: a Creation Club plugin (in loadorder.txt, absent
+    /// from plugins.txt) authoring the contradicting pair itself is still passed over, because the gate is the
+    /// implicit group the load-order status shows, not the five base masters.</summary>
+    [Fact]
+    public void ACreationClubOverrideAuthoringTheMismatchIsNotWarnedAbout()
+    {
+        var block = SeedBlock(CheckDialogue(Svc, W.CcOverriddenTopic), Fid(W.CcOverriddenTopic));
+
+        Assert.Contains("subtype=Custom (stale)", block);
+        Assert.DoesNotContain("the MARKER is authoritative", block);
+    }
+
+    /// <summary>A gap the Dragonborn renumbering cannot explain is two fields edited apart, not an old file: the
+    /// warning says the Subtype edit does nothing in game and names the sync, rather than framing an authoring
+    /// error as benign vintage.</summary>
+    [Fact]
+    public void AMismatchWithoutTheRenumberingSignatureSaysTheSubtypeEditIsANoOp()
+    {
+        var block = SeedBlock(CheckDialogue(Svc, W.EditedApartSubtypeTopic), Fid(W.EditedApartSubtypeTopic));
+
+        Assert.Contains("the MARKER is authoritative", block);
+        Assert.Contains("do NOT carry the Dragonborn-era renumbering signature", block);
+        Assert.Contains("in-game no-op", block);
+        Assert.Contains("sync SNAM to CUST", block);
+        Assert.DoesNotContain("not necessarily broken", block);
+    }
+
+    /// <summary>The one modeled row Mutagen's enum leaves unnamed (index 3, FVDL) is named by its MARKER, in the
+    /// prose and in the JSON — never handed back as an empty string.</summary>
+    [Fact]
+    public void TheMarkerNamesItselfWhereMutagensEnumHasNoNameForIt()
+    {
+        var result = Svc.CheckDialogue(new[] { Fid(W.FvdlMarkerTopic) }, 1000);
+        Assert.Null(result.Error);
+        Assert.Contains("buckets as FVDL", SeedBlock(
+            CheckTextRender.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000), Fid(W.FvdlMarkerTopic)));
+
+        var json = JsonDocument.Parse(JsonWire.RenderCheck(new CheckSweep(DialogueSel(), Dialogue: result), 20000));
+        var row = json.RootElement.GetProperty("families")
+                      .GetProperty(SweepFamilySelection.Token(SweepFamily.Dialogue))
+                      .GetProperty("seeds").EnumerateArray()
+                      .SelectMany(s => s.GetProperty("topics").EnumerateArray())
+                      .Single(t => t.GetProperty("topic").GetString() == W.FvdlMarkerTopic.ToString());
+        Assert.Equal("FVDL", row.GetProperty("subtype_from_marker").GetString());
+    }
+
+    /// <summary>A non-blank marker the table does not model is neither blank nor a disagreement — it must still be
+    /// named, not fall through both checks in silence.</summary>
+    [Fact]
+    public void AMarkerTheTableDoesNotModelIsNamed()
+    {
+        var block = SeedBlock(CheckDialogue(Svc, W.UnmodeledMarkerTopic), Fid(W.UnmodeledMarkerTopic));
+
+        Assert.Contains("is ZZZZ, which is not a marker houseCARL models", block);
+        Assert.Contains("never plays", block);
+    }
+
+    /// <summary>Everything AFTER the seed prefix the sweep echoes — the composed refusal itself. The sweep writes
+    /// "{seed}: {refusal}.", and the seed is "&lt;id&gt;:&lt;definer&gt;", so a plugin name found anywhere in the
+    /// whole response may be the seed's own echo rather than the failure's subject.</summary>
+    static string AfterSeed(string text, string seed)
+    {
+        int i = text.IndexOf(seed + ":", StringComparison.Ordinal);
+        Assert.True(i >= 0, $"no seed '{seed}' in the response: {text}");
+        return text[(i + seed.Length + 1)..];
+    }
+
+    /// <summary>One seed's own block: the head line containing <paramref name="marker"/> and the indented findings
+    /// under it, stopping at the NEXT seed's head — or at the family's accounting or boundary, whichever comes first.
+    ///
+    /// <para>The terminator must be the next head, not the next blank line: the seed heads are contiguous
+    /// (<c>CheckSentences.DialogueSeedHead</c> ends in one newline and the next head follows it directly), so the
+    /// first blank line comes after the LAST seed and every block would span every seed below it — a seed's
+    /// verdict could then be satisfied by a sibling's.</para>
+    ///
+    /// <para>The start is anchored to a HEAD line rather than the first line containing the marker: a kind label
+    /// also appears in a seed's scope sentence, so a marker search would resolve the quest block to the DLVW
+    /// seed.</para></summary>
+    static string SeedBlock(string response, string marker)
+    {
+        var lines = response.Split('\n');
+        int start = Array.FindIndex(lines,
+            l => l.StartsWith("seed ", StringComparison.Ordinal) && l.Contains(marker, StringComparison.Ordinal));
+        Assert.True(start >= 0, $"no seed head containing '{marker}': {response}");
+        int end = Array.FindIndex(lines, start + 1,
+            l => l.StartsWith("seed ", StringComparison.Ordinal)
+                 || l.StartsWith("[accounting:", StringComparison.Ordinal)
+                 || l.StartsWith("boundary (", StringComparison.Ordinal));
+        return string.Join("\n", lines[start..(end < 0 ? lines.Length : end)]);
+    }
+
+    static void Served(string response, params string[] mustName)
+    {
+        Assert.False(response.StartsWith("error:", StringComparison.Ordinal), "refused: " + response.Split('\n').First());
+        foreach (var s in mustName) Assert.Contains(s, response);
+    }
+}

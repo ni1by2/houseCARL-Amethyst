@@ -1,0 +1,1226 @@
+using System.Text.RegularExpressions;
+using HousecarlCore;
+using Mutagen.Bethesda.Plugins;
+using System.Text.Json;
+using HousecarlMcp;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+// The artifact disposition on housecarl_records: to_file, auto-spill at the render ceiling, @artifact
+// re-entry, the epoch check, the results store's own hygiene, and error-row identity. The lanes exercised are
+// project.form='identity', 'everything', and the types=/where= scan.
+
+/// <summary>to_file, auto-spill, re-entry, the store's refusals, and error-row identity — everything that
+/// reads one stable build.</summary>
+[Trait("tier", "integration")]
+public sealed class RecordsArtifactTests : ArtifactTestBase, IClassFixture<ArtifactFixture>
+{
+    public RecordsArtifactTests(ArtifactFixture f) : base(f) { }
+
+    /// <summary>The scan population these tests measure against, read off the product's own accounting rather
+    /// than counted by hand here.</summary>
+    int SpellTotal => Je(RecordsTools.Records(Svc, types: new[] { "SPEL" }, format: "json")).GetProperty("total").GetInt32();
+    int WeaponTotal => Je(RecordsTools.Records(Svc, types: new[] { "WEAP" }, format: "json")).GetProperty("total").GetInt32();
+
+    // ---- to_file — the forced disposition ----------------------------------------------------------
+
+    [Fact]
+    public void ToFile_TheArtifactIsCompleteAndStampedWithTheScannedBuild()
+    {
+        var art = Art("complete.jsonl");
+        RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: art);
+        var m = ManifestOf(art);
+        Assert.Equal(SpellTotal, m.RowCount);
+        Assert.Equal(m.RowCount, m.Total);
+        Assert.Equal(W.Epoch0, m.Epoch);
+    }
+
+    /// <summary>The manifest's provenance stamp records WHICH TOOL wrote the artifact, and it is read back into
+    /// a live re-entry refusal ("artifact '…' (from X) …"), so a wrong stamp is a wrong name in a sentence a
+    /// caller reads.</summary>
+    [Fact]
+    public void ToFile_TheManifestStampsTheToolThatActuallyWroteIt_Scan()
+    {
+        var art = Art("provenance-scan.jsonl");
+        RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: art);
+
+        Assert.Equal(ToolNames.Records, ManifestOf(art).Tool);
+    }
+
+    /// <summary>The identity spelling writes through the list lane's summary writer, a second stamp site.</summary>
+    [Fact]
+    public void ToFile_TheManifestStampsTheToolThatActuallyWroteIt_IdentitySpelling()
+    {
+        var art = Art("provenance-identity.jsonl");
+        RecordsTools.Records(Svc, formids: W.SpellBodies.Select(b => RecordsWorld.Fid(b.FormKey)).ToArray(),
+                             project: new RecordsTools.RecordsProject { form = "identity" }, to_file: art);
+
+        Assert.Equal(ToolNames.Records, ManifestOf(art).Tool);
+    }
+
+    /// <summary>The stamp population read out of the writer's own source rather than listed here: every
+    /// <c>writer.Save(target, …)</c> call site in <c>Artifacts.cs</c> must pass the <c>ToolNames</c> constant, not
+    /// a literal, so a new writer is covered without an edit here.</summary>
+    [Fact]
+    public void EveryArtifactWritersProvenanceStampInterpolatesTheToolNameConstant()
+    {
+        var src = File.ReadAllText(Path.Combine(HarnessPaths.RepoRoot, "src", "housecarl-mcp", "Artifacts.cs"));
+        var sites = Regex.Matches(src, @"writer\.Save\(target,\s*([^,]+),");
+
+        Assert.True(sites.Count >= 7, $"only {sites.Count} writer.Save sites found — the scan went vacuous");
+        foreach (Match m in sites)
+            Assert.Equal("ToolNames.Records", m.Groups[1].Value.Trim());
+    }
+
+    /// <summary>For every form the tool declares — the list read out of the tool's own refusal, so it cannot
+    /// drift from the surface — a served <c>to_file=</c> call must stamp the constant. Forms that refuse
+    /// <c>to_file=</c> are skipped and counted, never silently passed.</summary>
+    [Fact]
+    public void EveryFormThatSpillsToAFile_StampsTheToolThatWroteIt()
+    {
+        var refusal = RecordsTools.Records(Svc, types: new[] { "SPEL" },
+                                           project: new RecordsTools.RecordsProject { form = "not-a-form" });
+        var forms = Regex.Match(refusal, @"use ([a-z_ |]+)\.").Groups[1].Value
+                         .Split('|').Select(f => f.Trim()).Where(f => f.Length > 0).ToList();
+        Assert.True(forms.Count >= 8, "the tool's form vocabulary did not parse: " + refusal);
+
+        int stamped = 0;
+        foreach (var form in forms)
+        {
+            var art = Art("provenance-" + form + ".jsonl");
+            var project = new RecordsTools.RecordsProject { form = form };
+            if (form == "fields") project.fields = new[] { "EditorID" };
+            if (form == "aggregate") project.group_by = "type";
+            var r = form is "delta" or "tree" or "chain" or "info_order"
+                ? "skip"
+                : RecordsTools.Records(Svc, types: new[] { "SPEL" }, project: project, to_file: art);
+            if (r == "skip" || r.StartsWith("error:", StringComparison.Ordinal) || !File.Exists(art)) continue;
+            Assert.Equal(ToolNames.Records, ManifestOf(art).Tool);
+            stamped++;
+        }
+        Assert.True(stamped >= 3, $"only {stamped} forms produced an artifact — the arm went vacuous");
+    }
+
+    [Fact]
+    public void ToFile_TheManifestTypeCountsCountTheRows()
+    {
+        var art = Art("typecounts.jsonl");
+        RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: art);
+        var m = ManifestOf(art);
+        var only = Assert.Single(m.TypeCounts!);   // one scanned type, so the count IS the row count
+        Assert.Equal(m.RowCount, only.Value);
+    }
+
+    [Fact]
+    public void ToFile_TheTextResponsesSpilledMarkerNamesTheFile()
+    {
+        // Prose-only: the marker is a rendered sentence, and the datum it must carry is the path itself.
+        var art = Art("named.jsonl");
+        var r = RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: art);
+        Assert.Contains("spilled:", r);
+        Assert.Contains(art, r);
+    }
+
+    [Fact]
+    public void ToFileJson_TheSpilledMarkerRidesInTheDocumentWithThePathAndReason()
+    {
+        var art = Art("json-marker.jsonl");
+        var sp = Je(RecordsTools.Records(Svc, types: new[] { "SPEL" }, format: "json", to_file: art)).GetProperty("spilled");
+        Assert.Equal(art, sp.GetProperty("path").GetString());
+        Assert.Equal("to_file", sp.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public void ToFileJson_TheRowsAreOmittedWhileTheTrueTotalStaysIntact()
+    {
+        var art = Art("json-total.jsonl");
+        var d = Je(RecordsTools.Records(Svc, types: new[] { "SPEL" }, format: "json", to_file: art));
+        Assert.Equal(0, d.GetProperty("matches").GetArrayLength());
+        Assert.Equal(SpellTotal, d.GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public void AnArtifactDeclaringNoIdentityColumnRefusesReEntryByName()
+    {
+        // records refuses aggregate+to_file up front, so the count-table file is built here through the same
+        // writer that lane used.
+        var p = CountTableArtifact("counts.jsonl");
+        var (_, _, err) = ResultArtifact.ReadIdentity(p, File.ReadAllText(p));
+        Assert.Contains("NO identity column", err);
+    }
+
+    /// <summary>A failed <c>to_file=</c> write must not take the caller's existing file with it. The whole artifact
+    /// is written to a temp first, so the failure here lands on the move INTO the destination — after every byte was
+    /// written — and the file the caller already had is still exactly what it was, with the temp cleaned up.</summary>
+    [Fact]
+    public void ToFile_AWriteThatFailsAfterItStartedLeavesTheCallersFileAsItWas()
+    {
+        var art = Art("held-target.jsonl");
+        const string mine = "the caller's own file\n";
+        File.WriteAllText(art, mine);
+
+        // Held without share-delete: the temp writes fine and the move onto this file is what fails.
+        using (new CommitFault(art))
+        {
+            var r = RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: art);
+            Assert.Contains("could not write the result artifact", r);
+        }
+
+        Assert.Equal(mine, File.ReadAllText(art));
+        Assert.Empty(Directory.GetFiles(Path.GetDirectoryName(art)!, "*.jsonl.tmp-*"));
+    }
+
+    [Fact]
+    public void ToFile_ARelativePathIsRefusedNamingTheAbsoluteRequirement() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: "relative.jsonl"), "absolute");
+
+    [Fact]
+    public void ToFile_ANonJsonlNameIsRefusedSoTheFileSaysWhatItIs() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: Art("x.csv")), ".jsonl");
+
+    [Fact]
+    public void ToFilePlusOffset_IsRefusedBecauseTheArtifactIsNeverAWindow() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "SPEL" }, offset: 2, to_file: Art("y.jsonl")), "offset");
+
+    // ---- auto-spill at the inline ceiling ----------------------------------------------------------
+
+    const int TinyScan = 200;    // below the scan render's floor for this world
+    const int TinyList = 120;    // below the identity render's floor for three rows
+    const int TinyBody = 300;    // below the full-body render's floor for three records
+
+    [Fact]
+    public void Control_MaxCharsTruncatesTheInlineTextRender()
+    {
+        var d = OwnResults();
+        Assert.Contains("[truncated:", RecordsTools.Records(Svc, types: new[] { "WEAP" }, max_chars: TinyScan));
+    }
+
+    [Fact]
+    public void AnAutoSpillAnnouncesTheCompleteResultWithItsRowCountNotTheRenderedPrefix()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, max_chars: TinyScan);
+        Assert.Contains($"spilled: complete result ({WeaponTotal} rows)", r);
+    }
+
+    [Theory]
+    [MemberData(nameof(Transports), MemberType = typeof(ArtifactTestBase))]
+    public void AnAutoSpillNamesTheResultsDirFileThatActuallyExists(string format)
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, format: format, max_chars: TinyScan);
+        var path = TheSpill(d);
+        // The file NAME, not the full path: a json render escapes the path's separators, and the name is
+        // unique inside this test's own results directory.
+        Assert.Contains(Path.GetFileName(path), r);
+    }
+
+    // ---- max_chars is a CEILING on what comes back, spill block and all (#546) ---------------------
+
+    /// <summary>A scan filled well past its cap comes back inside it. The truncation notice and the spilled: block
+    /// are charged before the rows are laid, and the row that would cross what is left is not written.</summary>
+    [Theory]
+    [InlineData(2_500)]
+    [InlineData(4_000)]
+    [InlineData(6_000)]
+    [InlineData(20_000)]
+    public void AScanRenderIsNeverWiderThanItsCap(int cap)
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Everything, max_chars: cap);
+
+        Assert.True(r.Length <= cap, $"the scan returned {r.Length} chars at max_chars={cap}");
+    }
+
+    /// <summary>And what the cap held back is a count, not a silence.</summary>
+    [Fact]
+    public void AScanCutByItsCapSaysHowManyRecordsItHeldBack()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Everything, max_chars: 2_500);
+
+        Assert.Matches(@"\[truncated: rendered \d+ of " + WeaponTotal + " records", r);
+    }
+
+    /// <summary>And the artifact it spilled to still holds the COMPLETE result: what the cap held back inline is in
+    /// the file, not lost. The ceiling bounds the render, never the answer.</summary>
+    [Fact]
+    public void TheSpillStillCarriesTheCompleteResultWhenTheRenderIsHeldToItsCap()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Everything, max_chars: 2_500);
+
+        Assert.True(r.Length <= 2_500, $"the scan returned {r.Length} chars at max_chars=2500");
+        Assert.Contains($"spilled: complete result ({WeaponTotal} rows)", r);
+        var m = ManifestOf(TheSpill(d));
+        Assert.Equal(WeaponTotal, m.RowCount);
+        Assert.Equal(m.RowCount, m.Total);
+    }
+
+    /// <summary>project.form='summary' answers under the same ceiling as the scan and batch renders — it is the
+    /// list lane's own render and had kept the pre-#546 shape, testing the cap before the row and appending the
+    /// notice and the spilled: block on top of whatever crossed it.</summary>
+    [Theory]
+    [InlineData(2_000)]
+    [InlineData(4_000)]
+    [InlineData(20_000)]
+    public void ASummaryRenderIsNeverWiderThanItsCap(int cap)
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, formids: SummaryIds,
+                                     project: new RecordsTools.RecordsProject { form = "summary" }, max_chars: cap);
+
+        Assert.True(r.Length <= cap, $"the summary returned {r.Length} chars at max_chars={cap}");
+    }
+
+    /// <summary>And under a cap too small for the spill block it must carry, it says so and names the cap that
+    /// clears it — where before it answered a thousand characters over the ceiling in silence, this lane never
+    /// having settled its own overrun at all.</summary>
+    [Fact]
+    public void ASummaryTooSmallForWhatItMustCarrySaysSoInsteadOfOverrunningSilently()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, formids: SummaryIds,
+                                     project: new RecordsTools.RecordsProject { form = "summary" }, max_chars: 900);
+
+        Assert.Matches(@"\[rendered \d+ of \d+ at max_chars=900\]", r);   // what it held back is counted
+        Assert.Contains("over the max_chars=900 it was given", r);
+        var needed = int.Parse(Regex.Match(r, @"raise max_chars to at least (\d+)").Groups[1].Value);
+        Assert.Equal(r.Length, needed);
+    }
+
+    /// <summary>The list-lane selection the summary tests render.</summary>
+    string[] SummaryIds => W.SpellBodies.Select(b => RecordsWorld.Fid(b.FormKey))
+        .Concat(W.WeaponBodies.Select(b => RecordsWorld.Fid(b.FormKey))).ToArray();
+
+    // ---- and on the five renders #546 left out: delta, tree, chain, the reverse effect chain (#604) --------
+    //
+    // Each of these tested the ceiling BEFORE the block it was about to write, so the record, node or carrier row
+    // that crossed went in whole and the notice and the spilled: block on top of it.
+
+    /// <summary>The bound, both arms: the response is inside its cap, or it is the one arm a bounded render may
+    /// still exceed it on — a max_chars too small for what the response carries whatever the budget, its spill
+    /// block included — and it says so, naming the number that clears it in one step.</summary>
+    static void InsideItsCap(string r, int cap, string what)
+    {
+        if (r.Length <= cap) return;
+        Assert.True(r.Contains($"over the max_chars={cap} it was given", StringComparison.Ordinal),
+                    $"the {what} returned {r.Length} chars at max_chars={cap} and did not say so");
+        var needed = int.Parse(Regex.Match(r, @"raise max_chars to at least (\d+)").Groups[1].Value);
+        Assert.Equal(r.Length, needed);
+    }
+
+    [Theory]
+    [InlineData(1_200)]
+    [InlineData(2_000)]
+    [InlineData(4_000)]
+    [InlineData(20_000)]
+    public void ADeltaRenderIsNeverWiderThanItsCap(int cap)
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("delta"),
+                                     versus: Je("\"" + W.MasterName + "\""), max_chars: cap);
+
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        InsideItsCap(r, cap, "delta");
+    }
+
+    [Theory]
+    [InlineData(1_200)]
+    [InlineData(2_000)]
+    [InlineData(4_000)]
+    [InlineData(20_000)]
+    public void ATreeRenderIsNeverWiderThanItsCap(int cap)
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("tree"), max_chars: cap);
+
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        InsideItsCap(r, cap, "tree");
+    }
+
+    [Theory]
+    [InlineData(1_200)]
+    [InlineData(2_000)]
+    [InlineData(4_000)]
+    [InlineData(20_000)]
+    public void AChainRenderIsNeverWiderThanItsCap(int cap)
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "SPEL" }, walk: new RecordsTools.RecordsWalk(),
+                                     project: Form("chain"), max_chars: cap);
+
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        InsideItsCap(r, cap, "chain");
+    }
+
+    [Theory]
+    [InlineData(400)]
+    [InlineData(700)]
+    [InlineData(1_200)]
+    [InlineData(4_000)]
+    public void AReverseEffectChainRenderIsNeverWiderThanItsCap(int cap)
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                     walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = "Effects[].BaseEffect" },
+                                     project: Form("chain"), max_chars: cap);
+
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        InsideItsCap(r, cap, "effect chain");
+    }
+
+    /// <summary>At a cap the render cannot hold — 100 short of what it takes uncapped, so it is derived rather
+    /// than pinned to a number that would only hold on the machine it was written on — each of the three forms
+    /// says what it held back in the caller's own max_chars, spills the complete result to its artifact, and
+    /// stays inside the ceiling or names the overrun the fixed part causes.</summary>
+    [Fact]
+    public void EachOfTheseRendersSaysWhatItsCapHeldBackAndStaysInsideIt()
+    {
+        foreach (var (name, call) in new (string, Func<int, string>)[]
+        {
+            ("delta", cap => RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("delta"),
+                                                  versus: Je("\"" + W.MasterName + "\""), max_chars: cap)),
+            ("tree", cap => RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("tree"), max_chars: cap)),
+            ("chain", cap => RecordsTools.Records(Svc, types: new[] { "SPEL" }, walk: new RecordsTools.RecordsWalk(),
+                                                  project: Form("chain"), max_chars: cap)),
+        })
+        {
+            var d = OwnResults();
+            int cap = call(0).Length - 100;   // the whole render spills nothing; 100 short of it cannot hold
+            var r = call(cap);
+
+            Assert.Contains("at max_chars=" + cap + "]", r);          // the notice quotes what the caller passed
+            Assert.Contains("spilled: complete result", r);           // and the artifact still holds it all
+            InsideItsCap(r, cap, name);
+        }
+    }
+
+    /// <summary>The census is a text render too, and the ceiling is stated over every one of them: a counts_only
+    /// response carries the header's source and selection statements whatever the budget, so at a max_chars it
+    /// cannot fit in it says so and names the number that clears it, rather than answering several times over the
+    /// cap in silence.</summary>
+    [Fact]
+    public void ACensusTooBigForItsCapSaysSoAndNamesTheNumberThatClearsIt()
+    {
+        foreach (var (name, call) in new (string, Func<int, string>)[]
+        {
+            ("scan census", cap => RecordsTools.Records(Svc, types: new[] { "SPEL" }, counts_only: true, max_chars: cap)),
+            ("list census", cap => RecordsTools.Records(Svc, formids: SummaryIds, project: Form("identity"),
+                                                        counts_only: true, max_chars: cap)),
+            ("delta census", cap => RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("delta"),
+                                                         versus: Je("\"" + W.MasterName + "\""), counts_only: true, max_chars: cap)),
+            ("tree census", cap => RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("tree"),
+                                                        counts_only: true, max_chars: cap)),
+            ("chain census", cap => RecordsTools.Records(Svc, types: new[] { "SPEL" }, walk: new RecordsTools.RecordsWalk(),
+                                                         project: Form("chain"), counts_only: true, max_chars: cap)),
+            ("reverse census", cap => RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                                           walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = "Effects[].BaseEffect" },
+                                                           project: Form("chain"), counts_only: true, max_chars: cap)),
+        })
+        {
+            var r = call(50);
+
+            Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+            Assert.True(r.Length > 50, $"the {name} fits 50 chars, so it cannot show the overrun arm");
+            InsideItsCap(r, 50, name);
+        }
+    }
+
+    /// <summary>The other side of the bound: a render whose complete output fits inside max_chars IS that output.
+    /// Every reserve the bounded pass holds back is room for a notice a complete render never writes, so charging
+    /// them against one that fits cut answers that fitted — and the cut then spilled, the spill block was charged
+    /// in turn, and the answer came back with no rows at all and a number far over what the whole thing took. The
+    /// caps are derived from each render's own width, so nothing here is pinned to this fixture's weight.</summary>
+    [Fact]
+    public void ARenderThatFitsItsCapIsNotCutByNoticesItNeverWrites()
+    {
+        foreach (var (name, call) in new (string, Func<int, string>)[]
+        {
+            ("delta", cap => RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("delta"),
+                                                  versus: Je("\"" + W.MasterName + "\""), max_chars: cap)),
+            ("tree", cap => RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Form("tree"), max_chars: cap)),
+            ("chain", cap => RecordsTools.Records(Svc, types: new[] { "SPEL" }, walk: new RecordsTools.RecordsWalk(),
+                                                  project: Form("chain"), max_chars: cap)),
+            ("effect chain", cap => RecordsTools.Records(Svc, formids: new[] { Fid(W.MgefA) },
+                                                         walk: new RecordsTools.RecordsWalk { direction = "reverse", follow = "Effects[].BaseEffect" },
+                                                         project: Form("chain"), max_chars: cap)),
+        })
+        {
+            var d = OwnResults();
+            int whole = call(0).Length;
+            foreach (int cap in new[] { whole, whole + 1, whole + 50, whole + 140 })
+            {
+                var r = call(cap);
+                Assert.Equal(whole, r.Length);                  // the complete render, not a cut one
+                Assert.DoesNotContain("spilled:", r);           // nothing was held back, so nothing spills
+                Assert.DoesNotContain("at max_chars=", r);      // and no notice claims a loss
+            }
+        }
+    }
+
+    /// <summary>The one arm left: a max_chars smaller than the spill block the response must carry — the block that
+    /// names the artifact holding the complete result — says so and names the cap that clears it, rather than
+    /// answering over the ceiling in silence.</summary>
+    [Fact]
+    public void ACapTooSmallForTheSpillBlockSaysSoAndNamesTheCapThatClearsIt()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, project: Everything, max_chars: TinyBody);
+
+        Assert.Contains($"over the max_chars={TinyBody} it was given", r);
+        Assert.Contains("raise max_chars to at least ", r);
+        var needed = int.Parse(Regex.Match(r, @"raise max_chars to at least (\d+)").Groups[1].Value);
+        Assert.Equal(r.Length, needed);
+    }
+
+    [Fact]
+    public void AnAutoSpilledArtifactHoldsEveryRowStampedWithTheScannedBuild()
+    {
+        var d = OwnResults();
+        RecordsTools.Records(Svc, types: new[] { "WEAP" }, max_chars: TinyScan);
+        var m = ManifestOf(TheSpill(d));
+        Assert.Equal(WeaponTotal, m.RowCount);
+        Assert.Equal(W.Epoch0, m.Epoch);
+    }
+
+    [Fact]
+    public void AutoSpillJson_TruncatedIsTrueAlongsideASpilledPathThatResolves()
+    {
+        var d = OwnResults();
+        var doc = Je(RecordsTools.Records(Svc, types: new[] { "WEAP" }, format: "json", max_chars: TinyScan));
+        Assert.True(doc.GetProperty("truncated").GetBoolean());
+        Assert.True(File.Exists(doc.GetProperty("spilled").GetProperty("path").GetString()!));
+    }
+
+    /// <summary>A scanner holding newly created files cannot prevent a complete report from being published.</summary>
+    [Fact]
+    public void AnAutoSpillLandsWhileAScannerGrabsEveryFileTheResultsDirectoryGains()
+    {
+        var d = OwnResults();
+        using (var scanner = new GrabbingScanner(d))
+        {
+            try
+            {
+                ArtifactTarget.BeforePublishForTest.Value = (_, final) =>
+                {
+                    Assert.False(File.Exists(final));
+                    Assert.True(scanner.WaitForGrab(TimeSpan.FromSeconds(10)), "the scanner never got a handle before publication");
+                };
+                var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, max_chars: TinyScan);
+                Assert.Contains("spilled:", r);
+                Assert.DoesNotContain("could NOT be written", r);
+                Assert.True(scanner.WaitForGrab(TimeSpan.FromSeconds(10)), "the scanner never got a handle on the spill");
+            }
+            finally { ArtifactTarget.BeforePublishForTest.Value = null; }
+        }
+        Assert.Equal(WeaponTotal, ManifestOf(TheSpill(d)).RowCount);
+    }
+
+    /// <summary>Holds read handles on created and renamed files, including the temporary file before publication.</summary>
+    sealed class GrabbingScanner : IDisposable
+    {
+        readonly FileSystemWatcher _watcher;
+        readonly List<FileStream> _held = new();
+        bool _stopping;
+
+        /// <summary>Wait until the scanner is holding at least one handle, so a slow watcher fails the test rather
+        /// than passing it for nothing.</summary>
+        public bool WaitForGrab(TimeSpan within)
+        {
+            var deadline = DateTime.UtcNow + within;
+            while (DateTime.UtcNow < deadline)
+            {
+                lock (_held) if (_held.Count > 0) return true;
+                Thread.Sleep(10);
+            }
+            return false;
+        }
+
+        public GrabbingScanner(string dir)
+        {
+            _watcher = new FileSystemWatcher(dir);
+            _watcher.Created += (_, e) => Grab(e.FullPath);
+            _watcher.Renamed += (_, e) => Grab(e.FullPath);
+            _watcher.EnableRaisingEvents = true;
+        }
+
+        void Grab(string path)
+        {
+            var deadline = DateTime.UtcNow.AddSeconds(5);
+            while (DateTime.UtcNow < deadline)
+            {
+                lock (_held) if (_stopping) return;
+                try
+                {
+                    var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite);
+                    lock (_held)
+                    {
+                        if (_stopping) fs.Dispose();
+                        else _held.Add(fs);
+                    }
+                    return;
+                }
+                catch (FileNotFoundException) { return; }
+                catch (IOException) { Thread.Sleep(1); }
+                catch (UnauthorizedAccessException) { return; }
+            }
+        }
+
+        public void Dispose()
+        {
+            _watcher.Dispose();
+            lock (_held)
+            {
+                _stopping = true;
+                foreach (var f in _held) f.Dispose();
+                _held.Clear();
+            }
+        }
+    }
+
+    [Fact]
+    public void TheBodyLaneAutoSpillsItsCompleteRowsWhenTheRenderIsTruncated()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, formids: Ids, project: Everything, max_chars: TinyBody);
+        Assert.Contains("spilled:", r);
+        Assert.Equal(Ids.Length, ManifestOf(TheSpill(d)).RowCount);
+    }
+
+    [Fact]
+    public void TheIdentityLaneAutoSpillsUnderTheSameContract()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, formids: Ids, project: SummaryForm, max_chars: TinyList);
+        Assert.Contains("spilled:", r);
+        Assert.Equal(Ids.Length, ManifestOf(TheSpill(d)).RowCount);
+    }
+
+    [Fact]
+    public void AFailedAutoSpillIsNamedLoudInTheTextResponse()
+    {
+        // Prose-only: the failure has no value to report — the datum is that no file was produced.
+        using var svc = UncreatableResults("failed-text");
+        var r = RecordsTools.Records(svc, types: new[] { "WEAP" }, max_chars: TinyScan);
+        Assert.Contains("[truncated:", r);
+        Assert.Contains("could NOT be written", r);
+        Assert.Contains("exists NOWHERE", r);
+    }
+
+    [Fact]
+    public void AFailedAutoSpillRidesTheJsonDocumentAsSpillError()
+    {
+        using var svc = UncreatableResults("failed-json");
+        var doc = Je(RecordsTools.Records(svc, types: new[] { "WEAP" }, format: "json", max_chars: TinyScan));
+        Assert.True(doc.TryGetProperty("spill_error", out _));
+    }
+
+    // ---- @file re-entry against the same build -----------------------------------------------------
+
+    [Fact]
+    public void ArtifactReEntry_TheBodyLaneReadsEveryIdentityInTheFile()
+    {
+        var art = IdentityArtifact("reenter-body.jsonl");
+        var d = Je(RecordsTools.Records(Svc, formids: new[] { "@" + art }, project: Everything,
+                                        format: "json", counts_only: true));
+        Assert.Equal(TokensOf(art).Count, d.GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public void ArtifactReEntry_TheWhereGrammarMembershipTestTakesTheSameFile()
+    {
+        var art = IdentityArtifact("reenter-where.jsonl");
+        var d = Je(RecordsTools.Records(Svc, types: new[] { "WEAP" }, where: new[] { $"formid in @{art}" }, format: "json"));
+        Assert.Equal(TokensOf(art).Count, d.GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public void APlainAtFileListStillEntersWithNoManifestAndNoEpochClaim()
+    {
+        var plain = PlainList("plain.txt", 2);
+        var d = Je(RecordsTools.Records(Svc, formids: new[] { "@" + plain }, project: SummaryForm,
+                                        format: "json", counts_only: true));
+        Assert.Equal(2, d.GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public void AnAtFileEntryMixedWithInlineEntriesIsRefusedNamed() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { "@" + PlainList("mixed-plain.txt", 2), Ids[0] }),
+                "IN PLACE OF the whole list");
+
+    [Fact]
+    public void ARelativeAtPathIsRefusedNamed() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { "@relative.txt" }), "absolute");
+
+    [Fact]
+    public void ANoIdentityArtifactIsRefusedAtTheFormidsDoorToo() =>
+        Refused(RecordsTools.Records(Svc, formids: new[] { "@" + CountTableArtifact("counts-door.jsonl") }),
+                "NO identity column");
+
+    // ---- the spill marker tells the truth about what it holds --------------------------------------
+
+    [Fact]
+    public void AWindowedAutoSpillSaysWindowAndNeverClaimsTheCompleteResult()
+    {
+        var d = OwnResults();
+        var r = RecordsTools.Records(Svc, types: new[] { "WEAP" }, limit: 2, max_chars: TinyScan);
+        Assert.Contains($"spilled: the returned WINDOW (2 rows of {WeaponTotal} total matches)", r);
+        Assert.DoesNotContain("complete result", r);
+    }
+
+    [Fact]
+    public void AWindowedAutoSpillNamesWhereTheMissingMatchesAre()
+    {
+        // Prose-only: "nowhere" is not a value the response can carry as a number. The sentence names the WINDOW,
+        // not limit=, because offset= alone makes a window too and the matches it drops are the ones before it.
+        var d = OwnResults();
+        Assert.Contains("outside the returned window are in NO file",
+                        RecordsTools.Records(Svc, types: new[] { "WEAP" }, limit: 2, max_chars: TinyScan));
+    }
+
+    [Fact]
+    public void WindowedSpillJson_CarriesCompleteFalseWithRowCountAndTotalAsData()
+    {
+        var d = OwnResults();
+        var sp = Je(RecordsTools.Records(Svc, types: new[] { "WEAP" }, limit: 2, format: "json", max_chars: TinyScan))
+                 .GetProperty("spilled");
+        Assert.False(sp.GetProperty("complete").GetBoolean());
+        Assert.Equal(2, sp.GetProperty("row_count").GetInt32());
+        Assert.Equal(WeaponTotal, sp.GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public void Control_AnUnwindowedSpillIsCompleteTrue()
+    {
+        var d = OwnResults();
+        var sp = Je(RecordsTools.Records(Svc, types: new[] { "WEAP" }, format: "json", max_chars: TinyScan))
+                 .GetProperty("spilled");
+        Assert.True(sp.GetProperty("complete").GetBoolean());
+    }
+
+    [Fact]
+    public void AFailedToFileUnderJsonReturnsAParseableErrorAndEpochDocument()
+    {
+        var doc = Je(RecordsTools.Records(Svc, types: new[] { "SPEL" }, format: "json",
+                                          to_file: UnwritableTarget("blocked-scan", "x.jsonl")));
+        Assert.Contains("could not write", doc.GetProperty("error").GetString());
+        Assert.Equal(W.Epoch0, doc.GetProperty("epoch").GetString());
+    }
+
+    [Fact]
+    public void AFailedToFileOnTheBodyLaneParsesToo()
+    {
+        var doc = Je(RecordsTools.Records(Svc, formids: new[] { Ids[0] }, project: Everything, format: "json",
+                                          to_file: UnwritableTarget("blocked-body", "y.jsonl")));
+        Assert.True(doc.TryGetProperty("error", out _));
+    }
+
+    [Fact]
+    public void AWhitespaceOnlyFormidsElementStaysAPerItemErrorAndTheBatchSurvives()
+    {
+        var ids = new[] { Ids[0], "  " };
+        var d = Je(RecordsTools.Records(Svc, formids: ids, project: SummaryForm, format: "json", counts_only: true));
+        Assert.Equal(2, d.GetProperty("count").GetInt32());
+        Assert.Equal(1, d.GetProperty("errors").GetInt32());
+        Assert.DoesNotContain("failed unexpectedly", RecordsTools.Records(Svc, formids: ids, project: SummaryForm));
+    }
+
+    [Fact]
+    public void ToFileIntoTheServersResultsDirectoryIsRefusedNamingThePruneHazard() =>
+        Refused(RecordsTools.Records(Svc, types: new[] { "SPEL" }, to_file: Path.Combine(Svc.ResultsDir, "mine.jsonl")),
+                "pruned by age");
+
+    // ---- error rows are not identity-bearing -------------------------------------------------------
+
+    [Fact]
+    public void AnArtifactKeepsItsErrorRowWhileIdentityExtractionYieldsOnlyTheResolvedFormids()
+    {
+        var art = Art("mixed.jsonl");
+        RecordsTools.Records(Svc, formids: new[] { "garbage", Ids[0], Ids[1] }, project: SummaryForm, to_file: art);
+        Assert.Equal(3, ManifestOf(art).RowCount);
+        Assert.Equal(2, TokensOf(art).Count);
+    }
+
+    [Fact]
+    public void AMixedArtifactReEntersOnItsResolvedRowsWithNoWasItEditedMisdiagnosis()
+    {
+        var art = Art("mixed-reenter.jsonl");
+        RecordsTools.Records(Svc, formids: new[] { "garbage", Ids[0], Ids[1] }, project: SummaryForm, to_file: art);
+        var d = Je(RecordsTools.Records(Svc, formids: new[] { "@" + art }, project: SummaryForm,
+                                        format: "json", counts_only: true));
+        Assert.Equal(2, d.GetProperty("count").GetInt32());
+        Assert.DoesNotContain("was it edited", RecordsTools.Records(Svc, formids: new[] { "@" + art }, project: SummaryForm));
+    }
+
+    [Fact]
+    public void TheWhereGrammarMembershipTestAgreesWithAMixedArtifactsResolvedRows()
+    {
+        var art = Art("mixed-where.jsonl");
+        RecordsTools.Records(Svc, formids: new[] { "garbage", Ids[0], Ids[1] }, project: SummaryForm, to_file: art);
+        var d = Je(RecordsTools.Records(Svc, types: new[] { "WEAP" }, where: new[] { $"formid in @{art}" }, format: "json"));
+        Assert.Equal(2, d.GetProperty("total").GetInt32());
+    }
+
+    [Fact]
+    public void ABodyArtifactsParseFailureRowIsSkippedTheSameWay()
+    {
+        var art = Art("bmixed.jsonl");
+        RecordsTools.Records(Svc, formids: new[] { "notaformid", Ids[0] }, project: Everything, to_file: art);
+        Assert.Equal(2, ManifestOf(art).RowCount);
+        Assert.Equal(Ids[0], Assert.Single(TokensOf(art)));
+    }
+
+    [Fact]
+    public void AnAllErrorArtifactIsRefusedByItsRealCauseNeverByAccusingTheFile()
+    {
+        var art = Art("allerr.jsonl");
+        RecordsTools.Records(Svc, formids: new[] { "garbage1", "garbage2" }, project: SummaryForm, to_file: art);
+        var r = RecordsTools.Records(Svc, formids: new[] { "@" + art }, project: SummaryForm);
+        Refused(r, "ERROR rows");
+        Assert.DoesNotContain("was it edited", r);
+    }
+
+    // ---- fixture builders --------------------------------------------------------------------------
+
+    /// <summary>An identity artifact over the world's weapons — the file the re-entry tests read back.</summary>
+    string IdentityArtifact(string name)
+    {
+        var art = Art(name);
+        var r = RecordsTools.Records(Svc, formids: Ids, project: SummaryForm, to_file: art);
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        return art;
+    }
+
+    /// <summary>A plain (non-artifact) @file list of the first <paramref name="n"/> weapons.</summary>
+    string PlainList(string name, int n)
+    {
+        var p = Art(name);
+        File.WriteAllText(p, string.Join("\r\n", Ids.Take(n)));
+        return p;
+    }
+
+    /// <summary>A count-table artifact: rows with no per-record identity column.</summary>
+    string CountTableArtifact(string name)
+    {
+        var p = Art(name);
+        using var w = new ResultArtifact.Writer();
+        w.WriteRow((jw, _) =>
+        {
+            jw.WriteStartObject();
+            jw.WriteString("key", W.OverrideName);
+            jw.WriteNumber("count", 1);
+            jw.WriteEndObject();
+        });
+        var (_, err) = w.Save(ArtifactTarget.Named(p), ToolNames.Records, Array.Empty<KeyValuePair<string, string>>(),
+                              identity: null, new[] { "key", "count" }, "count desc, then key asc", 1, W.Epoch0!);
+        Assert.Null(err);
+        return p;
+    }
+
+    /// <summary>This world's own results folder, emptied, so the one file a call spilled is the only file in it.</summary>
+    string OwnResults() => SpillFolders.Emptied(Svc);
+
+    /// <summary>The one artifact a spilling call left in the results folder.</summary>
+    static string TheSpill(string dir) => Assert.Single(Directory.GetFiles(dir, "*.jsonl"));
+
+    /// <summary>A second service over this world's instance whose results folder CANNOT be created: a file sits
+    /// where it should be, beside the service's user config.</summary>
+    LoadOrderService UncreatableResults(string name)
+    {
+        var storeDir = W.Scratch("blockers", name, "store");
+        Directory.CreateDirectory(storeDir);
+        File.WriteAllText(Path.Combine(storeDir, "results"), "a file where the results directory should be");
+        return LoadOrderService.WithInstance(W.Instance, 0, new UserConfigStore(Path.Combine(storeDir, "user.json")));
+    }
+
+    /// <summary>A to_file target that passes validation and then cannot be written: its parent is a file.</summary>
+    string UnwritableTarget(string name, string leaf)
+    {
+        var blocker = W.Scratch("blockers", name);
+        File.WriteAllText(blocker, "a file where a directory should be");
+        return Path.Combine(blocker, "sub", leaf);
+    }
+}
+
+/// <summary>
+/// The epoch check. This class owns its own world per test: every test changes a plugin's mtime, which
+/// re-fingerprints the build — a shared world would hand the change to whatever ran next.
+/// </summary>
+[Trait("tier", "integration")]
+public sealed class RecordsArtifactEpochTests : IDisposable
+{
+    readonly RecordsWorld _w = new();   // which already owns the auto-spill directory these tests write into
+
+    public void Dispose() => _w.Dispose();
+
+    string[] Ids => _w.Weapons.Select(RecordsWorld.Fid).ToArray();
+    static RecordsTools.RecordsProject SummaryForm => new() { form = "summary" };
+    static RecordsTools.RecordsProject Everything => new() { form = "everything" };
+
+    string ArtifactPath(string name)
+    {
+        var p = System.IO.Path.Combine(_w.Root, "artifacts", name);
+        Directory.CreateDirectory(System.IO.Path.GetDirectoryName(p)!);
+        return p;
+    }
+
+    string WriteArtifact(string name)
+    {
+        var p = ArtifactPath(name);
+        var r = RecordsTools.Records(_w.Svc, formids: Ids, project: SummaryForm, to_file: p);
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        return p;
+    }
+
+    /// <summary>Write the artifact, then change the load order so the artifact's epoch is stale.</summary>
+    string Stale(string name)
+    {
+        var p = WriteArtifact(name);
+        File.SetLastWriteTimeUtc(_w.OverrideFile, DateTime.UtcNow.AddHours(1));
+        return p;
+    }
+
+    /// <summary>An epoch in the shape a houseCARL from before the fingerprint formula changed wrote: 16 bare hex
+    /// chars, no format tag.</summary>
+    const string PreUpgradeEpoch = "0123456789abcdef";
+
+    /// <summary>Write the artifact, then rewrite its manifest epoch into the pre-upgrade shape — the state every
+    /// artifact on disk is in the moment a user upgrades across a formula change, with NOTHING about the load
+    /// order having moved.</summary>
+    string PreUpgrade(string name)
+    {
+        var p = WriteArtifact(name);
+        var text = File.ReadAllText(p);
+        Assert.Contains(_w.Epoch0!, text);
+        File.WriteAllText(p, text.Replace(_w.Epoch0!, PreUpgradeEpoch));
+        return p;
+    }
+
+    string Now => _w.Svc.Stats().epoch!;
+
+    [Fact]
+    public void Control_TheBuildReFingerprintsWhenAPluginsContentSignalChanges()
+    {
+        var before = _w.Epoch0;
+        File.SetLastWriteTimeUtc(_w.OverrideFile, DateTime.UtcNow.AddHours(1));
+        Assert.NotEqual(before, Now);
+    }
+
+    [Fact]
+    public void StaleReEntry_TheBodyLaneRefusalNamesBothEpochsAndTheNoOverridePosture()
+    {
+        var art = Stale("stale-body.jsonl");
+        var now = Now;
+        var r = RecordsTools.Records(_w.Svc, formids: new[] { "@" + art }, project: Everything);
+        Assert.StartsWith("error:", r);
+        Assert.Contains(_w.Epoch0!, r);
+        Assert.Contains(now, r);
+        Assert.Contains("the load order changed", r);
+        Assert.Contains("no stale-override", r);
+    }
+
+    /// <summary>An artifact written before the fingerprint formula changed mismatches over a load order nothing
+    /// touched, so the refusal has to name the upgrade, not blame the order it cannot speak for.</summary>
+    [Fact]
+    public void PreUpgradeReEntry_TheRefusalBlamesTheFormulaChangeAndNotTheLoadOrder()
+    {
+        var art = PreUpgrade("pre-upgrade.jsonl");
+        var now = Now;
+        var r = RecordsTools.Records(_w.Svc, formids: new[] { "@" + art }, project: Everything);
+        Assert.StartsWith("error:", r);
+        Assert.Contains($"epoch={PreUpgradeEpoch}", r);
+        Assert.Contains($"epoch={now}", r);
+        Assert.Contains("written by an OLDER houseCARL", r);
+        // The load order was never touched, so the refusal may not claim it was.
+        Assert.DoesNotContain("the load order changed", r);
+        Assert.Contains("Re-run the producing query", r);
+        Assert.Contains("no stale-override", r);
+    }
+
+    [Fact]
+    public void StaleReEntry_TheRefusalIsStampedWithTheBuildItConsulted()
+    {
+        var art = Stale("stale-stamp.jsonl");
+        var now = Now;
+        var r = RecordsTools.Records(_w.Svc, formids: new[] { "@" + art }, project: Everything);
+        // A served response stamps the same epoch, so without the refusal assertion this test would pass with
+        // the epoch check gone entirely.
+        Assert.StartsWith("error:", r);
+        Assert.Contains($"epoch={now}", r);
+    }
+
+    [Fact]
+    public void StaleReEntryJson_IsAnErrorAndEpochDocument()
+    {
+        var art = Stale("stale-json.jsonl");
+        var now = Now;
+        var d = JsonDocument.Parse(RecordsTools.Records(_w.Svc, formids: new[] { "@" + art }, project: Everything,
+                                                        format: "json")).RootElement;
+        Assert.True(d.TryGetProperty("error", out _));
+        Assert.Equal(now, d.GetProperty("epoch").GetString());
+    }
+
+    [Fact]
+    public void StaleReEntry_TheWhereGrammarPredicateRefusesTheSameWayStamped()
+    {
+        var art = Stale("stale-where.jsonl");
+        var now = Now;
+        var r = RecordsTools.Records(_w.Svc, types: new[] { "WEAP" }, where: new[] { $"formid in @{art}" });
+        // The scan lane emits its envelope header before the refusal line, so the refusal is the SECOND line
+        // here — unlike the list lanes, whose refusal is the whole response.
+        Assert.Contains("\nerror:", r);
+        Assert.Contains(_w.Epoch0!, r);
+        Assert.Contains($"epoch={now}", r);
+    }
+
+    [Fact]
+    public void Control_APlainListStillEntersAfterTheOrderChanges_ItNeverClaimedABuild()
+    {
+        var plain = ArtifactPath("plain.txt");
+        File.WriteAllText(plain, string.Join("\r\n", Ids.Take(2)));
+        File.SetLastWriteTimeUtc(_w.OverrideFile, DateTime.UtcNow.AddHours(1));
+        var d = JsonDocument.Parse(RecordsTools.Records(_w.Svc, formids: new[] { "@" + plain }, project: SummaryForm,
+                                                        format: "json", counts_only: true)).RootElement;
+        Assert.Equal(2, d.GetProperty("count").GetInt32());
+    }
+
+    [Fact]
+    public void ToFile_OverwritesTheStaleArtifactWholesaleWithTheNewBuildsResult()
+    {
+        var art = Stale("rematerialize.jsonl");
+        var stale = ReadEpoch(art);
+        var now = Now;
+        RecordsTools.Records(_w.Svc, formids: Ids, project: SummaryForm, to_file: art);
+        Assert.Equal(now, ReadEpoch(art));
+        Assert.NotEqual(stale, ReadEpoch(art));
+    }
+
+    [Fact]
+    public void ReEntryIsCleanAgainstTheReMaterializedArtifact()
+    {
+        var art = Stale("clean-again.jsonl");
+        RecordsTools.Records(_w.Svc, formids: Ids, project: SummaryForm, to_file: art);
+        var d = JsonDocument.Parse(RecordsTools.Records(_w.Svc, formids: new[] { "@" + art }, project: SummaryForm,
+                                                        format: "json", counts_only: true)).RootElement;
+        Assert.Equal(Ids.Length, d.GetProperty("count").GetInt32());
+    }
+
+    static string ReadEpoch(string path)
+    {
+        var (m, _, err) = ResultArtifact.ReadIdentity(path, File.ReadAllText(path));
+        Assert.Null(err);
+        return m!.Epoch;
+    }
+}
+
+/// <summary>The core writer/reader pair the whole disposition rests on — no load order needed.</summary>
+[Trait("tier", "unit")]
+public sealed class RecordsArtifactRoundTripTests : IDisposable
+{
+    const string Epoch = "abcdef0123456789";
+
+    readonly string _dir = Path.Combine(Path.GetTempPath(), "hc-artifact-roundtrip-" + Guid.NewGuid().ToString("N"));
+
+    public RecordsArtifactRoundTripTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose() { try { Directory.Delete(_dir, true); } catch (Exception) { /* temp cleanup */ } }
+
+    (string Path, string? Error, ResultArtifact.Manifest? Manifest) Write()
+    {
+        var p = Path.Combine(_dir, Guid.NewGuid().ToString("N") + ".jsonl");
+        using var w = new ResultArtifact.Writer();
+        w.WriteRow((jw, _) =>
+        {
+            jw.WriteStartObject(); jw.WriteString("formid", "000001:A.esp"); jw.WriteString("type", "Weapon"); jw.WriteEndObject();
+        }, "Weapon");
+        w.WriteRow((jw, _) =>
+        {
+            jw.WriteStartObject(); jw.WriteString("formid", "000002:A.esp"); jw.WriteString("type", "Armor"); jw.WriteEndObject();
+        }, "Armor");
+        var (m, err) = w.Save(ArtifactTarget.Named(p), ToolNames.Records, new List<KeyValuePair<string, string>> { new("type", "WEAP") },
+                              "formid", new[] { "formid", "type" }, "input order", 2, Epoch);
+        return (p, err, m);
+    }
+
+    [Fact]
+    public void TheWriterSavesItsManifestAndItsRows()
+    {
+        var (_, err, m) = Write();
+        Assert.Null(err);
+        Assert.Equal(2, m!.RowCount);
+    }
+
+    [Fact]
+    public void TheSniffRecognizesAManifestOnLine1() =>
+        Assert.True(ResultArtifact.LooksLikeArtifact(File.ReadAllText(Write().Path)));
+
+    [Fact]
+    public void TheSniffSaysNoToAPlainFormidList() =>
+        Assert.False(ResultArtifact.LooksLikeArtifact("000001:A.esp\n000002:A.esp\n"));
+
+    [Fact]
+    public void TheManifestFieldsSurviveTheRoundTrip()
+    {
+        var (path, _, _) = Write();
+        var (m, _, err) = ResultArtifact.ReadIdentity(path, File.ReadAllText(path));
+        Assert.Null(err);
+        Assert.Equal(ToolNames.Records, m!.Tool);
+        Assert.Equal(Epoch, m.Epoch);
+        Assert.Equal(2, m.RowCount);
+        Assert.Equal("formid", m.Identity);
+        Assert.Equal(2, m.TypeCounts!.Count);
+        Assert.Equal(1, m.TypeCounts["Weapon"]);
+        Assert.Equal(1, m.TypeCounts["Armor"]);
+    }
+
+    [Fact]
+    public void TheIdentityTokensComeBackInRowOrder()
+    {
+        var (path, _, _) = Write();
+        var (_, tokens, err) = ResultArtifact.ReadIdentity(path, File.ReadAllText(path));
+        Assert.Null(err);
+        Assert.Equal(new[] { "000001:A.esp", "000002:A.esp" }, tokens);
+    }
+}
+
+/// <summary>The results store's own contracts: reservation, disposal, and the write-time age prune.</summary>
+[Trait("tier", "unit")]
+public sealed class RecordsArtifactResultsStoreTests : IDisposable
+{
+    readonly string _dir = Path.Combine(Path.GetTempPath(), "hc-artifact-store-" + Guid.NewGuid().ToString("N"));
+
+    public RecordsArtifactResultsStoreTests() => Directory.CreateDirectory(_dir);
+
+    public void Dispose()
+    {
+        try { Directory.Delete(_dir, true); } catch (Exception) { /* temp cleanup */ }
+    }
+
+    string Aged(string name, int daysOld)
+    {
+        var p = Path.Combine(_dir, name);
+        File.WriteAllText(p, "{}");
+        File.SetLastWriteTimeUtc(p, DateTime.UtcNow.AddDays(-daysOld));
+        return p;
+    }
+
+    [Fact]
+    public void ASpillOlderThanThePruneWindowIsDeletedAtTheNextWrite()
+    {
+        var old = Aged("stale-spill.jsonl", ResultsStore.PruneAfterDays + 1);
+        using var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
+        Assert.False(File.Exists(old));
+    }
+
+    [Fact]
+    public void AFreshSpillSurvivesTheSameWriteTimePrune()
+    {
+        var fresh = Aged("fresh-spill.jsonl", 0);
+        using var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
+        Assert.True(File.Exists(fresh));
+    }
+
+    [Fact]
+    public void SameSecondReservationsChooseDistinctUnpublishedPaths()
+    {
+        using var r1 = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
+        using var r2 = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
+        Assert.NotEqual(r1.Path, r2.Path);
+        Assert.False(File.Exists(r1.Path));
+        Assert.False(File.Exists(r2.Path));
+        r1.Write(s => s.WriteByte(1));
+        r2.Write(s => s.WriteByte(2));
+        Assert.Equal(new byte[] { 1 }, File.ReadAllBytes(r1.Path));
+        Assert.Equal(new byte[] { 2 }, File.ReadAllBytes(r2.Path));
+        Assert.Equal(2, Directory.GetFiles(_dir).Length);
+    }
+
+    [Fact]
+    public void AnOldOrphanedWriterTempIsPrunedLikeAnyStaleSpill()
+    {
+        var orphan = Aged("half-written.jsonl.tmp-deadbeef", ResultsStore.PruneAfterDays + 1);
+        using var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
+        Assert.False(File.Exists(orphan));
+    }
+
+    [Fact]
+    public void AnUnwrittenReservationCreatesNoFileToDelete()
+    {
+        string p;
+        using (var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef"))
+        {
+            p = r.Path;
+            Assert.False(File.Exists(p));
+        }
+        Assert.False(File.Exists(p));
+        Assert.Empty(Directory.GetFiles(_dir));
+    }
+
+    /// <summary>The final path cannot be opened until its manifest and all rows have been written.</summary>
+    [Fact]
+    public void ReadersCannotOpenTheFinalReportBeforePublication()
+    {
+        using var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
+        Assert.Throws<FileNotFoundException>(() => new FileStream(r.Path, FileMode.Open, FileAccess.Read, FileShare.ReadWrite));
+
+        using var w = new ResultArtifact.Writer();
+        w.WriteRow((jw, _) => { jw.WriteStartObject(); jw.WriteString("formid", "000001:A.esp"); jw.WriteEndObject(); });
+        var (m, err) = w.Save(r, ToolNames.Records, Array.Empty<KeyValuePair<string, string>>(), "formid",
+                              new[] { "formid" }, "input order", 1, "0123456789abcdef");
+        Assert.Null(err);
+        Assert.Equal(1, m!.RowCount);
+        Assert.True(ResultArtifact.LooksLikeArtifact(File.ReadAllText(r.Path)));
+    }
+
+    /// <summary>A target is written once — the write closes its handle, so a second one would fail against a dead
+    /// stream and clean up the artifact that already landed. It says so instead, and the artifact stands.</summary>
+    [Fact]
+    public void AnArtifactTargetRefusesASecondWriteRatherThanLosingTheFirst()
+    {
+        using var r = ResultsStore.Reserve(_dir, ToolNames.Records, "0123456789abcdef");
+        using var w = new ResultArtifact.Writer();
+        w.WriteRow((jw, _) => { jw.WriteStartObject(); jw.WriteString("formid", "000001:A.esp"); jw.WriteEndObject(); });
+        var (_, err) = w.Save(r, ToolNames.Records, Array.Empty<KeyValuePair<string, string>>(), "formid",
+                              new[] { "formid" }, "input order", 1, "0123456789abcdef");
+        Assert.Null(err);
+
+        Assert.Throws<InvalidOperationException>(() =>
+            w.Save(r, ToolNames.Records, Array.Empty<KeyValuePair<string, string>>(), "formid",
+                   new[] { "formid" }, "input order", 1, "0123456789abcdef"));
+        Assert.True(ResultArtifact.LooksLikeArtifact(File.ReadAllText(r.Path)));
+    }
+}
+
+/// <summary>The reverse effect chain's carrier rows are cut inside a SHARED render, in a buffer the seed loop
+/// never measures — so unless that render says it cut, the cut is invisible: nothing marks the response
+/// truncated, and the pipeline writes no artifact. Driven against a hand-built result rather than through the
+/// tool because reaching that cut through the tool needs a seed wider than the auto-spill block it would then
+/// have to carry (~1 KB, three absolute paths), and no fixture's MGEF has that many carriers.</summary>
+[Trait("tier", "unit")]
+public sealed class ReverseEffectChainSharedCutTests
+{
+    static string Render(int cap, out bool truncated)
+    {
+        var rows = Enumerable.Range(0, 8).Select(i =>
+            new EffectChainRow(FormKey.Factory($"00080{i}:HcRecMaster.esm"), "Spell", "HcRecSpell" + i,
+                               "HcRecMaster.esm", 0, 1, 5f, 0, 0)).ToArray();
+        var result = new EffectChainResult(FormKey.Factory("000805:HcRecMaster.esm"), "HcRecMgefFire", rows,
+                                           rows.Length, false, null, null);
+        return RecordsTools.RenderRecordsEffectChains(new[] { ("000805:HcRecMaster.esm", result) }, 1, rows.Length,
+                                                      rows.Length, 0, "records  form=chain", null, cap, null,
+                                                      out truncated);
+    }
+
+    /// <summary>One char under what the whole render takes, so the shared render is the only thing that can cut —
+    /// and the cut it makes is what marks the response truncated, which is what the pipeline spills on.</summary>
+    [Fact]
+    public void ACutInsideTheSharedRenderMarksTheResponseTruncated()
+    {
+        var r = Render(Render(100_000, out _).Length - 1, out bool truncated);
+
+        Assert.Contains("[truncated: rendered", r);
+        Assert.True(truncated);
+    }
+}

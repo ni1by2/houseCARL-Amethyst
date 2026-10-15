@@ -1,3 +1,5 @@
+> Historical record: this describes the July filemap-based build. For current setup and limitations, start with [README](../README.md), [Linux installation](linux-install.md) and [Linux development](linux-development.md).
+
 # Troubleshooting
 
 houseCARL-Amethyst fails loudly when Amethyst state is incomplete or

@@ -1,0 +1,255 @@
+{
+  "schema_version": 1,
+  "date": "2026-10-14",
+  "worktree_head": "2ec4d3c1033294bc2a0d40ee494a4e877547fa73",
+  "removals": [
+    {
+      "id": "HousecarlMcpTests.ActivePatchWriteLockTests.ADirectSerializeOntoAMappedTargetFails",
+      "source": "src/housecarl-mcp-tests/ActivePatchWriteLockTests.cs",
+      "original_line": 24,
+      "removed_source": "    // Probe arm CONTROL: a direct serialize onto a target whose overlay is held fails, so the lock still reproduces here.\n    [Fact]\n    public void ADirectSerializeOntoAMappedTargetFails()\n    {\n        var key = new ModKey(\"HcWriteLockGuard\", ModType.Plugin);\n        var target = TwoKeywordPatch(key, out _);\n        var ov = SkyrimMod.CreateFromBinaryOverlay(target, SkyrimRelease.SkyrimSE);\n        try\n        {\n            _ = ov.EnumerateMajorRecords().FirstOrDefault();\n            var patch = new SkyrimMod(key, SkyrimRelease.SkyrimSE);\n            patch.Keywords.AddNew().EditorID = \"HcWriteLockGuard_Ctrl\";\n\n            Assert.ThrowsAny<Exception>(() => patch.BeginWrite.ToPath(target).WithLoadOrder(new ISkyrimModGetter[] { ov }).Write());\n        }\n        finally { (ov as IDisposable)?.Dispose(); }\n    }\n",
+      "removed_source_sha256": "6f05c02a45698495e189a5a1fb1d870a7ee1ff588a90f5663e6594d117d46c84",
+      "original_file_sha256": "cc30af2cca32bc0eccb07abef97f9cdf651d2dbcc3e45a3733e32c4356d5545d",
+      "kind": "Windows-only control retired; portable purpose covered",
+      "intent": "A control demonstrates that direct Mutagen serialization onto a mapped target fails on Windows, so the neighboring product tests can expose Windows handle-lifetime regressions.",
+      "reason": "This method never calls the product write operation. Its only assertion requires any exception from direct Mutagen serialization with an open overlay. Linux permits this operation; reproducing Windows sharing restrictions is outside the Linux/Amethyst target. The useful product outcomes—Apply and Remove can update an active target and save correct records—remain asserted directly by passing sibling tests and real Amethyst RPC writes.",
+      "not_preserved": "The Windows OS sharing-violation control is intentionally retired. No equivalent Windows behavior or Windows execution is claimed.",
+      "mapping": [
+        {
+          "old_assertion": "Direct serializer throws with an open overlay.",
+          "disposition": "Platform-only mechanism, intentionally not a Linux requirement."
+        },
+        {
+          "old_assertion": "Rationale: active targets remain writable through the product after handle management.",
+          "disposition": "Retained siblings reopen the output: Remove leaves exactly one record; Apply stores Damage=777. Amethyst RPC tests additionally assert actual edits/removals and transaction metadata."
+        }
+      ],
+      "evidence": [
+        {
+          "method": "ActivePatchWriteLockTests.RemoveWritesIntoTheActivePatch",
+          "source": {
+            "path": "src/housecarl-mcp-tests/ActivePatchWriteLockTests.cs",
+            "line": 24
+          },
+          "assertion_scope": "Calls product RemoveRecords, asserts success/count=1, then reopens the target and checks exactly one record.",
+          "baseline_cases": [
+            {
+              "name": "HousecarlMcpTests.ActivePatchWriteLockTests.RemoveWritesIntoTheActivePatch",
+              "outcome": "Passed"
+            }
+          ]
+        },
+        {
+          "method": "ActivePatchWriteLockTests.ApplyReEditsTheActivePatchsOwnOverride",
+          "source": {
+            "path": "src/housecarl-mcp-tests/ActivePatchWriteLockTests.cs",
+            "line": 40
+          },
+          "assertion_scope": "Calls product Apply against the active winner target, then reopens the plugin and checks Damage=777.",
+          "baseline_cases": [
+            {
+              "name": "HousecarlMcpTests.ActivePatchWriteLockTests.ApplyReEditsTheActivePatchsOwnOverride",
+              "outcome": "Passed"
+            }
+          ]
+        },
+        {
+          "method": "AmethystSnapshotWireTests.InPlaceRecordWriteRequiresBothConsentsAndCommitsTheOwnerMarkerWithThePlugin",
+          "source": {
+            "path": "src/housecarl-mcp-tests/AmethystSnapshotWireTests.cs",
+            "line": 186
+          },
+          "assertion_scope": "Actual Amethyst RPC write with filename and consent; persisted edited record and metadata.",
+          "baseline_cases": [
+            {
+              "name": "HousecarlMcpTests.AmethystSnapshotWireTests.InPlaceRecordWriteRequiresBothConsentsAndCommitsTheOwnerMarkerWithThePlugin",
+              "outcome": "Passed"
+            }
+          ]
+        },
+        {
+          "method": "AmethystSnapshotWireTests.RemoveUsesTheSameConsentAndTransactionLaneForExistingPlugins",
+          "source": {
+            "path": "src/housecarl-mcp-tests/AmethystSnapshotWireTests.cs",
+            "line": 208
+          },
+          "assertion_scope": "Actual Amethyst RPC Remove; persisted absence of the requested record and immediate visibility metadata.",
+          "baseline_cases": [
+            {
+              "name": "HousecarlMcpTests.AmethystSnapshotWireTests.RemoveUsesTheSameConsentAndTransactionLaneForExistingPlugins",
+              "outcome": "Passed"
+            }
+          ]
+        }
+      ],
+      "decision_date": "2026-10-14",
+      "pre_removal_result": "Failed",
+      "retained_verification": [
+        {
+          "test": "HousecarlMcpTests.ActivePatchWriteLockTests.RemoveWritesIntoTheActivePatch",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        },
+        {
+          "test": "HousecarlMcpTests.ActivePatchWriteLockTests.ApplyReEditsTheActivePatchsOwnOverride",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        },
+        {
+          "test": "HousecarlMcpTests.AmethystSnapshotWireTests.InPlaceRecordWriteRequiresBothConsentsAndCommitsTheOwnerMarkerWithThePlugin",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        },
+        {
+          "test": "HousecarlMcpTests.AmethystSnapshotWireTests.RemoveUsesTheSameConsentAndTransactionLaneForExistingPlugins",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        }
+      ]
+    },
+    {
+      "id": "HousecarlMcpTests.HeldOpenTests.WhileHeldTheEngineReadFaultsLoudly_AndReturnsNoQuietlyEmptyPlugin",
+      "source": "src/housecarl-mcp-tests/HeldOpenTests.cs",
+      "original_line": 63,
+      "removed_source": "    /// <summary><c>Assert.Throws</c> is what states no quietly-empty plugin came back.</summary>\n    [Fact]\n    public void WhileHeldTheEngineReadFaultsLoudly_AndReturnsNoQuietlyEmptyPlugin()\n    {\n        using var world = new LockWorld();\n        using var hold = HeldOpen.Hold(world.PluginPath);\n\n        var ex = Assert.Throws<IOException>(() => Read(world.PluginPath));\n\n        // ERROR_SHARING_VIOLATION. The BCL composes the message, so a substring of it would pin .NET.\n        Assert.Equal(32, ex.HResult & 0xFFFF);\n\n        hold.Dispose();\n        world.AssertNoHandlesLeft();\n    }\n",
+      "removed_source_sha256": "2c7ea919025562108d01fa27493fc9d7011710b9825924a7b601af4f9a495f2a",
+      "original_file_sha256": "3525c3a87ea02aa9e3bc4c37d914938aa7b49734eb03510c84a87a7d3f24d184",
+      "kind": "Duplicated behavior plus obsolete Windows error number",
+      "intent": "A held plugin read throws instead of quietly returning an empty plugin; cleanup releases the handle.",
+      "reason": "The retained test uses the same LockWorld, HeldOpen.Hold and Read helper, asserts IOException during the hold, then releases it and checks the exact saved weapon EditorID before cleanup. It contains the portable no-silent-empty-result assertion and adds a recovery/vacuity check. The removed method’s only extra assertion is Windows ERROR_SHARING_VIOLATION (HResult low word 32), which is not a Linux error-number contract.",
+      "not_preserved": "The fixed Windows HResult=32 assertion is intentionally retired; IOException, successful recovery and cleanup remain asserted.",
+      "mapping": [
+        {
+          "old_assertion": "Assert.Throws<IOException>(() => Read(world.PluginPath)).",
+          "disposition": "Same expression and helper remain in AfterTheHoldIsDisposedTheSameReadSucceeds."
+        },
+        {
+          "old_assertion": "Assert.Equal(32, ex.HResult & 0xFFFF).",
+          "disposition": "Platform-specific error number, intentionally not required on Linux."
+        },
+        {
+          "old_assertion": "Dispose hold and AssertNoHandlesLeft.",
+          "disposition": "Both retained in the recovery test. Directory deletion is not claimed as proof of zero open handles on Linux."
+        }
+      ],
+      "evidence": [
+        {
+          "method": "HeldOpenTests.AfterTheHoldIsDisposedTheSameReadSucceeds",
+          "source": {
+            "path": "src/housecarl-mcp-tests/HeldOpenTests.cs",
+            "line": 64
+          },
+          "assertion_scope": "Asserts IOException during the same hold, releases it, reads the single weapon’s exact expected EditorID and deletes the temporary directory.",
+          "baseline_cases": [
+            {
+              "name": "HousecarlMcpTests.HeldOpenTests.AfterTheHoldIsDisposedTheSameReadSucceeds",
+              "outcome": "Passed"
+            }
+          ]
+        }
+      ],
+      "decision_date": "2026-10-14",
+      "pre_removal_result": "Failed",
+      "retained_verification": [
+        {
+          "test": "HousecarlMcpTests.HeldOpenTests.AfterTheHoldIsDisposedTheSameReadSucceeds",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        }
+      ]
+    },
+    {
+      "id": "HousecarlMcpTests.ToolCallShimWirePathTests.AFilenameInPlaceIsNotRefusedByTheBooleanGate",
+      "source": "src/housecarl-mcp-tests/ToolCallShimWirePathTests.cs",
+      "original_line": 206,
+      "removed_source": "    /// <summary>A real filename is untouched by that gate: it reaches the tool body, which judges the lane.</summary>\n    [Fact]\n    public void AFilenameInPlaceIsNotRefusedByTheBooleanGate()\n    {\n        var r = _s.Call(ToolNames.Apply, \"\"\"{\"ops\":[],\"in_place\":\"NoSuchPlugin.esp\"}\"\"\");\n\n        Assert.DoesNotContain(\"names no file\", r.Text, StringComparison.Ordinal);\n        Assert.True(r.BodyRan, r.Describe());\n    }\n",
+      "removed_source_sha256": "3ee3e4310d0d6ba4a2939d61334d96310ae4e3654c86ce5537fd171e1b7fc1ce",
+      "original_file_sha256": "4b640573df653918f309a6849aa2018af6f5824bb3a228329f920ee5e3471758",
+      "kind": "Positive binding control covered by real Amethyst write",
+      "intent": "A filename string in in_place passes the Boolean-value gate and reaches Apply’s body.",
+      "reason": "The old unconfigured call used NoSuchPlugin.esp and inferred body entry from ServerFixture.BodyRan, which recognizes the obsolete MO2 prompt. It never asserted missing-file handling. The retained Amethyst test sends in_place=\"Fixture.esp\" through the same MCP Apply shim, asserts a non-error result and reopens the plugin to verify the edit. A Boolean gate that rejected filename strings would fail that stronger test. All four invalid Boolean spellings remain separately tested over MCP.",
+      "not_preserved": "NoSuchPlugin.esp with empty ops is no longer a standalone smoke call. The removed test made no assertion about missing-plugin diagnostics or empty-operation semantics, so those are not claimed as replacement coverage.",
+      "mapping": [
+        {
+          "old_assertion": "Response does not contain the Boolean gate’s names-no-file error.",
+          "disposition": "The retained filename RPC must succeed and persist InPlaceVerified; a gate refusal fails it."
+        },
+        {
+          "old_assertion": "BodyRan is true for the unconfigured filename call.",
+          "disposition": "Actual output record readback proves body execution without relying on a manager-specific prompt."
+        }
+      ],
+      "evidence": [
+        {
+          "method": "AmethystSnapshotWireTests.InPlaceRecordWriteRequiresBothConsentsAndCommitsTheOwnerMarkerWithThePlugin",
+          "source": {
+            "path": "src/housecarl-mcp-tests/AmethystSnapshotWireTests.cs",
+            "line": 186
+          },
+          "assertion_scope": "in_place=\"Fixture.esp\" crosses the same Apply wire/shim; non-error result and saved EditorID prove execution.",
+          "baseline_cases": [
+            {
+              "name": "HousecarlMcpTests.AmethystSnapshotWireTests.InPlaceRecordWriteRequiresBothConsentsAndCommitsTheOwnerMarkerWithThePlugin",
+              "outcome": "Passed"
+            }
+          ]
+        },
+        {
+          "method": "ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane",
+          "source": {
+            "path": "src/housecarl-mcp-tests/ToolCallShimWirePathTests.cs",
+            "line": 190
+          },
+          "assertion_scope": "All four bare/quoted true/false spellings still produce the named gate refusal before the overwrite lane.",
+          "baseline_cases": [
+            {
+              "name": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"\\\"true\\\"\")",
+              "outcome": "Passed"
+            },
+            {
+              "name": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"false\")",
+              "outcome": "Passed"
+            },
+            {
+              "name": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"true\")",
+              "outcome": "Passed"
+            },
+            {
+              "name": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"\\\"false\\\"\")",
+              "outcome": "Passed"
+            }
+          ]
+        }
+      ],
+      "decision_date": "2026-10-14",
+      "pre_removal_result": "Failed",
+      "retained_verification": [
+        {
+          "test": "HousecarlMcpTests.AmethystSnapshotWireTests.InPlaceRecordWriteRequiresBothConsentsAndCommitsTheOwnerMarkerWithThePlugin",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        },
+        {
+          "test": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"\\\"true\\\"\")",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        },
+        {
+          "test": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"false\")",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        },
+        {
+          "test": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"true\")",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        },
+        {
+          "test": "HousecarlMcpTests.ToolCallShimWirePathTests.ABooleanInPlaceIsRefusedByNameAndNeverEntersTheOverwriteLane(spelling: \"\\\"false\\\"\")",
+          "focused_after": "Passed",
+          "full_after": "Passed"
+        }
+      ]
+    }
+  ]
+}

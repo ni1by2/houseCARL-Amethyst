@@ -1,0 +1,478 @@
+using Mutagen.Bethesda;
+using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Skyrim;
+using HousecarlCore;
+using HousecarlMcp;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+/// <summary>
+/// The synthetic MO2 world the dialogue family's info-order and CK-parity facts are driven against.
+///
+/// <para>Four plugins: <see cref="VanillaName"/> (a base master by filename, carrying the stale-subtype topics the
+/// SNAM ownership gate reads as "not the modder's"), <see cref="MasterName"/> (the topic + the CK-parity-complete view/branch/quest seeds),
+/// <see cref="MidName"/> (re-lists 6 of the topic's 8 INFOs, PNAM-chained, in reverse — moves nothing),
+/// <see cref="LastName"/> — the WINNER — (re-lists ONLY INFO 0 with no PNAM, which evicts it to the
+/// tail).</para>
+///
+/// <para>And one plugin OUTSIDE the order: <see cref="PatchName"/>, in a disabled mod folder and in neither
+/// loadorder.txt nor plugins.txt — the freshly authored patch an off-order fold names.</para>
+///
+/// <para><b>Never the shared instance for a test that locks a file.</b> Each of the three dialogue lock facts
+/// (<c>UNREAD-WIRED</c>, <c>DEFINER-LOCK-LOUD</c>, <c>WINNER-LOCK-LOUD</c>) constructs its OWN
+/// <see cref="DialogueWorld"/> via <c>new()</c> rather than the shared collection fixture — a held file is
+/// unreadable to anything else in the process, so sharing it would make every other test's readability depend
+/// on scheduling.</para>
+///
+/// <para><b>A lock test must force the index build FIRST</b> — call <c>Svc.Stats()</c> on a fresh world before
+/// taking the hold. Locking a plugin before the first real query makes the index build SILENTLY EXCLUDE it,
+/// which changes the topic's winner instead of surfacing a read failure, so the lock facts would quietly
+/// assert something else. Deleting the <c>Stats()</c> call changes what those tests measure without failing
+/// anything.</para>
+/// </summary>
+public sealed class DialogueWorld : IDisposable
+{
+    /// <summary>A base master BY FILENAME — what <see cref="ErrorCheck.BaseMasters"/> matches on, so its own records
+    /// are the "vanilla, not the modder's" side of the SNAM ownership gate.</summary>
+    public const string VanillaName = "Skyrim.esm";
+    public const string MasterName = "HcDvMaster.esp";
+    public const string MidName = "HcDvMid.esp";
+    public const string LastName = "HcDvLast.esp";
+
+    /// <summary>Creation Club content: in loadorder.txt, absent from plugins.txt, so it is FORCE-LOADED — the
+    /// implicit group the load-order status shows, and content the modder no more authored than a base master's.</summary>
+    public const string CcName = "ccHcTest.esl";
+
+    /// <summary>The freshly authored patch: on disk in a DISABLED mod folder and in NEITHER loadorder.txt nor
+    /// plugins.txt, so the active order does not have it. What an off-order fold names.</summary>
+    public const string PatchName = "HcDvPatch.esp";
+
+    public string Root { get; }
+    public string Instance { get; }
+    public string MasterPath { get; }
+    public string MidPath { get; }
+    public string LastPath { get; }
+
+    /// <summary>The off-order patch's path on disk — inside a mod folder MO2 has disabled.</summary>
+    public string PatchPath { get; private set; } = "";
+
+    /// <summary>The off-order MASTER patch's path on disk.</summary>
+    public string PatchEsmPath { get; private set; } = "";
+
+    public LoadOrderService Svc { get; }
+
+    /// <summary>The topic: 8 plain INFOs in master, no PNAM, so file order is the order — until mid/last override.</summary>
+    public FormKey Topic { get; }
+
+    /// <summary>The 8 INFO FormKeys in their ORIGINAL (master) order.</summary>
+    public IReadOnlyList<FormKey> Info { get; }
+
+    /// <summary>The line evicted from #1 to #8 by <see cref="LastName"/>'s no-PNAM re-list.</summary>
+    public FormKey MovedLine => Info[0];
+
+    public FormKey ViewOk { get; }
+    public FormKey BranchOk { get; }
+    public FormKey QuestOk { get; }
+
+    /// <summary>The #660 shape: numeric Subtype = RechargeExit (73) beside SNAM = HELO (Hello, 79) — a topic
+    /// carrying the pre-Dragonborn numbering, six low. The marker is authoritative.</summary>
+    public FormKey StaleSubtypeTopic { get; }
+
+    /// <summary>The control: Subtype and SNAM naming the same subtype, so a topic that agrees is never labelled.</summary>
+    public FormKey AgreeingSubtypeTopic { get; }
+
+    /// <summary>The same stale shape in the base master <see cref="VanillaName"/>, touched by nothing — Bethesda's own
+    /// number, which the modder cannot act on, so the check stays quiet about it.</summary>
+    public FormKey VanillaStaleTopic { get; }
+
+    /// <summary>A stale base-master topic that <see cref="LastName"/> OVERRIDES, carrying the base record's pair
+    /// forward UNCHANGED — Bethesda's number still, not the override's statement, so the check stays quiet.</summary>
+    public FormKey VanillaStaleOverriddenTopic { get; }
+
+    /// <summary>A base-master topic whose pair AGREES, overridden by the force-loaded <see cref="CcName"/> with a
+    /// contradicting Subtype: a pair that plugin really did author, kept quiet only by who force-loads it.</summary>
+    public FormKey CcOverriddenTopic { get; }
+
+    /// <summary>Two fields edited apart, not an old file: Subtype=Custom (0) beside SNAM=HELO (79), a gap the
+    /// Dragonborn renumbering cannot explain. The Subtype edit is an in-game no-op until SNAM is synced.</summary>
+    public FormKey EditedApartSubtypeTopic { get; }
+
+    /// <summary>SNAM=FVDL — index 3, the one modeled row Mutagen's enum leaves unnamed — beside Subtype=Custom, so a
+    /// render has to name the subtype from the marker itself rather than hand back nothing.</summary>
+    public FormKey FvdlMarkerTopic { get; }
+
+    /// <summary>A topic whose SNAM is a non-blank marker the table does not model (<c>ZZZZ</c>) — neither blank nor a
+    /// disagreement, and silently unbucketed in game if nothing says so.</summary>
+    public FormKey UnmodeledMarkerTopic { get; }
+
+    /// <summary>The off-order patch's own new topic, defined in <see cref="PatchName"/> and therefore in no active
+    /// plugin at all — the topic a fold is the whole merge of.</summary>
+    public FormKey PatchOwnTopic { get; }
+
+    /// <summary>The two INFOs of <see cref="PatchOwnTopic"/>, in the patch's own list order.</summary>
+    public IReadOnlyList<FormKey> PatchOwnInfo { get; }
+
+    /// <summary>A topic the BASE MASTER defines and the regular winner overrides — where an off-order .esm has to
+    /// land between the two, not at the end.</summary>
+    public FormKey MasterBlockTopic { get; }
+
+    /// <summary>Its three INFOs, in the base master's own list order.</summary>
+    public IReadOnlyList<FormKey> MasterBlockInfo { get; }
+
+    /// <summary>The off-order patch that is a MASTER by extension: MO2 sorts it into the master block, not onto
+    /// the end of the order.</summary>
+    public const string PatchEsmName = "HcDvPatch.esm";
+
+    /// <summary>A regular plugin listed AFTER <see cref="CcName"/>, so the master block is not a prefix of this
+    /// order and a folded master has to land between the two — the shape that tells a forward scan over order
+    /// positions apart from a backward scan over contributors.</summary>
+    public const string TailName = "HcDvTail.esp";
+
+    /// <summary>A file the index build cannot open, listed FIRST in the order on the arm that ships it — so the
+    /// build excludes it and the scannable plugin list stops sharing indices with the order.</summary>
+    public const string UnreadableName = "HcDvBroken.esp";
+
+    /// <summary>A topic <see cref="MidName"/> DEFINES, which its shadowed copy carries too — so folding that copy
+    /// is folding the definer, whose own list is the move baseline.</summary>
+    public FormKey MidOwnTopic { get; private set; }
+
+    /// <summary>Its two INFOs, in the defining plugin's own list order.</summary>
+    public IReadOnlyList<FormKey> MidOwnInfo { get; private set; } = Array.Empty<FormKey>();
+
+    /// <summary>A topic <see cref="TailName"/> DEFINES, below the last master — so a folded master lands ahead of
+    /// its defining plugin, which is where a projection must not become the move baseline.</summary>
+    public FormKey TailTopic { get; private set; }
+
+    /// <summary>Its three INFOs, in the defining plugin's own list order.</summary>
+    public IReadOnlyList<FormKey> TailInfo { get; private set; } = Array.Empty<FormKey>();
+
+    /// <summary>A topic <see cref="MasterName"/> defines with an AGREEING Subtype/SNAM pair, which the off-order
+    /// patch overrides with a contradicting Subtype — the shape that tells "what the override inherited" apart
+    /// from the override itself.</summary>
+    public FormKey PatchSubtypeTopic { get; }
+
+    /// <summary>A second copy of <see cref="MidName"/>, in a DISABLED mod folder — the shadowed-copy fold, whose
+    /// filename is active while this file is not the one the order loads.</summary>
+    public const string ShadowModFolder = "MidShadowMod";
+
+    /// <summary>A start-game-enabled quest with no <c>.seq</c>, in the SHADOWED copy: its dormant finding is the one
+    /// a fold must not soften by putting a display label where a plugin name is compared.</summary>
+    public FormKey ShadowSeqQuest { get; }
+
+    /// <summary>The same quest in the plain off-order patch — the control the shadowed arm is measured against.</summary>
+    public FormKey PatchSeqQuest { get; }
+
+    /// <param name="patchActive">write the same patch into the ACTIVE order instead — the comparison arm for a
+    /// folded read, so what the fold projects can be measured against what the order really says once the plugin
+    /// is enabled. Its own instance, never the shared fixture.</param>
+    /// <param name="unreadablePlugin">also ship a plugin the index build CANNOT open, listed in the order before
+    /// the rest. The build excludes it, so the scannable plugin list and the order's own index space stop agreeing
+    /// — the shape that catches a position named out of the wrong list. Its own instance too: every response in
+    /// that world carries the excluded-plugin clause.</param>
+    public DialogueWorld(bool patchActive = false, bool unreadablePlugin = false)
+    {
+        Root = Path.Combine(Path.GetTempPath(), "hc-dialogue-tests-" + Guid.NewGuid().ToString("N"));
+        Directory.CreateDirectory(Path.Combine(Root, "game", "Data"));
+
+        var masterKey = ModKey.FromNameAndExtension(MasterName);
+        var midKey = ModKey.FromNameAndExtension(MidName);
+        var lastKey = ModKey.FromNameAndExtension(LastName);
+
+        // The base master, by filename: two topics carrying the pre-Dragonborn numbering, one of which LastMod
+        // overrides. Which side of the SNAM ownership gate a record falls on is decided by this filename.
+        var sky = new SkyrimMod(new ModKey("Skyrim", ModType.Master), SkyrimRelease.SkyrimSE);
+        var vanillaStale = sky.DialogTopics.AddNew(); vanillaStale.EditorID = "HcDvVanillaStale";
+        vanillaStale.Subtype = DialogTopic.SubtypeEnum.RechargeExit;
+        vanillaStale.SubtypeName = new RecordType("HELO");
+        VanillaStaleTopic = vanillaStale.FormKey;
+        var vanillaOver = sky.DialogTopics.AddNew(); vanillaOver.EditorID = "HcDvVanillaStaleOverridden";
+        vanillaOver.Subtype = DialogTopic.SubtypeEnum.RechargeExit;
+        vanillaOver.SubtypeName = new RecordType("HELO");
+        VanillaStaleOverriddenTopic = vanillaOver.FormKey;
+        // A topic the BASE MASTER defines with three lines, for the master-block placement: an off-order .esm
+        // folded into it lands after this plugin and BEFORE the regular plugin that also touches it.
+        var masterOrder = sky.DialogTopics.AddNew(); masterOrder.EditorID = "HcDvMasterOrder";
+        MasterBlockTopic = masterOrder.FormKey;
+        var masterInfo = new FormKey[3];
+        for (int i = 0; i < 3; i++)
+        {
+            var r = new DialogResponses(sky.GetNextFormKey(), SkyrimRelease.SkyrimSE) { EditorID = $"HcDvMasterLine{i}" };
+            masterInfo[i] = r.FormKey;
+            masterOrder.Responses.Add(r);
+        }
+        MasterBlockInfo = masterInfo;
+        // …and one whose pair AGREES, for the Creation Club override to contradict on its own account.
+        var ccBase = sky.DialogTopics.AddNew(); ccBase.EditorID = "HcDvCcOverridden";
+        ccBase.Subtype = DialogTopic.SubtypeEnum.Hello;
+        ccBase.SubtypeName = new RecordType("HELO");
+        CcOverriddenTopic = ccBase.FormKey;
+
+        var master = new SkyrimMod(masterKey, SkyrimRelease.SkyrimSE);
+
+        DialogResponses NewInfo(string edid) => new(master.GetNextFormKey(), SkyrimRelease.SkyrimSE) { EditorID = edid };
+
+        var topic = master.DialogTopics.AddNew(); topic.EditorID = "HcDvOrder";
+        Topic = topic.FormKey;
+        var info = new FormKey[8];
+        for (int i = 0; i < 8; i++) { var r = NewInfo($"HcDvLine{i}"); info[i] = r.FormKey; topic.Responses.Add(r); }
+        Info = info;
+
+        // Subtype-vs-SNAM pair (#660): one topic carrying the pre-Dragonborn numbering (RechargeExit=73 under
+        // SNAM HELO, six low) and one where the two agree.
+        var stale = master.DialogTopics.AddNew(); stale.EditorID = "HcDvStaleSubtype";
+        stale.Subtype = DialogTopic.SubtypeEnum.RechargeExit;
+        stale.SubtypeName = new RecordType("HELO");
+        StaleSubtypeTopic = stale.FormKey;
+        var agree = master.DialogTopics.AddNew(); agree.EditorID = "HcDvAgreeingSubtype";
+        agree.Subtype = DialogTopic.SubtypeEnum.Hello;
+        agree.SubtypeName = new RecordType("HELO");
+        AgreeingSubtypeTopic = agree.FormKey;
+        // Two fields edited apart: Custom (0) beside HELO (79) is a gap no renumbering explains.
+        var apart = master.DialogTopics.AddNew(); apart.EditorID = "HcDvEditedApart";
+        apart.Subtype = DialogTopic.SubtypeEnum.Custom;
+        apart.SubtypeName = new RecordType("HELO");
+        EditedApartSubtypeTopic = apart.FormKey;
+        // The row Mutagen's enum omits (index 3) — the marker is the only name there is.
+        var fvdl = master.DialogTopics.AddNew(); fvdl.EditorID = "HcDvFvdlMarker";
+        fvdl.Subtype = DialogTopic.SubtypeEnum.Custom;
+        fvdl.SubtypeName = new RecordType("FVDL");
+        FvdlMarkerTopic = fvdl.FormKey;
+        // A non-blank marker the table does not model — the silent-fallthrough case.
+        var unmodeled = master.DialogTopics.AddNew(); unmodeled.EditorID = "HcDvUnmodeledMarker";
+        unmodeled.Subtype = DialogTopic.SubtypeEnum.Hello;
+        unmodeled.SubtypeName = new RecordType("ZZZZ");
+        UnmodeledMarkerTopic = unmodeled.FormKey;
+        // A topic whose pair AGREES here, for the off-order patch to contradict in its own override: the SNAM gate
+        // has to judge that override against THIS copy — the defining one — and not against the patch's own.
+        var patchBase = master.DialogTopics.AddNew(); patchBase.EditorID = "HcDvPatchSubtype";
+        patchBase.Subtype = DialogTopic.SubtypeEnum.Hello;
+        patchBase.SubtypeName = new RecordType("HELO");
+        PatchSubtypeTopic = patchBase.FormKey;
+
+        // CK-parity-complete seeds — the no-false-positive lock for V1 (a real authored view/branch/quest never
+        // renders as a gap).
+        var view = master.DialogViews.AddNew(); view.EditorID = "HcDvViewOk";
+        DialogueCkParity.ApplyViewDefaults(view); ViewOk = view.FormKey;
+        var branch = master.DialogBranches.AddNew(); branch.EditorID = "HcDvBranchOk";
+        // Flags (DNAM) is never filled — the create path refuses instead — so the OK fixture sets it itself.
+        DialogueCkParity.ApplyBranchDefaults(branch); branch.Flags = DialogBranch.Flag.TopLevel;
+        BranchOk = branch.FormKey;
+        var quest = master.Quests.AddNew(); quest.EditorID = "HcDvQuestOk";
+        quest.Objectives.Add(new QuestObjective { Index = 1 });
+        DialogueCkParity.ApplyQuestDefaults(quest); QuestOk = quest.FormKey;
+
+        Instance = Path.Combine(Root, "inst");
+        var mods = Path.Combine(Instance, "mods");
+        Directory.CreateDirectory(Path.Combine(mods, "VanillaStub"));
+        Directory.CreateDirectory(Path.Combine(mods, "MasterMod"));
+        Directory.CreateDirectory(Path.Combine(mods, "MidMod"));
+        Directory.CreateDirectory(Path.Combine(mods, "LastMod"));
+        MasterPath = Path.Combine(mods, "MasterMod", MasterName);
+        MidPath = Path.Combine(mods, "MidMod", MidName);
+        LastPath = Path.Combine(mods, "LastMod", LastName);
+        sky.BeginWrite.ToPath(Path.Combine(mods, "VanillaStub", VanillaName)).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
+        master.BeginWrite.ToPath(MasterPath).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
+
+        // MID: re-lists INFOs 2..7, PNAM-chained, in REVERSE — moves nothing (a well-behaved patch).
+        var mid = new SkyrimMod(midKey, SkyrimRelease.SkyrimSE);
+        var midTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(mid, topic);
+        midTopic.Responses.Clear();
+        for (int i = 7; i >= 2; i--)
+        {
+            var r = new DialogResponses(info[i], SkyrimRelease.SkyrimSE) { EditorID = $"HcDvLine{i}" };
+            r.PreviousDialog.SetTo(info[i - 1]);
+            midTopic.Responses.Add(r);
+        }
+        // A topic MID itself defines, so a fold of that filename's other copy is a fold of the DEFINER.
+        var midOwn = mid.DialogTopics.AddNew(); midOwn.EditorID = "HcDvMidOwn";
+        MidOwnTopic = midOwn.FormKey;
+        var midOwnInfo = new FormKey[2];
+        for (int i = 0; i < 2; i++)
+        {
+            var r = new DialogResponses(mid.GetNextFormKey(), SkyrimRelease.SkyrimSE) { EditorID = $"HcDvMidOwnLine{i}" };
+            midOwnInfo[i] = r.FormKey;
+            midOwn.Responses.Add(r);
+        }
+        MidOwnInfo = midOwnInfo;
+        mid.BeginWrite.ToPath(MidPath).WithLoadOrder(new ISkyrimModGetter[] { master }).Write();
+
+        // LAST (the winner): re-lists ONLY INFO 0, no PNAM — evicted from the top, appended to the bottom.
+        var last = new SkyrimMod(lastKey, SkyrimRelease.SkyrimSE);
+        var lastTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(last, topic);
+        lastTopic.Responses.Clear();
+        lastTopic.Responses.Add(new DialogResponses(info[0], SkyrimRelease.SkyrimSE) { EditorID = "HcDvLine0" });
+        // …and overrides one stale base-master topic, carrying the stale number forward: now a mod's own record.
+        WriteEngine.GenericGetOrAddAsOverride(last, vanillaOver);
+        // …and re-lists the base master's FIRST line with no PNAM, which sends it to the bottom: the regular
+        // plugin an off-order .esm has to be folded in AHEAD of.
+        var lastMasterOrder = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(last, masterOrder);
+        lastMasterOrder.Responses.Clear();
+        lastMasterOrder.Responses.Add(new DialogResponses(masterInfo[0], SkyrimRelease.SkyrimSE) { EditorID = "HcDvMasterLine0" });
+        last.BeginWrite.ToPath(LastPath).WithLoadOrder(new ISkyrimModGetter[] { sky, master, mid }).Write();
+
+        // CC (force-loaded, and the winner of its topic): overrides an AGREEING base topic with a contradicting
+        // Subtype, so the pair is this plugin's own — only who force-loads it keeps the check quiet.
+        var cc = new SkyrimMod(ModKey.FromNameAndExtension(CcName), SkyrimRelease.SkyrimSE);
+        var ccTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(cc, ccBase);
+        ccTopic.Subtype = DialogTopic.SubtypeEnum.Custom;
+        Directory.CreateDirectory(Path.Combine(mods, "CcMod"));
+        cc.BeginWrite.ToPath(Path.Combine(mods, "CcMod", CcName))
+          .WithLoadOrder(new ISkyrimModGetter[] { sky, master, mid, last }).Write();
+
+        // A regular plugin BELOW the .esl, so this order's master block is not a prefix: it re-lists the base
+        // master's first line, which is what a folded master landing above it must not evict.
+        var tail = new SkyrimMod(ModKey.FromNameAndExtension(TailName), SkyrimRelease.SkyrimSE);
+        var tailTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(tail, masterOrder);
+        tailTopic.Responses.Clear();
+        tailTopic.Responses.Add(new DialogResponses(masterInfo[0], SkyrimRelease.SkyrimSE) { EditorID = "HcDvMasterLine0" });
+        // …and a topic of its OWN, below the last master: a folded master lands AHEAD of this plugin, so this is
+        // the topic whose definer the projection can precede.
+        var tailOwn = tail.DialogTopics.AddNew(); tailOwn.EditorID = "HcDvTailOrder";
+        TailTopic = tailOwn.FormKey;
+        var tailInfo = new FormKey[3];
+        for (int i = 0; i < 3; i++)
+        {
+            var r = new DialogResponses(tail.GetNextFormKey(), SkyrimRelease.SkyrimSE) { EditorID = $"HcDvTailLine{i}" };
+            tailInfo[i] = r.FormKey;
+            tailOwn.Responses.Add(r);
+        }
+        TailInfo = tailInfo;
+        Directory.CreateDirectory(Path.Combine(mods, "TailMod"));
+        tail.BeginWrite.ToPath(Path.Combine(mods, "TailMod", TailName))
+            .WithLoadOrder(new ISkyrimModGetter[] { sky }).Write();
+
+        // The freshly authored patch: written into a DISABLED mod folder and listed in neither loadorder.txt nor
+        // plugins.txt, so nothing in the active order sees it. It re-lists INFO 3 with NO PNAM (the tail arm) and
+        // INFO 5 with a PNAM naming INFO 1 (the after-target arm), and defines a topic of its own.
+        var patchKey = ModKey.FromNameAndExtension(PatchName);
+        var patch = new SkyrimMod(patchKey, SkyrimRelease.SkyrimSE);
+        var patchTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(patch, topic);
+        patchTopic.Responses.Clear();
+        patchTopic.Responses.Add(new DialogResponses(info[3], SkyrimRelease.SkyrimSE) { EditorID = "HcDvLine3" });
+        var reLinked = new DialogResponses(info[5], SkyrimRelease.SkyrimSE) { EditorID = "HcDvLine5" };
+        reLinked.PreviousDialog.SetTo(info[1]);
+        patchTopic.Responses.Add(reLinked);
+        // The same start-game-enabled, .seq-less quest in the plain off-order patch: the control the shadowed
+        // copy's verdict is compared against.
+        var patchQuest = patch.Quests.AddNew(); patchQuest.EditorID = "HcDvPatchSeqQuest";
+        patchQuest.Flags = Quest.Flag.StartGameEnabled;
+        DialogueCkParity.ApplyQuestDefaults(patchQuest);
+        PatchSeqQuest = patchQuest.FormKey;
+        // …and an OVERRIDE whose Subtype contradicts the marker it inherited: the pair is the patch's own, so the
+        // gate must warn on it — which it only does if the defining copy, not the patch's, is what it compared.
+        var patchSubtype = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(patch, patchBase);
+        patchSubtype.Subtype = DialogTopic.SubtypeEnum.Custom;
+        var ownTopic = patch.DialogTopics.AddNew(); ownTopic.EditorID = "HcDvPatchOwn";
+        PatchOwnTopic = ownTopic.FormKey;
+        var ownInfo = new FormKey[2];
+        for (int i = 0; i < 2; i++)
+        {
+            var r = new DialogResponses(patch.GetNextFormKey(), SkyrimRelease.SkyrimSE) { EditorID = $"HcDvPatchOwnLine{i}" };
+            ownInfo[i] = r.FormKey;
+            ownTopic.Responses.Add(r);
+        }
+        PatchOwnInfo = ownInfo;
+        Directory.CreateDirectory(Path.Combine(mods, "PatchMod"));
+        PatchPath = Path.Combine(mods, "PatchMod", PatchName);
+        patch.BeginWrite.ToPath(PatchPath)
+             .WithLoadOrder(new ISkyrimModGetter[] { sky, master, mid, last }).Write();
+
+        // The off-order MASTER: a .esm, so MO2 sorts it into the master block rather than onto the end. It
+        // re-lists the base master's MIDDLE line with no PNAM, which moves that line within the block — visible
+        // only if the fold really is placed ahead of the regular plugin that re-lists the first line.
+        var patchEsm = new SkyrimMod(ModKey.FromNameAndExtension(PatchEsmName), SkyrimRelease.SkyrimSE);
+        var esmTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(patchEsm, masterOrder);
+        esmTopic.Responses.Clear();
+        esmTopic.Responses.Add(new DialogResponses(masterInfo[1], SkyrimRelease.SkyrimSE) { EditorID = "HcDvMasterLine1" });
+        // …and it re-lists ONE line of a topic the TAIL plugin defines, which sits below it: the fold contributes
+        // before the definer does, which is where a projection could wrongly become the move baseline.
+        var esmTailTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(patchEsm, tailOwn);
+        esmTailTopic.Responses.Clear();
+        esmTailTopic.Responses.Add(new DialogResponses(tailInfo[1], SkyrimRelease.SkyrimSE) { EditorID = "HcDvTailLine1" });
+        Directory.CreateDirectory(Path.Combine(mods, "PatchEsmMod"));
+        PatchEsmPath = Path.Combine(mods, "PatchEsmMod", PatchEsmName);
+        patchEsm.BeginWrite.ToPath(PatchEsmPath).WithLoadOrder(new ISkyrimModGetter[] { sky, tail }).Write();
+
+        // The SHADOWED copy: the same filename as an ACTIVE plugin, in a disabled folder. It re-lists INFO 2 with
+        // no PNAM, so folding it moves that line to the bottom — and its rows must not render under the active
+        // copy's name.
+        var midShadow = new SkyrimMod(midKey, SkyrimRelease.SkyrimSE);
+        var shadowTopic = (IDialogTopic)WriteEngine.GenericGetOrAddAsOverride(midShadow, topic);
+        shadowTopic.Responses.Clear();
+        shadowTopic.Responses.Add(new DialogResponses(info[2], SkyrimRelease.SkyrimSE) { EditorID = "HcDvLine2" });
+        // …its own copy of the topic MID DEFINES, with the same two lines: folding this copy folds the DEFINER's
+        // own list, which is the baseline the MOVED annotations are measured against.
+        var shadowOwn = new DialogTopic(MidOwnTopic, SkyrimRelease.SkyrimSE) { EditorID = "HcDvMidOwn" };
+        foreach (var k in midOwnInfo)
+            shadowOwn.Responses.Add(new DialogResponses(k, SkyrimRelease.SkyrimSE) { EditorID = "HcDvMidOwnLine" });
+        midShadow.DialogTopics.Add(shadowOwn);
+        // …and a start-game-enabled quest with no .seq anywhere, so the SEQ lint has a real DORMANT finding to
+        // make — the finding a fold must not soften into an override ambiguity between a file and itself.
+        // An explicit key past the copied topic's: this file carries records built in ANOTHER mod object, which
+        // the allocator here does not know about, so AddNew would hand out one of their FormIDs.
+        var shadowQuest = new Quest(midKey.MakeFormKey(0x900), SkyrimRelease.SkyrimSE) { EditorID = "HcDvShadowSeqQuest" };
+        midShadow.Quests.Add(shadowQuest);
+        shadowQuest.Flags = Quest.Flag.StartGameEnabled;
+        DialogueCkParity.ApplyQuestDefaults(shadowQuest);
+        ShadowSeqQuest = shadowQuest.FormKey;
+        Directory.CreateDirectory(Path.Combine(mods, ShadowModFolder));
+        midShadow.BeginWrite.ToPath(Path.Combine(mods, ShadowModFolder, MidName))
+                 .WithLoadOrder(new ISkyrimModGetter[] { master }).Write();
+
+        File.WriteAllText(Path.Combine(Instance, "ModOrganizer.ini"),
+            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
+            + Path.Combine(Root, "game").Replace(@"\", @"\\") + ")\r\n");
+        var prof = Path.Combine(Instance, "profiles", "Default");
+        Directory.CreateDirectory(prof);
+        // A file the build cannot open, FIRST in the order on that arm: it is excluded from the build, so the
+        // scannable plugin list is shorter than the order and their indices no longer line up.
+        if (unreadablePlugin)
+        {
+            Directory.CreateDirectory(Path.Combine(mods, "BrokenMod"));
+            File.WriteAllBytes(Path.Combine(mods, "BrokenMod", UnreadableName), new byte[] { 0x00, 0x01, 0x02, 0x03 });
+        }
+        var brokenLine = unreadablePlugin ? UnreadableName + "\r\n" : "";
+
+        // The .esl sits ABOVE a regular plugin here, which is legal and is the shape that catches a placement
+        // rule assuming the master block is a prefix of the order. The patch itself is in the order only on the
+        // comparison arm — the same file, the same records, read as the game would read it once MO2 enables it.
+        var patchLine = patchActive ? PatchName + "\r\n" : "";
+        File.WriteAllText(Path.Combine(prof, "loadorder.txt"),
+            "# header\r\n" + brokenLine + VanillaName + "\r\n" + MasterName + "\r\n" + MidName + "\r\n" + LastName + "\r\n"
+            + CcName + "\r\n" + TailName + "\r\n" + patchLine);
+        // Neither the base master nor the CC plugin is listed here — that absence is what makes them force-loaded.
+        File.WriteAllText(Path.Combine(prof, "plugins.txt"),
+            (unreadablePlugin ? "*" + UnreadableName + "\r\n" : "")
+            + "*" + MasterName + "\r\n*" + MidName + "\r\n*" + LastName + "\r\n*" + TailName + "\r\n"
+            + (patchActive ? "*" + PatchName + "\r\n" : ""));
+        // PatchMod, PatchEsmMod and the shadow folder are switched OFF: their files are on disk and out of the
+        // order, which is what a fold names. MidMod sits above the shadow folder, so the copy the order loads —
+        // and the copy a {file, mod} fold of the shadow is measured against — is MidMod's.
+        File.WriteAllText(Path.Combine(prof, "modlist.txt"),
+            "# header\r\n" + (unreadablePlugin ? "+BrokenMod\r\n" : "") + (patchActive ? "+" : "-")
+            + "PatchMod\r\n-PatchEsmMod\r\n+TailMod\r\n+CcMod\r\n+LastMod\r\n+MidMod\r\n-"
+            + ShadowModFolder + "\r\n+MasterMod\r\n+VanillaStub\r\n");
+
+        var store = new UserConfigStore(Path.Combine(Root, "user.json"));
+        Svc = LoadOrderService.WithInstance(Instance, 0, store);
+    }
+
+    public void Dispose()
+    {
+        Svc.Dispose();
+        try { Directory.Delete(Root, true); } catch { /* temp cleanup best-effort */ }
+    }
+}
+
+/// <summary>The shared, read-only dialogue world. One build per test class collection — never for a test that
+/// holds a file open.</summary>
+public sealed class DialogueFixture : IDisposable
+{
+    public DialogueWorld W { get; } = new();
+    public LoadOrderService Svc => W.Svc;
+    public void Dispose() => W.Dispose();
+}
+
+[CollectionDefinition("dialogue")]
+public sealed class DialogueCollection : ICollectionFixture<DialogueFixture> { }

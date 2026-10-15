@@ -6,9 +6,10 @@ namespace HousecarlGenerator;
 /// <summary>
 /// BSA read/write round-trip proof on a REAL archive: list → unpack (both via Mutagen's in-process reader) → pack (via
 /// BSArch) → re-list, plus the load-bearing gate — Mutagen's unpack is BYTE-FOR-BYTE identical to BSArch's own unpack of
-/// the same archive (the independent-implementation check that the self-contained bsa-extract-guard can't give).
+/// the same archive (the independent-implementation check that the self-contained BsaExtractTests can't give).
 /// Skipped (not failed) if BSArch or the test archive isn't present; provide both via args or the HOUSECARL_BSARCH /
 /// HOUSECARL_TEST_BSA env vars. BSArch is needed only for the pack step + the parity oracle — reads no longer use it.
+/// A manual command, not a CI probe: CI has neither BSArch nor a real archive, so there it would assert nothing.
 ///
 /// Run: dotnet run --project src/housecarl-generator bsa-probe ["&lt;BSArch.exe&gt;"] ["&lt;test.bsa&gt;"]
 /// </summary>
@@ -33,7 +34,7 @@ internal static class BsaProbe
         if (!File.Exists(bsarch)) { Console.WriteLine($"  SKIP  no BSArch at '{bsarch}' (pass its path as arg 1, or set HOUSECARL_BSARCH)"); return 0; }
         if (!File.Exists(bsa)) { Console.WriteLine($"  SKIP  no test archive at '{bsa}' (pass one as arg 2, or set HOUSECARL_TEST_BSA)"); return 0; }
 
-        var work = Path.Combine(Environment.CurrentDirectory, ".bsa-probe");
+        var work = Path.Combine(Path.GetTempPath(), ".bsa-probe");
         var unpacked = Path.Combine(work, "unpacked");            // Mutagen unpack
         var bsarchDir = Path.Combine(work, "bsarch-unpacked");    // BSArch unpack (the parity oracle)
         var repacked = Path.Combine(work, "repacked.bsa");
@@ -84,7 +85,7 @@ internal static class BsaProbe
             Check(File.Exists(repacked) && new FileInfo(repacked).Length == beforeLen,
                   "non-destructive: the PRIOR archive is left intact after a failed pack");
         }
-        finally { try { Directory.Delete(work, recursive: true); } catch { /* in-dir scratch; non-fatal */ } }
+        finally { try { Directory.Delete(work, recursive: true); } catch { /* temp scratch; non-fatal */ } }
 
         Console.WriteLine();
         Console.WriteLine(fail == 0 ? "================ ALL PASS ================" : $"================ {fail} CHECK(S) FAILED ================");

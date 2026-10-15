@@ -1,0 +1,284 @@
+---
+updated: 2026-10-09
+covers: [src/housecarl-core/SksePluginReader.cs, src/housecarl-core/SksePeek.cs, src/housecarl-core/SkseConfigReferenceExtractor.cs, src/housecarl-core/NativePairing.cs, src/housecarl-mcp/SkseTools.cs, src/housecarl-mcp/SkseInventoryWire.cs, src/housecarl-mcp/SkseConfigAuditWire.cs, src/housecarl-mcp/NativePairingWire.cs, src/housecarl-mcp/SkseRenderParts.cs, src/housecarl-mcp/SkseJsonDoc.cs]
+---
+# The SKSE layer: what a DLL declares, and the static-load rule
+
+## What it is
+
+The SKSE layer reads static facts from files: version manifests, import tables, embedded
+strings, and configuration tokens. houseCARL does not observe DLL loading, registration, or
+hooks in a running game. Treat findings as plausibility checks to verify in-game; a missing
+token or an empty result does not establish that everything works. The tool description states
+this limitation once for all three families.
+
+`housecarl_skse` runs one family per call: inventory, pairing, or config. Each family answers a
+different question about a different population. The response identifies the family used and
+names the other two.
+
+## Contracts
+
+SKSE asset paths are Bethesda virtual paths. Their filename fields use `BethesdaPath.FileName`,
+including on Linux; host `Path.GetFileName` would return the entire backslash-separated path.
+The native PE import tests use an authored AMD64 image with a known import table, independent of
+Windows system DLL availability. They inspect bytes and never execute the image.
+
+### The static-load rule
+
+A loose, top-level, x64, readable, version-matching, non-debug DLL is the only kind the SKSE loader loads. Each of the
+following is a STATIC reason it will not, and this list is the rule's one home:
+
+| blocker | why the loader refuses it |
+|---|---|
+| no active provider | nothing in the active order supplies the path at all, so there is no image to load; the chain's first arm |
+| BSA-only | the loader scans loose `Data\SKSE\Plugins` only, so an archive-shipped DLL is never opened |
+| subfolder | the scan is `SKSE\Plugins\*.dll` top-level only; a nested DLL is parent-loaded or bundled, not loaded |
+| 32-bit | an x86 image cannot load in SE/AE |
+| unreadable | not a valid PE image, or a corrupt export directory — surfaced, never skipped |
+| version-locked mismatch | a plugin declaring no version-independence path loads only on a listed runtime |
+| query-only on AE | the AE loader loads only `SKSEPlugin_Version` plugins, so an SE/VR-era query-only plugin is dead on 1.6+ |
+| Debug-CRT | a debug-built DLL imports a runtime that ships only with Visual Studio, so the loader fails with error 126 |
+
+Two of these are MACHINE-DEPENDENT and are checked rather than assumed, because houseCARL runs on the modder's own box:
+the Debug-CRT blocker is null where the debug runtime resolves here (`SksePluginReader.IsSystemDllResolvable`), and
+the version-lock and AE-era arms degrade to "verify" when the installed runtime could not be resolved. A DLL that loads
+here and nowhere else is still named as broken for everyone else rather than reported clean.
+
+Absence of evidence is never evidence of absence. `SksePluginInfo.Is64Bit` and `.Imports` are tri-state: a value, a
+genuine empty, or `null` for a walk that never happened or failed. A null never becomes a 32-bit claim or an
+"imports nothing", and `DebugCrtBlocker` returns null on a failed import walk.
+
+The rule is applied in three shapes, on purpose, and they must agree:
+
+- **the blocker string**: `AssetLayers.LooseDllBlocker` (unreadable, 32-bit, then `SksePluginReader.DebugCrtBlocker`)
+  plus the no-provider / BSA-only / subfolder arms in `AssetLayers.cs`, composed into `NativePairedDll.LoadBlocker` /
+  `SkseFileEntry.Note`, which the pairing verdict treats as dead;
+- **the inventory render arms**: `SkseInventoryWire`'s diagnostic subsets and per-DLL detail block, which report each
+  class as its own population with its own count;
+- **the pairing fate ladder**: `NativePairingWire.Verdict` / `Judge`, which adds the loader's era rules and the
+  version lock on top of the blocker and reduces a class to the best fate among its candidate DLLs.
+
+Consolidating the three into one helper is issue #415. Until then, a new blocker lands in all three or the tools
+disagree.
+
+### The PE manifest read
+
+`SksePluginReader` reads `SKSEPlugin_Version`, a data blob the AE loader itself reads without executing the DLL. The
+layout is ABI-fixed by the loader and identical in both CommonLib lineages (alandtse/CommonLibVR@ng and
+powerof3/CommonLibSSE@dev):
+
+```
+0x000 uint32  dataVersion
+0x004 uint32  pluginVersion          (REL::Version.pack: maj<<24 | min<<16 | patch<<4 | build)
+0x008 char    pluginName[256]
+0x108 char    author[256]
+0x208 char    supportEmail[252]      <-- 252, NOT 256 (the one non-obvious offset)
+0x304 uint32  versionIndependenceEx  (bit0 = NoStructUse)
+0x308 uint32  versionIndependence    (bit0 = AddressLibraryPostAE, bit1 = Signatures, bit2 = StructsPost629)
+0x30C uint32  compatibleVersions[16] (zero-terminated list of REL::Version.pack values)
+0x34C uint32  xseMinimum
+```
+
+`supportEmail` being 252 rather than 256 is what puts the two flag words at 0x304 and 0x308. The reader
+never guesses a layout — the offsets come from the pinned headers. A real blob is the full 0x350 bytes with a non-zero
+`dataVersion`; a short or all-zero one (a forwarded or corrupt export) is named rather than presented as a phantom
+`""` v0.0.0 plugin.
+
+The older SE/VR loader instead CALLS an exported `SKSEPlugin_Query` that fills its info at runtime, so a query-only
+plugin's metadata is not statically readable at all; it is classified and says so rather than inventing a name. A DLL
+under `SKSE\Plugins` with none of the SKSE exports is a bundled dependency, not a plugin.
+
+Kinds are named, never degraded: `Modern` (blob readable), `LegacyQuery` (SE/VR-era, metadata filled at runtime),
+`NotSkse` (no SKSE export — a bundled dependency), `Unreadable`. A zero directory Size beside a declared RVA is not
+absence: the export walk is bounded by the directory's own counts and reads it, while the import walk has only that
+Size as a bound and so answers UNKNOWN instead. Both refuse a partial answer — a short list rendered as a complete
+"imports (N): …" would let a dropped `vcruntime140d.dll` read as a clean bill of health.
+
+Three version numbers are in sight and none is the truth about the others: the SKSE manifest's own declaration (what
+the author typed, routinely stale — SPID 7.3.3 declares 7.0.0), the image's Win32 file version, and the mod's MO2
+`meta.ini`. Each is labelled with its source and the others ride the same line only where they disagree on their
+numeric prefix; a modder's tag ("7.0.19.0-AIO") is unknown, not different.
+
+Reads hold no handle at rest: a read-share stream, closed before return, so MO2 and xEdit can still move the file.
+
+### The peek
+
+`SksePeek` scans one DLL's image for embedded strings — opt-in per DLL, because scanning a whole image is not free,
+while imports ride the PE open the manifest read already pays for. Runs are scanned in ASCII AND UTF-16LE (modern C++
+plugins use wide strings, so an ASCII-only scan is a confident half-blind answer) at both byte alignments, and only
+runs matching an extraction class are kept. An image past the size cap is refused and NAMED, never half-read: there is
+no partial-scan state, because a half-read image's "nothing embedded" would be a silent lie.
+
+The two classifiers are held to DIFFERENT bars, and the asymmetry is deliberate. A config path is only ever SHOWN, so a
+`{}` template costs nothing and is kept. A plugin name is ADJUDICATED against the load order and can come back "NOT in
+your load order", so a false positive there is a false alarm: anything not shaped like a real filename is dropped,
+including both format-string dialects (`%s.esp`, `{}.esp`).
+
+### Native pairing
+
+A native Papyrus function is ONE thing declared in TWO places — a `.pex` class carrying a native-flagged function, and
+a DLL that registers the implementation at runtime. The halves ship as separate files and fail independently, and the
+engine's response is "unable to bind" plus calls that silently no-op.
+
+`NativePairing` extracts the DECLARATION side only, purely over Mutagen's `PexFile` model. The native flag is raw bit1
+(bit0 is Global): Mutagen's enum names sit one off from the file format, so the raw bit is the truth. A native-flagged
+property accessor is counted as `Prop.Get` / `Prop.Set`.
+
+The baseline is honest by construction: a class carried by an official archive is the ENGINE's even when SKSE's loose
+override wins the file, and skse64's own script additions are SKSE CORE, implemented by the game-root loader. Remaining
+classes pair to a DLL their provider mod (or a mod in its conflict chain, the bundling case) ships. A class's verdict
+is the BEST fate among its candidates, because which DLL implements it is not statically knowable. UNPAIRED is a verify
+flag, never "broken". A class whose only loading candidate is a debug build is its own finding (#417) rather than a
+line of the healthy roster, which prints class names and would have carried a checkmark over the file that needs
+reporting.
+
+The SKSE-CORE rescue pool (every non-official pairing identity shipping a copy of an ENGINE class) has three known
+residual edges, all of them false-flag or missed-flag modes of the audit:
+
+- an INI-injected third-party BSA reads official, so its classes read ENGINE;
+- a paid Creation Club archive is not BaseMaster-owned, so its engine natives read third-party and flag;
+- a provider co-shipping a vanilla override AND an orphan declaration copy has that copy rescued into the unflagged
+  baseline — which for the game `Data` folder covers everything installed there.
+
+### Config references
+
+`SkseConfigReferenceExtractor` is catalog-free and framework-agnostic: it finds the three things checkable against the
+load order without knowing what any framework MEANS. A form token is a hex FormID paired with a plugin filename by `|`
+or `~` in either order, normalized through the one shared home `FormIdRange.LocalObjectId`; a path-segment gate is a
+directory component that is itself a plugin filename, gating the whole file on that plugin's presence; a form object
+is a JSON object holding a number `id` and a string `plugin`, the shape IED writes every form in.
+
+Token extraction is a heuristic over SHAPES, line-local, with no object model — so a string token in a comment or a
+disabled block still surfaces (a form object in a comment does not: the JSON walk skips comments), and the framing is "references this file declares", never "references the DLL will use". Bare
+EditorID and name strings are out of scope: a JSON string is not unambiguously an EditorID, and validating every string
+would drown the signal. An over-wide or unparseable hex is CAPTURED and named, never guessed.
+
+The scan finds each `|` or `~` on a line and reads outward from it: a hex on one side, a plugin name ending in
+`.esp`, `.esm` or `.esl` on the other. A plugin-first name runs left from its extension to the first boundary; a
+hex-first name runs right to its first extension. Each read stops at the neighbouring delimiter, so a line is scanned
+in linear time by construction, and the name rule lives in one place (`IsNameChar` and the group match).
+
+The name rule is three deliberate choices. Apostrophes are ALLOWED, because excluding them truncates real names
+mid-word (`kryptopyr's Trade & Barter.esp`). Brackets and parentheses are allowed only as a CLOSED, balanced group of
+name characters, nested or not (`[Caenarvon] Magecore.esp`, `Asuras Guard [Armor].esp`, `Mod (v2).esp`,
+`Mod [v2 (SE)].esp` are read whole) and a LONE `[` or `(` still bounds the name. A group holding a character a name
+cannot carry is not a group: `[Mod, Inc] Foo.esp|0x800` reads as `Foo.esp`. The lone bracket is what the surrounding
+syntax looks like: prose (`will cast fireball (Skyrim.esm|0x5)`), a JSON array (`["Skyrim.esm|0x800"]`), a
+section-like `[Skyrim.esm|0x5]`; in each the group cannot close before the `|`, so the name starts after the bracket.
+A name never carries `=`, `,`, `:`, a double quote, a brace or a slash, so those bound it as before. A comment leader
+bounds it too: a `;` or `#` that is the first character of the line or is followed by whitespace, so
+`; Skyrim.esm|0x5 is the iron sword` and `Skyrim.esm|0x5 # Dawnguard.esm|0x6` read clean, while `Mod #2.esp` keeps its
+`#` (no plugin in the ARR list carries `;` or `#` at all). A name never starts inside the previous token, so two
+tokens split by a space, or by a group right after the first hex, are both read. The rule is the same in the
+plugin-first, hex-first and tilde forms; a path-segment gate is a whole directory component and was never cut.
+
+What it still cannot tell apart is a closed group glued to a token: prose (`see (note) Skyrim.esm|0x5`), a section
+header and a token on one line (`[Section] Skyrim.esm|0x5`), a comment whose text opens with a group
+(`Skyrim.esm|0x5 ; (comment) Dawnguard.esm|0x6` reads the second name as `(comment) Dawnguard.esm`). Each reads as one
+name and surfaces as PLUGIN MISSING (INERT), never DANGLING — the same exposure a prose prefix with no bracket always
+had, since spaces are part of names.
+
+A form object is read only in a `.json` file, by a reader that skips comments and allows trailing commas, as IED's own
+files carry both. The object is `{"id": <decimal local FormID>, "plugin": "<file>"}`; extra members are allowed, and
+`id` 0 is the empty form IED writes as `{"id":0}`, skipped with or without a plugin. An `id` that is not a decimal
+32-bit number (a string, a fraction, a negative, null, a boolean, an object) is UNPARSEABLE, never read as hex, and
+its raw keeps the `id` text the file holds, escapes included. Each form object carries the JSON path of the object
+(`$.data.custom.data.npc.data[1].form`, a name that is not a plain identifier bracketed and quoted) as its locator,
+shown beside its line. The text render shows the path alone for a one-line file, as IED writes its whole config, where
+line 1 locates nothing; the json twin keeps the real line beside `path`, with `shape` `form_object`. A file that stops parsing
+keeps the forms read before the break and adds one UNPARSEABLE reference at the breaking line, but only when a
+`"plugin"` object key (outside comments and string values) follows the break; a string that will not decode, such as
+an escaped lone surrogate `"\uD800"`, is a break like any other, so one bad file never fails the call; a JSON fragment with no form object after the break adds nothing, so the string-token
+scan of a non-JSON `.json` is unchanged. A file's references come back sorted by line, both shapes together, and every
+line number and the one-line test use one rule: `\n`, a lone `\r` and `\r\n` each end a line. The walk reads the
+config's own UTF-8 bytes (re-encoding the decoded text only under a UTF-16 BOM). IED's 901 KB user config is about
+2,500 form objects and one pass.
+
+The verdict is the service's, over the active order: OK, PLUGIN MISSING, DANGLING, UNPARSEABLE. A form the index does not
+hold but `EngineImplicit` names (PlayerRef 000014, Player 000007 in Skyrim.esm) is OK, because the engine holds it; the
+index is asked first, so a real record at that id resolves as any other; IED configs name PlayerRef in actor filters. The headline keeps two
+signals apart. BROKEN (dangling + unparseable) should resolve and does not, and is actionable. INERT (plugin missing) is
+optional support for a mod you do not have; counting it as dead would make a healthy order read as thousands of dead
+references.
+
+### Transport
+
+Every family render charges its tail before laying a row: the scope note, the caveats, the filter hint, the family
+footer, each list's own cut notice, and the headings written whatever the rows cost. `cap` stays the caller's own
+`max_chars` (the number every notice quotes) while `budget` is the room content has once that tail is charged. A row
+is measured against what it is about to write, not against what the buffer holds, and a row that crossed is taken back
+out whole. The filtered config audit is the exception to "whole": a file that fits is written whole, in the order it
+declares its references; the first file that does not is cut per reference line, its non-OK references (DANGLING,
+PLUGIN MISSING, UNPARSEABLE) first and then the OKs, and ends on `showing N of M references (all K non-OK shown)`,
+`(J of K non-OK shown)`, or `(all OK)`. The json twin cuts a row in the same order (`CutOrder`), so both show the same
+references. A partly shown file counts as cut, as do the files after it, so the next page starts on it again; a file
+that cannot show even one reference line is taken back out whole, in both twins. The unfiltered audit keeps its
+file-order cut. The one arm a bounded render can still exceed (a
+cap too small for what the response carries whatever the budget) is named by `RenderCap.Settle`.
+
+The json twin states the same rows and the same accounting in named fields, and classifies with the SAME judge the text
+render uses, which is why each family's serializer lives beside its text render rather than in `SkseJsonDoc`. Rows are
+dropped from the tail when the document reaches the cap; the serialized string is never cut, which would emit malformed
+json. A census counts the population the document answers over (the filter's matches when there is a filter) so no
+number describes a wider set than the rows beside it.
+
+## Pinned by
+
+- *What it is*, the one-family paragraph: `SkseFamilySelectionTests.TheFooterNamesTheFamilyThatRanAndTheSpellingOfBothThatDidNot`
+  — every response names the family it ran and the spelling of the two it did not;
+  `AnUnknownFindingsValueIsRefused_NamingTheThreeFamilies` in the same class and
+  `SkseFindingsWireShapeTests.AJsonArrayForFindingsGetsTheToolsOwnOneFamilyRefusal` — one family per call;
+  `SkseFamilyBindingTests.EachFamilyAnswersWithItsOwnWireClassHeaderAndItsOwnFooter` — each `findings=` value is
+  answered by its own family's render and footer, through the real renders.
+- *The static-load rule*: `SkseImportWalkTests` — a failed import walk leaves `Imports` null, never a genuine empty,
+  and a null never becomes a Debug-CRT claim or blocker; `SksePeekRenderTests` pins both Debug-CRT wordings.
+- *The static-load rule*: `NativePairingRuntimeCompareTests` — the runtime compare that decides the version lock,
+  where garbage never passes.
+- *The PE manifest read*: the map is pinned by `SkseVersionBlobDecodeTests` (`ViExAlone_SetsNoStructsOnly`,
+  `ViAlone_SetsAddressLibraryOnly`), which fail the instant email is "fixed" to 256 and both flag fields shift; the
+  rest of that class (the flag decode, the zero-terminated runtime list, the REL::Version unpack) and
+  `SkseReadFromDiskTests` with `SkseImportWalkTests.ASystemDllIsClassifiedNotSkse`, a non-SKSE or unreadable image
+  classified by kind rather than thrown.
+- *The PE manifest read*: `SkseDirectoryReadTests` — a zero directory Size beside a declared RVA: the export walk
+  reads it, the import walk answers unknown rather than a short list.
+- *The PE manifest read*: `SkseVersionSourceTests` pins the row separator the composed text may not use
+  (`TheVersionTextDoesNotUseTheRowSeparator`); the rest of the class — the three version numbers each labelled with
+  its source and shown only where they disagree, and a modder's tag not a disagreement.
+- *The peek*: `SksePeekScanTests` pins the UTF-16 arm and the negative classification arms; `SksePeekRenderTests`
+  pins the load-order cross-check, including no ABSENT verdict when the order is unknown.
+- *Native pairing*: `NativePairingExtractTests` pins the raw bit1 native flag; `NativePairingProvenanceTests` — an
+  official archive's class is the ENGINE's even under a winning loose override; `NativePairingRenderVerdictTests` —
+  UNPAIRED is framed a verify flag, never "broken".
+- *Config references*: both charset directions are pinned by `SkseConfigReferenceShapeTests`
+  (`APluginNameWithAnApostropheIsNotCutAtTheApostrophe`, `ABracketGroupInsideAPluginNameIsKeptWhole`,
+  `AParenthesisGroupInsideAPluginNameIsKeptWhole`, `AnOpeningParenthesisBoundsThePluginNameInProse`,
+  `ALoneBracketBeforeAPluginNameBoundsIt`, `ANestedGroupInsideAPluginNameIsKeptWhole`,
+  `ACommentLeaderIsNotPartOfAPluginName`, `AHashInsideAPluginNameIsKept`); the rest
+  of that class pins the extractor against every reference shape the evidence sample established, because a false
+  DANGLING is this family's worst failure mode; `SkseConfigVerdictTests` pins each verdict against a synthetic order,
+  and `SkseConfigRenderFramingTests` pins the BROKEN / INERT headline. `SkseConfigFormObjectTests` pins the form
+  object: its verdicts and paths, the id-0 skip, the raw of a non-number id, the line beside the path, and the break;
+  `SkseConfigEngineImplicitTests` pins PlayerRef as OK while another absent Skyrim.esm form stays DANGLING.
+- *Transport*: `SkseTransportTests.EachFamilysTextRenderFilledPastItsCapAnswersInsideIt` and
+  `TheJsonTailIsPaidForInsideMaxCharsRatherThanAppendedPastIt` — the tail is charged before a row is laid, and a row
+  that crossed is taken back out; `ACapTooSmallForTheFixedPartSaysSoInsteadOfOverrunningSilently` — the one arm that
+  can exceed the cap is named; `TheJsonTwinCarriesTheWindowedRows` and
+  `OverMaxCharsTheJsonTwinDropsRowsAndStaysValid` — the json twin states the same rows and drops them from the tail;
+  `TheConfigTwinsCensusCountsTheFiltersReferencesNotTheWholeAudit` — a census counts the filter's matches (all in
+  the same class).
+- *Transport*: `SkseTransportWireTests` — the json twin's rows and accounting in named fields, driven over the wire.
+- *Transport*: `SkseConfigFilteredCutTests` — the filtered audit's per-reference cut, non-OK first, its notice and its
+  file accounting, the json twin's same order, a json cap sweep across one row's length, the unfiltered json's
+  file-order cut, and a file that fits whole kept in file order.
+
+## Where
+
+`src/housecarl-core/SksePluginReader.cs` reads the PE manifest, the imports and the Debug-CRT verdict;
+`SksePeek.cs` is the embedded-string peek; `NativePairing.cs` extracts the native declarations;
+`SkseConfigReferenceExtractor.cs` extracts config references. `src/housecarl-mcp/SkseTools.cs` holds the tool and the family
+dispatch. Each family's text and json render is in its own file: `SkseInventoryWire.cs`, `SkseConfigAuditWire.cs`
+and `NativePairingWire.cs`, the last with the pairing verdict. `SkseRenderParts.cs` holds the section heading and
+the cut notices all three use, and the plugin version text the inventory and pairing renders use.
+`src/housecarl-mcp/SkseJsonDoc.cs` writes the family documents. Tool: `housecarl_skse`.
+The service code, the three lanes and the blocker string (`LooseDllBlocker`), is in `src/housecarl-mcp/AssetLayers.cs` ([`assets.md`](assets.md)).
+The result records are in `src/housecarl-mcp/AssetResults.cs` ([`assets.md`](assets.md)).

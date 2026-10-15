@@ -1,0 +1,166 @@
+---
+updated: 2026-10-11
+covers: [src/housecarl-core/FieldPredicate.cs, src/housecarl-core/ContainmentIndex.cs]
+---
+# Select and walk
+
+## What it is
+
+The selection half of the tool surface: the `where=` value predicate, and the two edge kinds it and the
+walk construct travel (the form link, and containment). The closure walk and its ordered source
+universe, and the whole-order reverse index behind an unbounded `references=`, are
+`docs/architecture/walk-and-reverse.md`. The deep field comparison behind the conflict tree is
+`docs/architecture/read-engine.md`, and the localized-strings classifier that decides what a refusal
+may say about a plugin's text is `docs/architecture/write-path.md`.
+
+Nothing here carries a record-type vocabulary. The predicate extracts through the read engine's own
+path walk, and containment comes off Mutagen's context walk.
+
+## Contracts
+
+- A filterable path is exactly a readable path: the predicate pulls each candidate's value through
+  `ReadEngine.ReadLeaf`, and the comparison vocabulary is the token forms that walk emits — enum
+  name, invariant numeric round-trip, `True`/`False`, `XXXXXX:Plugin.esp`.
+- The operators: `=` and `!=` compare across that whole token vocabulary; `>` `>=` `<` `<=` are
+  numeric-only; `contains` and `startswith` are case-insensitive substring and prefix; `has`,
+  `has_any` and `has_none` are BITWISE set-tests over a `[Flags]` enum or plain integer leaf (every
+  bit of the operand set, at least one set, none set) which `=` (exact value) and the range ops
+  cannot express, and whose operand is a bit value or a flag name, or several split the way an `in`
+  list splits with the flags decode's `|` as a separator too (`[Body, Hands]` = `Body, Hands` =
+  `Body | Hands`), and the decode's `slotNN` (biped) or `bitN` token for an unnamed bit; `=` and `!=`
+  on a flags leaf resolve the same spellings, once per operand and enum. On a list or dict path the
+  has-family refuses the call, from the schema on a typed scan and at the first list read otherwise:
+  a form-link list with form operands gets the list members' own spelling (`Keywords[*none] in [X]`),
+  other form links a `->` step (`Keywords->editorid = X`), a dict one entry, any other list the
+  scalar sub-path advice (`Factions[*any].<field> has 1`); the display's spaced `slot 32` is refused naming `slot32`; `exists` and `missing` take no
+  operand; `in` and `not in` take a list. A leading `not` negates a string operator only.
+- On an enum leaf the schema names, a `=`, `!=`, `in` or `not in` literal that is neither a whole number (compared to
+  the enum's underlying value) nor one of that enum's names (a comma list only on a `[Flags]` enum) refuses the call at
+  plan time with a "did you mean", when every `types=` type carrying the field rejects it; an untyped scan and a `->`
+  term's right side are not checked.
+- `editorid` reads the record's EditorID off the early EDID subrecord, never a reflection walk, so it
+  answers on a record whose deep body Mutagen cannot parse. `winner` is the PROVENANCE term (which
+  plugin wins the record, not its content) evaluated through the scan's bound resolution, so naming
+  it forces winner resolution over the whole scanned scope.
+- A membership list separates on commas and newlines ONLY, never a bare space, because a plugin
+  filename can legally contain one; brackets and quotes are stripped per token, so a pasted JSON
+  array parses as written. `@<absolute path>` reads a list FILE, and when that file is a result
+  ARTIFACT its identity column IS the list and carries an epoch obligation the consuming scan checks
+  against its own captured build, refusing loud on a mismatch and naming both epochs.
+- A predicate never returns a silently wrong answer: every candidate that produced no value is
+  accounted per cause (no such field, list hop, non-list quantified step, no containing record,
+  container, read fault, unresolved link target, genuinely unset), and a numeric operator on a
+  non-numeric field is a named `FatalError` on the first value-bearing candidate. A step into an
+  element the record does not carry (a null gendered arm such as a male-only addon's `WorldModel[1]`,
+  an absent list, dict key, or an index past the end) is unset, never a read fault (#1071). A read
+  past a list's end prints `(absent: list has N element(s))`, and `CopyFrom` names the source's
+  missing value.
+- A bracket key a list can never take (a word such as `Conditions[any]`, a negative index, a `*` key
+  on an indexing walk, a gendered index other than 0 or 1) is a wrong path, never a read fault
+  (`PathKeyShapeException`). A typed scan refuses it from the schema before any record is read when
+  every scanned type calls that step a list; otherwise it is counted per predicate and refuses only
+  when it was wrong on every scanned record, so a type where the key fits keeps the scan. Only the
+  `where=` refusal adds the star hint (`Conditions[*any]`); other read lanes print the plain note.
+- The value operators take scalar-leaf paths only. `exists`/`missing` are the exception that matches
+  a carried substruct or non-empty list; `in`/`not in` on `formid` test identity and read no body.
+- `exists`/`missing` read a PRESENT subrecord carrying FormID zero as PRESENT rather than absent, so
+  `missing:PreviousDialog` never matches a head-marked INFO (#697). An empty modeled list or dict is
+  absent; a carried substruct is present; a no-such-field or a read fault matches neither operator.
+- The accounting is loud or soft by ratio. No readable value on ANY candidate is a LOUD line saying
+  the zero is not a confirmed nothing-matches; no value on MORE THAN HALF of them is a soft note; and
+  a read FAULT on any candidate is said whatever the ratio, because those records could not be judged
+  at all and passing them off as non-matches is the silently degraded answer.
+- An `editorid in` or `formid in` term on the candidate itself (no `->` side, no `*parent` hop)
+  names the members that have no record in the selection, in list order and as the caller typed them
+  (#1092). The selection is the records the scan's selectors let through: `types=`, `plugins=` (on a
+  scoped scan, the highest-loading copy only), `formids=`, `editorid_contains=`, `references=` /
+  `references_none=`, `conflicts_only=`, `defined_in=`, or the `source=` file of an off-order scan.
+  Other `where` terms never exclude a member: a record they drop, a deleted one under a body term
+  included, still counts as matched. When the scan could not judge everything (a plugin the build could
+  not load or the scan could not read, a record it could not scan), the note says that cause and that a
+  record may exist, instead of "have no record". The text note and json `unmatched` name the first
+  `UnmatchedShown`; the note counts the rest ("and N more"), pointing at `to_file=`, or at the manifest
+  when one was written. A manifest's `notes` carries the whole list.
+- A predicate set whose every term is header-only (`editorid`, `winner`, `formid` membership, or a
+  side led by a `*parent` hop) must still see DELETED records. A deleted record has no live body for
+  a content filter, but its EditorID, its winner resolution and its containing record are real facts,
+  which is what keeps a patch-deleted placed reference in the results of
+  `where=["*parent.EditorID = SomeCell"]`, the crash-log lookup that step exists for.
+- The near-miss hint fires only on a zero-row scan whose predicate set is nothing but one exact,
+  un-negated `editorid =` term read on the candidate itself. With a second term ANDed in the zero has
+  another candidate cause, so the hint would assert one it has not established.
+- An operand or list entry that mixes the two FormID notations is refused at parse; a bare runtime
+  FormID is resolved through the call's own FormID door, so it compares as the record it addresses.
+- A leading `not` flips a string operator's verdict only where that verdict is DEFINITE, so a
+  mistyped path under `not contains` cannot match everything.
+- A quantified step (`[*any]`, `[*all]`, `[*none]`, `[*count]`) folds elements into a boolean or a
+  number; the bare `[*]` set token is refused. An empty list is a definite verdict, and one element
+  that could not be judged sinks a fold the judged elements have not already decided. A quantified
+  step behind an unset step (an absent substruct, a missing gendered arm, an index past the end)
+  folds an empty list, so `[*all]` and `[*none]` match vacuously and `[*count] = 0` matches.
+- `*parent` is the containment step and leads a path by definition. Its grammar is
+  `ContainmentIndex.SplitHops`, shared with the read walk, so both surfaces refuse the same mistake
+  in the same words. Everything below the hop reads the containing record with no second rule.
+- The containment climb is index-only: a chain reads a body for the record its terms run on, and
+  what carries across candidates is the VERDICT, not the body (#720). The `->` step keeps the same
+  shape: its verdict is memoised per predicate and target, with the notes the accounting sentence
+  quotes, so a hit names the same field a fresh read would; the target body is dropped as soon as
+  it is judged, so a link scan holds no target bodies for the call (#1158).
+- A scan gathers its containing records a CHUNK at a time (#1147): the scan lanes buffer up to
+  10,000 candidates, `FieldPredicateSet.HoldParents` collects the distinct parent keys, with no
+  memoized verdict yet, of the chunk's rows that pass the filters run before `where=`
+  (`editorid_contains`, `references=`, the deleted-record rule, the set lane's `conflicts_only`), and `ContainmentIndex.GatherContainers` reads them through
+  `WinnerBodies.For`, one walk per winner plugin, typed by the order index like every fetch
+  (load-order-resolver.md). The bodies are dropped when the chunk drains, so the
+  chunk is the memory bound and only verdicts outlive it. A winner plugin a gather cannot walk is named
+  once in the scan's unreadable list. A parent the chunk did not gather (a hop on a `->` target) is
+  fetched alone through the one-at-a-time fetch, and its fault is the row's own, as before the
+  gather. Stream bodies held in a chunk outlive their plugin's overlay: a chunk can span several
+  plugins, and a Mutagen body reads after its overlay is disposed. A projection's `*parent` read
+  gathers its render chunk's first-hop parents the same way, once per chunk, on the first row that
+  reads one; a winner that gather could not walk answers each later row with the same fault instead
+  of reopening the plugin. A walk's `*parent` hop is not batched; its one fetch is typed by the index.
+- Containment is captured at index build from Mutagen's context walk, merged per plugin in priority
+  order with the last declaration standing, and a plugin that throws part-way merges nothing.
+
+## Pinned by
+
+- `WhereGrammarTests`: the operator, operand and pseudo-path refusals at parse.
+- `WhereQuantifierTests`: the quantified step's folds and its refusals, and its `has` / `has_any` /
+  `has_none` block pins the bitwise set-test bullet including the zero-mask refusal.
+- `PresentNullLinkRenderTests.PresenceSweepsTellTheTwoShapesApart`: the #697 bullet: a head-marked
+  INFO answers `exists` and only a plain one answers `missing`.
+- `RecordsContainmentTests.ADeletedPlacedReferenceIsStillFilteredByTheCellThatHoldsIt`: the
+  header-only-set-still-sees-deleted-records bullet, with a body-reading predicate dropping it beside.
+- `ValuePredicateTests.Ge_OnAPathWrongForMoreThanHalfAMixedScanGetsTheSoftNote_NotTheLoudOne`: the loud-versus-soft accounting bullet:
+  a path wrong for more than half a mixed scan gets "had no value on", not the loud line.
+- `RecordsArtifactTests`: `formid in @<artifact>` re-entry, its epoch check, and
+  `APlainAtFileListStillEntersWithNoManifestAndNoEpochClaim` for the plain list file beside it.
+- `WhereContainmentTests` / `RecordsContainmentTests`: the `*parent` step and its no-verdict rollups.
+- `WhereContainmentCostTests`: `ParentBodiesHeld` / `ParentBodyHighWater` / `ParentBodyFetches`, the
+  #720 invariant that no containing record outlives the candidate that read it.
+- `WhereContainmentBatchTests` / `RecordsContainmentBatchTests`: the #1147 chunk gather: one gather
+  per chunk, each parent once, the same answer across a chunk boundary, and on
+  the real scan, set lane, projection and walk no lone seek and only typed walks (`CostCounters.TypedSeeks`,
+  `TypedCollectPasses`); rows dropped before `where=` gather nothing; a chunk crossing a plugin
+  boundary; a projection hop walks only the rows it reads and does not reopen a faulted winner.
+- `LinkStepVerdictTests`: the `->` step judges each target once, holds no target body, and a remembered verdict names its own field (#1158).
+- `WhereAccountingCauseTests`: the per-cause accounting sentences.
+- `RecordsUnmatchedMembersTests`: the unmatched-members bullet: text, json, `@file`, the cap, the manifest,
+  a member only a lower scoped copy carries, a FormID named as typed; `UnmatchedMembersJudgementTests`,
+  `UnmatchedMembersUnreadableTests`, `UnmatchedMembersDegradedOrderTests` and `UnmatchedMembersOffOrderTests`
+  the deleted, unscannable, unreadable, load-failure, `where_source=winner` and off-order cases.
+- `WhereNearMissTests.ASecondPredicateGetsNoSentence_TheZeroHasAnotherCandidateCause` and
+  `AContainsTermGetsNoSentence_TheHintIsForTheExactSpellingOnly` — the near-miss hint's sole-term
+  rule. They assert the rendered sentence, so they pin that bullet and not `ExactEditorId` itself,
+  which no test names.
+- `ValuePredicateTests`: the by-construction extraction through `ReadEngine.ReadLeaf`, over records built in memory: each operator's matched set against a
+  brute-force set from the records' known values.
+- `GenderedArmAccountingTests` / `AbsentStepAccountingTests`: the #1071 bullet: a missing gendered arm,
+  absent list or index past the end is unset (and answers `missing`), and a genuine parse failure stays a read fault.
+
+## Where
+
+`src/housecarl-core/FieldPredicate.cs` (the `where=` grammar and its accounting),
+`ContainmentIndex.cs` (the child-to-parent map and the `*parent` grammar).
+Entry points: `housecarl_records` (`where=`).

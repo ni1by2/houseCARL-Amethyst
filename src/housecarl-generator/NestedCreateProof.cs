@@ -7,22 +7,30 @@ using HousecarlCore;
 namespace HousecarlGenerator;
 
 /// <summary>
-/// NESTED-CREATE build proof (nested/dialogue plan, Layer A) — exercises the REAL
-/// <see cref="WritePatchBuilder.CreateRecords"/> (the core the MCP create tool calls) on its NESTED path, so the
-/// proof transfers to the server by construction (the way <see cref="CreateProof"/> proves flat create). Where
-/// STEP 0's scout proved the Mutagen PRIMITIVE in isolation, this proves the mechanism THROUGH the production cleave —
-/// parent override → NestedAddNew → ApplyVerb → multi-master serialize → re-open from disk.
+/// Build proof for the NESTED path of <see cref="WritePatchBuilder.CreateRecords"/>, the core the create tool calls
+/// (<see cref="CreateProof"/> covers the flat path). It must drive the whole production chain — parent override →
+/// NestedAddNew → ApplyVerb → multi-master serialize → re-open from disk — not the Mutagen primitive in isolation,
+/// or it proves nothing about the tool.
 ///
-///   N1 — ONE-SHOT (the unit Aaron confirmed): a DialogTopic (flat) + a DialogResponses/INFO under it (same-call
+///   N1 — ONE-SHOT: a DialogTopic (flat) + a DialogResponses/INFO under it (same-call
 ///        sibling parent) in ONE call → re-open: the INFO is in the NEW topic's Responses, both ids local 0x800+.
-///   N2 — INFO into an EXISTING topic (FormKey parent): the topic is overridden into the patch carrying its
-///        original lines, the new INFO appended → re-open: new INFO present AND the original responses survive.
-///   N3 — PlacedObject into an EXISTING Cell, collection='Persistent' (the outcome-(ii) named discriminator) →
+///   N2 — INFO into an EXISTING topic (FormKey parent): the topic is overridden into the patch and the new INFO
+///        appended → re-open: the new INFO is under it. What the override carries of the ORIGINAL lines is
+///        REPORTED, not asserted — see the note at the end of the run.
+///   N10 — a SINGULAR owned child: a Landscape under an existing cell that has none → re-open, the cell holds it.
+///   N11 — REJECT a singular slot that is already filled: a Landscape under a cell that has terrain → refused
+///         before anything is allocated, from the parent's REAL body (the patch's override carries no children).
+///   N12 — a Cell under a Worldspace with NEITHER route named → refused naming both (collection= and grid=).
+///   N13 — DELETE a singular owned child: remove the N10 Landscape by its own FormID → re-open, the cell holds
+///         none. Mutagen's typed remove reaches no singular owned child, so this is the detach path end to end.
+///   N14 — REJECT the same occupied slot on the into= lane, where the patch ALREADY carries the parent: that copy
+///         is an override and holds no terrain, so the order's body is what the refusal is decided from.
+///   N3 — PlacedObject into an EXISTING Cell, collection='Persistent' (the named discriminator) →
 ///        re-open: the new ref is in the cell's Persistent list.
-///   N4 — REJECT a nested type with NO parent (Q3): create 'DialogResponses' alone → refused, names the need for a parent.
-///   N5 — REJECT a parent that can't contain the child (Q3): 'DialogResponses' under a WEAPON FormKey → refused loud.
-///   N6 — REJECT an ambiguous add-target (Q3): 'PlacedObject' into a Cell with NO collection= → refused, names the lists.
-///   N7 — REJECT a forward sibling parent (Q3): an INFO whose parent sibling is declared LATER → refused, the order rule.
+///   N4 — REJECT a nested type with NO parent: create 'DialogResponses' alone → refused, names the need for a parent.
+///   N5 — REJECT a parent that can't contain the child: 'DialogResponses' under a WEAPON FormKey → refused loud.
+///   N6 — REJECT an ambiguous add-target: 'PlacedObject' into a Cell with NO collection= → refused, names the lists.
+///   N7 — REJECT a forward sibling parent: an INFO whose parent sibling is declared LATER → refused, the order rule.
 ///
 /// Vanilla Skyrim.esm is SHA-checked unchanged (create only writes the patch). Patches land in
 /// write-output/nested-create-proof/ for xEdit.  Run: dotnet run --project src/housecarl-generator nested-create-proof [Skyrim.esm]
@@ -51,9 +59,20 @@ internal static class NestedCreateProof
         foreach (var (fk, _, body) in resolver.WinnerRecordsOfType(new[] { typeof(ICellGetter) }))
             if (body is ICellGetter c && c.Persistent.Count > 0) { cellFk = fk; origPersistent = c.Persistent.Count; break; }
         FormKey weaponFk = resolver.WinnerRecordsOfType(new[] { typeof(IWeaponGetter) }).Select(x => x.fk).FirstOrDefault();
-        if (topicFk.IsNull || cellFk.IsNull || weaponFk.IsNull)
-        { Console.Error.WriteLine($"error: could not sample fixtures (topic={topicFk} cell={cellFk} weapon={weaponFk})."); return 1; }
+        // The SINGULAR owned-child arms need both halves of the slot: a cell that carries terrain and one that does not.
+        FormKey landlessCellFk = default, terrainCellFk = default;
+        foreach (var (fk, _, body) in resolver.WinnerRecordsOfType(new[] { typeof(ICellGetter) }))
+        {
+            if (body is not ICellGetter c) continue;
+            if (c.Landscape is null) { if (landlessCellFk.IsNull) landlessCellFk = fk; }
+            else if (terrainCellFk.IsNull) terrainCellFk = fk;
+            if (!landlessCellFk.IsNull && !terrainCellFk.IsNull) break;
+        }
+        FormKey worldspaceFk = resolver.WinnerRecordsOfType(new[] { typeof(IWorldspaceGetter) }).Select(x => x.fk).FirstOrDefault();
+        if (topicFk.IsNull || cellFk.IsNull || weaponFk.IsNull || landlessCellFk.IsNull || terrainCellFk.IsNull || worldspaceFk.IsNull)
+        { Console.Error.WriteLine($"error: could not sample fixtures (topic={topicFk} cell={cellFk} weapon={weaponFk} landless-cell={landlessCellFk} terrain-cell={terrainCellFk} worldspace={worldspaceFk})."); return 1; }
         Console.WriteLine($"fixtures: topic={topicFk} (responses={origResponses})  cell={cellFk} (persistent={origPersistent})  weapon={weaponFk}");
+        Console.WriteLine($"          landless-cell={landlessCellFk}  terrain-cell={terrainCellFk}  worldspace={worldspaceFk}");
         Console.WriteLine();
 
         var outDir = Path.GetFullPath(Path.Combine("write-output", "nested-create-proof"));
@@ -86,11 +105,10 @@ internal static class NestedCreateProof
         }
 
         // ===================== N2 — INFO into an EXISTING topic (FormKey parent) =====================
-        //   ASSERTS THE MECHANISM only (the new child is allocated + placed under the overridden parent + local id).
+        //   Asserts the MECHANISM only: the new child is allocated, placed under the overridden parent, local id.
         //   It does NOT assert "the parent's existing children survive" — overriding the parent yields an override
-        //   carrying ONLY the new child (sibChildren below). Whether that's correct (Skyrim merges children across
-        //   plugins by record) or lossy (the override replaces the child list) is the merge-vs-replace SEMANTIC,
-        //   reported as an OPEN QUESTION below — NOT decided by guessing (evidence-first, §4).
+        //   carrying ONLY the new child. Whether Skyrim merges children across plugins or the override replaces the
+        //   child list is still unestablished, so it is reported below rather than asserted either way.
         int n2OverrideCount = -1;
         {
             var outPath = Path.Combine(outDir, "houseCARL_NestedCreate_N2.esp");
@@ -110,9 +128,9 @@ internal static class NestedCreateProof
                 $"created={YN(ok)} new-info-present={YN(present)} local-id={YN(local)} | override-carries={(responses?.Count ?? -1)} of {origResponses + 1} (orig+new) [merge-semantic: OPEN]{Err(o)}"));
         }
 
-        // ===================== N3 — PlacedObject into an existing Cell, collection='Persistent' (outcome ii) =====================
+        // ===================== N3 — PlacedObject into an existing Cell, collection='Persistent' =====================
         //   Same as N2: asserts the MECHANISM (ref allocated + in the cell's Persistent + local id). The override
-        //   carries only the new ref (not the cell's other 28) — the merge-vs-replace OPEN QUESTION, not asserted.
+        //   carries only the new ref, not the cell's other 28 — the same unestablished question, not asserted.
         int n3OverrideCount = -1;
         {
             var outPath = Path.Combine(outDir, "houseCARL_NestedCreate_N3.esp");
@@ -156,11 +174,10 @@ internal static class NestedCreateProof
                 $"created={(o.Success ? o.Created.Count : 0)} both-under-topic={YN(bothUnder)} L2.Prompt=\"{prompt}\" field-landed={YN(fieldLanded)} distinct-ids={YN(distinct)}{Err(o)}"));
         }
 
-        // ===================== N9 — extend= with a parent CARRIED BY THE PATCH (the former gap, now SUPPORTED) =====================
+        // ===================== N9 — extend= with a parent CARRIED BY THE PATCH =====================
         //   Create a topic (call 1), then add an INFO under it in a SEPARATE into= call (call 2). The parent topic lives
-        //   in the PATCH, not the load order — resolved from the patch being extended (Phase 0 opens the patch before
-        //   pre-flight). Asserts the INFO lands under the patch-carried topic; and a GENUINELY-absent parent (in neither
-        //   the load order nor the patch) still refuses LOUD, naming both (Q3).
+        //   in the PATCH, not the load order, so it resolves only because the patch being extended is opened before
+        //   pre-flight. Asserts the INFO lands under it, and that a parent absent from BOTH still refuses loud.
         {
             var outPath = Path.Combine(outDir, "houseCARL_NestedCreate_N9.esp");
             var s1 = WritePatchBuilder.CreateRecords(resolver, rulebook,
@@ -181,6 +198,63 @@ internal static class NestedCreateProof
             bool ok = s1.Success && s2.Success && infoUnder && ghostRefused;
             results.Add(("N9 extend+patch-carried parent (now works; absent still refuses)", ok,
                 $"call1-ok={YN(s1.Success)} call2-ok={YN(s2.Success)} info-under-topic={YN(infoUnder)} absent-refused-loud={YN(ghostRefused)}{Err(s2)}"));
+        }
+
+        // ===================== N10 — a SINGULAR owned child under a parent that has none =====================
+        //   The shape parent= could not reach at all: a slot holding exactly one record, not a list. Driven through
+        //   the same production chain as every arm above — parent override → NestedAddNew → serialize → re-open.
+        FormKey n10Land = default; string n10Path = Path.Combine(outDir, "houseCARL_NestedCreate_N10.esp");
+        {
+            var specs = new[]
+            {
+                new WritePatchBuilder.CreateSpec { RecordType = "Landscape", EditorId = "HC_N10_Land", ParentRef = landlessCellFk.ToString(), Edits = Array.Empty<WriteRequest>() },
+            };
+            var o = WritePatchBuilder.CreateRecords(resolver, rulebook, specs, n10Path, extend: false);
+            bool ok = o.Success && o.Created.Count == 1;
+            n10Land = ok ? o.Created[0].FormKey : default;
+            var under = ok ? CellLandscape(n10Path, landlessCellFk) : null;
+            bool present = under == n10Land;
+            bool local = ok && n10Land.ID >= 0x800 && n10Land.ModKey.FileName.String.Equals(Path.GetFileName(n10Path), StringComparison.OrdinalIgnoreCase);
+            results.Add(("N10 singular child created", ok && present && local,
+                $"created={YN(ok)} land-under-cell={YN(present)} local-id={YN(local)}{Err(o)}"));
+        }
+
+        // ===================== N11 — REJECT a singular slot that is already filled =====================
+        //   Measured against the parent's REAL body: the patch's fresh override of the cell carries no children, so
+        //   a guard reading the copy would allocate a second, empty LAND and ship it.
+        results.Add(RejectCheck("N11 reject occupied singular slot", outDir, "N11", resolver, rulebook,
+            new[] { new WritePatchBuilder.CreateSpec { RecordType = "Landscape", EditorId = "HC_N11_Land", ParentRef = terrainCellFk.ToString(), Edits = Array.Empty<WriteRequest>() } },
+            msg => msg.Contains("already holds", StringComparison.OrdinalIgnoreCase)));
+
+        // ===================== N12 — REJECT a Cell under a Worldspace with neither route named =====================
+        results.Add(RejectCheck("N12 reject unnamed cell route", outDir, "N12", resolver, rulebook,
+            new[] { new WritePatchBuilder.CreateSpec { RecordType = "Cell", EditorId = "HC_N12_Cell", ParentRef = worldspaceFk.ToString(), Edits = Array.Empty<WriteRequest>() } },
+            msg => msg.Contains("TopCell", StringComparison.Ordinal) && msg.Contains("grid=", StringComparison.Ordinal)));
+
+        // ===================== N13 — DELETE the singular owned child N10 created =====================
+        {
+            var rem = WritePatchBuilder.RemoveRecords(resolver, new[] { n10Land }, n10Path);
+            bool removed = rem.Success && rem.Removed.Count == 1 && rem.Removed[0].Target == n10Land;
+            bool gone = File.Exists(n10Path) && CellLandscape(n10Path, landlessCellFk) is null;
+            results.Add(("N13 singular child removed", removed && gone,
+                $"removed={YN(removed)} slot-empty-on-reopen={YN(gone)}" + (rem.Success ? "" : "  err=" + (rem.Error ?? "").Replace('\n', ' '))));
+        }
+
+        // ===================== N14 — REJECT an occupied singular slot on a parent the PATCH ALREADY CARRIES =====================
+        //   Call 1 puts a placed ref in the cell, so the patch carries the cell as a fresh override that holds no
+        //   terrain. Reading only that copy reads the slot free and ships a second LAND under a cell that has one.
+        {
+            var outPath = Path.Combine(outDir, "houseCARL_NestedCreate_N14.esp");
+            var s1 = WritePatchBuilder.CreateRecords(resolver, rulebook,
+                new[] { new WritePatchBuilder.CreateSpec { RecordType = "PlacedObject", EditorId = "HC_N14_Ref", ParentRef = terrainCellFk.ToString(), IntoCollection = "Persistent", Edits = Array.Empty<WriteRequest>() } },
+                outPath, extend: false);
+            var s2 = WritePatchBuilder.CreateRecords(resolver, rulebook,
+                new[] { new WritePatchBuilder.CreateSpec { RecordType = "Landscape", EditorId = "HC_N14_Land", ParentRef = terrainCellFk.ToString(), Edits = Array.Empty<WriteRequest>() } },
+                outPath, extend: true);
+            bool refused = !s2.Success && (s2.Error ?? "").Contains("already holds", StringComparison.OrdinalIgnoreCase);
+            bool noLand = File.Exists(outPath) && CellLandscape(outPath, terrainCellFk) is null;
+            results.Add(("N14 reject occupied slot, carried parent", s1.Success && refused && noLand,
+                $"call1-ok={YN(s1.Success)} refused={YN(refused)} no-land-in-patch={YN(noLand)}{Err(s2)}"));
         }
 
         // ===================== N4 — REJECT nested with no parent =====================
@@ -275,6 +349,19 @@ internal static class NestedCreateProof
             back = SkyrimMod.CreateFromBinaryOverlay(patchPath, SkyrimRelease.SkyrimSE);
             var info = back.EnumerateMajorRecords<IDialogResponsesGetter>().FirstOrDefault(x => x.FormKey == infoFk);
             return info?.Prompt?.String;
+        }
+        catch { return null; }
+        finally { (back as IDisposable)?.Dispose(); }
+    }
+
+    /// <summary>The FormKey in a cell's singular terrain slot on re-open, or null when the slot is empty.</summary>
+    static FormKey? CellLandscape(string patchPath, FormKey cellFk)
+    {
+        ISkyrimModGetter? back = null;
+        try
+        {
+            back = SkyrimMod.CreateFromBinaryOverlay(patchPath, SkyrimRelease.SkyrimSE);
+            return back.EnumerateMajorRecords<ICellGetter>().FirstOrDefault(x => x.FormKey == cellFk)?.Landscape?.FormKey;
         }
         catch { return null; }
         finally { (back as IDisposable)?.Dispose(); }

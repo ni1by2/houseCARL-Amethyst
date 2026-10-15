@@ -1,0 +1,14 @@
+{
+  "name": "housecarl-papyrus-tools",
+  "version-string": "1.0.0",
+  "builtin-baseline": "6f29f12e82a8293156836ad81cc9bf5af41fe836",
+  "dependencies": [
+    "boost-algorithm",
+    "boost-container",
+    "boost-filesystem",
+    "boost-program-options",
+    "boost-property-tree",
+    "fmt",
+    "pugixml"
+  ]
+}

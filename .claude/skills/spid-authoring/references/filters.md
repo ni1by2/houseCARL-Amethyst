@@ -15,6 +15,9 @@ sections, and exclusions (`-X`) are always AND. Letter codes and skill indices a
 > Source: the article's String / Form / Level / Trait Filter sections (SPID 7.3.0), plus **[source]**
 > cross-checks where noted.
 
+**Sections.** 1 String Filters (position 1) · 2 Form Filters (position 2) · 3 Level Filters
+(position 3), which owns what a Level Filter reaches · 4 Trait Filters (position 4).
+
 ---
 
 ## 1. String Filters (position 1)
@@ -87,7 +90,7 @@ Form = 0x12345||FormExpression1,FormExpression2,...
 | Perk | `[PERK]` | Perks |
 | Specific NPC | `[NPC_]` | FormID / EDID |
 | NPC's Template | `[NPC_]` | FormID / EDID (targets descendants — grammar-core §11) |
-| Actor | `[ACHR]` | FormID / EDID *(added in 7.3)* |
+| Actor | `[ACHR]` | FormID / EDID *(added in 7.3 — **absent below 7.3**: on an older install the whole line is skipped silently)* |
 | Voice Type | `[VTYP]` | VTCK – Voice |
 | Known Spell | `[SPEL]` | Actor Effects |
 | Skin | `[ARMO]` | WNAM – Worn Armor |
@@ -162,10 +165,54 @@ Form = 0x12345|||w1(2/3)
 Form = 0x12345|||5/10,7/12
 ```
 
-**Leveled Distribution:** the moment a line defines a Level Filter it joins the *Leveled Distribution*
-pass — SPID checks the level/skills of loaded **auto-leveled** NPCs against the filter (unless another
-filter discards the NPC or the chance roll fails). This is a distinct distribution path from regular
-(non-level-filtered) entries.
+### What a Level Filter reaches — and what it does not **[source]**
+
+This section owns the question; the skill body points here rather than restating it.
+
+**A Level Filter narrows by the NPC's own level. It does not narrow the line to auto-levelled NPCs.**
+On the ordinary on-load path SPID runs the **whole** entry list — level-filtered entries included —
+against every non-player, non-deleted NPC that loads, and compares the range to that NPC's own
+level. So a line reading `|||20` reaches every matching NPC at level 20 or above, fixed-level actors
+included.
+
+**The separate pass is a re-distribution, not the distribution.** SPID keeps a second, smaller list
+holding only the level-filtered entries, and replays it for NPCs whose level is a **PC level
+multiplier** — on player level-up, and on game load — so a scaling actor gains an entry when it grows
+into the range and loses it when it falls out. That pass is restricted to PC-level-mult NPCs; it
+adds re-evaluation to an already-distributed population, it does not shrink the population the line
+reached in the first place.
+
+**Why it matters in numbers.** These numbers are **instance-derived**: they were measured once, on
+one heavily overhauled 3,801-plugin order, with `housecarl_records` at a stamped epoch. They are here
+to show the *shape* of the gap — hundreds-fold, not a rounding error — and nothing else. They are not
+a constant, not a baseline for another order, and not a number to quote as a finding. Measure your own
+order at the epoch you are working against, and quote that.
+
+On such an order the two populations are nowhere near each other. **The bandit census** found 17 of
+24,782 bandit-faction NPC records on a PC level multiplier, against 4,040 matching the line's own level
+bound; the whole order carries 963 PC-level-mult NPC records, across every faction — so 17 is the
+bandit-faction slice of that 963, not a second order-wide total.
+Reading the filter as "auto-levelled NPCs only" understates the reach by a factor of hundreds there.
+Those counts read each record's own local data, so a templated NPC whose stats are inherited is not
+counted although SPID matches the resolved actor (1,073 of the 24,782 bandit-faction records inherit
+stats) — a census is a floor, and the source below, not the ratio, is what settles the rule.
+
+**A second census** on the same order, cut on the two civil-war factions
+(`CWImperialFaction` + `CWSonsFaction`) instead of bandits, found 2,249 NPC records in those factions,
+155 of them on a PC level multiplier, and 917 of them inheriting stats from a template. Different
+group, different predicates: none of those three is comparable with a bandit number or with the 963,
+which is why each count here names both. Count both of yours with
+`housecarl_records` (`counts_only=true`) before quoting a reach.
+
+> **Source.** `powerof3/Spell-Perk-Item-Distributor`: `DistributeManager.cpp`
+> `detail::distribute_on_load` calls `Distribute(npcData, false)` for every NPC passing
+> `should_process_NPC` (`!IsPlayer() && !IsDeleted()`); `FormData.h`
+> `Distributables<Form>::GetForms(bool a_onlyLevelEntries)` returns the full `forms` list on
+> `false` and the `formsWithLevels` subset only on `true`; `LookupFilters.cpp`
+> `Data::passed_level_filters` tests the range against `NPC::Data::GetLevel()`;
+> `DistributePCLevelMult.cpp` gates its hooks on `npc->HasPCLevelMult()`. Read on the `master`
+> branch and re-checked at tag `v6.8.5.rc9` — the logic is identical at both, and the repository
+> publishes no 7.0.0 or 7.3.0 tag to read, so this holds across the 7.x window the corpus documents.
 
 ---
 

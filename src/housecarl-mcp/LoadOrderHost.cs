@@ -1,0 +1,50 @@
+// The shared door every area's host interface extends, and the asset capture it returns.
+namespace HousecarlMcp;
+
+/// <summary>One asset build with its warnings, profile and roots, all taken in one <c>_gate</c> hold.</summary>
+internal readonly record struct AssetCapture(AssetResolver.AssetView View, IReadOnlyList<string> Warnings, string ProfileName,
+                                             Mo2Roots Roots, IReadOnlyList<ActiveArchive> Archives, IReadOnlyList<string> EnabledMods)
+{
+    /// <summary>The captured mods root, or null when there is none.</summary>
+    public string? ModsRootOrNull => string.IsNullOrWhiteSpace(Roots.ModsDir) ? null : Roots.ModsDir;
+}
+
+/// <summary>The four MO2 roots, taken in one <c>_gate</c> hold after the roots are derived.</summary>
+internal readonly record struct Mo2Roots(string ProfileDir, string DataDir, string ModsDir, string OverwriteDir);
+
+/// <summary>The head members areas share; contract in docs/architecture/load-order-service.md.</summary>
+internal interface ILoadOrderHost
+{
+    /// <summary>The record resolver, built on first access and kept fresh on every later one.</summary>
+    LoadOrderResolver Resolver { get; }
+
+    /// <summary>The live asset resolver, for a core check that captures it itself.</summary>
+    AssetResolver Assets { get; }
+
+    /// <summary>The four roots in one <c>_gate</c> hold, derived first; throws what derivation throws.</summary>
+    Mo2Roots CaptureRoots();
+
+    /// <summary>One asset build with its warnings, profile and roots, in one <c>_gate</c> hold.</summary>
+    AssetCapture CaptureAssets();
+
+    /// <summary>A pinned index and the asset build that pairs with it, in one <c>_gate</c> hold; <paramref name="afterPin"/> runs between the two.</summary>
+    (LoadOrderService.ViewPin Pin, AssetCapture Assets) CapturePinAndAssets(Action? afterPin);
+
+    /// <summary>A pinned index and the four MO2 roots in one <c>_gate</c> hold; <paramref name="afterPin"/> runs between the two.</summary>
+    (LoadOrderService.ViewPin Pin, Mo2Roots Roots) CapturePinAndRoots(Action? afterPin);
+
+    /// <summary>The write gate; lock it before any capture, never inside one.</summary>
+    object WriteGate { get; }
+
+    /// <summary>The type lookup, one per service; its map is built from the corpus on the first resolution that needs it.</summary>
+    TypeLookup Types { get; }
+
+    /// <summary>The corpus rulebook (corpus.json), loaded once on first use.</summary>
+    CorpusRulebook Rulebook { get; }
+
+    /// <summary>The configured check, the four roots and the built resolver's plugin names in one hold of the head's index lock; throws the unconfigured prompt when there is no instance.</summary>
+    OutputRoots ConfiguredRoots();
+
+    /// <summary>The in-place consent over the user config store, one per service.</summary>
+    InPlaceConsent InPlaceConsent { get; }
+}

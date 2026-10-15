@@ -9,7 +9,7 @@ The bundled grammar reference for the `spid-authoring` skill (part of the 5-skil
 distributor-framework cluster — sibling to `skypatcher-authoring`). It documents SPID's `_DISTR.ini`
 distribution grammar — the line syntax, every form type, every filter section and modifier, the
 count/index/chance fields, and the runtime ordering — reconstructed into a consistent, lookup-friendly
-form. The eventual `SKILL.md` (not yet authored — see "Layering") drives lookups against it.
+form. The skill's `SKILL.md` drives lookups against it, routed through `index.jsonl`.
 
 Unlike SkyPatcher (one grammar *per record type*, hence a `records/` dir), SPID has **one grammar**
 that applies across 10 form types. So the corpus is shaped as: `grammar-core` (the line + mechanics) +
@@ -40,7 +40,7 @@ the per-record files.
 | Distributable form types | **10 / 10** (`form-types.md`) |
 | Filter sections | **4 / 4** (`filters.md`) |
 | Flat enums | skill indices, trait letters, package-list types, form signatures, distribution order, defaults (`value-tables.md`) |
-| **Gaps** | **none in the article's scope.** Two article-*silent* details (comment syntax, whitespace tolerance) were resolved from source — see Confidence. |
+| **Gaps** | **The article does not cover verification behaviour.** Five details a user hits when checking whether a rule landed — player exclusion, the once-per-launch config read, the runtime `SPID_Processed` marker, the dynamic keyword's missing plugin FormID, and its reachability by name — are absent from article 6617 and were resolved from source (marked **[source]**; see Confidence). Two other article-*silent* details (comment syntax, whitespace tolerance) came from source the same way. Expect further gaps outside the article's grammar scope. |
 
 ## Confidence
 
@@ -54,6 +54,31 @@ the per-record files.
   - **Whitespace around `|` and `,` is stripped**, **`" - "` ⇒ `~`** (xEdit paste form), and FormID
     zero-padding is forgiven — from `sanitize()`.
   - **Chance `!`** deterministic flag and **Level `w`** weight prefix — confirmed in the parsers.
+  - **The player is not distributed to** — `should_process_NPC` in `DistributeManager.cpp` gates the
+    on-load path on `!IsPlayer() && !IsDeleted()`; the PC-level-mult hooks require an already-processed
+    NPC and the death path carries its own `!IsPlayerRef()` guard. All `Distribute()` call sites were
+    read (`DistributeManager.cpp`, `DistributePCLevelMult.cpp`, `DeathDistribution.cpp`). Not in the
+    article.
+  - **Configs are read once per game launch** (`main.cpp`, `kPostLoad`/`kDataLoaded`), so a rule added
+    mid-session needs a restart. Not in the article.
+  - **The "already handled this NPC" marker is a runtime keyword, not a persisted one** — `Setup()` in
+    `DistributeManager.cpp` creates `SPID_Processed` via `IFormFactory` each launch (declared in
+    `DistributeManager.h`), and `distribute_on_load` skips an NPC that already carries it. The
+    article states the from-scratch-per-launch behaviour; the mechanism behind it is source-only.
+  - **A dynamically created keyword has no plugin FormID but is pushed into the game's keyword array**
+    (`FormData.h`, `kCreateIfMissing`). The other half — that SKSE's `Keyword.GetKeyword` resolves a
+    name against that same array — is read from SKSE's own source (`ianpatt/skse64`,
+    `skse64/PapyrusKeyword.cpp`), not inferred; its one-shot, never-invalidated cache is recorded as a
+    caveat in `form-types.md`. The article documents dynamic creation but neither consequence.
+  - **The INI scan does not recurse** — `GetConfigs` (`SPID/src/LookupConfigs.cpp`, 7.3.0, commit
+    `31e76d3`) calls `distribution::get_configs(R"(Data\)", "_DISTR")`, and CLibUtil's helper
+    (`include/CLIBUtil/distribution.hpp`) uses a plain `directory_iterator`, so a `_DISTR.ini` in a
+    subfolder of `Data/` is never read (`grammar-core.md` §2). Read 2026-09-09.
+  - **The SKSE version manifest carries the major digit only** — `SKSEPlugin_Version` sets
+    `v.PluginVersion(Version::MAJOR)` (`SPID/src/main.cpp`, 7.3.0, commit `31e76d3`; unchanged at
+    7.3.3), so every SPID 7.x declares 7.0.0 to SKSE while the Win32 version resource
+    (`SPID/cmake/version.rc.in`) carries the full `MAJOR.MINOR.PATCH.0`. This is why the manifest and
+    MO2's `meta.ini` disagree; see `SKILL.md` and houseCARL issue #667. Read 2026-09-09.
 - **One residual confidence caveat:** comment syntax. SPID parses configs via **CSimpleIniA**
   (source-confirmed); the **`;`** line-comment character is CSimpleIni's documented *library default*
   rather than a SPID line of code we read. Stated in the corpus as "standard INI `;` comments (via
@@ -66,8 +91,22 @@ the per-record files.
 `powerof3/Spell-Perk-Item-Distributor` (GitHub, `master`, **MIT License**) was read for grammar facts
 only — no code vendored. Files consulted (all `SPID/src/`): `LookupConfigs.cpp` (`sanitize()`, parser
 chain), `LookupConfigs.h` (`TraitsFilterComponentParser`, `ChanceComponentParser`,
-`LevelFiltersComponentParser`), `Defs.h` (`Traits` struct). MIT (unlike SkyPatcher's unlicensed repo)
-would permit vendoring, but the corpus documents grammar, it doesn't embed source.
+`LevelFiltersComponentParser`), `Defs.h` (`Traits` struct), `DistributeManager.cpp`
+(`detail::should_process_NPC`, `Setup()`, the load hooks), `DistributeManager.h` (the `processed`
+keyword declaration), `DistributePCLevelMult.cpp` and `DeathDistribution.cpp` (the remaining
+`Distribute()` call sites and their guards), `Distribute.cpp` (the call-site inventory),
+`FormData.h` (`kCreateIfMissing`), `main.cpp` (config read and lookup timing). The
+verification-behaviour files were read at commit `6e66908` (`master`, 2026-09-02); the earlier parsing
+files at `master` as of 2026-06-02. MIT (unlike SkyPatcher's unlicensed repo) would permit vendoring,
+but the corpus documents grammar, it doesn't embed source.
+
+The file-discovery fact spans one more seam inside the repo's own build: **CLibUtil**
+(`powerof3/CLibUtil`, `include/CLIBUtil/distribution.hpp`, read 2026-09-09) supplies
+`distribution::get_configs`, and `SPID/cmake/version.rc.in` supplies the DLL's version resource.
+
+One fact reaches outside SPID's repo: **SKSE** (`ianpatt/skse64`, `master` `4cd2e34`, read 2026-09-05)
+— `skse64/PapyrusKeyword.cpp`, for how `Keyword.GetKeyword` resolves a name. Cited in `form-types.md`
+so the by-name-reachability claim does not span an unread seam.
 
 ## Structure
 
@@ -80,20 +119,21 @@ references/
 ├── form-types.md       ← the 10 distributable form types + signatures + special cases
 ├── filters.md          ← the 4 filter sections (String / Form / Level / Trait) in depth
 ├── value-tables.md     ← flat enums (skill indices, trait letters, package-list types, signatures, …)
-└── index.jsonl         ← lookup routing — NOT YET GENERATED (see Layering; deferred with the sibling)
+└── index.jsonl         ← lookup routing: one line per topic, mapping aliases to the file that answers
 ```
+
+**When you add a fact to this corpus, add or update its `index.jsonl` line too** — a fact the router
+cannot reach is a fact the skill will not find.
 
 ## Layering (build plan)
 
 - **Layer 1 (this corpus) — DONE pending review.** The five reference files above. Built only after
   the complete reference was in hand (article captured + source cross-checked) — the project's
   no-guesswork gate.
-- **Layer 2 — not started.** `SKILL.md` (the lookup + bundled-or-warn playbook, modeled on
-  `papyrus-reference`, authored via the `skill-authoring` specialist), `index.jsonl` (routing format
-  designed alongside SKILL.md, kept consistent with the `skypatcher-authoring` sibling),
-  `evals/` (trigger + author-output eval sets per HOUSECARL_SKILL_AUTHORING.md §6.4/§6.5 — run the
-  anonymized, relevance-framed agent fan-out), and the final §8 reviewer walk. Author Layer 2 only
-  after Aaron reviews Layer 1.
+- **Layer 2 — done.** `SKILL.md` (the lookup + bundled-or-warn playbook, modeled on
+  `papyrus-reference`), `index.jsonl` (routing kept consistent with the `skypatcher-authoring`
+  sibling), and `evals/` (trigger + author-output eval sets per HOUSECARL_SKILL_AUTHORING.md
+  §6.4/§6.5) all ship. The skill is live as `/housecarl:spid-authoring`.
 
 ## Cluster note
 

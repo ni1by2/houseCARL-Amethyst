@@ -1,0 +1,1 @@
+- **Amethyst connection discovery remains available from source through setup’s `--connect-only` option.** Linux CI and plugin launch metadata now use the fork configuration; saved-snapshot reads and transaction safeguards remain in place.
