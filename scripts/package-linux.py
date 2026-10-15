@@ -113,11 +113,27 @@ def native_tool_artifacts(root: Path) -> tuple[Path, list[tuple[Path, str]]]:
 
 def build(repo: Path, output: Path, native_tools: Path) -> None:
     server = repo / "dist/linux-base/server"
+    required_server_files = (
+        "housecarl-mcp",
+        "housecarl-mcp.dll",
+        "housecarl-mcp.deps.json",
+        "housecarl-mcp.runtimeconfig.json",
+        "libhostfxr.so",
+        "libhostpolicy.so",
+        "amethyst_filegraph.abi3.so",
+        "amethyst_snapshot.py",
+        "corpus.json",
+    )
+    missing_server_files = [
+        name for name in required_server_files
+        if not (server / name).is_file() or (server / name).is_symlink()
+    ]
+    if missing_server_files:
+        raise ValueError(
+            "self-contained server publish output is incomplete; missing: "
+            + ", ".join(missing_server_files)
+        )
     inputs = {
-        "server/housecarl-mcp": server / "housecarl-mcp",
-        "server/amethyst_filegraph.abi3.so": server / "amethyst_filegraph.abi3.so",
-        "server/amethyst_snapshot.py": server / "amethyst_snapshot.py",
-        "server/corpus.json": server / "corpus.json",
         "README.md": repo / "README.md",
         "LICENSE": repo / "LICENSE",
         "THIRD-PARTY-NOTICES.txt": repo / "THIRD-PARTY-NOTICES.txt",
@@ -132,6 +148,7 @@ def build(repo: Path, output: Path, native_tools: Path) -> None:
     with tempfile.TemporaryDirectory(prefix="housecarl-linux-package-") as temp:
         stage = Path(temp)
         for relative, source in inputs.items(): add_file(source, stage, relative)
+        add_tree(server, stage, "server")
         _, native_artifacts = native_tool_artifacts(native_tools)
         for source, relative in native_artifacts: add_file(source, stage, relative)
         add_tree(repo / ".claude/skills", stage, "claude/skills")

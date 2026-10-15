@@ -66,6 +66,12 @@ jobs:
       - name: Tests — Linux installer and package
         run: python3 -m unittest discover -s scripts/tests -v
 
+      - name: Build and start the Linux release archive
+        run: |
+          scripts/build-linux-base.sh
+          python3 scripts/package-linux.py
+          python3 scripts/probes/check_linux_package.py dist/housecarl-amethyst-linux-x64.tar.gz
+
       - name: Upload Linux test results
         if: ${{ always() }}
         uses: actions/upload-artifact@v7

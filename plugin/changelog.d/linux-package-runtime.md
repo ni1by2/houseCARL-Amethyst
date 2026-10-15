@@ -1,0 +1,1 @@
+- **The Linux archive now includes the complete .NET server and reports its package version.** The release check starts the extracted archive and requests its MCP tool list, catching packages that install successfully but cannot run.

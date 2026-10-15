@@ -64,6 +64,11 @@ class LinuxPackageTests(unittest.TestCase):
             root = Path(raw)
             files = {
                 "dist/linux-base/server/housecarl-mcp": b"server",
+                "dist/linux-base/server/housecarl-mcp.dll": b"managed server assembly",
+                "dist/linux-base/server/housecarl-mcp.deps.json": b"dependencies",
+                "dist/linux-base/server/housecarl-mcp.runtimeconfig.json": b"runtime configuration",
+                "dist/linux-base/server/libhostfxr.so": b"host fxr",
+                "dist/linux-base/server/libhostpolicy.so": b"host policy",
                 "dist/linux-base/server/amethyst_filegraph.abi3.so": b"native",
                 "dist/linux-base/server/amethyst_snapshot.py": b"helper",
                 "dist/linux-base/server/corpus.json": b"{}",
@@ -93,6 +98,11 @@ class LinuxPackageTests(unittest.TestCase):
             with tarfile.open(archive, "r:gz") as tar:
                 names = [member.name for member in tar.getmembers()]
                 self.assertEqual(1, names.count("manifest.json"))
+                self.assertIn("server/housecarl-mcp.dll", names)
+                self.assertIn("server/housecarl-mcp.deps.json", names)
+                self.assertIn("server/housecarl-mcp.runtimeconfig.json", names)
+                self.assertIn("server/libhostfxr.so", names)
+                self.assertIn("server/libhostpolicy.so", names)
                 self.assertIn("claude/skills/example/references/data.jsonl", names)
                 self.assertIn("codex/skills/housecarl/SKILL.md", names)
                 self.assertNotIn("claude/skills/example/evals/evals.json", names)
@@ -103,6 +113,10 @@ class LinuxPackageTests(unittest.TestCase):
                 self.assertIn("tools/native-build-info.json", names)
             manifest, _ = installer.inspect_archive(archive)
             self.assertEqual("1.2.3", manifest["version"])
+
+            (root / "dist/linux-base/server/housecarl-mcp.dll").unlink()
+            with self.assertRaisesRegex(ValueError, "self-contained server publish output is incomplete"):
+                package_linux.build(root, root / "out/incomplete-package.tar.gz", native_tools)
 
     def test_native_tool_package_refuses_modified_source_and_missing_license(self):
         with tempfile.TemporaryDirectory(prefix="hc-linux-native-integrity-") as raw:
