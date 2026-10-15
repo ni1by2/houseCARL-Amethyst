@@ -38,7 +38,7 @@ jobs:
       - name: Install native build tools
         run: |
           sudo apt-get update
-          sudo apt-get install --yes clang cmake ninja-build zip unzip curl tar
+          sudo apt-get install --yes clang clang-tools-18 cmake ninja-build zip unzip curl tar
 
       - name: Check out the tested Amethyst filegraph source
         uses: actions/checkout@v7

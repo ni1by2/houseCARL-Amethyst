@@ -1,0 +1,1 @@
+- **Build the native Papyrus tools on Ubuntu 24.04.** The Caprica build recipe supplies missing standard C++ headers, and the build instructions and CI include Clang's dependency scanner. The Ubuntu 24.04/glibc 2.39 package baseline is unchanged.

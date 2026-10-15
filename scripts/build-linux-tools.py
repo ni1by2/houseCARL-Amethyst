@@ -103,6 +103,17 @@ def patch_caprica_object_length(source: Path) -> None:
     header.write_text(text.replace(original, corrected), encoding="utf-8")
 
 
+def patch_caprica_standard_headers(source: Path) -> None:
+    """Include the standard declarations used by the pinned filesystem helper."""
+    path = source / "caprica/common/FSUtils.cpp"
+    original = "#include <cstring>\n#include <filesystem>\n#include <future>\n#include <sstream>"
+    corrected = "#include <algorithm>\n#include <cstring>\n#include <filesystem>\n#include <future>\n#include <iterator>\n#include <sstream>"
+    text = path.read_text(encoding="utf-8")
+    if text.count(original) != 1:
+        raise RuntimeError("pinned Caprica standard-header patch no longer matches exactly once")
+    path.write_text(text.replace(original, corrected), encoding="utf-8")
+
+
 def smoke_test(caprica: Path, champollion: Path, root: Path) -> None:
     caprica_probe = subprocess.run([str(caprica)], text=True, stdout=subprocess.PIPE,
                                    stderr=subprocess.STDOUT, timeout=20, check=False)
@@ -219,6 +230,7 @@ def main() -> int:
             # The pinned source spells this path with different case than the checked-in directory.
             (caprica_source / "Caprica").symlink_to("caprica", target_is_directory=True)
             patch_caprica_object_length(caprica_source)
+            patch_caprica_standard_headers(caprica_source)
             caprica_build, champ_build = work / "build-caprica", work / "build-champollion"
             cmake_build(caprica_source, caprica_build, deps, vcpkg_root, compiler)
             cmake_build(champ_source, champ_build, deps, vcpkg_root, compiler)
@@ -281,7 +293,7 @@ def main() -> int:
                 "tools": {name: {"commit": data["commit"], "version": data["version"], "license": data["license"]}
                           for name, data in lock["tools"].items()},
                 "dependency_license_files": dependency_license_count,
-                "caprica_build_patch": "temporary Caprica -> caprica CMake symlink; PexWriter.h object length includes its own field and follows output endianness",
+                "caprica_build_patch": "temporary Caprica -> caprica CMake symlink; PexWriter.h object length includes its own field and follows output endianness; FSUtils.cpp explicitly includes algorithm and iterator",
                 "smoke_test": "Caprica compiled synthetic Papyrus source and Champollion decompiled the produced PEX",
                 "artifacts": artifacts,
             }
