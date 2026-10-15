@@ -29,6 +29,7 @@ PY
 "$dotnet" clean "$repo/housecarl.sln" -c Release -m:1 -v quiet
 "$dotnet" restore "$repo/src/housecarl-generator" --disable-parallel -m:1
 "$dotnet" build "$repo/src/housecarl-generator" -c Release --no-restore -m:1
+rm -rf -- "$out/server"
 mkdir -p -- "$out/generated" "$out/references" "$out/server"
 "$dotnet" "$repo/src/housecarl-generator/bin/Release/net9.0/housecarl-generator.dll" \
   "$out/generated" "$out/references"
