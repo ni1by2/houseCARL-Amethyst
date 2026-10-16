@@ -1,0 +1,1 @@
+- Running the C# tests now keeps transaction journals in temporary state directories, including child MCP servers. Tests no longer leave unfinished journals in the developer's real state directory that block package installation.

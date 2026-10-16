@@ -74,6 +74,7 @@ public sealed class ServerFixture : IDisposable
             StandardOutputEncoding = Encoding.UTF8,
         };
         psi.Environment["HOUSECARL_DATA_DIR"] = _dataDir;
+        psi.Environment["XDG_STATE_HOME"] = Path.Combine(_dataDir, "state");
         if (environment is not null)
             foreach (var (name, value) in environment) psi.Environment[name] = value;
 

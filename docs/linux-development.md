@@ -44,6 +44,8 @@ python3 -m unittest discover -s scripts/tests -v
 
 The C# suite builds saved-snapshot fixtures with Amethyst's native producer, using the extension at `AMETHYST_FILEGRAPH_EXTENSION`. Installer and package checks run in isolated temporary homes and leave the current host registration unchanged.
 
+The C# test executor sets `XDG_STATE_HOME` to a private temporary directory before running tests. Each default MCP server fixture also gets its own state directory; fixtures can explicitly select a different temporary root. This keeps unfinished synthetic transactions out of the developer's real state directory, where they would block package installation. Cleanup runs when the owning fixture is disposed or the test process exits normally.
+
 ## Assemble a Linux package candidate
 
 The release recipe targets Ubuntu 24.04 x64 and requires Python 3.12+, the native build tools above, and the Amethyst extension built from the pinned source. Run `scripts/build-linux-package.sh` from the repository root with `AMETHYST_FILEGRAPH_EXTENSION` set to the built module. Package installation, upgrade, rollback, uninstall and selected-Proton acceptance are separate release checks; passing the source CI does not claim those checks have run.
