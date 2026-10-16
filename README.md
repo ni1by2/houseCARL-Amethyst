@@ -20,6 +20,15 @@ Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. Se
 
 Download the archive, checksum and standalone installer from [v2.0.5 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5). This is a prerelease. Follow the [Linux installation guide](docs/linux-install.md) to verify the download, install it, and select your Amethyst saved snapshot. Running the package does not require the .NET SDK or build tools.
 
+Install the [runtime prerequisites](docs/linux-install.md#runtime-requirements) first. Then, from the directory containing all three downloads, run:
+
+```sh
+sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
+  python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
+```
+
+Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required; running `python3 install-linux.py` alone exits with a missing-action error. Run the installer as your normal user. Restart Claude Code or Codex afterward, then [select your Amethyst connection](docs/linux-install.md#select-an-amethyst-connection).
+
 ## Usage
 
 ```

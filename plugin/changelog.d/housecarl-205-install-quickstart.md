@@ -1,0 +1,1 @@
+- Installation entry points now show the complete `install --archive` command beside the download steps and explain the missing-action error. The older installation page now directs users through the current Linux installer.

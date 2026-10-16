@@ -8,11 +8,16 @@ Download these three assets into the same directory:
 - [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/housecarl-amethyst-linux-x64.tar.gz.sha256)
 - [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/install-linux.py)
 
-Verify the archive before installation:
+## Quick start
+
+Install the [runtime prerequisites](#runtime-requirements) first. From the directory containing all three downloads, verify the archive and then install it:
 
 ```sh
-sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256
+sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
+  python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
+
+Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required. Running `python3 install-linux.py` alone exits with the missing-action error; it does not install anything. Use your normal user account for the installer. Restart Claude Code or Codex afterward and [select your Amethyst connection](#select-an-amethyst-connection).
 
 The published archive's SHA-256 is `dc0e7a7aa859943a5ceb461c0c5c0da38fe3802ebb310865e4b1dc0615cab382`. Its bundled documentation records the candidate state at the release commit; use this online guide for the completed release status.
 
