@@ -32,8 +32,13 @@ this integration does not rebuild those pinned native inputs.
 - The focused regression set passed: 146 tests, no failures.
 - The complete Linux C# suite passed: 7,350 passed, one Windows-only skip, no failures.
 - All 21 Python installer/package tests passed.
-- Final committed-source archive validation is pending the parent-check follow-up.
-  The earlier `1307ece5` archive is superseded and must not be installed or published.
+- The final self-contained archive was built from runtime/source commit
+  `37c9b0eaeb9d8a40c968a4b392277cead429b527` and passed payload hashes,
+  native API 13/schema 9 loading, MCP initialization/version 2.1.0 and the 34-tool list.
+  The seeded stale-output sentinel was removed.
+- Archive SHA-256: `214235c588d0ddb1968530f772df8a8dd8cab3e8506df6a1f8e7c32456f161e7`.
+- This is a local validation candidate, not a published release. The earlier
+  `1307ece5` archive is superseded and must not be installed or published.
 - The parent-replacement regressions were checked against the previous ordering:
   both failed there and passed with source validation followed by the final parent check.
 
