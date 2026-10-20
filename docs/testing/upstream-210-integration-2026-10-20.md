@@ -19,7 +19,9 @@ script namespace caching parses virtual archive separators independently of the
 host operating system.
 
 Validation uses an Ubuntu 24.04 container with .NET SDK 9.0.316 and Python 3.12,
-as UID 1000 with networking disabled during build/test execution. Configuration,
+as UID 1000 with networking disabled during build/test execution. Missing
+self-contained runtime packages were restored separately into a disposable private
+NuGet cache before the offline archive build. Configuration,
 state, cache and temporary files stay in disposable storage. The native reader,
 Caprica and Champollion are reused unchanged from the verified 2.0.5 package;
 this integration does not rebuild those pinned native inputs.
@@ -30,8 +32,12 @@ this integration does not rebuild those pinned native inputs.
 - The focused regression set passed: 144 tests, no failures.
 - The complete Linux C# suite passed: 7,348 passed, one Windows-only skip, no failures.
 - All 21 Python installer/package tests passed.
-- Package validation is pending the committed-source archive check; its result will
-  be recorded before the candidate is submitted for review.
+- The self-contained Linux archive built from source commit `1307ece549fbe87125e82e04e2c8c84f95507091` passed
+  payload hash verification, native API 13/schema 9 loading, MCP initialization,
+  version 2.1.0 and the 34-tool listing. The seeded stale-output sentinel was removed.
+- Archive SHA-256: `acf117b9273e2917e282030b0e30cf3d36ff012dbc20ee352e0060fdba6aeea8`.
+- The archive is a local validation candidate, not a published release. This later
+  documentation update records its results without claiming a new runtime build.
 
 An initial full run exposed Windows-specific physical FaceGen fixture paths,
 a Windows-only artifact-path matcher, and host-dependent BSA namespace parsing.
