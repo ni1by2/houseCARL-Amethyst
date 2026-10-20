@@ -29,15 +29,13 @@ this integration does not rebuild those pinned native inputs.
 ## Results
 
 - The whole Release solution build passed. Compiler/analyzer warnings remain.
-- The focused regression set passed: 144 tests, no failures.
-- The complete Linux C# suite passed: 7,348 passed, one Windows-only skip, no failures.
+- The focused regression set passed: 146 tests, no failures.
+- The complete Linux C# suite passed: 7,350 passed, one Windows-only skip, no failures.
 - All 21 Python installer/package tests passed.
-- The self-contained Linux archive built from source commit `1307ece549fbe87125e82e04e2c8c84f95507091` passed
-  payload hash verification, native API 13/schema 9 loading, MCP initialization,
-  version 2.1.0 and the 34-tool listing. The seeded stale-output sentinel was removed.
-- Archive SHA-256: `acf117b9273e2917e282030b0e30cf3d36ff012dbc20ee352e0060fdba6aeea8`.
-- The archive is a local validation candidate, not a published release. This later
-  documentation update records its results without claiming a new runtime build.
+- Final committed-source archive validation is pending the parent-check follow-up.
+  The earlier `1307ece5` archive is superseded and must not be installed or published.
+- The parent-replacement regressions were checked against the previous ordering:
+  both failed there and passed with source validation followed by the final parent check.
 
 An initial full run exposed Windows-specific physical FaceGen fixture paths,
 a Windows-only artifact-path matcher, and host-dependent BSA namespace parsing.

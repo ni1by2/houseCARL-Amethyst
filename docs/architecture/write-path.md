@@ -628,3 +628,7 @@ publication boundary, preserving the durable journal and destination checks.
 Private compact/merge builds under `SuspendPublication` do not count as
 caller-visible writes. Their final transaction group or local publication records
 the destinations instead, so a later refusal names files actually published.
+
+The destination parent is revalidated after the final source check and immediately
+before the anchored rename/exchange. A directory replacement during source
+validation therefore refuses publication into both the old and replacement paths.

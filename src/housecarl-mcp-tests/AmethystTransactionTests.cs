@@ -19,6 +19,46 @@ public sealed class AmethystTransactionTests
     [Theory]
     [InlineData(false)]
     [InlineData(true)]
+    public void ParentReplacementDuringTheFinalSourceCheckPreventsPublication(bool existingDestination)
+    {
+        using var fixture = new TransactionFixture();
+        var source = Path.Combine(fixture.Library, "source.esp");
+        File.WriteAllText(source, "source");
+        if (existingDestination) File.WriteAllText(fixture.Destination, "original destination");
+        using var mark = MidCallChange.Begin();
+        MidCallChange.Open(source, () => File.ReadAllText(source));
+        var coordinator = new AmethystTransactionCoordinator(fixture.State);
+        var journal = coordinator.Begin(fixture.Request());
+        using var locks = coordinator.AcquireWriteLocks(fixture.Library, fixture.ManagerLock);
+        using var content = new MemoryStream(Encoding.UTF8.GetBytes("new destination"));
+        var artifact = coordinator.PrepareArtifact(journal.Id, "unit-1", fixture.Destination, "plugin", content, fixture.Library);
+        var parent = Path.GetDirectoryName(fixture.Destination)!;
+        var moved = Path.Combine(fixture.Library, "old-parent");
+        var replaced = false;
+        var previous = MidCallChange.BeforeCheck.Value;
+        MidCallChange.BeforeCheck.Value = name =>
+        {
+            if (replaced || name != "source.esp") return;
+            Directory.Move(parent, moved);
+            Directory.CreateDirectory(parent);
+            File.WriteAllText(fixture.Destination, "replacement parent contents");
+            replaced = true;
+        };
+        try
+        {
+            Assert.Throws<IOException>(() => coordinator.Publish(journal.Id, artifact.Id, locks));
+            Assert.True(replaced);
+            Assert.Equal("replacement parent contents", File.ReadAllText(fixture.Destination));
+            var oldDestination = Path.Combine(moved, Path.GetFileName(fixture.Destination));
+            if (existingDestination) Assert.Equal("original destination", File.ReadAllText(oldDestination));
+            else Assert.False(File.Exists(oldDestination));
+        }
+        finally { MidCallChange.BeforeCheck.Value = previous; }
+    }
+
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
     public void ASourceChangedAtThePublicationBoundaryPreventsTheTransactionWrite(bool existingDestination)
     {
         using var fixture = new TransactionFixture();

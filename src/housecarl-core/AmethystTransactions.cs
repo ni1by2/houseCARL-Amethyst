@@ -385,8 +385,8 @@ public sealed class AmethystTransactionCoordinator
         }
         VerifyOriginalUnchanged(artifact, destination.Parent, destination.Leaf);
         _fault?.Invoke("after_final_destination_check");
-        EnsureDestinationParentStillAnchored(journal, target, destination.Parent);
         MidCallChange.BeforeCommit();
+        EnsureDestinationParentStillAnchored(journal, target, destination.Parent);
         if (artifact.OriginalExisted)
         {
             LinuxAnchoredFileSystem.Exchange(destination.Parent, sibling, destination.Leaf);
