@@ -53,3 +53,23 @@ No installed runtime, live Skyrim profile, mod ordering, enablement, deployment,
 Steam compatibility mapping or prefix was changed. Live deployment and gameplay
 remain untested. Independent review is required before landing this candidate.
 The published 2.0.5 tag and downloads remain unchanged.
+
+## Release preparation
+
+The 2.1.0 Linux preview release uses the same tested server, native tools, skills and
+installer as the final candidate above. README and installation-guide updates are
+packaged separately without recompiling the runtime. The release archive therefore
+has a new checksum, recorded in its checksum asset and release notes. The candidate
+checksum above continues to identify the original validation artifact.
+
+GitHub CI passed on `cb4c9f1b9958e1d01edc3d304cd7ac42219bb02f`:
+[Linux / Amethyst build and tests](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/39455387090).
+Later release-preparation edits are documentation only. Independent review and
+publication remain pending until the release is approved and published.
+
+The release archive's SHA-256 is
+`cc363dbc7eef08fe50bdc4d6abec1297668e53dcb6e5718e87280b363ca8f360`.
+Its payload manifest differs from the tested candidate only in `README.md` and
+`docs/linux-install.md`; the standalone installer is byte-identical. An isolated
+Ubuntu 24.04 package probe verified the new archive's payload hashes, native API
+13/schema 9, MCP version 2.1.0 and all 34 tools. No build or test suite was repeated.

@@ -1,12 +1,12 @@
-# Install the Linux 2.0.5 preview
+# Install the Linux 2.1.0 preview
 
-Version [2.0.5 is published as a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5), targeting Ubuntu 24.04 x64. Its Amethyst snapshot helper requires Python 3.12 or newer. The final package also passed installation, isolated Claude Code/Codex registration and a Proton CachyOS utility round trip on an Arch-derived host. See the [verification record](testing/upstream-205-integration-2026-10-15.md) for the checks and their limits.
+Version [2.1.0 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.0), targeting Ubuntu 24.04 x64. Its Amethyst snapshot helper requires Python 3.12 or newer. The [2.1.0 verification record](testing/upstream-210-integration-2026-10-20.md) covers the updated engine, transaction regressions and package checks. Installation, isolated Claude Code/Codex registration and the Proton CachyOS utility round trip were checked for [2.0.5](testing/upstream-205-integration-2026-10-15.md); those checks were not repeated for 2.1.0. The installer and pinned native utilities are unchanged.
 
 Download these three assets into the same directory:
 
-- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/housecarl-amethyst-linux-x64.tar.gz)
-- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/housecarl-amethyst-linux-x64.tar.gz.sha256)
-- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.0.5/install-linux.py)
+- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/housecarl-amethyst-linux-x64.tar.gz)
+- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/housecarl-amethyst-linux-x64.tar.gz.sha256)
+- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/install-linux.py)
 
 ## Quick start
 
@@ -19,7 +19,7 @@ sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
 
 Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required. Running `python3 install-linux.py` alone exits with the missing-action error; it does not install anything. Use your normal user account for the installer. Restart Claude Code or Codex afterward and [select your Amethyst connection](#select-an-amethyst-connection).
 
-The published archive's SHA-256 is `dc0e7a7aa859943a5ceb461c0c5c0da38fe3802ebb310865e4b1dc0615cab382`. Its bundled documentation records the candidate state at the release commit; use this online guide for the completed release status.
+Use the checksum asset from the same release as the archive. The release notes also record its SHA-256. Do not mix the 2.0.5 archive or installer with the 2.1.0 downloads.
 
 ## Runtime requirements
 
@@ -46,6 +46,8 @@ The installer registers the server for Claude Code in `~/.claude.json` and Codex
 Use `python3 install-linux.py rollback` to switch back or `python3 install-linux.py uninstall` to remove the program. Both actions refuse to switch or remove files while a transaction journal is pending, corrupt, or newer than the package understands. The installer does not remove Amethyst data, houseCARL transaction recovery data, unrelated settings, or modified skill directories.
 
 To update from an earlier package, run the new release's installer with its archive using the same `install` command. The previous activation is retained for rollback. Installing a version that is already present refuses to overwrite it.
+
+For a 2.0.5 installation, download all three 2.1.0 assets into a new directory and run the Quick start commands above. Your selected Amethyst connection and transaction state remain outside the version directory and are retained. Restart Claude Code or Codex afterward; an already running MCP process continues to use its old program until restarted. Updating the server does not refresh or deploy your Amethyst profile.
 
 If installation reports an unfinished transaction, preserve its journal and inspect that exact ID with `housecarl_staging_status` in the current compatible server. Use the supported recovery action for its recorded state before retrying installation. If no compatible server is available, stop and request recovery help. Do not delete journals or select a different state root to bypass the check. Older development test runs could leave journals referencing deleted temporary fixtures; establish their origin and preserve a backup before quarantining any such records.
 
