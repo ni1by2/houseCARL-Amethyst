@@ -1355,9 +1355,11 @@ public static class WriteEngine
     {
         try
         {
+            MidCallChange.BeforeCommit();
             if (AmethystTransactionWriteScope.Current is { } transaction)
                 transaction.CommitPlugin(tmpPath, outputPath);
             else AtomicFile.Commit(tmpPath, outputPath);
+            if (!AmethystTransactionWriteScope.PublicationIsSuspended) MidCallChange.AfterCommit(outputPath);
         }
         finally { CleanupStaged(tmpPath); }
     }

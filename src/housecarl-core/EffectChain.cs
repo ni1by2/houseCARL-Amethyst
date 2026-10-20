@@ -59,81 +59,142 @@ public static class EffectChain
     /// The typed-match gate runs first, so a bad target never reads as a silent "0 carriers"; a valid but unused MGEF
     /// returns a clean zero result with no error.</summary>
     public static EffectChainResult Resolve(LoadOrderResolver resolver, FormKey mgef, IReadOnlyList<Type> scope, int limit)
+        => ResolveMany(resolver, new[] { mgef }, scope, limit)[0];
+
+    /// <summary>The chains of several MGEFs off one capture: the seeds read through the door, then one pass over the carriers.</summary>
+    public static EffectChainResult[] ResolveMany(LoadOrderResolver resolver, IReadOnlyList<FormKey> mgefs, IReadOnlyList<Type> scope,
+                                                  int limit, CancellationToken ct = default)
     {
         var view = resolver.Capture();
         // Post-capture refusals are STAMPED: they are answers about this build. Only the service's pre-capture
         // type-narrow gate refuses without an epoch.
         EffectChainResult FailStamped(string msg) => EffectChainResult.Fail(msg) with { Stamp = view.Stamp };
+        var results = new EffectChainResult[mgefs.Count];
 
-        // --- typed-match gate: the target must be an MGEF. Cheap — one winner-body fetch off this view. ---
-        var w = view.ResolveWinner(mgef);
-        if (w is null)
-            return FailStamped(
-                $"no record with FormID {mgef} in the load order. The chain form needs a MagicEffect (MGEF) the active order defines.");
-        string mgefEid;
+        // --- typed-match gate: each target must be an MGEF; only its type and EditorID outlive its group. ---
+        var seeds = new Dictionary<FormKey, (bool Mgef, string Name)>();
+        var gateUnread = new Dictionary<string, PluginUnreadableException>(StringComparer.OrdinalIgnoreCase);
         using (var session = resolver.OpenSession())
+            OrderedGather.ForEachGroup(view, session, mgefs, (bodies, _) =>
+            {
+                foreach (var (fk, b) in bodies)
+                    seeds[fk] = b is IMagicEffectGetter mr ? (true, mr.EditorID ?? "<none>") : (false, RecordNaming.StripOverlay(b.GetType().Name));
+            }, gateUnread, ct);
+        // Each live seed's FormKey to its indices, so a carrier's effect entry is tested against every seed at once.
+        var seedAt = new Dictionary<FormKey, List<int>>();
+        for (int i = 0; i < mgefs.Count; i++)
         {
-            var mbody = view.GetRecord(session, w.Value.WinnerPlugin, mgef);
-            if (mbody is null)
-                return FailStamped(
-                    $"winner '{w.Value.WinnerPlugin}' did not yield {mgef} on fetch — cannot confirm it is a MagicEffect.");
-            if (mbody is not IMagicEffectGetter mr)
-                return FailStamped(
-                    $"{mgef} resolves to a {RecordNaming.StripOverlay(mbody.GetType().Name)}, not a MagicEffect — the chain form " +
+            var mgef = mgefs[i];
+            var w = view.ResolveWinner(mgef);
+            if (w is null)
+                results[i] = FailStamped(
+                    $"no record with FormID {mgef} in the load order. The chain form needs a MagicEffect (MGEF) the active order defines.");
+            else if (!seeds.TryGetValue(mgef, out var seed))
+                results[i] = FailStamped(gateUnread.TryGetValue(w.Value.WinnerPlugin, out var fault)
+                    ? $"{mgef} could not be read: {fault.Message}"
+                    : $"winner '{w.Value.WinnerPlugin}' did not yield {mgef} on fetch — cannot confirm it is a MagicEffect.");
+            else if (!seed.Mgef)
+                results[i] = FailStamped(
+                    $"{mgef} resolves to a {seed.Name}, not a MagicEffect — the chain form " +
                     $"needs an MGEF. (To find what references an arbitrary record, use {ToolNames.Records} references=[the FormID] " +
                     "— unbounded off the reverse-reference index, or with types= or plugins= for a cheaper bounded scan.)");
-            mgefEid = mr.EditorID ?? "<none>";
+            else if (seedAt.TryGetValue(mgef, out var at)) at.Add(i);
+            else seedAt[mgef] = new List<int> { i };
         }
+        var live = seedAt.Values.SelectMany(a => a).ToList();
+        if (live.Count == 0) return results;
 
-        // --- scan the winner bodies of the scope; collect every matching effect entry. ---
-        var rows = new List<EffectChainRow>();
-        int total = 0, unscannable = 0;
-        var samples = new List<string>();
+        // --- scan the winner bodies of the scope once; collect every matching effect entry of every seed. ---
+        var rows = mgefs.Select(_ => new List<EffectChainRow>()).ToArray();
+        var total = new int[mgefs.Count];
+        var unscannable = new int[mgefs.Count];
+        var samples = mgefs.Select(_ => new List<string>()).ToArray();
+        void Skip(int i, FormKey fk, Exception ex)
+        {
+            unscannable[i]++;
+            if (samples[i].Count < 3) samples[i].Add($"{FormIdToken.Of(fk)} — {ex.GetType().Name}: {ex.Message}");
+        }
         // A plugin that cannot be opened now wins carriers this scan cannot see; collected so the note names the gap.
         var unreadable = new List<PluginUnreadableException>();
         try
         {
             foreach (var (fk, _, body) in view.WinnerRecordsOfType(scope, unreadable))
             {
-                // Per-record fault isolation: one record Mutagen cannot parse is excluded and accounted.
+                ct.ThrowIfCancellationRequested();
+                // One walk of the carrier's effects; each seed's hits are held until the walk ends, so a fault drops
+                // that seed's hits on this carrier and counts it unscannable, as a per-seed Match did.
+                Dictionary<FormKey, List<EffectHit>>? hits = null;
+                Dictionary<FormKey, Exception>? faults = null;
+                Exception? whole = null;
                 try
                 {
-                    var hits = Match(body, mgef);
-                    if (hits.Count == 0) continue;
-                    string type = RecordNaming.StripOverlay(body.GetType().Name);
-                    string winner = view.ResolveWinner(fk)?.WinnerPlugin ?? "?";
-                    foreach (var h in hits)
+                    var effects = EffectsOf(body) ?? Array.Empty<IEffectGetter>();
+                    for (int e = 0; e < effects.Count; e++)
                     {
-                        total++;
-                        if (rows.Count < limit)
-                            rows.Add(new EffectChainRow(fk, type, body.EditorID, winner, h.Index, h.Count, h.Magnitude, h.Area, h.Duration));
+                        var eff = effects[e];
+                        var mgef = eff.BaseEffect.FormKey;
+                        if (!seedAt.ContainsKey(mgef) || faults?.ContainsKey(mgef) == true) continue;
+                        try
+                        {
+                            var d = eff.Data;   // absent data is reported at zero; a Data fault marks only this seed
+                            hits ??= new();
+                            if (!hits.TryGetValue(mgef, out var l)) hits[mgef] = l = new List<EffectHit>();
+                            l.Add(new EffectHit(e, effects.Count, d?.Magnitude ?? 0f, d?.Area ?? 0, d?.Duration ?? 0));
+                        }
+                        catch (Exception ex) { (faults ??= new())[mgef] = ex; hits?.Remove(mgef); }
                     }
                 }
-                catch (Exception ex)
+                catch (Exception ex) { whole = ex; }   // the list itself faulted: every seed not already faulted fails here
+                if (faults is not null)
+                    foreach (var (mgef, ex) in faults)
+                        foreach (var i in seedAt[mgef]) Skip(i, fk, ex);
+                if (whole is not null)
                 {
-                    unscannable++;
-                    if (samples.Count < 3) samples.Add($"{FormIdToken.Of(fk)} — {ex.GetType().Name}: {ex.Message}");
+                    foreach (var i in live)
+                        if (faults is null || !faults.ContainsKey(mgefs[i])) Skip(i, fk, whole);
+                    continue;
                 }
+                if (hits is null) continue;
+                string type, winner; string? eid;
+                try { type = RecordNaming.StripOverlay(body.GetType().Name); winner = view.ResolveWinner(fk)?.WinnerPlugin ?? "?"; eid = body.EditorID; }
+                catch (Exception ex) { foreach (var mgef in hits.Keys) foreach (var i in seedAt[mgef]) Skip(i, fk, ex); continue; }
+                foreach (var (mgef, list) in hits)
+                    foreach (var i in seedAt[mgef])
+                        foreach (var h in list)
+                        {
+                            total[i]++;
+                            if (rows[i].Count < limit)
+                                rows[i].Add(new EffectChainRow(fk, type, eid, winner, h.Index, h.Count, h.Magnitude, h.Area, h.Duration));
+                        }
             }
         }
+        catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
         // Anything escaping the stream itself gets a NAMED failure, never the MCP layer's generic message.
-        catch (Exception ex) { return FailStamped($"scan aborted: {ex.GetType().Name}: {ex.Message}"); }
+        catch (Exception ex)
+        {
+            foreach (var i in live) results[i] = FailStamped($"scan aborted: {ex.GetType().Name}: {ex.Message}");
+            return results;
+        }
 
-        string? scanNote = unscannable == 0 ? null
-            : $"note: {unscannable} record instance(s) could not be scanned (Mutagen could not parse their content) and were skipped: "
-              + string.Join("; ", samples)
-              + (unscannable > samples.Count ? $"; and {unscannable - samples.Count} more" : "")
-              + $". Inspect one with {ToolNames.Records} formids=[the FormID] (per-field fault isolation applies).";
+        foreach (var i in live)
+        {
+            string? scanNote = unscannable[i] == 0 ? null
+                : $"note: {unscannable[i]} record instance(s) could not be scanned (Mutagen could not parse their content) and were skipped: "
+                  + string.Join("; ", samples[i])
+                  + (unscannable[i] > samples[i].Count ? $"; and {unscannable[i] - samples[i].Count} more" : "")
+                  + $". Inspect one with {ToolNames.Records} formids=[the FormID] (per-field fault isolation applies).";
 
-        string? coverageNote = unreadable.Count == 0 ? null
-            : $"coverage gap: {unreadable.Count} plugin(s) could not be read, so any carrier they win is missing from this chain: "
-              + string.Join("; ", unreadable.Select(u => u.Message));
-        scanNote = scanNote is null ? coverageNote
-                 : coverageNote is null ? scanNote
-                 : scanNote + " " + coverageNote;
+            string? coverageNote = unreadable.Count == 0 ? null
+                : $"coverage gap: {unreadable.Count} plugin(s) could not be read, so any carrier they win is missing from this chain: "
+                  + string.Join("; ", unreadable.Select(u => u.Message));
+            scanNote = scanNote is null ? coverageNote
+                     : coverageNote is null ? scanNote
+                     : scanNote + " " + coverageNote;
 
-        return new EffectChainResult(mgef, mgefEid, rows, total, total > rows.Count, null, scanNote, view.Stamp)
-            { UnreadPlugins = unreadable.Select(u => u.PluginName).ToList() };
+            results[i] = new EffectChainResult(mgefs[i], seeds[mgefs[i]].Name, rows[i], total[i], total[i] > rows[i].Count, null, scanNote, view.Stamp)
+                { UnreadPlugins = unreadable.Select(u => u.PluginName).ToList() };
+        }
+        return results;
     }
 }
 

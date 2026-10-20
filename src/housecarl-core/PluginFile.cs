@@ -17,7 +17,7 @@ public static class PluginFile
         ISkyrimModGetter? ov = null;
         try
         {
-            ov = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(path));
+            ov = MidCallChange.Open(path, () => SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(path)));
             var h = ov.ModHeader;
             return new PluginHeaderFacts(
                 h.Flags.HasFlag(SkyrimModHeader.HeaderFlag.Master),

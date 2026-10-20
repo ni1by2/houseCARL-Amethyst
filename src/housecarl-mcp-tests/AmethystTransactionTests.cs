@@ -16,6 +16,32 @@ public sealed class AmethystTransactionTests
 {
     readonly ServerFixture _server;
     public AmethystTransactionTests(ServerFixture server) => _server = server;
+    [Theory]
+    [InlineData(false)]
+    [InlineData(true)]
+    public void ASourceChangedAtThePublicationBoundaryPreventsTheTransactionWrite(bool existingDestination)
+    {
+        using var fixture = new TransactionFixture();
+        var source = Path.Combine(fixture.Library, "source.esp");
+        File.WriteAllText(source, "original source");
+        if (existingDestination) File.WriteAllText(fixture.Destination, "original destination");
+        using var mark = MidCallChange.Begin();
+        MidCallChange.Open(source, () => File.ReadAllText(source));
+        var coordinator = new AmethystTransactionCoordinator(fixture.State, point =>
+        {
+            if (point == "after_final_destination_check") File.WriteAllText(source, "another program saved the source");
+        });
+        var journal = coordinator.Begin(fixture.Request());
+        using var locks = coordinator.AcquireWriteLocks(fixture.Library, fixture.ManagerLock);
+        using var content = new MemoryStream(Encoding.UTF8.GetBytes("new destination"));
+        var artifact = coordinator.PrepareArtifact(journal.Id, "unit-1", fixture.Destination, "plugin", content, fixture.Library);
+
+        Assert.Throws<LoadOrderChangedMidCallException>(() => coordinator.Publish(journal.Id, artifact.Id, locks));
+        if (existingDestination) Assert.Equal("original destination", File.ReadAllText(fixture.Destination));
+        else Assert.False(File.Exists(fixture.Destination));
+        Assert.Contains("'source.esp' changed on disk during this call", mark.Settle());
+    }
+
     [Fact]
     public void NewArtifactIsPreparedJournaledAndPublishedWithReceipt()
     {

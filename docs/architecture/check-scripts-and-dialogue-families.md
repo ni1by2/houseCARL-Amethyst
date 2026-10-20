@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-23
+updated: 2026-10-16
 covers: [src/housecarl-core/ScriptPropertyCheck.cs, src/housecarl-core/EditorIdNearMiss.cs]
 ---
 # The scripts and dialogue families, and the EditorID near-miss hint
@@ -28,6 +28,17 @@ missing ANCESTOR truncates the chain with a named note while the properties that
 BSA that failed to read this build is surfaced, so a "not found" that may merely be unscanned is never an
 authoritative absence. An unbound object property is a flag to VERIFY, not a proven defect: it is sometimes filled
 by script at runtime.
+
+#### Each .pex is read once per sweep
+
+One sweep reads each BSA's file table once, walks each folder it looks a script up in once into a name table, and
+reads each `.pex` once (`ScriptPropertyCheck.PexReads`), so a parent shared by many children, or many scripts packed in
+one archive, costs one read. A folder the archive does not hold falls back to one whole-archive name table, built once
+and shared by every such folder. A table is held only once its walk completes, so a walk that throws leaves nothing
+cached and throws again on the next read. A BSA whose last-write time or size changes mid-sweep is reopened before its
+next read, so a script it no longer holds is reported as vanished, as a fresh read would. Only the parsed properties
+and parent are kept, and only for that sweep; the next call reads the disk afresh. The memo is keyed by the class
+name's exact spelling, so every name and reason is worded as a fresh load would word it.
 
 #### Unverifiable attachments ride through every filter
 
@@ -72,6 +83,9 @@ out of.
 - *The EditorID near-miss hint*: `WhereNearMissTests`, whose arms cover the rename sentence, the winner that dropped its EditorID, and
   each gate that must produce no sentence at all: a `contains` term, a second predicate, a `formids=` set,
   `conflicts_only`, a `references=` filter, an aggregate, and an explicit plugin scope.
+- *Each .pex is read once per sweep*: `ScriptsReadOnceTests` — one archive table read and three `.pex` loads for two
+  children sharing a parent, four loads, each finding keeping its own spelling, when the children spell the parent
+  differently, and a BSA replaced under a live sweep reported as vanished.
 
 ## Where
 - `src/housecarl-core/ScriptPropertyCheck.cs`: the scripts family: `ScriptPropertyCheck.Run`,

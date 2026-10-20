@@ -16,10 +16,10 @@ internal static class BodyPrefetch
 
     /// <summary>The chunk covering rows <paramref name="start"/> to <paramref name="end"/>, ready to walk a plugin
     /// when a row asks. <paramref name="sourceAt"/> names the plugin whose body a row displays, or null for the
-    /// winner.</summary>
+    /// winner; <paramref name="parents"/> is the rows' container gather when the caller owns it, else the chunk's own.</summary>
     internal static Chunk Gather(
         LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, CostCounters counters,
-        IReadOnlyList<FormKey> keys, int start, int end, Func<int, string?> sourceAt, CancellationToken ct)
+        IReadOnlyList<FormKey> keys, int start, int end, Func<int, string?> sourceAt, CancellationToken ct, Parents? parents = null)
     {
         var gather = new BodyGather(view, session, BodyGather.Absent.Null, onDemand: true, ct: ct);
         var plugins = new Dictionary<FormKey, string>();
@@ -33,7 +33,7 @@ internal static class BodyPrefetch
             plugins[fk] = plugin;
         }
         Interlocked.Add(ref counters.KeysWanted, plugins.Count);     // what this caller asked for, whether or not a row reads it
-        return new Chunk(gather, plugins, view, session, ct);
+        return new Chunk(gather, plugins, view, session, ct, parents);
     }
 
     /// <summary>One chunk's bodies, each source plugin enumerated once and only when a row asks for it.</summary>
@@ -41,23 +41,44 @@ internal static class BodyPrefetch
     {
         readonly BodyGather _gather;
         readonly Dictionary<FormKey, string> _plugins;
+        readonly Parents _parents;
+
+        internal Chunk(BodyGather gather, Dictionary<FormKey, string> plugins,
+                       LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, CancellationToken ct,
+                       Parents? parents = null)
+        { _gather = gather; _plugins = plugins; _parents = parents ?? new Parents(view, session, plugins.Keys, ct); }
+
+        /// <summary>A row's containing record, gathered for every row on the first hop its child type takes (#1147); null fetches it alone.</summary>
+        internal IMajorRecordGetter? Parent(IMajorRecordGetter child, FormKey parent) => _parents.Parent(child, parent);
+
+        /// <summary>This row's body, walking its source plugin once for the whole chunk. A body that is not gathered
+        /// comes back null and the row's own read raises the fault it always did; an
+        /// <see cref="OutOfMemoryException"/> from the walk propagates rather than being swallowed (#756).</summary>
+        internal IMajorRecordGetter? Body(FormKey fk)
+            => _plugins.TryGetValue(fk, out var plugin) ? _gather.Body(plugin, fk) : null;
+    }
+
+    /// <summary>The containing records of a set of rows, gathered once on the first hop any of them takes.</summary>
+    internal sealed class Parents
+    {
         readonly LoadOrderResolver.IndexView _view;
         readonly LoadOrderResolver.OverlaySession _session;
+        readonly ICollection<FormKey> _rows;
         readonly CancellationToken _ct;
         // The rows' containing records, gathered on the first hop, and the plugins that gather could not walk.
         (Dictionary<FormKey, IMajorRecordGetter> Bodies, Dictionary<string, PluginUnreadableException> Faults)? _parents;
 
-        internal Chunk(BodyGather gather, Dictionary<FormKey, string> plugins,
-                       LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, CancellationToken ct)
-        { _gather = gather; _plugins = plugins; _view = view; _session = session; _ct = ct; }
+        internal Parents(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, ICollection<FormKey> rows,
+                         CancellationToken ct)
+        { _view = view; _session = session; _rows = rows; _ct = ct; }
 
-        /// <summary>A row's containing record, gathered for every row on the first hop its child type takes (#1147); null fetches it alone.</summary>
+        /// <summary>A row's containing record, gathered for every row on the first hop; null fetches it alone.</summary>
         internal IMajorRecordGetter? Parent(IMajorRecordGetter child, FormKey parent)
         {
-            if (!_plugins.ContainsKey(child.FormKey)) return null;   // a hop above the chunk's own rows
+            if (!_rows.Contains(child.FormKey)) return null;   // a hop above the rows themselves
             if (_parents is null)
             {
-                var wanted = _plugins.Keys.Select(fk => _view.ParentOf(fk)).OfType<FormKey>();
+                var wanted = _rows.Select(fk => _view.ParentOf(fk)).OfType<FormKey>();
                 _parents = (ContainmentIndex.GatherContainers(_view, _session, wanted, out var faults, _ct), faults);
             }
             var (bodies, gatherFaults) = _parents.Value;
@@ -66,11 +87,5 @@ internal static class BodyPrefetch
             if (_view.ResolveWinner(parent) is { } w && gatherFaults.TryGetValue(w.WinnerPlugin, out var fault)) throw fault;
             return null;
         }
-
-        /// <summary>This row's body, walking its source plugin once for the whole chunk. A body that is not gathered
-        /// comes back null and the row's own read raises the fault it always did; an
-        /// <see cref="OutOfMemoryException"/> from the walk propagates rather than being swallowed (#756).</summary>
-        internal IMajorRecordGetter? Body(FormKey fk)
-            => _plugins.TryGetValue(fk, out var plugin) ? _gather.Body(plugin, fk) : null;
     }
 }

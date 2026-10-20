@@ -85,8 +85,10 @@ The [Linux installation and current limits](docs/linux-install.md) page describe
 installer. The [2.0.5 verification record](docs/testing/upstream-205-integration-2026-10-15.md)
 distinguishes the final release checks from earlier candidate results.
 
-The release integrates upstream houseCARL 2.0.5 at `4e285051` and bundles the native
-component from stable Amethyst 2.5.4 at `edde06e5` (native API 13; schema 9, engine 1, rules 13). houseCARL
+The published 2.0.5 release integrates upstream houseCARL 2.0.5 at `4e285051`.
+This source branch integrates upstream 2.1.0 at `1391dacd`; its validation is recorded
+[separately](docs/testing/upstream-210-integration-2026-10-20.md). The published download
+links above continue to refer to 2.0.5. Both retain the native component from stable Amethyst 2.5.4 at `edde06e5` (native API 13; schema 9, engine 1, rules 13). houseCARL
 has read a real installed 2.5.4 profile. The Linux package bundles the .NET runtime and
 Amethyst's native component. **Python 3.12+ must be installed.** The native reader opens
 a private catalog copy and does not write manager files. The [snapshot contract](docs/architecture/amethyst-saved-snapshot.md)

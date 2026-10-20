@@ -13,7 +13,7 @@ internal sealed class ScanDetailReader : IDisposable
     readonly CrossQueryOutcome _q;
     readonly IReadOnlyList<string>? _fields;
     readonly int _depth;
-    readonly bool _resolveNames, _winnerFields;
+    readonly bool _resolveNames, _winnerFields, _wholePass;
     readonly string? _containerHint;
     readonly IReadOnlyList<(int Depth, string[]? Tail)>? _depths;
     readonly CancellationToken _ct;
@@ -23,14 +23,15 @@ internal sealed class ScanDetailReader : IDisposable
 
     BodyPrefetch.Chunk? _chunk;
     int _chunkStart = -1;
+    List<ReadOutcome>? _named;   // resolve_names on a whole pass (the artifact): the chunk read, then named through the door
 
     internal ScanDetailReader(LoadOrderService svc, CrossQueryOutcome q, IReadOnlyList<string>? fields, int depth,
                               bool resolveNames, bool winnerFields, string? containerHint,
-                              IReadOnlyList<(int Depth, string[]? Tail)>? depths, CancellationToken ct)
+                              IReadOnlyList<(int Depth, string[]? Tail)>? depths, CancellationToken ct, bool wholePass = false)
     {
         _svc = svc; _q = q; _fields = fields; _depth = depth;
         _resolveNames = resolveNames; _winnerFields = winnerFields;
-        _containerHint = containerHint; _depths = depths; _ct = ct;
+        _containerHint = containerHint; _depths = depths; _ct = ct; _wholePass = wholePass;
         _linkMemo = resolveNames ? new RecordReads.LinkMemo() : null;
         // Only a pinned outcome can be read this way; an unpinned one falls through to the plain per-row path.
         _view = q.Pin?.View;
@@ -47,7 +48,9 @@ internal sealed class ScanDetailReader : IDisposable
         var fk = _q.Keys[i];
         var plugin = SourceAt(i);
         FillChunk(i);
+        if (_named is not null) return _named[i - _chunkStart];
         var body = _chunk?.Body(fk);   // the plugin is walked here, on the first row of the chunk that wants it
+        Interlocked.Increment(ref _svc.Counters.ScanRowReads);
         return _svc.ResolveReadOn(_q, fk, plugin, _fields, false, _depth, _resolveNames, _linkMemo,
                                   _containerHint, _depths, _session, body, heldParent: _chunk is null ? null : _chunk.Parent);
     }
@@ -63,9 +66,27 @@ internal sealed class ScanDetailReader : IDisposable
         int start = BodyPrefetch.ChunkStart(i);
         if (start == _chunkStart) return;
         _chunkStart = start;
-        _chunk = BodyPrefetch.Gather(view, _session, _q.Pin!.Resolver.Counters, _q.Keys, start,
+        _named = null;
+        _chunk =BodyPrefetch.Gather(view, _session, _q.Pin!.Resolver.Counters, _q.Keys, start,
                                      Math.Min(start + BodyPrefetch.ChunkRows, _q.Keys.Count),
                                      SourceAt, _ct);
+        _named = _resolveNames && _wholePass ? NameChunk(start, Math.Min(start + BodyPrefetch.ChunkRows, _q.Keys.Count)) : null;
+    }
+
+    /// <summary>A chunk's rows read without names, then every link target they render that the render-wide memo
+    /// does not hold read a group at a time through the door.</summary>
+    List<ReadOutcome> NameChunk(int start, int end)
+    {
+        var rows = new List<ReadOutcome>(end - start);
+        for (int r = start; r < end; r++)
+        {
+            _ct.ThrowIfCancellationRequested();
+            Interlocked.Increment(ref _svc.Counters.ScanRowReads);
+            rows.Add(_svc.ResolveReadOn(_q, _q.Keys[r], SourceAt(r), _fields, false, _depth, false, null,
+                                        _containerHint, _depths, _session, _chunk!.Body(_q.Keys[r]), heldParent: _chunk.Parent));
+        }
+        RecordReads.NameLinks(rows, _view!.Value, _session!, _linkMemo!, _ct);
+        return rows;
     }
 
     public void Dispose() => _session?.Dispose();

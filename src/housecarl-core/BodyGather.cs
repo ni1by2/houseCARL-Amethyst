@@ -3,7 +3,7 @@ using Mutagen.Bethesda.Plugins.Records;
 
 namespace HousecarlCore;
 
-/// <summary>Many record bodies, ONE walk per plugin — the one primitive every lane that gathers in bulk reads
+/// <summary>Many record bodies, each (plugin, group) read once — the one primitive every lane that gathers in bulk reads
 /// through; contract in docs/architecture/read-engine.md.</summary>
 public sealed class BodyGather
 {
@@ -51,11 +51,31 @@ public sealed class BodyGather
         set.Add(fk);
     }
 
-    /// <summary>Walk each declared plugin ONCE — a no-op when deferred, and once per gather, faults included.</summary>
-    public void Gather()
+    /// <summary>Read the declared pairs through the door, each (plugin, group) once — a no-op when deferred, and once per gather, faults included.
+    /// With <paramref name="perGroup"/>, each group's asked keys are handed over while only that group's bodies are held.</summary>
+    public void Gather(Action<IReadOnlyCollection<FormKey>>? perGroup = null)
     {
         if (_onDemand) return;
-        foreach (var plugin in _declared.Keys) Walk(plugin);
+        var plugins = _declared.Keys.Where(_attempted.Add).ToList();
+        var pairs = new List<(string, FormKey)>();
+        foreach (var plugin in plugins)
+        {
+            _held[plugin] = new Dictionary<FormKey, IMajorRecordGetter>(_declared[plugin].Count);
+            foreach (var fk in _declared[plugin]) pairs.Add((plugin, fk));
+        }
+        var faults = new Dictionary<string, PluginUnreadableException>(StringComparer.OrdinalIgnoreCase);
+        OrderedGather.ForEachGroup(_view, _session, pairs, (plugin, bodies, asked) =>
+        {
+            foreach (var (fk, body) in bodies) _held[plugin][fk] = body;
+            if (perGroup is null) return;
+            perGroup(asked);
+            _held[plugin].Clear();
+        }, faults, _ct);
+        // A faulted plugin keeps what it yielded and stays unwalked, so Body falls back per record as before.
+        // A per-group gather dropped what it held, so its plugins stay unwalked too and a later Body seeks rather than answering null.
+        foreach (var plugin in plugins)
+            if (faults.TryGetValue(plugin, out var fault)) _faults[plugin] = fault;
+            else if (perGroup is null) _walked.Add(plugin);
     }
 
     /// <summary>The gathered body, or <see cref="Absent"/>'s answer when this gather does not hold the pair.</summary>
@@ -96,6 +116,7 @@ public sealed class BodyGather
         try { view.CollectRecords(session, plugin, keys, sink); return null; }
         catch (OutOfMemoryException) { throw; }
         catch (OperationCanceledException) { throw; }
+        catch (LoadOrderChangedMidCallException) { throw; }
         catch (PluginUnreadableException ex) { return ex; }
         catch (Exception ex) { return new PluginUnscannableException(plugin, ex); }
     }

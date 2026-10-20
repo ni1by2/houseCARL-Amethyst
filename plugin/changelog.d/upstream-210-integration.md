@@ -1,0 +1,2 @@
+- **Linux uses the upstream 2.1.0 engine while retaining Amethyst staging transactions.** Large reads use the optimized engine and changed sources refuse before publication; check a large read and a staged patch in a disposable profile.
+- **Namespaced Papyrus scripts cache each BSA folder consistently on Linux.** Check a script in a nested archive folder.

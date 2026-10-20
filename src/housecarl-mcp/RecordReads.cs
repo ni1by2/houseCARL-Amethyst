@@ -139,10 +139,7 @@ internal sealed partial class RecordReads
         for (int i = 0; i < rf.Fields.Count; i++)
         {
             var f = rf.Fields[i];
-            // Whichever carrier the line RENDERED its reference on: the round-trip token, or the FormID a
-            // container element's summary note spelled. One rule, one shape of value.
-            var rendered = f.HasValue ? f.Token : f.NoteRef;
-            if (rendered is { } tok && FormKey.TryFactory(tok, out var fk) && !fk.IsNull)
+            if (LinkTarget(f) is { } fk)
             {
                 rebuilt ??= new List<FieldValue>(rf.Fields);
                 rebuilt[i] = f with { Link = ResolveRefOne(view, session, fk, memo) };
@@ -150,6 +147,10 @@ internal sealed partial class RecordReads
         }
         return rebuilt is null ? rf : rf with { Fields = rebuilt };
     }
+
+    /// <summary>The form a line renders a reference to, on its round-trip token or a container element's summary note; null for none.</summary>
+    static FormKey? LinkTarget(FieldValue f)
+        => (f.HasValue ? f.Token : f.NoteRef) is { } tok && FormKey.TryFactory(tok, out var fk) && !fk.IsNull ? fk : null;
 
     /// <summary>On a read of a field that OWNS CHILD RECORDS, state the ADDITIVE UNION the game assembles there —
     /// every distinct child every touching plugin declares, keyed by FormID. The field's own VALUE stays the read
@@ -334,9 +335,29 @@ internal sealed partial class RecordReads
               with { Stamp = p.View.Stamp, Pin = p }
             : ResolveRead(fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo, containerHint, depths, countFields);
 
-    /// <summary>The summary twin of <see cref="ResolveReadOn"/> — the conflicts-only lazy fill.</summary>
+    /// <summary>The summary twin of <see cref="ResolveReadOn"/>, one key read alone.</summary>
     internal RecordSummary ResolveSummaryOn(CrossQueryOutcome q, FormKey fk)
         => q.Pin is { } p ? ResolveSummary(p.Resolver, p.View, fk) with { Pin = p } : ResolveSummary(fk);
+
+    /// <summary>Every key's summary off one door pass, parallel to the keys, a missed key read alone; null when unpinned.</summary>
+    internal IReadOnlyList<RecordSummary>? FillSummaries(CrossQueryOutcome q, CancellationToken ct)
+    {
+        if (q.Pin is not { } p) return null;
+        var filled = new Dictionary<FormKey, RecordSummary>();
+        var unreadable = new Dictionary<string, PluginUnreadableException>(StringComparer.OrdinalIgnoreCase);
+        using (var session = p.Resolver.OpenSession())
+            OrderedGather.ForEachGroup(p.View, session, q.Keys, (bodies, _) =>
+            {
+                foreach (var (fk, body) in bodies)
+                    try
+                    {
+                        var w = p.View.ResolveWinner(fk)!.Value;
+                        filled[fk] = RecordSummary.Of(fk, body, w.WinnerPlugin, w.OverrideDepth).WithRuntime(p.View.RuntimeAddressOf(fk)) with { Pin = p };
+                    }
+                    catch (Exception ex) when (ex is not OperationCanceledException and not OutOfMemoryException) { }   // its row's own read raises it
+            }, unreadable, ct);
+        return q.Keys.Select(fk => filled.TryGetValue(fk, out var s) ? s : ResolveSummaryOn(q, fk)).ToList();
+    }
 
     /// <summary>What a folded tree carries besides its nodes: the winner's identity, and the precise owned-child
     /// tier for the whole tree — empty when the visitor stopped the walk early, since a partial tier would read as
@@ -393,12 +414,16 @@ internal sealed partial class RecordReads
             var body = view.GetRecord(session, w.Value.WinnerPlugin, fk);
             result = body is null
                 ? new ResolvedRef(FormIdToken.Of(fk), Resolved: false, Winner: w.Value.WinnerPlugin)   // winner named but the fetch didn't yield it
-                : new ResolvedRef(FormIdToken.Of(fk), Resolved: true, Type: RecordNaming.StripOverlay(body.GetType().Name),
-                                  EditorId: body.EditorID, Name: ReadEngine.DisplayName(body), Winner: w.Value.WinnerPlugin);
+                : RefOf(fk, body, w.Value.WinnerPlugin);
         }
         memo.Refs[fk] = result;
         return result;
     }
+
+    /// <summary>A resolved target's identity, read off its winner's body.</summary>
+    static ResolvedRef RefOf(FormKey fk, IMajorRecordGetter body, string winner)
+        => new(FormIdToken.Of(fk), Resolved: true, Type: RecordNaming.StripOverlay(body.GetType().Name),
+               EditorId: body.EditorID, Name: ReadEngine.DisplayName(body), Winner: winner);
 
     /// <summary>The artifact-epoch mismatch refusal — one wording for every consuming lane, naming both epochs and
     /// the two legitimate next moves.</summary>
@@ -468,37 +493,93 @@ internal sealed partial class RecordReads
         var unionMemo = new ChildUnionMemo();                  // the caller NAMED these records: the union lane, one assembly per record
         // One overlay cache for the whole batch.
         using var batchSession = resolver.OpenSession();
-        var outcomes = new List<ReadOutcome>(formids.Count);
-        // Every FormID is parsed up front so the bodies can be gathered a CHUNK of rows at a time — one
-        // enumeration per source plugin — and the scan's body forms come through here, so this lane and the scan
-        // render lane cost the same per row.
+        // The scan's body forms come through here too, so this lane and the scan render lane cost the same per row.
+        var outcomes = ReadRowsOrdered(view, batchSession, resolver.Counters, formids, plugin, BatchPassRows, ct, (fk, body, parent) =>
+            ResolveRead(resolver, view, fk, plugin, fields, conflictTree, depth, false, null, containerHint, unionMemo, batchSession, depths, body, countFields, summary, parent)
+                with { Stamp = view.Stamp, Pin = pin });   // the batch's one build, stamped and pinned per item
+        if (resolveNames) NameLinks(outcomes, view, batchSession, linkMemo!, ct);
+        return outcomes;
+    }
+
+    /// <summary>How many rows of one group a batch reads before it releases their bodies; a test lowers it to split a group.</summary>
+    internal int BatchPassRows { get; set; } = BodyPrefetch.ChunkRows;
+
+    /// <summary>A batch's rows read through the door, a group at a time, and answered in input order.</summary>
+    static ReadOutcome[] ReadRowsOrdered(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, CostCounters counters,
+                                         IReadOnlyList<string> formids, string? plugin, int passRows, CancellationToken ct,
+                                         Func<FormKey, IMajorRecordGetter?, Func<IMajorRecordGetter, FormKey, IMajorRecordGetter?>?, ReadOutcome> readRow)
+    {
         var keys = new FormKey[formids.Count];
-        var parseErrors = new string?[formids.Count];
+        var slots = new ReadOutcome?[formids.Count];
+        var sourced = new List<(int Row, string Source)>(formids.Count);
         for (int i = 0; i < formids.Count; i++)
         {
             try { keys[i] = view.ParseFormId(formids[i]); }
-            catch (Exception ex) { parseErrors[i] = $"bad FormID '{formids[i]}': {ex.Message}"; }
+            catch (Exception ex) { slots[i] = ReadOutcome.Fail(default, $"bad FormID '{formids[i]}': {ex.Message}"); continue; }
+            if ((plugin ?? view.ResolveWinner(keys[i])?.WinnerPlugin) is { } source) sourced.Add((i, source));
         }
-        BodyPrefetch.Chunk? chunk = null;
-        int chunkStart = -1;
-        for (int i = 0; i < formids.Count; i++)
+        var passes = new List<List<(int Row, string Source)>>();
+        foreach (var (_, rows) in OrderedGather.Sort(view, sourced, r => r.Source, r => keys[r.Row]))
+            for (int s = 0; s < rows.Count; s += passRows)   // the held bodies stay bounded inside one big group
+                passes.Add(rows.GetRange(s, Math.Min(passRows, rows.Count - s)));
+        // Consecutive passes share one container gather per run of at most passRows rows, so held containers stay bounded too.
+        for (int p = 0; p < passes.Count;)
         {
-            ct.ThrowIfCancellationRequested();   // a client that aborted stops the batch inside one record
-            if (parseErrors[i] is { } perr) { outcomes.Add(ReadOutcome.Fail(default, perr)); continue; }
-            int start = BodyPrefetch.ChunkStart(i);
-            if (start != chunkStart)
+            int end = p, runRows = 0;
+            while (end < passes.Count && runRows + passes[end].Count <= passRows) runRows += passes[end++].Count;
+            var parents = new BodyPrefetch.Parents(view, session, passes.Skip(p).Take(end - p).SelectMany(x => x).Select(r => keys[r.Row]).ToHashSet(), ct);
+            for (; p < end; p++)
             {
-                chunkStart = start;
-                chunk = BodyPrefetch.Gather(view, batchSession, resolver.Counters, keys, start, Math.Min(start + BodyPrefetch.ChunkRows, keys.Length),
-                                            _ => plugin, ct);
+                var part = passes[p];
+                var partKeys = part.Select(r => keys[r.Row]).ToArray();
+                var chunk = BodyPrefetch.Gather(view, session, counters, partKeys, 0, partKeys.Length, j => part[j].Source, ct, parents);
+                foreach (var (i, _) in part)
+                {
+                    ct.ThrowIfCancellationRequested();   // a client that aborted stops the batch inside one record
+                    slots[i] = readRow(keys[i], chunk.Body(keys[i]), chunk.Parent);
+                }
             }
-            var fk = keys[i];
-            var body = chunk?.Body(fk);   // the plugin is walked here, on the first row of the chunk that wants it
-            outcomes.Add(ResolveRead(resolver, view, fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo, containerHint, unionMemo, batchSession, depths, body, countFields, summary,
-                                     chunk is null ? null : chunk.Parent)
-                         with { Stamp = view.Stamp, Pin = pin });   // the batch's one build, stamped and pinned per item
         }
-        return outcomes;
+        for (int i = 0; i < slots.Length; i++)
+            if (slots[i] is null)
+            {
+                ct.ThrowIfCancellationRequested();
+                slots[i] = readRow(keys[i], null, null);
+            }
+        return slots!;
+    }
+
+    /// <summary>resolve_names over read rows: every link target primed through the door, then each row annotated off the memo.</summary>
+    internal static void NameLinks(IList<ReadOutcome> outcomes, LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session,
+                          LinkMemo memo, CancellationToken ct)
+    {
+        PrimeNames(outcomes.Select(o => o.Record), view, session, memo, ct);
+        for (int r = 0; r < outcomes.Count; r++)
+            if (outcomes[r].Record is { } rf)
+                outcomes[r] = outcomes[r] with { Record = AnnotateLinks(rf, view, session, memo) };
+    }
+
+    /// <summary>Fill <paramref name="memo"/> with the link targets these records render, each target's winner group read once.</summary>
+    static void PrimeNames(IEnumerable<RecordFields?> records, LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session,
+                           LinkMemo memo, CancellationToken ct)
+    {
+        var want = new Dictionary<FormKey, string>();   // each target and its winner, resolved once
+        foreach (var rf in records)
+            if (rf is not null)
+                foreach (var f in rf.Fields)
+                    if (LinkTarget(f) is { } fk && !memo.Refs.ContainsKey(fk) && !want.ContainsKey(fk) && view.ResolveWinner(fk) is { } w)
+                        want[fk] = w.WinnerPlugin;
+        if (want.Count == 0) return;
+        var faults = new Dictionary<string, PluginUnreadableException>(StringComparer.OrdinalIgnoreCase);
+        OrderedGather.ForEachGroup(view, session, want.Select(kv => (kv.Value, kv.Key)), (plugin, bodies, asked) =>
+        {
+            foreach (var fk in asked)
+                if (bodies.TryGetValue(fk, out var b)) memo.Refs[fk] = RefOf(fk, b, plugin);
+        }, faults, ct);
+        // A target the walk of a faulted winner did not yield names that fault, and is not fetched again per target.
+        foreach (var (fk, plugin) in want)
+            if (!memo.Refs.ContainsKey(fk) && faults.TryGetValue(plugin, out var fault))
+                memo.Refs[fk] = new ResolvedRef(FormIdToken.Of(fk), Resolved: false, Winner: plugin, Error: fault.Message);
     }
 
     // ---- `records`: the one-pole batch (source=named, wherever the plugin lives) -----------------------
@@ -568,6 +649,11 @@ internal sealed partial class RecordReads
                           $"folders on disk: {string.Join(", ", loc.Ambiguous.Select(h => $"'{h.Where}'"))} — disambiguate " +
                           "with source={\"file\": \"" + plugin + "\", \"mod\": \"<mod folder>\"}.");
         // The named copy IS the copy the game loads, so it is read out of the order like any other active pole.
+        // A copy the build did not index serves now: refuse rather than answer off the index's other copy.
+        // A second locate that agrees with the index again still refuses: this call already saw the named copy serve.
+        if (activeFilename && loc.Enabled && view.PluginPath(plugin) is { } indexed && !PluginPaths.SamePluginFile(indexed, loc.Path!))
+            return (null, (_host.ServingCopyMoved([(plugin, indexed)]) ?? new ServingCopyMove(plugin, loc.Where, ServingCopyMove.FolderOf(indexed), "the served copy changed again during this call; run this again"))
+                          .Refusal("nothing was read"));
         if (activeFilename && loc.Enabled)
             return (new PoleInfo(plugin, "active in the load order", InOrder: true, EpochCoversPole: true), null);
         var poleWhere = $"OUT-OF-LOAD-ORDER ({loc.Where}{(loc.WhyNotActive is { } why ? $"; NOT active — {why}" : "")})";
@@ -626,34 +712,10 @@ internal sealed partial class RecordReads
             var linkMemo = resolveNames ? new LinkMemo() : null;
             var unionMemo = new ChildUnionMemo();   // named records again: the union lane
             using var batchSession = resolver.OpenSession();   // and one overlay cache for the batch, as ResolveBatch has
-            var outcomes = new List<ReadOutcome>(formids.Count);
-            // Parsed up front and gathered a chunk at a time, the same shape ResolveBatch reads by.
-            var keys = new FormKey[formids.Count];
-            var parseErrors = new string?[formids.Count];
-            for (int i = 0; i < formids.Count; i++)
-            {
-                try { keys[i] = view.ParseFormId(formids[i]); }
-                catch (Exception ex) { parseErrors[i] = $"bad FormID '{formids[i]}': {ex.Message}"; }
-            }
-            BodyPrefetch.Chunk? chunk = null;
-            int chunkStart = -1;
-            for (int i = 0; i < formids.Count; i++)
-            {
-                ct.ThrowIfCancellationRequested();   // a client that aborted stops the batch inside one record
-                if (parseErrors[i] is { } perr) { outcomes.Add(ReadOutcome.Fail(default, perr)); continue; }
-                int start = BodyPrefetch.ChunkStart(i);
-                if (start != chunkStart)
-                {
-                    chunkStart = start;
-                    chunk = BodyPrefetch.Gather(view, batchSession, resolver.Counters, keys, start, Math.Min(start + BodyPrefetch.ChunkRows, keys.Length),
-                                                _ => plugin, ct);
-                }
-                var fk = keys[i];
-                var body = chunk?.Body(fk);   // the plugin is walked here, on the first row of the chunk that wants it
-                outcomes.Add(ResolveRead(resolver, view, fk, plugin, fields, false, depth, resolveNames, linkMemo, containerHint, unionMemo, batchSession, depths, body, countFields, summary,
-                                         chunk is null ? null : chunk.Parent)
-                             with { Stamp = view.Stamp, Pin = pin });
-            }
+            var outcomes = ReadRowsOrdered(view, batchSession, resolver.Counters, formids, plugin, BatchPassRows, ct, (fk, body, parent) =>
+                ResolveRead(resolver, view, fk, plugin, fields, false, depth, false, null, containerHint, unionMemo, batchSession, depths, body, countFields, summary, parent)
+                    with { Stamp = view.Stamp, Pin = pin });
+            if (resolveNames) NameLinks(outcomes, view, batchSession, linkMemo!, ct);
             return outcomes;
         }
 
@@ -671,7 +733,7 @@ internal sealed partial class RecordReads
         }
 
         ISkyrimModGetter ov;
-        try { ov = LoadOrderResolver.OpenOverlay(arm.Path!, string.IsNullOrEmpty(arm.DataDir) ? null : arm.DataDir); }
+        try { ov = MidCallChange.Open(arm.Path!, () => LoadOrderResolver.OpenOverlay(arm.Path!, string.IsNullOrEmpty(arm.DataDir) ? null : arm.DataDir)); }
         catch (Exception ex)
         {
             refusal = $"could not open '{arm.Path}' as a Skyrim plugin: {ex.Message}";
@@ -724,14 +786,15 @@ internal sealed partial class RecordReads
                 }
                 var record = ReadEngine.ReadFields(rec, fields, depth, containerHint, depths: depths);   // materialise while the overlay is open
                 if (summary) record = record with { Name = ReadEngine.DisplayName(rec) };
-                if (resolveNames) record = AnnotateLinks(record, view, session!, linkMemo!);
                 var winner = view.ResolveWinner(fk);                             // winner CONTEXT where the record also lives in the order
                 // No pin: an off-order body is never the copy the game loads, so it owes no shared-EditorID note.
                 results[index] = new ReadOutcome(fk, record, plugin, winner?.WinnerPlugin,
                                                  winner?.OverrideDepth ?? 0, null, null)
                                  with { Stamp = view.Stamp };
             }
-            return results.Select(r => r!).ToList();
+            var answered = results.Select(r => r!).ToList();
+            if (resolveNames) NameLinks(answered, view, session!, linkMemo!, ct);   // names resolve against the active order's session
+            return answered;
         }
         finally { (ov as IDisposable)?.Dispose(); }
     }
@@ -748,7 +811,7 @@ internal sealed partial class RecordReads
     /// through the index alone.</summary>
     public IReadOnlyList<InfoOrderRow> InfoOrderBatch(IReadOnlyList<string> formids, ArtifactDemand? demand,
                                                       out string? refusal, out OrderStamp? epoch,
-                                                      PoleInfo? foldArm, FoldFacts? foldFacts)
+                                                      PoleInfo? foldArm, FoldFacts? foldFacts, CancellationToken ct = default)
     {
         refusal = null;
         var resolver = _host.Resolver;
@@ -776,11 +839,24 @@ internal sealed partial class RecordReads
         // a dictionary keyed on FormKey would leave the earlier duplicates rendering a fabricated failure.
         var dialRows = new List<(int Index, FormKey Fk)>();
         var dialSeen = new HashSet<FormKey>();
+        var parsed = new List<(string Raw, FormKey? Fk, string? Error)>(formids.Count);
         foreach (var raw in formids)
         {
-            FormKey fk;
-            try { fk = view.ParseFormId(raw); }
-            catch (Exception ex) { rows.Add(new InfoOrderRow(raw?.Trim() ?? "", null, null, null, null, $"bad FormID '{raw}': {ex.Message}")); continue; }
+            try { parsed.Add((raw, view.ParseFormId(raw), null)); }
+            catch (Exception ex) { parsed.Add((raw, null, $"bad FormID '{raw}': {ex.Message}")); }
+        }
+        // Every winner body is read through the door, keeping only its type and EditorID.
+        var facts = new Dictionary<FormKey, (bool Topic, string Type, string? EditorId)>();
+        var unreadable = new Dictionary<string, PluginUnreadableException>(StringComparer.OrdinalIgnoreCase);
+        OrderedGather.ForEachGroup(view, session, parsed.Where(p => p.Fk is not null).Select(p => p.Fk!.Value), (bodies, _) =>
+        {
+            foreach (var (fk, b) in bodies)
+                facts[fk] = (b is Mutagen.Bethesda.Skyrim.IDialogTopicGetter, RecordNaming.StripOverlay(b.GetType().Name), b.EditorID);
+        }, unreadable, ct);
+        foreach (var (raw, parsedFk, parseError) in parsed)
+        {
+            if (parseError is not null) { rows.Add(new InfoOrderRow(raw?.Trim() ?? "", null, null, null, null, parseError)); continue; }
+            var fk = parsedFk!.Value;
             var win = view.ResolveWinner(fk);
             if (win is null)
             {
@@ -796,24 +872,24 @@ internal sealed partial class RecordReads
                 rows.Add(new InfoOrderRow(FormIdToken.Of(fk), null, null, null, null, UnresolvedFormId(view, fk)));
                 continue;
             }
-            var body = view.GetRecord(session, win.Value.WinnerPlugin, fk);
-            if (body is null)
+            if (!facts.TryGetValue(fk, out var fact))
             {
                 rows.Add(new InfoOrderRow(FormIdToken.Of(fk), null, null, win.Value.WinnerPlugin, null,
-                                          $"the winner body of {FormIdToken.Of(fk)} could not be read from '{win.Value.WinnerPlugin}'."));
+                                          unreadable.TryGetValue(win.Value.WinnerPlugin, out var fault)
+                                              ? $"the winner body of {FormIdToken.Of(fk)} could not be read: {fault.Message}"
+                                              : $"the winner body of {FormIdToken.Of(fk)} could not be read from '{win.Value.WinnerPlugin}'."));
                 continue;
             }
-            if (body is not Mutagen.Bethesda.Skyrim.IDialogTopicGetter)
+            if (!fact.Topic)
             {
-                var typeName = RecordNaming.StripOverlay(body.GetType().Name);
-                rows.Add(new InfoOrderRow(FormIdToken.Of(fk), typeName, body.EditorID, win.Value.WinnerPlugin, null,
+                var typeName = fact.Type;
+                rows.Add(new InfoOrderRow(FormIdToken.Of(fk), typeName, fact.EditorId, win.Value.WinnerPlugin, null,
                     $"{FormIdToken.Of(fk)} is a {typeName}, and the info_order form renders the merged INFO sequence of a DIALOGUE TOPIC (DIAL). " +
                     "For a quest's topics, select them by composition: types=[\"DIAL\"] where=[\"Quest = " + FormIdToken.Of(fk) + "\"]."));
                 continue;
             }
             dialRows.Add((rows.Count, fk));
-            rows.Add(new InfoOrderRow(FormIdToken.Of(fk), RecordNaming.StripOverlay(body.GetType().Name), body.EditorID,
-                                      win.Value.WinnerPlugin, null, null));
+            rows.Add(new InfoOrderRow(FormIdToken.Of(fk), fact.Type, fact.EditorId, win.Value.WinnerPlugin, null, null));
             if (dialSeen.Add(fk)) dialFks.Add(fk);
         }
         if (dialFks.Count > 0)

@@ -582,7 +582,7 @@ internal sealed partial class AssetLayers
     public SkyPatcherLayerData SkyPatcherLayer() => SkyPatcherLayer(d => d, lint: false);
 
     /// <summary>The layer scan handed to <paramref name="use"/> while its replay is open, so <see cref="SkyPatcherLayerData.Lint"/> resolves a line only when <paramref name="use"/> asks; the lookup is valid only inside it.</summary>
-    public T SkyPatcherLayer<T>(Func<SkyPatcherLayerData, T> use, bool lint = true)
+    public T SkyPatcherLayer<T>(Func<SkyPatcherLayerData, T> use, bool lint = true, CancellationToken ct = default)
     {
         // No epoch is stamped: the INI layer is outside the index fingerprint, so a bare index epoch would overclaim.
         // One hold, one profile refresh: a warm asset build pairs with the pinned index; a cold one reads the profile itself.
@@ -634,32 +634,42 @@ internal sealed partial class AssetLayers
                 var folderTypes = fieldMap.ForSubfolder(folder.Subfolder).Select(m => m.RecordType).ToList();
                 foreach (var eid in eids)
                 {
+                    ct.ThrowIfCancellationRequested();
                     var rfk = folderTypes.Select(t => replay.ResolveEditorId(eid, t)).FirstOrDefault(x => x is not null);
                     if (rfk is not null) targets.Add(rfk.Value); else unresolvedTargets++;
                 }
             }
-            foreach (var fk in targets)
+            int handedOver = 0;
+            OrderedGather.ForEachGroup(view, session, targets, (bodies, asked) =>
             {
-                var r = replay.Replay(fk);
-                // An unpatchable type has nothing to replay, so it counts with the failures as it always has.
-                if (r.Error is not null || r.IsUnpatchable) { failedReplays++; continue; }
-                foreach (var fo in r.Folders)
+                handedOver += asked.Count;
+                foreach (var fk in asked)
                 {
-                    if (fo.Result is not { } res) continue;
-                    var map = fieldMap.For(fo.Subfolder, r.TypeName!);
-                    foreach (var a in res.Applied)
-                        if (SkyPatcherConflicts.IsNoOpWrite(a, map))
-                            noOps.Add(new SkyPatcherNoOpWrite(fo.Subfolder, FormIdToken.Of(fk), r.EditorId,
-                                a.FieldPath, a.File, a.LineNumber, a.Op, a.RawValue, a.Before!));
+                    ct.ThrowIfCancellationRequested();
+                    var r = replay.Replay(fk, bodies.GetValueOrDefault(fk));
+                    // An unpatchable type has nothing to replay, so it counts with the failures as it always has.
+                    if (r.Error is not null || r.IsUnpatchable) { failedReplays++; continue; }
+                    foreach (var fo in r.Folders)
+                    {
+                        if (fo.Result is not { } res) continue;
+                        var map = fieldMap.For(fo.Subfolder, r.TypeName!);
+                        foreach (var a in res.Applied)
+                            if (SkyPatcherConflicts.IsNoOpWrite(a, map))
+                                noOps.Add(new SkyPatcherNoOpWrite(fo.Subfolder, FormIdToken.Of(fk), r.EditorId,
+                                    a.FieldPath, a.File, a.LineNumber, a.Op, a.RawValue, a.Before!));
+                    }
                 }
-            }
+            }, ct: ct);
+            failedReplays += targets.Count - handedOver;   // not in the order: the door skips them
             // Stable output: targets is a hash set, so without this a re-run cannot be diffed against the previous one.
             noOps.Sort((x, y) =>
             {
                 int c = string.Compare(x.File, y.File, StringComparison.OrdinalIgnoreCase);
                 if (c != 0) return c;
                 c = x.Line.CompareTo(y.Line);
-                return c != 0 ? c : string.Compare(x.FormKey, y.FormKey, StringComparison.OrdinalIgnoreCase);
+                if (c != 0) return c;
+                c = string.Compare(x.FormKey, y.FormKey, StringComparison.OrdinalIgnoreCase);
+                return c != 0 ? c : string.Compare(x.FieldPath, y.FieldPath, StringComparison.Ordinal);
             });
             if (broadLines > 0) noOpNotes.Add($"no-op scan: {broadLines} broad (type-wide) line(s) were evaluated only against the explicitly-targeted records, not every record of their type.");
             if (unresolvedTargets > 0) noOpNotes.Add($"no-op scan: {unresolvedTargets} explicit target(s) did not resolve (the overlay's per-record warnings name them; read one with {ToolNames.Records} formids=[\"<FormID>\"] source={{\"overlay\": \"skypatcher\", \"state\": \"post\"}}).");
