@@ -57,6 +57,8 @@ public sealed class FieldPredicateSet
     HashSet<FormKey>? _heldAsked;
     // The link step's verdict per predicate and target, kept for the set's lifetime in place of the target bodies (#1158).
     readonly Dictionary<(int Index, FormKey Target), (bool Satisfied, EvalKind Kind)> _targetVerdicts = new();
+    // The type a memoised no-parent verdict found no container for, so the note names it on a memo hit.
+    readonly Dictionary<(int Index, FormKey Target), string?> _targetNoParent = new();
 
     // The '*parent' hop's verdict memo, keyed by the predicate and by which side hopped.
     readonly Dictionary<(int Index, bool LinkSide, FormKey Parent), (bool Satisfied, EvalKind Kind)> _parentVerdicts = new();
@@ -137,6 +139,95 @@ public sealed class FieldPredicateSet
 
     /// <summary>Drop the chunk's containing records; the verdicts they decided stay memoized.</summary>
     public void ReleaseParents() { _heldParents = null; _heldAsked = null; }
+
+    // One door group's target bodies, and the keys it yielded, while that group is judged.
+    IReadOnlyDictionary<FormKey, IMajorRecordGetter>? _heldTargets;
+    HashSet<FormKey>? _heldTargetsAsked;
+
+    /// <summary>Whether any term follows a '->' link, so a candidate's body must be read to learn its targets.</summary>
+    public bool NeedsLinkStep => _predicates.Any(p => p.LinkPath is not null);
+
+    /// <summary>Collect every target and container the scan will ask for, then judge them a group at a time, keeping verdicts.</summary>
+    public void PrimeOrdered(IEnumerable<IMajorRecordGetter>? candidates, IEnumerable<FormKey>? candidateKeys,
+                             Action<IEnumerable<FormKey>, Action<IReadOnlyDictionary<FormKey, IMajorRecordGetter>, IReadOnlyCollection<FormKey>>> forEachGroup,
+                             CancellationToken ct = default)
+    {
+        if (_parentOf is null && _predicates.All(p => p.LinkPath is null)) return;
+        var pairs = new HashSet<(int K, FormKey Fk)>();
+        var parents = new HashSet<(int K, bool LinkSide, FormKey At)>();
+        var deadEnds = new HashSet<FormKey>();
+        void Climb(FormKey from, int k, bool linkSide, int hops)
+        {
+            var at = from; int climbed = 0;
+            while (climbed < hops && _parentOf!(at) is { } up) { at = up; climbed++; }
+            if (climbed == hops) { if (!_parentVerdicts.ContainsKey((k, linkSide, at))) parents.Add((k, linkSide, at)); }
+            else if (climbed > 0 && !_noParentTypes.ContainsKey(at)) deadEnds.Add(at);   // the rollup names the record a chain stops on
+        }
+        if (candidateKeys is not null && _parentOf is not null)
+            foreach (var key in candidateKeys)
+            {
+                ct.ThrowIfCancellationRequested();
+                for (int k = 0; k < _predicates.Count; k++)
+                    if (_predicates[k] is { LinkPath: null, ParentHops: > 0 } p) Climb(key, k, false, p.ParentHops);
+            }
+        foreach (var child in candidates ?? Enumerable.Empty<IMajorRecordGetter>())
+        {
+            ct.ThrowIfCancellationRequested();
+            if (_walk is not null && !CanMatch(child.GetType())) continue;
+            for (int k = 0; k < _predicates.Count; k++)
+            {
+                var p = _predicates[k];
+                bool linkSide = p.LinkPath is not null;
+                int hops = linkSide ? p.LinkParentHops : p.ParentHops;
+                if (hops > 0) { if (_parentOf is not null) Climb(child.FormKey, k, linkSide, hops); continue; }
+                if (!linkSide) continue;
+                // A fault ends this predicate's collection for the record; targets already gathered are still read and judged,
+                // which costs a few reads, and the scan meets the same fault on the record and names it unscannable.
+                try { CollectTargets(p, k, child, pairs); }
+                catch (Exception ex) when (ex is not (OperationCanceledException or OutOfMemoryException)) { }
+            }
+        }
+        var byKey = new Dictionary<FormKey, List<(int K, bool Parent, bool LinkSide)>>();
+        void Add(FormKey fk, (int, bool, bool) v) { if (!byKey.TryGetValue(fk, out var l)) byKey[fk] = l = new(); l.Add(v); }
+        foreach (var (k, fk) in pairs) Add(fk, (k, false, false));
+        foreach (var (k, ls, at) in parents) Add(at, (k, true, ls));
+        foreach (var at in deadEnds) Add(at, (-1, true, false));
+        if (byKey.Count == 0) return;
+        var fatal = _fatal; int evalIndex = _evalIndex;
+        forEachGroup(byKey.Keys, (bodies, asked) =>
+        {
+            var present = new HashSet<FormKey>(asked.Where(bodies.ContainsKey));
+            var heldParents = _heldParents; var heldAsked = _heldAsked;
+            _heldTargets = bodies; _heldTargetsAsked = present;
+            _heldParents = bodies; _heldAsked = present;
+            try
+            {
+                foreach (var fk in present)
+                {
+                    ct.ThrowIfCancellationRequested();
+                    foreach (var (k, isParent, linkSide) in byKey[fk])
+                    {
+                        if (_fatal is not null) return;
+                        if (k < 0) { NoParentTypeOf(fk); continue; }
+                        _evalIndex = k;
+                        var p = _predicates[k];
+                        if (!isParent) { TargetVerdict(p, fk); continue; }
+                        if (_parentVerdicts.ContainsKey((k, linkSide, fk))) continue;
+                        var parent = bodies[fk];
+                        ParentBodyFetches++;
+                        if (++_parentsInFlight > ParentBodyHighWater) ParentBodyHighWater = _parentsInFlight;
+                        (bool, EvalKind) verdict;
+                        try { verdict = linkSide ? EvalLinkPath(p, parent, 0) : EvalTerms(p, parent); }
+                        finally { _parentsInFlight--; }
+                        if (_fatal is not null) return;                 // never memoized: the scan meets it again
+                        _parentVerdicts[(k, linkSide, fk)] = verdict;
+                    }
+                }
+            }
+            finally { _heldTargets = null; _heldTargetsAsked = null; _heldParents = heldParents; _heldAsked = heldAsked; _evalIndex = evalIndex; }
+        });
+        _fatal = fatal;   // a typed error is the scan's to raise, in candidate order
+    }
 
     FieldPredicateSet(IReadOnlyList<Predicate> predicates)
     {
@@ -984,20 +1075,27 @@ public sealed class FieldPredicateSet
     }
 
     /// <summary>The link step's left path from segment <paramref name="from"/> down.</summary>
-    (bool Satisfied, EvalKind Kind) EvalLinkPath(Predicate p, object obj, int from)
+    (bool Satisfied, EvalKind Kind) EvalLinkPath(Predicate p, object obj, int from) =>
+        WalkLink(p, obj, from, c => JudgeTargets(p, c), (elems, fold, each) => FoldOver(p, elems, fold, each), m => (false, m));
+
+    /// <summary>Gather every target <see cref="EvalLinkPath"/> would judge from <paramref name="obj"/>, judging none.</summary>
+    void CollectTargets(Predicate p, int k, object obj, HashSet<(int K, FormKey Fk)> pairs) =>
+        WalkLink(p, obj, 0,
+                 c => { if (c.Links is { } links) foreach (var fk in links) pairs.Add((k, fk)); return true; },
+                 (elems, _, each) => { foreach (var e in elems) each(e); return true; },
+                 _ => true);
+
+    /// <summary>The one walk of a link path: fold each list on the way down, and hand each link set it reaches to <paramref name="leaf"/>.</summary>
+    T WalkLink<T>(Predicate p, object obj, int from, Func<(List<FormKey>? Links, string? Note), T> leaf,
+                  Func<List<object>, Fold, Func<object, T>, T> fold, Func<EvalKind, T> miss)
     {
         var segs = p.LinkPath!;
         int q = FirstFold(p.LinkFolds, from, segs.Length);
-        if (q >= 0)
-        {
-            var (elems, _, miss) = ElementsAt(obj, segs, p.LinkFolds!, from, q);
-            if (miss is { } m) return (false, m);
-            return FoldOver(p, elems!, p.LinkFolds![q],
-                            e => q + 1 >= segs.Length
-                                 ? JudgeTargets(p, ReadEngine.LinksIn(e, p.LinkPathDisplay ?? ""))
-                                 : EvalLinkPath(p, e, q + 1));
-        }
-        return JudgeTargets(p, ReadEngine.CollectLinksAt(obj, from == 0 ? segs : segs[from..]));
+        if (q < 0) return leaf(ReadEngine.CollectLinksAt(obj, from == 0 ? segs : segs[from..]));
+        var (elems, _, m) = ElementsAt(obj, segs, p.LinkFolds!, from, q);
+        if (m is { } kind) return miss(kind);
+        return fold(elems!, p.LinkFolds![q],
+                    e => q + 1 >= segs.Length ? leaf(ReadEngine.LinksIn(e, p.LinkPathDisplay ?? "")) : WalkLink(p, e, q + 1, leaf, fold, miss));
     }
 
     /// <summary>Resolve one collected link set to its winner bodies and judge the predicate's own side on them — satisfied iff any target satisfies.</summary>
@@ -1032,10 +1130,18 @@ public sealed class FieldPredicateSet
     /// <summary>One target's verdict on the predicate's own side, read once per call; the body is dropped as soon as it is judged.</summary>
     (bool Satisfied, EvalKind Kind) TargetVerdict(Predicate p, FormKey fk)
     {
-        if (_targetVerdicts.TryGetValue((_evalIndex, fk), out var memo)) return memo;
-        var target = _fetchWinnerBody!(fk);
+        if (_targetVerdicts.TryGetValue((_evalIndex, fk), out var memo))
+        {
+            if (memo.Kind == EvalKind.NoParent) _lastNoParent = _targetNoParent.GetValueOrDefault((_evalIndex, fk));
+            return memo;
+        }
+        var target = _heldTargetsAsked is not null && _heldTargetsAsked.Contains(fk) ? _heldTargets![fk] : _fetchWinnerBody!(fk);
         var verdict = target is null ? (false, EvalKind.UnresolvedTarget) : EvalCore(p, target);
-        if (_fatal is null) _targetVerdicts[(_evalIndex, fk)] = verdict;
+        if (_fatal is null)
+        {
+            _targetVerdicts[(_evalIndex, fk)] = verdict;
+            if (verdict.Item2 == EvalKind.NoParent) _targetNoParent[(_evalIndex, fk)] = _lastNoParent;
+        }
         return verdict;
     }
 

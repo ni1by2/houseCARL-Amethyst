@@ -848,7 +848,7 @@ public sealed class AssetResolver : IDisposable
         $"{rootName}: could not {verb} '{(dir.Length == 0 ? "\\" : dir)}' — {Concise(ex)}";
 
     /// <summary>Normalize an asset path for matching: forward slashes to backslashes, drop a leading separator. Lenient — never throws.</summary>
-    static string Normalize(string p) => (p ?? "").Replace('/', '\\').TrimStart('\\');
+    internal static string Normalize(string p) => (p ?? "").Replace('/', '\\').TrimStart('\\');
 
     /// <summary>The public form of the one path gate — normalize and validate a Data-relative path — so the place lane's destination rides this validator.</summary>
     public static string ValidateRelPath(string relPath) => NormalizeQueryPath(relPath);

@@ -288,7 +288,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     public SkseConfigAuditData SkseConfigAudit() => _assetLayers.SkseConfigAudit();
     public NativePairingAuditData NativePairingAudit() => _assetLayers.NativePairingAudit();
     public SkyPatcherLayerData SkyPatcherLayer() => _assetLayers.SkyPatcherLayer();
-    public T SkyPatcherLayer<T>(Func<SkyPatcherLayerData, T> use) => _assetLayers.SkyPatcherLayer(use);
+    public T SkyPatcherLayer<T>(Func<SkyPatcherLayerData, T> use, CancellationToken ct = default) => _assetLayers.SkyPatcherLayer(use, ct: ct);
     public NifInspectBatchData NifInspect(IReadOnlyList<string> relPaths, string? sourceProvider) => _assetLayers.NifInspect(relPaths, sourceProvider);
     public NifSetResult NifSet(string relPath, IReadOnlyList<NifSetOp> ops, string? sourceProvider, string? patchName, string? into, bool inPlace, bool acknowledge)
         => _assetLayers.NifSet(relPath, ops, sourceProvider, patchName, into, inPlace, acknowledge);
@@ -329,6 +329,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                                        Func<IMajorRecordGetter, FormKey, IMajorRecordGetter?>? heldParent = null)
         => _reads.ResolveReadOn(q, fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo, containerHint, depths, session, prefetched, countFields, heldParent);
     internal RecordSummary ResolveSummaryOn(CrossQueryOutcome q, FormKey fk) => _reads.ResolveSummaryOn(q, fk);
+    internal IReadOnlyList<RecordSummary>? FillSummaries(CrossQueryOutcome q, CancellationToken ct) => _reads.FillSummaries(q, ct);
     public IReadOnlyList<ReadOutcome> ResolveBatch(IReadOnlyList<string> formids, IReadOnlyList<string>? fields, bool conflictTree, int depth = 1,
                                                    bool resolveNames = false, string? plugin = null,
                                                    string? containerHint = ReadEngine.DepthExpandHint,
@@ -391,8 +392,9 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         => _reads.WalkForwardBatch(seeds, seedPaths, follow, depth, maxNodes, exclusions, demand, out refusal, out epoch, ct, wantCycles, through, leftOut);
     internal IReadOnlyList<RecordReads.InfoOrderRow> InfoOrderBatch(IReadOnlyList<string> formids, ArtifactDemand? demand,
                                                                    out string? refusal, out OrderStamp? epoch,
-                                                                   RecordReads.PoleInfo? foldArm = null, RecordReads.FoldFacts? foldFacts = null)
-        => _reads.InfoOrderBatch(formids, demand, out refusal, out epoch, foldArm, foldFacts);
+                                                                   RecordReads.PoleInfo? foldArm = null, RecordReads.FoldFacts? foldFacts = null,
+                                                                   CancellationToken ct = default)
+        => _reads.InfoOrderBatch(formids, demand, out refusal, out epoch, foldArm, foldFacts, ct);
     public CrossQueryOutcome CrossQuery(IReadOnlyList<string>? typeSet, IReadOnlyList<FormKey>? references, string? editoridContains,
                                         bool conflictsOnly, IReadOnlyList<string>? plugins, IReadOnlyList<string>? where, int limit,
                                         bool definedIn = false, string? groupBy = null, int offset = 0, string? whereSource = null,
@@ -413,7 +415,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         => _reads.OffOrderQuery(pole, typeSet, references, editoridContains, scopePlugins, definedIn, where, limit, groupBy, offset,
                                 formidSet, artifactDemands, pinnedView, referencesNone, ct);
     public EffectChainResult ResolveEffectChain(FormKey mgef, IReadOnlyList<string>? typesNarrow, int limit)
-        => _reads.ResolveEffectChain(mgef, typesNarrow, limit);
+        => _reads.ResolveEffectChains(new[] { mgef }, typesNarrow, limit)[0];
+    public IReadOnlyList<EffectChainResult> ResolveEffectChains(IReadOnlyList<FormKey> mgefs, IReadOnlyList<string>? typesNarrow, int limit,
+                                                                CancellationToken ct = default)
+        => _reads.ResolveEffectChains(mgefs, typesNarrow, limit, ct);
 
     internal RecordReads ReadArea => _reads;   // the reads area instance, for tests that set its seams
 
@@ -477,6 +482,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     internal bool GateHeldByThisThread => Monitor.IsEntered(_gate);   // for a test seam that must know whether it runs inside the hold
 
     internal int AbsenceExplanations;   // how many times the explainer has parsed the profile, for the cost tests
+    internal int ServingCopyReResolves;   // how many times a moved serving copy re-resolved the order, for the tests
 
     /// <summary>MO2's mods root as this service currently has it, or null when it has none yet; taken under the gate.</summary>
     internal string? ModsRootOrNull
@@ -765,9 +771,56 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         var copies = hits.Select(h => new PluginCopy(h.Path, h.Where, OutputLocations.JudgeServed(comp, hits, h.Path).Served, SizeOf(h.Path))).ToList();
         // No copy serves the name: a lone copy still has a header to read, and several leave none established.
         var from = copies.FirstOrDefault(c => c.Served == OutputLocations.ServedStanding.Serves) ?? (copies.Count == 1 ? copies[0] : null);
-        return new PluginFacts(copies, from, from is null ? null : PluginFile.ReadHeader(from.Path));
+        string? indexed;
+        Mo2Roots roots;
+        lock (_gate) { indexed = _resolver?.Capture().PluginPath(pluginName); roots = RootsLocked(); }
+        var moved = indexed is null || roots.ProfileDir.Length == 0 ? null : ServingCopyMoved(pluginName, indexed, comp, roots, hits);
+        return new PluginFacts(copies, from, from is null ? null : PluginFile.ReadHeader(from.Path), moved);
 
         static long? SizeOf(string path) { try { return new FileInfo(path).Length; } catch { return null; } }
+    }
+
+    ServingCopyMove? ILoadOrderHost.ServingCopyMoved(IEnumerable<(string Plugin, string? IndexedPath)> plugins)
+    {
+        Mo2Roots roots;
+        lock (_gate) roots = RootsLocked();
+        if (roots.ProfileDir.Length == 0) return null;          // an order handed in, not read from a profile: no MO2 copy to compare
+        var comp = Mo2LoadOrder.ReadComposition(roots.ProfileDir);   // parsed once for every plugin checked
+        return plugins.Where(p => p.IndexedPath is not null)
+                      .Select(p => ServingCopyMoved(p.Plugin, p.IndexedPath!, comp, roots, null)).FirstOrDefault(m => m is not null);
+    }
+
+    /// <summary>The live serving-copy check (#1196): null when the first enabled copy, judged by JudgeServed, is
+    /// <paramref name="indexedPath"/>, else the order is re-resolved through the profile-change path, deferred while
+    /// another thread writes, and skipped when the index already holds the live copy. <paramref name="hits"/> is a full locate the caller already ran.</summary>
+    ServingCopyMove? ServingCopyMoved(string plugin, string indexedPath, Mo2Composition comp, Mo2Roots roots, IReadOnlyList<PluginFileHit>? hits)
+    {
+        IReadOnlyList<PluginFileHit> located = hits
+            ?? (Mo2LoadOrder.ServingCopy(comp, roots.ModsDir, roots.DataDir, roots.OverwriteDir, plugin) is { } s ? [s] : []);
+        bool Serves(string? path) => path is not null && OutputLocations.JudgeServed(comp, located, path).Served == OutputLocations.ServedStanding.Serves;
+        if (Serves(indexedPath)) return null;
+        var live = located.FirstOrDefault(h => h.Enabled);
+        string? current;
+        lock (_gate) current = _resolver?.Capture().PluginPath(plugin);
+        string? why = null;                                       // the index already holds the live copy: only this call's view is old
+        if (current is null ? live is not null : !Serves(current))
+            lock (_gate)
+            {
+                why = "another write is running; run this again once it finishes";
+                if (Monitor.TryEnter(_writeGate))
+                    try
+                    {
+                        var before = _resolvedPaths;
+                        why = ReResolve(RootsLocked()) ? null : _profileHeld is not null
+                            ? "MO2 is holding its profile files; run this again once MO2 has saved them"
+                            : "the profile's load order read back empty; run this again once MO2 has rewritten loadorder.txt";
+                        if (!ReferenceEquals(before, _resolvedPaths)) Interlocked.Increment(ref ServingCopyReResolves);   // a rebuild was published
+                    }
+                    finally { Monitor.Exit(_writeGate); }
+            }
+        hits ??= Mo2LoadOrder.LocatePlugin(comp, roots.ModsDir, roots.DataDir, roots.OverwriteDir, plugin);   // the refuse path only: label the index's copy
+        var had = hits.FirstOrDefault(h => PluginPaths.SamePluginFile(h.Path, indexedPath))?.Where ?? ServingCopyMove.FolderOf(indexedPath);
+        return new ServingCopyMove(Path.GetFileName(indexedPath), live?.Where, had, why);
     }
 
     /// <summary>Read MO2's OWN local Nexus update cache — every managed mod's meta.ini Nexus fields — with NO network; only Nexus-linked mods become entries, and a missing mods folder is named.</summary>

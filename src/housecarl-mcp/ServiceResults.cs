@@ -239,9 +239,24 @@ public sealed record ClassParents(
     Dictionary<string, string> Edges, string? BaselineNote, string? TopUpMissing, string? SiblingPexMissing = null);
 
 /// <summary>One plugin's facts for the status verdict: every same-named copy on disk, the copy whose header was read (the served one, else a lone unserved one; null when no read was tried), and that header (null when unreadable).</summary>
-internal sealed record PluginFacts(IReadOnlyList<PluginCopy> Copies, PluginCopy? HeaderFrom, HousecarlCore.PluginHeaderFacts? Header)
+internal sealed record PluginFacts(IReadOnlyList<PluginCopy> Copies, PluginCopy? HeaderFrom, HousecarlCore.PluginHeaderFacts? Header,
+                                   ServingCopyMove? Moved = null)
 {
     public HousecarlCore.LocalizedFlagRead Localized => HousecarlCore.WriteEngine.LocalizedFlag(Header);
+}
+
+/// <summary>The copy MO2 serves for a plugin is no longer the one the index read: where each sits (folder labels), and,
+/// when the order was not re-resolved, why and when to run again.</summary>
+internal sealed record ServingCopyMove(string Plugin, string? Served, string Indexed, string? NotRefreshed)
+{
+    public static string FolderOf(string path) => $"folder '{Path.GetFileName(Path.GetDirectoryName(path))}'";   // a copy no locate hit labels
+
+    /// <summary>The one-sentence refusal; <paramref name="nothingDone"/> says what the call did not do. A null
+    /// <see cref="Served"/> means no enabled folder holds the file.</summary>
+    public string Refusal(string nothingDone) =>
+        (Served is null ? $"no enabled folder holds '{Plugin}' now, so the game does not load it" : $"the game now loads '{Plugin}' from {Served}") +
+        $", but houseCARL's index still had the copy in {Indexed}; " +
+        (NotRefreshed is { } why ? $"{nothingDone} and the index was not refreshed: {why}." : $"the index is now refreshed and {nothingDone}; run it again.");
 }
 
 /// <summary>One on-disk copy of a plugin filename: where it sits (the label carries the layer state), its served standing, and its size.</summary>

@@ -21,6 +21,8 @@ public static partial class RecordsTools
     /// expression across both (#810, Aaron 2026-09-22).</summary>
     internal static int TableRowLimit(int limit) => limit <= 0 ? DefaultLimit : limit;
 
+    internal static Action? BeforeCutWindowWholeRead;
+
     /// <summary>The plugins= SELECT scope: which records are considered, as against source=, which decides whose version is read.</summary>
     public sealed class RecordsScope
     {
@@ -575,16 +577,18 @@ public static partial class RecordsTools
         bool cmpPrewindowed = false;
         string? cmpWindowNote = null;
         int cmpSelected = 0;
-        IReadOnlyList<T> Windowed<T>(IReadOnlyList<T> rows)
+        // A total given means the rows are already the window, read alone out of a list of that many.
+        IReadOnlyList<T> Windowed<T>(IReadOnlyList<T> rows, int total = -1)
         {
             if (cmpPrewindowed) return rows;
             // Under to_file= the rows are the file and the render is manifest-only, so no window applies.
             if (wantFile) return rows;
-            if (offset == 0 && rows.Count <= lim) return rows;
-            var w = rows.Skip(offset).Take(lim).ToList();
+            int n = total < 0 ? rows.Count : total;
+            if (offset == 0 && n <= lim) return rows;
+            var w = total < 0 ? rows.Skip(offset).Take(lim).ToList() : rows;
             var note = w.Count == 0
-                ? $"window: no rows — offset={offset} is past the end of the {rows.Count}-row list"
-                : $"window: rows {offset + 1}–{offset + w.Count} of {rows.Count} (limit={lim}, offset={offset})";
+                ? $"window: no rows — offset={offset} is past the end of the {n}-row list"
+                : $"window: rows {offset + 1}–{offset + w.Count} of {n} (limit={lim}, offset={offset})";
             envelope.Add(new("window", note));
             headerLine += "\n" + note;
             return w;
@@ -660,7 +664,7 @@ public static partial class RecordsTools
             // ---- info_order: the merged effective INFO sequence. ----
             if (form == "info_order")
             {
-                var ioRows = svc.InfoOrderBatch(ids, demand, out var ioRefusal, out var ioEpoch, ioFold, ioFoldFacts);
+                var ioRows = svc.InfoOrderBatch(ids, demand, out var ioRefusal, out var ioEpoch, ioFold, ioFoldFacts, ct);
                 if (ioRefusal is not null)
                     return json ? JsonWire.RenderError(ioRefusal, ioEpoch) : "error: " + ioRefusal + Wire.EpochLine(ioEpoch);
                 if (FoldSeam(ioEpoch) is { } ioTear) return Wire.Refuse(json, ioTear, ioEpoch);
@@ -694,6 +698,9 @@ public static partial class RecordsTools
             var readFieldCounts = ReferenceEquals(readFields, readPaths) ? countFields : null;
             IReadOnlyList<ReadOutcome> outcomes;
             RecordReads.PoleInfo? pole = null;
+            bool windowRead = false;
+            IReadOnlyList<ReadOutcome> ReadWinners(string[] which, out string? refusal, out OrderStamp? refusalEpoch)
+                => svc.ResolveBatch(which, readFields, false, depth, resolveNames, null, demand, out refusal, out refusalEpoch, containerHint, readFieldDepths, ct, countFields: readFieldCounts, summary: form == "summary");
             // Clocked like the scan's body lane, over the BODIES READ; docs/architecture/records-tool-front.md.
             var listClock = System.Diagnostics.Stopwatch.StartNew();
             if (srcSpec.ReplaysOverlay)
@@ -712,7 +719,11 @@ public static partial class RecordsTools
             else if (srcName is null)
             {
                 if (srcOverlay) Arm(srcSpec.OverlayStatement!);
-                outcomes = svc.ResolveBatch(ids, readFields, false, depth, resolveNames, null, demand, out var refusal, out var refusalEpoch, containerHint, readFieldDepths, ct, countFields: readFieldCounts, summary: form == "summary");
+                // A walk's reached set is read only over the window it shows; a census, an aggregate, a file or an
+                // offset past the end reads it whole.
+                windowRead = walkDerived && !wantFile && !counts_only && form != "aggregate" && offset < ids.Length
+                             && !(offset == 0 && ids.Length <= lim);
+                outcomes = ReadWinners(windowRead ? ids.Skip(offset).Take(lim).ToArray() : ids, out var refusal, out var refusalEpoch);
                 if (refusal is not null)
                     return json ? JsonWire.RenderError(refusal, refusalEpoch)
                                 : "error: " + refusal + Wire.EpochLine(refusalEpoch);
@@ -757,7 +768,7 @@ public static partial class RecordsTools
                     : Census($"{Head(null)}\ncount={outcomes.Count} ok={ok} errors={err}" + Wire.EpochLine(epoch2));
             }
 
-            var winOutcomes = Windowed(dense ? unfolded : outcomes);   // render window; census/aggregate/artifacts stay complete
+            var winOutcomes = Windowed(dense ? unfolded : outcomes, windowRead ? ids.Length : -1);   // render window; census/aggregate/artifacts stay complete
             SpillState? spill2 = null;
             if (wantFile)
             {
@@ -774,6 +785,19 @@ public static partial class RecordsTools
             var rendered2 = Render2(spill2, out var truncated2);
             if (spill2 is null && truncated2)
             {
+                if (windowRead)
+                {
+                    // A cut window spills the whole list, so it is read whole here and the receipt counts both reads' bodies.
+                    BeforeCutWindowWholeRead?.Invoke();                           // test seam; null in the product
+                    listClock.Start();
+                    var all = ReadWinners(ids, out var allRefusal, out var allEpoch);
+                    listClock.Stop();
+                    var allStamp = allEpoch ?? all.FirstOrDefault(o => o.Stamp is not null)?.Stamp;
+                    if ((allRefusal ?? SeamTear(allStamp)) is { } allTear)
+                        return json ? JsonWire.RenderError(allTear, allStamp) : "error: " + allTear + Wire.EpochLine(allStamp);
+                    listCost = (listCost.Item1 + all.Count(o => o.Record is not null && !o.FromEngine), listClock.ElapsedMilliseconds);
+                    outcomes = FoldRows(all);
+                }
                 using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.Records, epoch2?.Epoch ?? "none");
                 var (s, aerr) = Artifacts.WriteBatch(outcomes, reservation, "ceiling", Echo(), formLevers, summary: form == "summary", scan: owed);
                 rendered2 = Render2(aerr is null ? SpillState.Spilled(s!, manifestOnly: false) : SpillState.WriteFailed(aerr), out _);
@@ -880,25 +904,20 @@ public static partial class RecordsTools
             if (reverseCarrier)
             {
                 // The typed MGEF lane: a non-MGEF seed fails loud per item rather than reading as '0 carriers'.
-                var results = new List<(string Seed, EffectChainResult Result)>(ids.Length);
+                var parsed = new List<(string Raw, FormKey? Fk, string? Error)>(ids.Length);
                 foreach (var raw in ids)
                 {
-                    FormKey fk;
-                    try { fk = door.Parse(raw); }
-                    catch (Exception ex) { results.Add((raw?.Trim() ?? "", EffectChainResult.Fail($"bad FormID '{raw}': {ex.Message}"))); continue; }
-                    // The per-seed carrier bound is the walk's own reach budget; limit=/offset= stay the SEED window.
-                    results.Add((FormIdToken.Of(fk), svc.ResolveEffectChain(fk, types, walkMaxNodes)));
+                    try { parsed.Add((raw, door.Parse(raw), null)); }
+                    catch (Exception ex) { parsed.Add((raw, null, $"bad FormID '{raw}': {ex.Message}")); }
                 }
-                // One build for the whole batch, so the per-seed stamps must agree and an @artifact seed list's
-                // epoch demand must match it.
-                var epochsR = results.Select(r => r.Result.Stamp).Where(e => e is not null).Distinct().ToList();
-                if (epochsR.Count > 1)
-                {
-                    var tear = $"the load order changed while the seeds resolved (epochs {string.Join(", ", epochsR.Select(e => e!.Epoch))}) — " +
-                               "the carrier sets would mix builds. Retry the call.";
-                    return json ? JsonWire.RenderError(tear, epochsR[^1]) : "error: " + tear;
-                }
-                var epochR = epochsR.FirstOrDefault();
+                // Every seed off one capture and one carrier pass; the per-seed carrier bound is the walk's reach budget.
+                var chains = svc.ResolveEffectChains(parsed.Where(p => p.Fk is not null).Select(p => p.Fk!.Value).ToList(), types, walkMaxNodes, ct);
+                int next = 0;
+                var results = parsed.Select(p => p.Fk is { } fk
+                    ? (Seed: FormIdToken.Of(fk), Result: chains[next++])
+                    : (Seed: p.Raw?.Trim() ?? "", Result: EffectChainResult.Fail(p.Error!))).ToList();
+                // An @artifact seed list's epoch demand must match the one build the batch read.
+                var epochR = results.Select(r => r.Result.Stamp).FirstOrDefault(e => e is not null);
                 if (demand is not null && (epochR is null || demand.Epoch != epochR.Epoch))
                 {
                     var dref = epochR is null
@@ -1555,7 +1574,7 @@ public static partial class RecordsTools
                     envelope.Add(new("fold_selection", $"the scan selected these topics from the ACTIVE order; a topic only '{ioFoldFacts.Label}' defines is not among them — name it in formids= to read its merge."));
                     headerLine += $"\n(the scan selects from the ACTIVE order; a topic only '{ioFoldFacts.Label}' defines is reached by naming it in formids=)";
                 }
-                var ioRows = svc.InfoOrderBatch(ioKeys, null, out var ioRefusal, out var ioEpoch, ioFold, ioFoldFacts);
+                var ioRows = svc.InfoOrderBatch(ioKeys, null, out var ioRefusal, out var ioEpoch, ioFold, ioFoldFacts, ct);
                 if (ioRefusal is not null)
                     return json ? JsonWire.RenderError(ioRefusal, ioEpoch) : "error: " + ioRefusal + Wire.EpochLine(ioEpoch);
                 if (FoldSeam(ioEpoch) is { } ioScanTear) return Wire.Refuse(json, ioScanTear, ioEpoch);
@@ -1697,6 +1716,11 @@ public static partial class RecordsTools
             }
 
             // ---- summary / fields / aggregate: the scan renders, envelope-stamped. ----
+            // Summary rows the scan left unfilled are filled once here, for the render and the spill alike.
+            if (outcome.Prefilled is null && outcome.Error is null && outcome.Groups is null
+                && !(projFields is { Length: > 0 } && readPaths is { Length: > 0 })
+                && svc.FillSummaries(outcome, ct) is { } fill)
+                outcome = outcome with { Prefilled = fill };
             SpillState? spill = null;
             if (wantFile && outcome.Error is null)
             {

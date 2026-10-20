@@ -1,3 +1,5 @@
+using System.Collections.Concurrent;
+
 namespace HousecarlCore;
 
 /// <summary>What one service's reads cost, counted where the work happens: never read by product code, never rendered,
@@ -13,17 +15,30 @@ public sealed class CostCounters
     /// <summary>Per-record seeks answered by walking only the record type's groups.</summary>
     public long TypedSeeks;
 
-    /// <summary>Plugins a gather actually walked.</summary>
+    /// <summary>(plugin, group) walks a gather made.</summary>
     public long CollectPasses;
 
     /// <summary>Gather walks answered by reading only the wanted record types' groups.</summary>
     public long TypedCollectPasses;
 
+    /// <summary>Reads of each plugin's top-level groups by the in-order walks, keyed (plugin, group); a walk with no group
+    /// map counts once as <c>*flat</c>.</summary>
+    public readonly ConcurrentDictionary<(string Plugin, string Group), int> GroupReads = new();
+
+    /// <summary>Count one read of one named group.</summary>
+    public void CountGroupRead(string plugin, string group) => GroupReads.AddOrUpdate((plugin, group), 1, static (_, n) => n + 1);
+
     /// <summary>Provider bodies the conflict-tree fold read.</summary>
     public long TreeBodiesRead;
 
+    /// <summary>Link caches the service's sessions have built.</summary>
+    public long LinkCacheBuilds;
+
     /// <summary>Record bodies the chunk gather was asked for.</summary>
     public long KeysWanted;
+
+    /// <summary>Rows the scan detail reader read.</summary>
+    public long ScanRowReads;
 
     /// <summary>SkyPatcher layers an overlay read opened for replay.</summary>
     public long ReplayOpens;

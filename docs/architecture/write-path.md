@@ -123,7 +123,8 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   pre-flight decides, and which recognisers it shares with apply, is [`corpus-rulebook.md`](corpus-rulebook.md)'s.
 - Flat-versus-nested is ONE decision (does a flat `SkyrimGroup<T>` match) off one `EnumerateFlatGroups`
   enumeration the override, create, removal-type and seek-type lanes all derive from; a nested record needs the
-  source link cache to rebuild its parent chain and fails loud without it.
+  source link cache to rebuild its parent chain and fails loud without it. The session builds that cache once per
+  source plugin and keeps it for the call; releasing a plugin's overlay before an in-place swap drops its cache too.
 - A flat group typed by an abstract base is created by naming a concrete arm, discovered from the runtime hierarchy;
   the bare base is refused with the discovered arms listed, never a guessed default.
 - Create is idempotent through upsert: a record the patch ITSELF defines is replaced at the same FormKey, while a
@@ -617,3 +618,17 @@ The writes area is one class, `RecordWrites`, across `RecordWrites.cs`, `RecordC
 - `src/housecarl-core/LocalizedStrings.cs`: the strings-shape classifier, whose localized language set is Mutagen's
   `Language` enum; the write lanes' pre-flights call
   `LocalizedStrings.RefusalFor`.
+
+## Amethyst publication and mid-call changes
+
+The 2.1.0 integration checks `MidCallChange.BeforeCommit` before publication and
+records the actual destination with `AfterCommit` after publication. The
+Amethyst transaction coordinator performs the same check at its anchored
+publication boundary, preserving the durable journal and destination checks.
+Private compact/merge builds under `SuspendPublication` do not count as
+caller-visible writes. Their final transaction group or local publication records
+the destinations instead, so a later refusal names files actually published.
+
+The destination parent is revalidated after the final source check and immediately
+before the anchored rename/exchange. A directory replacement during source
+validation therefore refuses publication into both the old and replacement paths.

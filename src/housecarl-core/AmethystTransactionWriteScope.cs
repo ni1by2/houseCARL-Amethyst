@@ -24,6 +24,9 @@ public sealed class AmethystTransactionWriteScope : IDisposable
 
     public static AmethystTransactionWriteScope? Current => SuppressDepth.Value == 0 ? Active.Value : null;
 
+    /// <summary>Private reshape builds have not published a caller-visible output.</summary>
+    internal static bool PublicationIsSuspended => SuppressDepth.Value > 0;
+
     /// <summary>Allow a complex producer to build and validate private scratch files before enrolling their destinations.</summary>
     public static IDisposable SuspendPublication()
     {

@@ -18,7 +18,7 @@ Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. Se
 
 ## Install
 
-Download the archive, checksum and standalone installer from [v2.0.5 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5). This is a prerelease. Follow the [Linux installation guide](docs/linux-install.md) to verify the download, install it, and select your Amethyst saved snapshot. Running the package does not require the .NET SDK or build tools.
+Download the archive, checksum and standalone installer from [v2.1.0 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.0). This is a prerelease. Follow the [Linux installation guide](docs/linux-install.md) to verify the download, install or update it, and select your Amethyst saved snapshot. Running the package does not require the .NET SDK or build tools.
 
 Install the [runtime prerequisites](docs/linux-install.md#runtime-requirements) first. Then, from the directory containing all three downloads, run:
 
@@ -81,12 +81,14 @@ deployment unchanged. Output stays pending until Amethyst refreshes and deploys 
 verification records whether the expected file won. `update_status` reads cached Nexus metadata;
 explicit update checks use the installed file ID.
 
-The [Linux installation and current limits](docs/linux-install.md) page describes the published
-installer. The [2.0.5 verification record](docs/testing/upstream-205-integration-2026-10-15.md)
-distinguishes the final release checks from earlier candidate results.
+The [Linux installation and current limits](docs/linux-install.md) page describes installation,
+upgrades and rollback. The [2.1.0 verification record](docs/testing/upstream-210-integration-2026-10-20.md)
+records the source, test results and package checks. Earlier installation and Proton acceptance
+are recorded for [2.0.5](docs/testing/upstream-205-integration-2026-10-15.md).
 
-The release integrates upstream houseCARL 2.0.5 at `4e285051` and bundles the native
-component from stable Amethyst 2.5.4 at `edde06e5` (native API 13; schema 9, engine 1, rules 13). houseCARL
+Version 2.1.0 integrates upstream houseCARL at `1391dacd`, including its engine optimizations
+and source-change checks, while preserving Amethyst's staged transaction workflow.
+It retains the native component from stable Amethyst 2.5.4 at `edde06e5` (native API 13; schema 9, engine 1, rules 13). houseCARL
 has read a real installed 2.5.4 profile. The Linux package bundles the .NET runtime and
 Amethyst's native component. **Python 3.12+ must be installed.** The native reader opens
 a private catalog copy and does not write manager files. The [snapshot contract](docs/architecture/amethyst-saved-snapshot.md)

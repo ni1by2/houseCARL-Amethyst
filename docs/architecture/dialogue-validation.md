@@ -1,5 +1,5 @@
 ---
-updated: 2026-09-25
+updated: 2026-10-16
 covers: [src/housecarl-core/DialogueValidate.cs, src/housecarl-core/DialogueCkParity.cs, src/housecarl-core/DialogueScriptCheck.cs, src/housecarl-core/DialogueCheck.cs, src/housecarl-mcp/DialogueSweep.cs, src/housecarl-mcp/DialogueSweepRender.cs, src/housecarl-mcp/DialogueKindChecks.cs]
 ---
 # Dialogue validation: CK parity, what a clean pass means, and the check family
@@ -64,6 +64,11 @@ unresolvable PNAM is reported. Deleted INFOs are skipped and tallied. Resolution
 validating within {plugin + its masters} alone is a deliberately deferred capability. The whole run is wrapped, so a
 resolve or asset failure rides `CheckError` rather than being swallowed.
 
+A Quest, Branch, PNAM or LinkTo target's TYPE is read off the index (the fold's own record where the fold wins it),
+and a wrong type is named from that class: no target body is fetched. Every fetch from a plugin copies its whole
+top-level group, so fetching each target sank a large follower quest past 8 GB. A target whose plugin changes
+mid-call is caught by ruling F's stamp check (pending that PR), which re-checks every plugin the call relied on.
+
 Standing limits a render must state rather than let "checks passed" read as "this will play": CTDA conditions are
 semantic and only the game evaluates them, and lip-sync and audio content are outside the data layer.
 
@@ -106,7 +111,10 @@ defaulting to the widest set. The same table decides what the epoch stamp names:
 substrate throughout and the stamp caveats nothing.
 
 ## Pinned by
-- `DialogueCkParityPairTests` and `DialogueCkParityCreateTests`: the fill and gap pairs; their `*-WINS` tests pin
+- `DialogueTypeCheckTests` — Branch, PNAM and LinkTo targets in a held-open plugin fetch no body, right type or
+  wrong, and a wrong type is still reported by name; a fold that wins a link target as another record type is
+  judged by the fold's type, and a record only the fold holds counts as present.
+- `DialogueCkParityPairTests` and `DialogueCkParityCreateTests` — the fill and gap pairs; their `*-WINS` tests pin
   NON-OVERRIDE, their `*-AUTOFILL` tests NEVER SILENT, `DIAL-PNAM-WINS` an explicit `0` Priority, and
   `QUST-ALIAS-LOCATION` VTCK's scope to reference aliases.
 - `DialogBranchFlagsRefusalTests`: a branch with no `Flags` is refused naming both values, and an explicit

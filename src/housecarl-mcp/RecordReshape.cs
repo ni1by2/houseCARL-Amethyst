@@ -91,6 +91,8 @@ internal sealed partial class RecordWrites
                     return WritePatchBuilder.CompactOutcome.Fail(
                         $"cannot compact '{name}': it was EXCLUDED from this session ({excluded}) — houseCARL won't renumber a plugin it can't fully parse. The file is untouched.");
                 srcPath = view.PluginPath(name);
+                if (inPlace && srcPath is not null && _host.ServingCopyMoved([(name, srcPath)]) is { } moved)
+                    return WritePatchBuilder.CompactOutcome.Fail(moved.Refusal("nothing was written"));
                 if (srcPath is null || !File.Exists(srcPath))
                     return WritePatchBuilder.CompactOutcome.Fail($"'{name}' not found on disk at {srcPath ?? "<unresolved>"} — nothing to compact.");
             }
@@ -196,6 +198,9 @@ internal sealed partial class RecordWrites
             // The consent gate: any in-place overwrite — the target, the external referencers, or both — needs acknowledge.
             bool willOverwriteTarget = inPlace;
             bool willRepoint = id.HasExternalReferencers && repointExternals;
+            // Each referencer rewritten in place must still be the copy MO2 serves; the first that moved refuses.
+            if (willRepoint && _host.ServingCopyMoved(id.ExternalPlugins.Select(p => (p, view.PluginPath(p)))) is { } extMoved)
+                return WritePatchBuilder.CompactOutcome.Fail(extMoved.Refusal("nothing was written"));
 
             // A plugin the identify pass could not read through REFUSES the in-place lane, before anything is written.
             // The new-plugin lane keeps the note — its output is reviewed before it replaces anything.
@@ -806,7 +811,9 @@ internal sealed partial class RecordWrites
             try
             {
                 Directory.CreateDirectory(Path.GetDirectoryName(item.Destination)!);
+                MidCallChange.BeforeCommit();
                 AtomicFile.Commit(item.StagedPath, item.Destination);
+                MidCallChange.AfterCommit(item.Destination);
             }
             catch (Exception ex) when (item.Role != "plugin")
             {

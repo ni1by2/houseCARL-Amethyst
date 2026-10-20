@@ -385,6 +385,7 @@ public sealed class AmethystTransactionCoordinator
         }
         VerifyOriginalUnchanged(artifact, destination.Parent, destination.Leaf);
         _fault?.Invoke("after_final_destination_check");
+        MidCallChange.BeforeCommit();
         EnsureDestinationParentStillAnchored(journal, target, destination.Parent);
         if (artifact.OriginalExisted)
         {
@@ -396,9 +397,14 @@ public sealed class AmethystTransactionCoordinator
                 LinuxAnchoredFileSystem.Unlink(destination.Parent, sibling);
                 throw new IOException("destination changed at publication; external content was preserved");
             }
+            MidCallChange.AfterCommit(target);
             LinuxAnchoredFileSystem.Unlink(destination.Parent, sibling);
         }
-        else LinuxAnchoredFileSystem.Rename(destination.Parent, sibling, destination.Parent, destination.Leaf, noReplace: true);
+        else
+        {
+            LinuxAnchoredFileSystem.Rename(destination.Parent, sibling, destination.Parent, destination.Leaf, noReplace: true);
+            MidCallChange.AfterCommit(target);
+        }
         LinuxAnchoredFileSystem.Sync(destination.Parent);
         using var committed = LinuxAnchoredFileSystem.OpenFileAt(destination.Parent, destination.Leaf);
         var committedIdentity = LinuxAnchoredFileSystem.Identity(committed);
