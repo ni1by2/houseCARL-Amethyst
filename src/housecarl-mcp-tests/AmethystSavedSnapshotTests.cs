@@ -398,6 +398,103 @@ public sealed class AmethystSavedSnapshotTests
         Assert.Contains("effective INI directory changed", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
     }
 
+    [Theory]
+    [InlineData(9)]
+    [InlineData(10)]
+    public void AbsentConfiguredVanillaArchiveDoesNotHideAvailableAssets(int schemaVersion)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
+        WriteVanillaArchiveInputs(world, "Vanilla.bsa, Skyrim - Patch.bsa");
+        File.Copy(Path.Combine(world.Root, "mods", "Alpha", "Fixture.bsa"), Path.Combine(world.Root, "game", "Data", "Vanilla.bsa"));
+
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.False(snapshot.Provenance.VanillaArchivesOmitted);
+        Assert.Single(snapshot.VanillaArchives, a => Path.GetFileName(a.Path) == "Vanilla.bsa");
+        using var assets = AssetResolver.BuildSavedSnapshot(snapshot);
+        Assert.Contains(assets.Resolve("skse/plugins/skypatcher/weapon/bsaonly.ini").Providers, p => p.Source == "Vanilla.bsa");
+        Assert.False(assets.Resolve("meshes/no-such-vanilla-file.nif").Exists);
+        Assert.False(assets.ReadIncomplete);
+        snapshot.CheckUnchanged();
+    }
+
+    [Theory]
+    [InlineData(9, "Skyrim - Patch.bsa")]
+    [InlineData(9, "skyrim - PATCH.BSA")]
+    [InlineData(10, "Skyrim - Patch.bsa")]
+    [InlineData(10, "skyrim - PATCH.BSA")]
+    public void MissingVanillaArchiveAppearingDuringCallRefuses(int schemaVersion, string filename)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
+        WriteVanillaArchiveInputs(world, "Skyrim - Patch.bsa");
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        snapshot.CheckUnchanged();
+
+        File.Copy(Path.Combine(world.Root, "mods", "Alpha", "Fixture.bsa"), Path.Combine(world.Root, "game", "Data", filename));
+        Assert.Contains("archive appeared", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Theory]
+    [InlineData(9)]
+    [InlineData(10)]
+    public void ExistingVanillaArchiveDisappearingDuringCallRefuses(int schemaVersion)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
+        WriteVanillaArchiveInputs(world, "Vanilla.bsa");
+        var archive = Path.Combine(world.Root, "game", "Data", "Vanilla.bsa");
+        File.Copy(Path.Combine(world.Root, "mods", "Alpha", "Fixture.bsa"), archive);
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+
+        File.Delete(archive);
+        Assert.Contains("cannot inspect", Assert.Throws<IOException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Theory]
+    [InlineData(9, false)]
+    [InlineData(9, true)]
+    [InlineData(10, false)]
+    [InlineData(10, true)]
+    public void NonFileVanillaArchiveIsNotTreatedAsAbsent(int schemaVersion, bool danglingLink)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
+        WriteVanillaArchiveInputs(world, "Skyrim - Patch.bsa");
+        var archive = Path.Combine(world.Root, "game", "Data", "Skyrim - Patch.bsa");
+        if (danglingLink) File.CreateSymbolicLink(archive, Path.Combine(world.Root, "missing.bsa"));
+        else Directory.CreateDirectory(archive);
+
+        if (danglingLink)
+            Assert.Contains("cannot resolve", Assert.Throws<IOException>(() => AmethystSavedSnapshot.Capture(world.Manifest)).Message);
+        else
+            Assert.Contains("vanilla archive", Assert.Throws<InvalidOperationException>(() => AmethystSavedSnapshot.Capture(world.Manifest)).Message);
+    }
+
+    [Theory]
+    [InlineData(9)]
+    [InlineData(10)]
+    public void MalformedVanillaArchiveRetainsFailureWarning(int schemaVersion)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
+        WriteVanillaArchiveInputs(world, "Broken.bsa");
+        File.WriteAllText(Path.Combine(world.Root, "game", "Data", "Broken.bsa"), "not a BSA archive");
+
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        using var assets = AssetResolver.BuildSavedSnapshot(snapshot);
+        Assert.True(assets.ReadIncomplete);
+        Assert.Contains(assets.BsaFailures, failure => failure.Contains("Broken.bsa", StringComparison.Ordinal));
+    }
+
+    static void WriteVanillaArchiveInputs(AmethystSnapshotWorld world, string archives)
+    {
+        var iniDir = Path.Combine(world.Profile, "ini files");
+        Directory.CreateDirectory(iniDir);
+        File.WriteAllText(Path.Combine(iniDir, "Skyrim.ini"), $"[Archive]\nsResourceArchiveList={archives}\n");
+        foreach (var name in new[] { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" })
+            File.WriteAllText(Path.Combine(world.Root, "game", "Data", name), "implicit master source");
+        File.WriteAllText(Path.Combine(world.Root, "manager-config", "paths.json"), JsonSerializer.Serialize(new
+        {
+            staging_path = world.Root, game_path = Path.Combine(world.Root, "game"), profile_ini_files = true
+        }));
+    }
+
     [Fact]
     public void MissingProfileIniFallsBackToPrefixAndTracksBothCandidates()
     {

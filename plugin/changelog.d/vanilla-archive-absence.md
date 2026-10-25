@@ -1,0 +1,1 @@
+- Avoid a blanket vanilla BSA coverage warning when Skyrim.ini lists an archive that is confirmed absent, such as Skyrim - Patch.bsa. Existing archives remain searchable; unreadable sources still report failures. Check load-order status and a known vanilla asset after connecting. An absent archive appearing during a read causes a retry.

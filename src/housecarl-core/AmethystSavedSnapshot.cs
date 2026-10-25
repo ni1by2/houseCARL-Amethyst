@@ -82,6 +82,8 @@ public sealed class AmethystSavedSnapshot
     readonly Dictionary<string, string> _effectiveIniPaths = new(StringComparer.OrdinalIgnoreCase);
     readonly Dictionary<string, string[]> _watchedEntries = new(StringComparer.Ordinal);
     readonly Dictionary<string, string[]> _watchedCandidates = new(StringComparer.Ordinal);
+    /// <summary>Configured or plugin-bound archives confirmed absent from the vanilla root; appearance invalidates this capture.</summary>
+    readonly HashSet<string> _absentVanillaArchives = new(StringComparer.OrdinalIgnoreCase);
     byte[]? _cccBytes;
     string? _cccPath;
     bool _vanillaArchiveCoverageIncomplete;
@@ -424,9 +426,8 @@ public sealed class AmethystSavedSnapshot
         {
             SafePart(archive, "vanilla archive filename");
             if (HasManagedArchive(archive)) { rank++; continue; }
-            var source = VanillaFile(archive);
-            if (source is null) _vanillaArchiveCoverageIncomplete = true;
-            else archives.Add(new(source, ArchiveDiscovery.IniArchiveOwner, rank, "Data"));
+            var source = VanillaFile(archive, trackArchiveAbsence: true);
+            if (source is not null) archives.Add(new(source, ArchiveDiscovery.IniArchiveOwner, rank, "Data"));
             rank++;
         }
         var managedNames = SavedArchives().Select(a => Path.GetFileName(a.Path)).ToHashSet(StringComparer.OrdinalIgnoreCase);
@@ -437,7 +438,7 @@ public sealed class AmethystSavedSnapshot
             {
                 if (managedNames.Contains(filename)) continue;
                 if (HasManagedArchive(filename)) continue;
-                var source = VanillaFile(filename);
+                var source = VanillaFile(filename, trackArchiveAbsence: true);
                 if (source is not null) archives.Add(new(source, plugin, rank, "Data"));
             }
             rank++;
@@ -767,17 +768,26 @@ public sealed class AmethystSavedSnapshot
     }
 
     /// <summary>Find a case-preserving vanilla file only inside the distinct vanilla root; ambiguity refuses.</summary>
-    string? VanillaFile(string relative)
+    string? VanillaFile(string relative, bool trackArchiveAbsence = false)
     {
+        if (trackArchiveAbsence) SafePart(relative, "vanilla archive filename");
         var current = VanillaDataDir;
         foreach (var part in relative.Replace('\\', '/').Split('/'))
         {
             var entries = Directory.EnumerateFileSystemEntries(current).Where(p => Path.GetFileName(p).Equals(part, StringComparison.OrdinalIgnoreCase)).ToList();
-            if (entries.Count == 0) return null;
+            if (entries.Count == 0)
+            {
+                if (trackArchiveAbsence) _absentVanillaArchives.Add(relative);
+                return null;
+            }
             if (entries.Count > 1) throw new InvalidOperationException($"vanilla paths differ only by case under '{current}'");
             current = entries[0];
         }
-        if (!File.Exists(current)) return null;
+        if (!File.Exists(current))
+        {
+            if (trackArchiveAbsence) throw new InvalidOperationException($"vanilla archive '{relative}' is not an accessible file; repair its source and retry");
+            return null;
+        }
         var canonical = LinuxFileIdentity.Canonical(current);
         if (!canonical.StartsWith(VanillaDataDir + "/", StringComparison.Ordinal)) throw new InvalidOperationException("vanilla file escapes its source root");
         RememberSource(current, LinuxFileIdentity.Of(current));
@@ -806,6 +816,12 @@ public sealed class AmethystSavedSnapshot
         }
         foreach (var (path, canonical) in _roots)
             if (LinuxFileIdentity.Canonical(path) != canonical) throw new InvalidOperationException($"Amethyst source root changed during the call: '{path}'; retry");
+        if (_absentVanillaArchives.Count > 0)
+        {
+            var appeared = Directory.EnumerateFileSystemEntries(VanillaDataDir).Select(Path.GetFileName)
+                .FirstOrDefault(name => name is not null && _absentVanillaArchives.Contains(name));
+            if (appeared is not null) throw new InvalidOperationException($"vanilla archive appeared during the call: '{appeared}'; retry");
+        }
         foreach (var (directory, expected) in _inputDirectories)
         {
             var actual = Directory.Exists(directory)

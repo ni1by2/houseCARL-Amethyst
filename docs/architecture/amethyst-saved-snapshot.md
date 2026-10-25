@@ -99,6 +99,15 @@ checks precede source reads. Source size and nanosecond modification time must
 match the catalog; observed device/inode/content stamps are rechecked before a
 result is published. These stamps detect inexpensive identity and freshness changes; they do not attest to content cryptographically.
 
+Vanilla archive discovery reads the effective `Skyrim.ini` archive lists and
+engine-loaded plugin bindings. A listed archive confirmed absent from the distinct
+vanilla root does not make asset coverage incomplete. Shipped defaults can list
+an absent `Skyrim - Patch.bsa`. Capture records these absent archive names and
+revalidation refuses if a matching entry appears, including with different casing.
+Directories and broken links at an archive path refuse; unreadable archive tables
+remain explicit resolver failures. Missing effective INI or implicit-plugin sources
+still mark vanilla archive coverage incomplete.
+
 ## Requests, warnings and artifacts
 
 The MCP filter serializes dependent calls and connection changes. It captures one
