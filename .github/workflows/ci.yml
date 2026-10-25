@@ -57,6 +57,20 @@ jobs:
       - name: Build pinned Caprica and Champollion
         run: python3 scripts/build-linux-tools.py
 
+      - name: Check out the schema-10 Amethyst filegraph source
+        uses: actions/checkout@v7
+        with:
+          repository: ChrisDKN/Amethyst-Mod-Manager
+          ref: abeae84afce940c6819f80c1cd4e6e51db2e935d
+          path: _ci/amethyst-filegraph-schema10-source
+
+      - name: Build Amethyst's pinned schema-10 filegraph
+        working-directory: _ci/amethyst-filegraph-schema10-source
+        run: |
+          native/amethyst_filegraph/build.sh
+          test -s src/amethyst_filegraph.abi3.so
+          echo "AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10=$GITHUB_WORKSPACE/_ci/amethyst-filegraph-schema10-source/src/amethyst_filegraph.abi3.so" >> "$GITHUB_ENV"
+
       - name: Build the whole solution (Release)
         run: dotnet build housecarl.sln --configuration Release
 

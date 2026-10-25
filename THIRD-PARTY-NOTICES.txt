@@ -3,15 +3,14 @@ houseCARL — THIRD-PARTY NOTICES
 
 AMETHYST FILEGRAPH (Linux saved-snapshot preview)
 ------------------------------------------------
-The Linux package candidate includes Amethyst's API-13 native filegraph component
-from its 2.5.4 AppImage. Copyright ChrisDKN and contributors. GPL-3.0-or-later;
-this combined preview is distributed under GPL version 3. The source tree is not
-currently included in the candidate archive, so the candidate is not ready for
-redistribution. The corresponding source is available at Amethyst Testing e98cf70f
-and stable edde06e5:
-    https://github.com/ChrisDKN/Amethyst-Mod-Manager/tree/e98cf70fe63f6b4a64b39e780ee3ffe02e553c6e/native/amethyst_filegraph
-The native module SHA256 is:
-    12f7bbd4046d16a398d798a3503e759d009bceca4be84ebcbe7db8ebf562ac95
+The Linux package candidate includes two Amethyst API-13 native filegraph readers.
+Copyright ChrisDKN and contributors. GPL-3.0-or-later; this combined preview is
+distributed under GPL version 3. The pinned sources and native build recipes are:
+Schema 9 / rules 13 (stable 2.5.4):
+    https://github.com/ChrisDKN/Amethyst-Mod-Manager/tree/edde06e518c0a3ca5ba47a8bbf065c4ecc4a8f92/native/amethyst_filegraph
+Schema 10 / rules 14 (2.6.0-beta.7):
+    https://github.com/ChrisDKN/Amethyst-Mod-Manager/tree/abeae84afce940c6819f80c1cd4e6e51db2e935d/native/amethyst_filegraph
+The package manifest records each bundled module's SHA-256.
 Cargo.toml and Cargo.lock identify its open-source dependencies and exact versions.
 The stdlib-only Python transport is part of this fork; Python itself is not bundled.
 

@@ -121,6 +121,7 @@ def build(repo: Path, output: Path, native_tools: Path) -> None:
         "libhostfxr.so",
         "libhostpolicy.so",
         "amethyst_filegraph.abi3.so",
+        "amethyst_filegraph_schema10.abi3.so",
         "amethyst_snapshot.py",
         "corpus.json",
     )
@@ -161,6 +162,7 @@ def build(repo: Path, output: Path, native_tools: Path) -> None:
         manifest = {"schema": 1, "name": "houseCARL-Amethyst-Linux-x64", "version": version,
                     "transaction_journal_schema": 1, "runtime": "linux-x64-self-contained-net9-untrimmed",
                     "python_minimum": "3.12", "native_filegraph_api": 13, "native_filegraph_schema": 9,
+                    "native_filegraph_schemas": [9, 10], "native_filegraph_rules": {"9": 13, "10": 14},
                     "files": files}
         (stage / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         temp_archive = output.with_suffix(output.suffix + ".tmp")

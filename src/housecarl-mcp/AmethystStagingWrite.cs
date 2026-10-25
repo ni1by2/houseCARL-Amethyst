@@ -76,7 +76,7 @@ internal sealed class AmethystStagingWrite : IDisposable
         var request = new AmethystTransactionRequest(operation, "skyrim_se", snapshot.ProfileDir,
             snapshot.ManifestPath, transactionRoot, snapshot.ManagerLockPath,
             snapshot.Provenance.Generation, snapshot.Provenance.InventoryGeneration,
-            "amethyst-schema9-engine1-rules13", requestHash,
+            snapshot.ProducerContract, requestHash,
             units ?? [new AmethystTransactionUnit("record-output"), new AmethystTransactionUnit("owner-metadata", ["record-output"])],
             InputSha256: snapshot.InputSha256,
             ConsentScope: immediateVisibility ? ["confirm_amethyst_redeploy", "confirm_live_deployment_change"] : [],

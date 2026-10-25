@@ -70,6 +70,7 @@ class LinuxPackageTests(unittest.TestCase):
                 "dist/linux-base/server/libhostfxr.so": b"host fxr",
                 "dist/linux-base/server/libhostpolicy.so": b"host policy",
                 "dist/linux-base/server/amethyst_filegraph.abi3.so": b"native",
+                "dist/linux-base/server/amethyst_filegraph_schema10.abi3.so": b"native-schema10",
                 "dist/linux-base/server/amethyst_snapshot.py": b"helper",
                 "dist/linux-base/server/corpus.json": b"{}",
                 "plugin/codex/housecarl/SKILL.md": b"umbrella",
@@ -103,6 +104,7 @@ class LinuxPackageTests(unittest.TestCase):
                 self.assertIn("server/housecarl-mcp.runtimeconfig.json", names)
                 self.assertIn("server/libhostfxr.so", names)
                 self.assertIn("server/libhostpolicy.so", names)
+                self.assertIn("server/amethyst_filegraph_schema10.abi3.so", names)
                 self.assertIn("claude/skills/example/references/data.jsonl", names)
                 self.assertIn("codex/skills/housecarl/SKILL.md", names)
                 self.assertNotIn("claude/skills/example/evals/evals.json", names)
@@ -113,6 +115,7 @@ class LinuxPackageTests(unittest.TestCase):
                 self.assertIn("tools/native-build-info.json", names)
             manifest, _ = installer.inspect_archive(archive)
             self.assertEqual("1.2.3", manifest["version"])
+            self.assertEqual([9, 10], manifest["native_filegraph_schemas"])
 
             (root / "dist/linux-base/server/housecarl-mcp.dll").unlink()
             with self.assertRaisesRegex(ValueError, "self-contained server publish output is incomplete"):

@@ -1,0 +1,1 @@
+- **Read Amethyst 2.6.0-beta.7 saved filegraphs with schema 10/rules 14, while retaining schema 9/rules 13 support.** Check `housecarl_load_order_status` and a known asset after selecting the saved-snapshot connection; freshness warnings still apply.

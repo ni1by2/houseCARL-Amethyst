@@ -23,12 +23,12 @@ sealed class AmethystSnapshotWorld : IDisposable
     public JsonElement ExpectedWinners { get; }
 
     /// <summary>Restore producer data without rebuilding its routing or winners; only fixture locations, plugin bytes and stamps change.</summary>
-    public AmethystSnapshotWorld(bool profileSpecific = false, string profileName = "default", bool gameOverride = false, bool linkedKeyword = false, bool voiceLine = false)
+    public AmethystSnapshotWorld(bool profileSpecific = false, string profileName = "default", bool gameOverride = false, bool linkedKeyword = false, bool voiceLine = false, int schemaVersion = 9)
     {
         _profileName = profileName; _profileSpecific = profileSpecific;
         _ = TestCorpus.Path;
         using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(HarnessPaths.RepoRoot,
-            "src", "housecarl-mcp-tests", "fixtures", "amethyst", "schema9-snapshot.json")));
+            "src", "housecarl-mcp-tests", "fixtures", "amethyst", $"schema{schemaVersion}-snapshot.json")));
         var data = fixture.RootElement;
         ExpectedWinners = data.GetProperty("winners").Clone();
         foreach (var file in data.GetProperty("files").EnumerateObject())

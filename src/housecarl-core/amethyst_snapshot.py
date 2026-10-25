@@ -11,7 +11,7 @@ import struct
 import sys
 
 NATIVE_API = 13
-NATIVE_SCHEMA = 9
+NATIVE_SCHEMAS = (9, 10)
 
 
 def frame(payload):
@@ -21,7 +21,7 @@ def frame(payload):
     sys.stdout.buffer.flush()
 
 
-def read_snapshot(copy_root, profile_id, extension, deploy_mode):
+def read_snapshot(copy_root, profile_id, extension, deploy_mode, expected_schema=9):
     """Open only the caller's copy and serve complete, cursor-paged native winners."""
     if sys.version_info < (3, 12):
         raise RuntimeError('Amethyst snapshot reads require Python 3.12 or newer')
@@ -33,8 +33,9 @@ def read_snapshot(copy_root, profile_id, extension, deploy_mode):
         raise RuntimeError('cannot load the packaged Amethyst filegraph component')
     native = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(native)
-    if native.api_version() != NATIVE_API or native.schema_version() != NATIVE_SCHEMA:
-        raise RuntimeError('unsupported Amethyst native component; this preview requires API 13 and schema 9')
+    expected_schema = int(expected_schema)
+    if expected_schema not in NATIVE_SCHEMAS or native.api_version() != NATIVE_API or native.schema_version() != expected_schema:
+        raise RuntimeError(f'unsupported Amethyst native component; this capture requires API 13 and schema {expected_schema}')
     library = native.LibrarySession.open(root)
     profile = library.open_profile(profile_id)
     snapshot = profile.snapshot()
