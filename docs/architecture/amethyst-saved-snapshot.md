@@ -11,7 +11,7 @@ there is no cross-schema fallback or migration of the live catalog. Unknown sche
 engine or rules combinations refuse. Revalidation requires the same captured
 schema/rules pair even if a different supported pair appears during the call.
 
-The earlier 2.1.0 package supports schema 9 only. The [2.1.1 verification record](../testing/upstream-211-compat-2026-10-25.md) covers schema-10 acceptance, archive absence handling and the final read-only profile check.
+The earlier 2.1.0 package supports schema 9 only. The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md) covers schema-10 acceptance, archive absence handling and the final read-only profile check.
 
 This Linux mode reads Amethyst's last complete saved filegraph. It consumes the
 producer's native snapshot and exact source paths. It never refreshes,
@@ -138,7 +138,7 @@ is optional future work, not a prerequisite for this mode.
 
 Managed record and asset writes use durable staging transactions. New patches
 preserve source files. Existing-plugin edits require their explicit lane, consent
-and redeployment guards; see the [write contract](write-path.md). A failed source
+and redeployment guards; see the [write contract](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/architecture/write-path.md). A failed source
 or profile revalidation rolls back enrolled outputs instead of returning a
 successful write against changed inputs.
 
@@ -150,7 +150,7 @@ falling back to another manager or an inferred deployment.
 
 Vanilla archive activation is implemented through the effective INI and
 engine-loaded plugins, as described above. Genuine archive/configuration coverage
-limits remain explicit. The [release verification record](../testing/upstream-211-compat-2026-10-25.md)
+limits remain explicit. The [release verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md)
 separates completed source/package checks from untested live deployment and gameplay.
 
 ## Evidence
