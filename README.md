@@ -14,6 +14,11 @@ houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders manag
 - The operating-system runtime libraries listed in the [Linux installation guide](docs/linux-install.md). The package includes the .NET runtime, Amethyst's native filegraph component and native Papyrus utilities.
 - Claude Code or OpenAI Codex to host the MCP server.
 
+The 2.1.1 source candidate also supports Amethyst 2.6.0-beta.7's API 13/schema 10,
+engine 1/rules 14 filegraph, with a separate pinned reader. The published 2.1.0
+download below supports schema 9/rules 13 only. This compatibility change does not
+switch the adapter to Amethyst's headless API.
+
 Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. See the [Linux development and build guide](docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
 
 ## Install

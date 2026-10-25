@@ -22,11 +22,13 @@ sealed class NativeFilegraphFactAttribute : FactAttribute
 public sealed class AmethystSavedSnapshotTests
 {
     [Theory]
-    [InlineData(false)]
-    [InlineData(true)]
-    public void AProfileRaceRollsBackTheNewStagedPluginAndMetadata(bool unrelatedFile)
+    [InlineData(false, 9)]
+    [InlineData(true, 9)]
+    [InlineData(false, 10)]
+    [InlineData(true, 10)]
+    public void AProfileRaceRollsBackTheNewStagedPluginAndMetadata(bool unrelatedFile, int schemaVersion)
     {
-        using var world = new AmethystSnapshotWorld();
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
         var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
         var original = File.ReadAllBytes(source);
         var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
@@ -35,6 +37,10 @@ public sealed class AmethystSavedSnapshotTests
         using var scope = AmethystSnapshotContext.Use(snapshot);
         File.WriteAllText(Path.Combine(world.Library, "filegraph.lock"), "");
         using var staging = new AmethystStagingWrite(snapshot, ToolNames.Apply, "fixture request");
+        var coordinator = new AmethystTransactionCoordinator();
+        var journal = Assert.Single(coordinator.Status().Where(s => s.State != "corrupt")
+            .Select(s => coordinator.ReadJournal(s.Id)).Where(j => j.ManifestPath == world.Manifest));
+        Assert.Equal($"amethyst-schema{schemaVersion}-engine1-rules{(schemaVersion == 9 ? 13 : 14)}", journal.ProducerContract);
         var ops = JsonSerializer.SerializeToElement(new[] { new { formid, field_path = "EditorID", value = "RacedPatch" } });
         var reply = ApplyTools.Apply(service, ops: ops, patch: "RacedPatch", format: "json");
         using var json = JsonDocument.Parse(reply);
@@ -62,10 +68,12 @@ public sealed class AmethystSavedSnapshotTests
         Assert.Contains("transaction routing supports", Assert.Throws<InvalidOperationException>(() => service.ConfiguredRoots()).Message);
     }
 
-    [Fact]
-    public void SavedWinnersAndProvidersMatchTheActualProducer()
+    [Theory]
+    [InlineData(9)]
+    [InlineData(10)]
+    public void SavedWinnersAndProvidersMatchTheActualProducer(int schemaVersion)
     {
-        using var world = new AmethystSnapshotWorld();
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
         var before = SHA256.HashData(File.ReadAllBytes(world.Database));
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
         foreach (var expected in world.ExpectedWinners.EnumerateArray())
@@ -143,13 +151,52 @@ public sealed class AmethystSavedSnapshotTests
         Assert.Contains("may be missing", AmethystSnapshotProvenance.Warning);
     }
 
-    [Fact]
-    public void ChangedSavedSourcesRefuse()
+    [Theory]
+    [InlineData(9)]
+    [InlineData(10)]
+    public void ChangedSavedSourcesRefuse(int schemaVersion)
     {
-        using var world = new AmethystSnapshotWorld();
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
         File.AppendAllText(Path.Combine(world.Root, "mods", "Beta", "Meshes", "example.nif"), "changed");
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
         Assert.Contains("saved source changed", Assert.Throws<InvalidOperationException>(() => snapshot.ResolveAssets("meshes/example.nif")).Message);
+    }
+
+    [Fact]
+    public void Schema10PreservesTheWinningSourcesOwnCasing()
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10);
+        var before = SHA256.HashData(File.ReadAllBytes(world.Database));
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Equal(10, snapshot.SchemaVersion);
+        Assert.Equal(14UL, snapshot.ProducerRulesRevision);
+        var sources = snapshot.ResolveAssets("MeShEs/CaseVariant.NIF");
+        Assert.Equal(new[] { "Beta", "Alpha" }, sources.Select(s => s.ProviderName));
+        Assert.EndsWith("/Beta/MESHES/casevariant.NIF", sources[0].LooseFilePath);
+        Assert.Equal("Beta", File.ReadAllText(sources[0].LooseFilePath!));
+        snapshot.CheckUnchanged();
+        Assert.Equal(before, SHA256.HashData(File.ReadAllBytes(world.Database)));
+        Assert.False(File.Exists(Path.Combine(world.Library, "filegraph.cache")));
+    }
+
+    [Theory]
+    [InlineData("PRAGMA user_version=11")]
+    [InlineData("UPDATE meta SET value=X'0D00000000000000' WHERE key='rules_revision'")]
+    [InlineData("UPDATE meta SET value=X'0200000000000000' WHERE key='engine_revision'")]
+    public void Schema10RejectsUnknownOrMismatchedProducerContracts(string mutation)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10);
+        world.Execute(mutation);
+        Assert.Contains("unsupported", Assert.Throws<InvalidOperationException>(() => AmethystSavedSnapshot.Capture(world.Manifest)).Message);
+    }
+
+    [Fact]
+    public void SwitchingToAnotherSupportedContractDuringACallStillRefuses()
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10);
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        world.Execute("PRAGMA user_version=9; UPDATE meta SET value=X'0D00000000000000' WHERE key='rules_revision'");
+        Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
     }
 
     [Fact]

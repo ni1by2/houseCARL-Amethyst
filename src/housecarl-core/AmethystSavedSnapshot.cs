@@ -8,11 +8,16 @@ using Org.BouncyCastle.Crypto.Digests;
 
 namespace HousecarlCore;
 
-/// <summary>A complete saved schema-9 filegraph. Amethyst's own native reader restores its winners from saved inputs.</summary>
+/// <summary>A complete saved schema-9 or schema-10 filegraph, restored by its matching pinned native reader.</summary>
 public sealed class AmethystSavedSnapshot
 {
     /// <summary>The tested producer contract, Amethyst 2.5.5-beta.1 / stable 2.5.4; native API 13, schema 9 and engine 1.</summary>
     public const ulong RulesRevision = 13;
+    /// <summary>The captured producer contract; revalidation must match the same pair, not merely another supported pair.</summary>
+    internal int SchemaVersion { get; private set; }
+    internal ulong ProducerRulesRevision { get; private set; }
+    /// <summary>Exact captured contract retained by durable staging and recovery journals.</summary>
+    public string ProducerContract => $"amethyst-schema{SchemaVersion}-engine1-rules{ProducerRulesRevision}";
     /// <summary>The selected profile and catalog generation, with an unverified-freshness warning.</summary>
     public AmethystSnapshotProvenance Provenance { get; private set; } = null!;
     /// <summary>Canonical profile folder selected by deploy_state.json.</summary>
@@ -209,9 +214,12 @@ public sealed class AmethystSavedSnapshot
         using (var database = OpenDatabase(DatabasePath))
         {
             Execute(database, "BEGIN");
-            if (Convert.ToInt32(Scalar(database, "PRAGMA user_version")) != 9 ||
-                MetaNumber(database, "engine_revision") != 1 || MetaNumber(database, "rules_revision") != RulesRevision)
-                throw new InvalidOperationException("unsupported Amethyst filegraph schema or engine/rules revision; this build supports schema 9, engine 1, rules 13");
+            SchemaVersion = Convert.ToInt32(Scalar(database, "PRAGMA user_version"));
+            ProducerRulesRevision = MetaNumber(database, "rules_revision");
+            if (MetaNumber(database, "engine_revision") != 1 ||
+                !((SchemaVersion == 9 && ProducerRulesRevision == RulesRevision) ||
+                  (SchemaVersion == 10 && ProducerRulesRevision == 14)))
+                throw new InvalidOperationException($"unsupported Amethyst filegraph schema or engine/rules revision; found schema {SchemaVersion}, rules {ProducerRulesRevision}; this build supports schema 9/rules 13 or schema 10/rules 14, engine 1");
             if (!Meta(database, "ready").AsSpan().SequenceEqual(new byte[] { 1 }))
                 throw new InvalidOperationException("Amethyst filegraph catalog is not ready; refresh it in Amethyst");
             var inventory = MetaNumber(database, "inventory_generation");
@@ -593,7 +601,7 @@ public sealed class AmethystSavedSnapshot
         // Refuse an unexpected identity contract rather than emulate another game's suppression rules.
         if (_candidates.Values.Any(c => c.Identities.Count > 0))
             throw new InvalidOperationException("unsupported exclusive-identity candidates in a Skyrim saved filegraph");
-        _nativeDeploymentMatches = AmethystNativeSnapshot.Read(database, ProfileDir, Provenance.Generation, Provenance.InventoryGeneration, _deployMode, row =>
+        _nativeDeploymentMatches = AmethystNativeSnapshot.Read(database, ProfileDir, Provenance.Generation, Provenance.InventoryGeneration, SchemaVersion, _deployMode, row =>
         {
             var ns = row.GetProperty("namespace").GetString() switch
             { "normal" => 0, "root" => 1, "archive" => 2, _ => throw new InvalidOperationException("unsupported Amethyst winner namespace") };
@@ -847,9 +855,9 @@ public sealed class AmethystSavedSnapshot
         using var database = OpenDatabase(DatabasePath);
         Execute(database, "BEGIN");
         if (MetaNumber(database, "inventory_generation") != Provenance.InventoryGeneration ||
-            Convert.ToInt32(Scalar(database, "PRAGMA user_version")) != 9 ||
+            Convert.ToInt32(Scalar(database, "PRAGMA user_version")) != SchemaVersion ||
             !Meta(database, "ready").AsSpan().SequenceEqual(new byte[] { 1 }) ||
-            MetaNumber(database, "rules_revision") != RulesRevision || MetaNumber(database, "engine_revision") != 1 ||
+            MetaNumber(database, "rules_revision") != ProducerRulesRevision || MetaNumber(database, "engine_revision") != 1 ||
             Convert.ToInt64(Scalar(database, "SELECT COUNT(*) FROM operations WHERE state NOT IN ('committed','failed')")) != 0)
             throw new InvalidOperationException("Amethyst filegraph inventory changed during the call; retry after Refresh");
         using var query = Command(database, "SELECT generation,inventory_generation,ready FROM profiles WHERE profile_id=$profile");

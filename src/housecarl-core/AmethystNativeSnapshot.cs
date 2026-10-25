@@ -14,14 +14,16 @@ internal static class AmethystNativeSnapshot
     /// <param name="profile">Canonical identity stored in the captured profile intent.</param>
     /// <param name="generation">Expected saved profile generation.</param>
     /// <param name="inventory">Expected catalog inventory generation.</param>
+    /// <param name="schemaVersion">Select the matching pinned reader before it opens the private catalog.</param>
     /// <param name="accept">Validate and retain one native winner against the captured candidates.</param>
-    internal static bool Read(SqliteConnection database, string profile, long generation, ulong inventory, string deployMode,
+    internal static bool Read(SqliteConnection database, string profile, long generation, ulong inventory, int schemaVersion, string deployMode,
         Action<JsonElement> accept, bool? deploymentOverride = null)
     {
-        var extension = Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_EXTENSION")
-            ?? Path.Combine(AppContext.BaseDirectory, "amethyst_filegraph.abi3.so");
+        if (schemaVersion is not (9 or 10)) throw new InvalidOperationException("unsupported Amethyst native snapshot schema");
+        var extension = Environment.GetEnvironmentVariable(schemaVersion == 9 ? "AMETHYST_FILEGRAPH_EXTENSION" : "AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10")
+            ?? Path.Combine(AppContext.BaseDirectory, schemaVersion == 9 ? "amethyst_filegraph.abi3.so" : "amethyst_filegraph_schema10.abi3.so");
         if (!Path.IsPathFullyQualified(extension) || !File.Exists(extension))
-            throw new InvalidOperationException("Amethyst's native filegraph component is missing; install the complete Linux preview package");
+            throw new InvalidOperationException($"Amethyst's schema-{schemaVersion} native filegraph component is missing; install the complete Linux preview package");
         var root = Path.Combine(Path.GetTempPath(), "hc-amethyst-capture-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -35,7 +37,7 @@ internal static class AmethystNativeSnapshot
             }
             var start = new ProcessStartInfo(Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_PYTHON") ?? "python3")
             { RedirectStandardInput = true, RedirectStandardOutput = true, RedirectStandardError = true, UseShellExecute = false };
-            foreach (var argument in new[] { "-I", Path.Combine(AppContext.BaseDirectory, "amethyst_snapshot.py"), root, profile, extension, deployMode })
+            foreach (var argument in new[] { "-I", Path.Combine(AppContext.BaseDirectory, "amethyst_snapshot.py"), root, profile, extension, deployMode, schemaVersion.ToString(System.Globalization.CultureInfo.InvariantCulture) })
                 start.ArgumentList.Add(argument);
             using var process = Process.Start(start) ?? throw new InvalidOperationException("cannot start Amethyst's snapshot reader");
             var errors = process.StandardError.ReadToEndAsync();
@@ -44,7 +46,7 @@ internal static class AmethystNativeSnapshot
             {
                 using var header = JsonDocument.Parse(Frame(process.StandardOutput.BaseStream, deadline.Token));
                 var metadata = header.RootElement;
-                if (metadata.GetProperty("api").GetInt32() != 13 || metadata.GetProperty("schema").GetInt32() != 9 ||
+                if (metadata.GetProperty("api").GetInt32() != 13 || metadata.GetProperty("schema").GetInt32() != schemaVersion ||
                     metadata.GetProperty("generation").GetInt64() != generation || metadata.GetProperty("inventory_generation").GetUInt64() != inventory)
                     throw new InvalidOperationException("Amethyst's native snapshot disagrees with the captured catalog generation");
                 long cursor = 0;

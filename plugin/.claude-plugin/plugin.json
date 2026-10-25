@@ -2,7 +2,7 @@
   "$schema": "https://json.schemastore.org/claude-code-plugin-manifest.json",
   "name": "housecarl",
   "displayName": "houseCARL-Amethyst",
-  "version": "2.1.0",
+  "version": "2.1.1",
   "description": "Native Linux data-layer access to an Amethyst-managed Skyrim SE load order, with reviewable patch authoring and guarded in-place edits.",
   "author": {
     "name": "ni1by2"

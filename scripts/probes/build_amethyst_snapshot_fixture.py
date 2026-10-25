@@ -17,6 +17,7 @@ import sys
 import tempfile
 
 PIN = "e98cf70fe63f6b4a64b39e780ee3ffe02e553c6e"
+SCHEMA10_PIN = "abeae84afce940c6819f80c1cd4e6e51db2e935d"
 
 
 class FixtureGame:
@@ -46,10 +47,10 @@ class FixtureGame:
         return self.root / "game" / "Data"
 
 
-def build(source, extension, output):
+def build(source, extension, output, schema=9):
     """Generate data and expectations independently of the C# implementation."""
     commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    assert commit == PIN, commit
+    assert commit == (SCHEMA10_PIN if schema == 10 else PIN), commit
     assert not subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--", "src", "native"], text=True)
     root = Path(tempfile.mkdtemp(prefix="hc-producer-fixture-"))
     os.environ["XDG_CONFIG_HOME"] = str(root / "config")
@@ -57,6 +58,8 @@ def build(source, extension, output):
     sys.path.insert(0, str(source / "src"))
     from Utils.filegraph.service import LibrarySession
     import msgpack
+    if schema == 10:
+        FixtureGame.filemap_casing = "preserve"
     profile = root / "profiles" / "default"
     profile.mkdir(parents=True)
     (profile / "modlist.txt").write_text("+Beta\n+Alpha\n-Gamma\n")
@@ -75,6 +78,9 @@ def build(source, extension, output):
         "overwrite/Meshes/overwrite.nif": b"overwrite",
         "Root_Folder/Data/Meshes/root.nif": b"root",
     }
+    if schema == 10:
+        files.update({"mods/Alpha/meshes/CaseVariant.nif": b"Alpha",
+                      "mods/Beta/MESHES/casevariant.NIF": b"Beta"})
     repo = Path(__file__).resolve().parents[2]
     files["mods/Alpha/Fixture.bsa"] = (repo / "src/housecarl-mcp-tests/fixtures/skypatcher/IniFixture.bsa").read_bytes()
     for relative, data in files.items():
@@ -105,6 +111,7 @@ def build(source, extension, output):
         if isinstance(value, list):
             return [json_value(item) for item in value]
         return value
+    assert library.status().schema_version == schema
     result = {"producer": commit, "extension_sha256": hashlib.sha256(extension.read_bytes()).hexdigest(),
               "root": str(root), "catalog_sql": sql, "files": {p: base64.b64encode(d).decode() for p, d in files.items()},
               "profile_files": {p.name: p.read_text() for p in profile.iterdir() if p.is_file()}, "winners": winners, "intent": json_value(intent)}
@@ -118,5 +125,6 @@ if __name__ == "__main__":
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--extension", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument("--schema", type=int, choices=(9, 10), default=9)
     args = parser.parse_args()
-    build(args.source.resolve(), args.extension.resolve(), args.output.resolve())
+    build(args.source.resolve(), args.extension.resolve(), args.output.resolve(), args.schema)

@@ -4,6 +4,11 @@ Version [2.1.0 is a prerelease (Linux preview)](https://github.com/ni1by2/houseC
 
 Download these three assets into the same directory:
 
+The published 2.1.0 archive supports filegraph schema 9/rules 13 only. Amethyst
+2.6.0-beta.7 uses schema 10/rules 14 and requires the 2.1.1 compatibility candidate,
+which is not yet a published release. Reinstalling 2.1.0 cannot resolve that
+contract mismatch; see the [source build guide](linux-development.md).
+
 - [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/housecarl-amethyst-linux-x64.tar.gz)
 - [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/housecarl-amethyst-linux-x64.tar.gz.sha256)
 - [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/install-linux.py)

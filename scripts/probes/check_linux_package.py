@@ -32,18 +32,23 @@ def check(archive: Path, installed_prefix: Path | None = None) -> None:
             payload = (installed_prefix / "current").resolve(strict=True)
             if installer.validate_installed_version(payload) != manifest:
                 raise RuntimeError("installed payload does not match the candidate archive manifest")
-        native_check = subprocess.run([
-            sys.executable, "-I", "-c",
-            "import importlib.util, sys; "
-            "spec = importlib.util.spec_from_file_location('amethyst_filegraph', sys.argv[1]); "
-            "native = importlib.util.module_from_spec(spec); spec.loader.exec_module(native); "
-            "assert native.api_version() == int(sys.argv[2]), 'native filegraph API mismatch'; "
-            "assert native.schema_version() == int(sys.argv[3]), 'native filegraph schema mismatch'",
-            str(payload / "server/amethyst_filegraph.abi3.so"),
-            str(manifest["native_filegraph_api"]), str(manifest["native_filegraph_schema"]),
-        ], capture_output=True, text=True, timeout=30)
-        if native_check.returncode:
-            raise RuntimeError(f"packaged Amethyst module failed to load: {native_check.stderr}")
+        schemas = manifest.get("native_filegraph_schemas", [manifest["native_filegraph_schema"]])
+        if schemas not in ([9], [9, 10]) or any(type(schema) is not int for schema in schemas):
+            raise ValueError("unsupported packaged Amethyst native schema list")
+        for schema in schemas:
+            filename = "amethyst_filegraph.abi3.so" if schema == 9 else f"amethyst_filegraph_schema{schema}.abi3.so"
+            native_check = subprocess.run([
+                sys.executable, "-I", "-c",
+                "import importlib.util, sys; "
+                "spec = importlib.util.spec_from_file_location('amethyst_filegraph', sys.argv[1]); "
+                "native = importlib.util.module_from_spec(spec); spec.loader.exec_module(native); "
+                "assert native.api_version() == int(sys.argv[2]), 'native filegraph API mismatch'; "
+                "assert native.schema_version() == int(sys.argv[3]), 'native filegraph schema mismatch'",
+                str(payload / "server" / filename),
+                str(manifest["native_filegraph_api"]), str(schema),
+            ], capture_output=True, text=True, timeout=30)
+            if native_check.returncode:
+                raise RuntimeError(f"packaged Amethyst schema-{schema} module failed to load: {native_check.stderr}")
         env = dict(os.environ, HOUSECARL_DATA_DIR=str(root / "user-data"))
         with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
             proc = subprocess.Popen(
@@ -104,7 +109,7 @@ def check(archive: Path, installed_prefix: Path | None = None) -> None:
                 required = {"housecarl_records", "housecarl_apply", "housecarl_set_amethyst_connection"}
                 if missing := required - tools:
                     raise RuntimeError(f"packaged server omitted tools: {sorted(missing)}")
-                print(f"Packaged Amethyst module: API {manifest['native_filegraph_api']}, schema {manifest['native_filegraph_schema']} passed.")
+                print(f"Packaged Amethyst modules: API {manifest['native_filegraph_api']}, schemas {schemas} passed.")
                 print(f"Packaged server {version}: MCP initialize and tools/list passed ({len(tools)} tools).")
             except Exception:
                 errors.flush()
