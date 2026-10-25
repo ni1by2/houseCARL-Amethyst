@@ -19,7 +19,7 @@ It also handles absent archive names in Skyrim's default INI without a blanket
 vanilla BSA coverage warning. Unreadable sources still report failures.
 The adapter continues to read Amethyst's saved snapshot; the headless API refactor is deferred.
 
-Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. See the [Linux development and build guide](docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
+Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. See the [Linux development and build guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
 
 ## Install
 
@@ -87,10 +87,10 @@ verification records whether the expected file won. `update_status` reads cached
 explicit update checks use the installed file ID.
 
 The [Linux installation and current limits](docs/linux-install.md) page describes installation,
-upgrades and rollback. The [2.1.1 verification record](docs/testing/upstream-211-compat-2026-10-25.md)
+upgrades and rollback. The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md)
 records schema compatibility, archive coverage and read-only profile checks.
-Earlier engine integration is recorded for [2.1.0](docs/testing/upstream-210-integration-2026-10-20.md),
-and isolated installation and Proton acceptance for [2.0.5](docs/testing/upstream-205-integration-2026-10-15.md).
+Earlier engine integration is recorded for [2.1.0](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-210-integration-2026-10-20.md),
+and isolated installation and Proton acceptance for [2.0.5](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md).
 
 Version 2.1.1 retains the upstream houseCARL 2.1.0 engine at `1391dacd`, including its
 optimizations and source-change checks, and Amethyst's staged transaction workflow.
@@ -98,7 +98,7 @@ It bundles the schema-9 native reader from stable Amethyst 2.5.4 at `edde06e5` a
 the schema-10 reader from 2.6.0-beta.7 at `abeae84a`. Read-only acceptance passed
 against saved profiles from the tested stable release and beta.7. The Linux package bundles the .NET runtime and
 Amethyst's native component. **Python 3.12+ must be installed.** The native reader opens
-a private catalog copy and does not write manager files. The [snapshot contract](docs/architecture/amethyst-saved-snapshot.md)
+a private catalog copy and does not write manager files. The [snapshot contract](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/architecture/amethyst-saved-snapshot.md)
 covers configuration, checks, and limits. Amethyst must close normally before a managed write
 that needs its library lock. The server refuses that write while Amethyst is open. Papyrus and
 BSA tools use the selected native Steam/Proton environment where supported. An isolated
@@ -208,7 +208,7 @@ Four layers below the plugin plane affect what the game runs. houseCARL reads ea
 
 The SKSE and SkyPatcher tools report what a file declares. They do not observe the running game.
 
-Two precedence orders determine an NPC's face: the file view selects the baked files, and the load order selects the record. `check findings=["facegen"]` compares them. See [docs/facegen.md](docs/facegen.md) for causes and fixes.
+Two precedence orders determine an NPC's face: the file view selects the baked files, and the load order selects the record. `check findings=["facegen"]` compares them. See [docs/facegen.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/facegen.md) for causes and fixes.
 
 ## Writing
 
@@ -230,7 +230,7 @@ The in-place lane does not create a backup or provide an undo. On the first writ
 
 The write tools also create records with fresh FormIDs, including nested dialogue structures, and remove records or list entries. They can forward a named plugin's record as the winning override, restore a vanilla record, copy an NPC's appearance into a standalone record, create an empty plugin, ESL-compact a plugin while carrying its FormID-keyed FaceGen and voice files, and merge plugins while renumbering only collisions. Every write trims unused masters.
 
-Dialogue records have bookkeeping that a byte-valid insert does not satisfy: [docs/dialogue.md](docs/dialogue.md).
+Dialogue records have bookkeeping that a byte-valid insert does not satisfy: [docs/dialogue.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/dialogue.md).
 
 ## Skills
 
@@ -246,7 +246,7 @@ The plugin ships seven skills, invoked as `/housecarl:<name>` in Claude Code or 
 | `open-animation-replacer` | OAR 3.0.0 `config.json` / `user.json` conditions, submod priorities, DAR `_conditions.txt` conversion. |
 | `skse-plugin-authoring` | Native SKSE plugin DLLs on CommonLibSSE-NG: lifecycle, event sinks, trampoline and Address Library hooks, native Papyrus functions, SE + AE + VR from one DLL. |
 
-Dialogue and facegen tools handle their own bookkeeping. Their measured behavior is documented in [docs/dialogue.md](docs/dialogue.md) and [docs/facegen.md](docs/facegen.md), which the tool descriptions link to.
+Dialogue and facegen tools handle their own bookkeeping. Their measured behavior is documented in [docs/dialogue.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/dialogue.md) and [docs/facegen.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/facegen.md), which the tool descriptions link to.
 
 
 
@@ -264,9 +264,9 @@ Dialogue and facegen tools handle their own bookkeeping. Their measured behavior
 | `docs/` | Architecture notes and decision records |
 | `standards/` | Testing and naming |
 
-Use the Linux build and test commands in [docs/linux-development.md](docs/linux-development.md).
+Use the Linux build and test commands in [docs/linux-development.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/linux-development.md).
 
-Before changing the code, read [CLAUDE.md](CLAUDE.md) and the architecture note for the subsystem in `docs/architecture/`. Each decision has its own file in `docs/decisions/`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process.
+Before changing the code, read [CLAUDE.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/CLAUDE.md) and the architecture note for the subsystem in `docs/architecture/`. Each decision has its own file in `docs/decisions/`. See [CONTRIBUTING.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/CONTRIBUTING.md) for the contribution process.
 
 ## Licence
 

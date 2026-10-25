@@ -51,11 +51,13 @@ this documentation pass, and the completed test suites were not rerun locally.
 The release payload manifest differs from the tested archive only in `README.md`,
 `docs/linux-install.md` and `docs/amethyst-saved-snapshot.md`. The repacked archive
 passed its own payload-hash, native API/schema and MCP startup/tool-list probe.
+Packaged relative links resolve; references to files outside the archive use
+source URLs pinned to the 2.1.1 tag.
 
 Release archive SHA-256:
 
 ```text
-daf2637fb3ac848a0a89b2e42f23a81fcb2b3537b450c17742c65384878736dd
+5b814b8c951140c3766f7d30ad392a510ee6ef8d8bb02209bbf79854e21d82e8
 ```
 
 The checksum asset and release notes identify the downloadable archive. The
