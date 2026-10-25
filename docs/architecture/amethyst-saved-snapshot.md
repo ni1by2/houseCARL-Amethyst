@@ -2,7 +2,7 @@
 
 ## Contract
 
-The 2.1.1 source candidate accepts two exact producer contracts: API 13/schema 9,
+The 2.1.1 Linux preview accepts two exact producer contracts: API 13/schema 9,
 engine 1/rules 13, and API 13/schema 10, engine 1/rules 14. Schema 9 uses the
 existing `edde06e5` native reader. Schema 10 uses Amethyst 2.6.0-beta.7 at
 `abeae84afce940c6819f80c1cd4e6e51db2e935d`, including preserved destination casing.
@@ -11,8 +11,7 @@ there is no cross-schema fallback or migration of the live catalog. Unknown sche
 engine or rules combinations refuse. Revalidation requires the same captured
 schema/rules pair even if a different supported pair appears during the call.
 
-The published 2.1.0 package supports schema 9 only. The release evidence below
-records earlier checks; it does not establish schema-10 acceptance.
+The earlier 2.1.0 package supports schema 9 only. The [2.1.1 verification record](../testing/upstream-211-compat-2026-10-25.md) covers schema-10 acceptance, archive absence handling and the final read-only profile check.
 
 This Linux mode reads Amethyst's last complete saved filegraph. It consumes the
 producer's native snapshot and exact source paths. It never refreshes,
@@ -135,44 +134,24 @@ global settings not represented by the saved generation may remain invisible;
 that uncertainty is what the warning covers. A new producer-owned live attestation
 is optional future work, not a prerequisite for this mode.
 
-## Availability and remaining work
+## Writes and deployment
 
-New record patches through `apply`, `create`, `forward` and `copy` use the same
-reflection-driven write engine as upstream. The request filter captures and
-serializes their saved inputs. Only a guarded new-patch call can allocate staging
-output; direct read callers still fail the service's output-root guard. `into=`
-and `in_place=` remain refused before tool bodies or consent side effects run.
+Managed record and asset writes use durable staging transactions. New patches
+preserve source files. Existing-plugin edits require their explicit lane, consent
+and redeployment guards; see the [write contract](write-path.md). A failed source
+or profile revalidation rolls back enrolled outputs instead of returning a
+successful write against changed inputs.
 
-Allocation registers the new plugin and metadata for rollback before writing
-either file. If profile/configuration, catalog generation or an observed source
-changes before the response, both artifacts are removed and the empty new folder
-is removed. An unrelated file added to that folder is preserved. Failed writes
-also roll back registered artifacts. A successful patch retains its profile,
-source generation, `pendingDeployment=true` and SHA-256 in `meta.ini`; inline JSON
-and structured MCP content report `amethyst_staging.state=pending_deployment`.
-Text replies state the same limitation. Dry runs create no folder or metadata.
+Staging does not establish game visibility. Refresh, enablement, ordering and
+deployment remain user-managed. Use `housecarl_staging_status` and the supported
+`housecarl_staging_manage` recovery or deployment-verification action to inspect
+recorded transactions. Missing or incompatible state refuses rather than silently
+falling back to another manager or an inferred deployment.
 
-No call changes Amethyst's profile ordering, plugin activation, graph or deployed
-game files. Refresh, placement, enablement and deployment are user-managed. These
-pending markers do not clear automatically yet: deployment verification is still
-a release gate. This is an implementation checkpoint toward full original
-houseCARL writing support, not a reduction of that release target.
-
-Other managed mutations are refused before their bodies run.
-MO2 connection/update-cache operations remain unavailable on Linux. Explicit-path
-archive and other manager-independent tools keep their existing behavior.
-
-This preview resolves staged loose files, saved BSA members and distinct vanilla
-loose files. **Vanilla BSA discovery is pending.** If the vanilla root contains
-BSAs, asset results set `read_incomplete` and provenance adds
-`asset_coverage_warning`; exports keep that warning too. An absent asset then
-does not establish absence from those vanilla archives. Use explicit archive tools
-to inspect them until the vanilla archive activation boundary is implemented.
-
-The remaining release gates are vanilla archive activation/coverage, extending
-owned patches, guarded existing-plugin edits with consent and redeployment
-confirmation, other managed write consumers, deployment verification, a complete
-Linux test pass, clean installation/update/rollback, and independent review.
+Vanilla archive activation is implemented through the effective INI and
+engine-loaded plugins, as described above. Genuine archive/configuration coverage
+limits remain explicit. The [release verification record](../testing/upstream-211-compat-2026-10-25.md)
+separates completed source/package checks from untested live deployment and gameplay.
 
 ## Evidence
 

@@ -10,29 +10,29 @@ houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders manag
 
 ### Linux / Amethyst preview
 
-- Linux x64, Python 3.12 or newer, and Amethyst. Version 2.5.4 is the tested stable release. The reader expects filegraph API 13 and database schema 9; other Amethyst versions require compatibility verification even if those numbers match.
+- Linux x64, Python 3.12 or newer, and Amethyst. Tested native contracts are API 13/schema 9, engine 1/rules 13 (stable 2.5.4), and API 13/schema 10, engine 1/rules 14 (2.6.0-beta.7). Other contracts require compatibility verification.
 - The operating-system runtime libraries listed in the [Linux installation guide](docs/linux-install.md). The package includes the .NET runtime, Amethyst's native filegraph component and native Papyrus utilities.
 - Claude Code or OpenAI Codex to host the MCP server.
 
-The 2.1.1 source candidate also supports Amethyst 2.6.0-beta.7's API 13/schema 10,
-engine 1/rules 14 filegraph, with a separate pinned reader. The published 2.1.0
-download below supports schema 9/rules 13 only. This compatibility change does not
-switch the adapter to Amethyst's headless API.
+Version 2.1.1 bundles a separately pinned reader for each supported contract.
+It also handles absent archive names in Skyrim's default INI without a blanket
+vanilla BSA coverage warning. Unreadable sources still report failures.
+The adapter continues to read Amethyst's saved snapshot; the headless API refactor is deferred.
 
 Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. See the [Linux development and build guide](docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
 
 ## Install
 
-Download the archive, checksum and standalone installer from [v2.1.0 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.0). This is a prerelease. Follow the [Linux installation guide](docs/linux-install.md) to verify the download, install or update it, and select your Amethyst saved snapshot. Running the package does not require the .NET SDK or build tools.
+Download the archive, checksum and standalone installer from [v2.1.1 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.1). This is a prerelease. Follow the [Linux installation guide](docs/linux-install.md) to verify the download, install or update it, and select your Amethyst saved snapshot. Running the package does not require the .NET SDK or build tools.
 
-Install the [runtime prerequisites](docs/linux-install.md#runtime-requirements) first. Then, from the directory containing all three downloads, run:
+Install the [runtime prerequisites](docs/linux-install.md#runtime-requirements) first. Quit Claude Code, Codex and any other host running houseCARL before installing or updating. From the directory containing all three downloads, run:
 
 ```sh
 sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
   python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
-Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required; running `python3 install-linux.py` alone exits with a missing-action error. Run the installer as your normal user. Restart Claude Code or Codex afterward, then [select your Amethyst connection](docs/linux-install.md#select-an-amethyst-connection).
+Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required; running `python3 install-linux.py` alone exits with a missing-action error. Run the installer as your normal user. Reopen Claude Code or Codex afterward. Existing connection settings are retained; on a first installation, [select your Amethyst connection](docs/linux-install.md#select-an-amethyst-connection). Ask the assistant to verify houseCARL's version and Amethyst connection; the server should report 2.1.1. See the [upgrade steps](docs/linux-install.md#update-from-205-or-210) for shutdown, verification and rollback.
 
 ## Usage
 
@@ -87,14 +87,16 @@ verification records whether the expected file won. `update_status` reads cached
 explicit update checks use the installed file ID.
 
 The [Linux installation and current limits](docs/linux-install.md) page describes installation,
-upgrades and rollback. The [2.1.0 verification record](docs/testing/upstream-210-integration-2026-10-20.md)
-records the source, test results and package checks. Earlier installation and Proton acceptance
-are recorded for [2.0.5](docs/testing/upstream-205-integration-2026-10-15.md).
+upgrades and rollback. The [2.1.1 verification record](docs/testing/upstream-211-compat-2026-10-25.md)
+records schema compatibility, archive coverage and read-only profile checks.
+Earlier engine integration is recorded for [2.1.0](docs/testing/upstream-210-integration-2026-10-20.md),
+and isolated installation and Proton acceptance for [2.0.5](docs/testing/upstream-205-integration-2026-10-15.md).
 
-Version 2.1.0 integrates upstream houseCARL at `1391dacd`, including its engine optimizations
-and source-change checks, while preserving Amethyst's staged transaction workflow.
-It retains the native component from stable Amethyst 2.5.4 at `edde06e5` (native API 13; schema 9, engine 1, rules 13). houseCARL
-has read a real installed 2.5.4 profile. The Linux package bundles the .NET runtime and
+Version 2.1.1 retains the upstream houseCARL 2.1.0 engine at `1391dacd`, including its
+optimizations and source-change checks, and Amethyst's staged transaction workflow.
+It bundles the schema-9 native reader from stable Amethyst 2.5.4 at `edde06e5` and
+the schema-10 reader from 2.6.0-beta.7 at `abeae84a`. Read-only acceptance passed
+against saved profiles from the tested stable release and beta.7. The Linux package bundles the .NET runtime and
 Amethyst's native component. **Python 3.12+ must be installed.** The native reader opens
 a private catalog copy and does not write manager files. The [snapshot contract](docs/architecture/amethyst-saved-snapshot.md)
 covers configuration, checks, and limits. Amethyst must close normally before a managed write

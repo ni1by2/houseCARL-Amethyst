@@ -1,8 +1,8 @@
 # Linux / Amethyst development
 
-The source build and CI target Ubuntu 24.04 x64. This source candidate supports API 13 with schema 9/rules 13 or schema 10/rules 14, both at engine revision 1. CI builds both native readers from pinned Amethyst sources. Both modules are required to assemble a package.
+The source build and CI target Ubuntu 24.04 x64. Version 2.1.1 supports API 13 with schema 9/rules 13 or schema 10/rules 14, both at engine revision 1. CI builds both native readers from pinned Amethyst sources. Both modules are required to assemble a package.
 
-For the published 2.1.0 Linux preview, use the [installation guide](linux-install.md). The [release verification record](testing/upstream-210-integration-2026-10-20.md) lists its completed checks. That package supports schema 9 only; the commands below build the new compatibility candidate from your checkout.
+For the 2.1.1 Linux preview downloads, use the [installation guide](linux-install.md). The [release verification record](testing/upstream-211-compat-2026-10-25.md) lists the completed compatibility and package checks. The commands below build the same supported contracts from source.
 
 ## Requirements
 
