@@ -1,6 +1,10 @@
 # houseCARL Amethyst implementation specification
 
-## Release status — 15 October 2026
+## Release status — 25 October 2026
+
+Use the [2.1.1 Linux preview installation guide](linux-install.md) and [verification record](testing/upstream-211-compat-2026-10-25.md) for the current download, supported schema-9/schema-10 contracts and completed checks. The headless API refactor is deferred. The planning snapshot and older release status below are historical; they do not describe remaining 2.1.1 work.
+
+## Earlier release status — 15 October 2026
 
 [v2.0.5 is published as a Linux preview prerelease](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5) from `87e9268dc1052e31343fc8ff5bc014bd53b6c264`, including upstream 2.0.5. Use the [installation guide](linux-install.md) and [release verification record](testing/upstream-205-integration-2026-10-15.md) for current setup, completed checks and limitations. The adapter refactor remains deferred. Windows execution, the actual manager GUI workflow, live-profile deployment and gameplay were not tested.
 

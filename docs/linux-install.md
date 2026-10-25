@@ -1,30 +1,27 @@
-# Install the Linux 2.1.0 preview
+# Install the Linux 2.1.1 preview
 
-Version [2.1.0 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.0), targeting Ubuntu 24.04 x64. Its Amethyst snapshot helper requires Python 3.12 or newer. The [2.1.0 verification record](testing/upstream-210-integration-2026-10-20.md) covers the updated engine, transaction regressions and package checks. Installation, isolated Claude Code/Codex registration and the Proton CachyOS utility round trip were checked for [2.0.5](testing/upstream-205-integration-2026-10-15.md); those checks were not repeated for 2.1.0. The installer and pinned native utilities are unchanged.
+Version [2.1.1 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.1), targeting Ubuntu 24.04 x64. Python 3.12 or newer is required. It supports the tested Amethyst native contracts API 13/schema 9, engine 1/rules 13, and API 13/schema 10, engine 1/rules 14. The latter is used by Amethyst 2.6.0-beta.7. Other contracts refuse until verified.
 
-Download these three assets into the same directory:
+The [2.1.1 verification record](testing/upstream-211-compat-2026-10-25.md) covers the compatibility fix, vanilla archive handling, package checks and read-only profile acceptance. Installation, isolated host registration and a disposable Proton CachyOS round trip were checked for [2.0.5](testing/upstream-205-integration-2026-10-15.md); those system workflows were not repeated for 2.1.1. The installer and pinned Papyrus utilities are unchanged.
 
-The published 2.1.0 archive supports filegraph schema 9/rules 13 only. Amethyst
-2.6.0-beta.7 uses schema 10/rules 14 and requires the 2.1.1 compatibility candidate,
-which is not yet a published release. Reinstalling 2.1.0 cannot resolve that
-contract mismatch; see the [source build guide](linux-development.md).
+Download these three assets from **the same release** into a new directory:
 
-- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/housecarl-amethyst-linux-x64.tar.gz)
-- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/housecarl-amethyst-linux-x64.tar.gz.sha256)
-- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.0/install-linux.py)
+- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.1/housecarl-amethyst-linux-x64.tar.gz)
+- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.1/housecarl-amethyst-linux-x64.tar.gz.sha256)
+- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.1/install-linux.py)
 
 ## Quick start
 
-Install the [runtime prerequisites](#runtime-requirements) first. From the directory containing all three downloads, verify the archive and then install it:
+Install the [runtime prerequisites](#runtime-requirements) first. Quit Claude Code, Codex and any other MCP host running houseCARL. Keep a separate terminal open for installation. From the directory containing all three downloads, verify the archive and then install it:
 
 ```sh
 sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
   python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
-Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required. Running `python3 install-linux.py` alone exits with the missing-action error; it does not install anything. Use your normal user account for the installer. Restart Claude Code or Codex afterward and [select your Amethyst connection](#select-an-amethyst-connection).
+Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required. Running `python3 install-linux.py` alone exits with the missing-action error; it does not install anything. Use your normal user account for the installer, without `sudo`. Reopen Claude Code or Codex afterward. On a first installation, [select your Amethyst connection](#select-an-amethyst-connection); an upgrade retains an existing selection. The MCP host starts the server automatically.
 
-Use the checksum asset from the same release as the archive. The release notes also record its SHA-256. Do not mix the 2.0.5 archive or installer with the 2.1.0 downloads.
+Use the checksum asset from the same release as the archive. The release notes also record its SHA-256. Do not mix archives, checksum files or installers from different releases.
 
 ## Runtime requirements
 
@@ -52,7 +49,32 @@ Use `python3 install-linux.py rollback` to switch back or `python3 install-linux
 
 To update from an earlier package, run the new release's installer with its archive using the same `install` command. The previous activation is retained for rollback. Installing a version that is already present refuses to overwrite it.
 
-For a 2.0.5 installation, download all three 2.1.0 assets into a new directory and run the Quick start commands above. Your selected Amethyst connection and transaction state remain outside the version directory and are retained. Restart Claude Code or Codex afterward; an already running MCP process continues to use its old program until restarted. Updating the server does not refresh or deploy your Amethyst profile.
+### Update from 2.0.5 or 2.1.0
+
+1. Download all three 2.1.1 assets listed above into a new directory. Open that directory in a separate terminal.
+2. Quit every Claude Code, Codex or other MCP host using houseCARL. The installer refuses to switch versions while an installed server is running. If it names PIDs, close the owning host normally and retry.
+3. Run the Quick start checksum and `install` commands above. Continue only after the checksum reports `OK`. Successful installation reports `Installed 2.1.1`.
+4. Confirm the active package:
+
+   ```sh
+   readlink -f ~/.local/opt/housecarl-amethyst/current
+   ```
+
+   The result should end in `/versions/2.1.1`.
+5. Reopen your MCP host and ask the assistant to verify houseCARL's version and Amethyst connection. `housecarl_load_order_status` should report server 2.1.1 and your selected saved profile. The installer-managed registration is named `housecarl`; use that entry if an older development registration also exists.
+
+Your selected connection and transaction state are retained outside the program directory. Updating the server does not refresh, enable, reorder or deploy Amethyst mods. If a read reports that the saved profile is stale, use Amethyst's **Refresh Modlist**, let it finish, and retry the read. Deployment is not a substitute for Refresh.
+
+For a read-only asset check, ask the assistant to inspect `scripts/actor.pex` with `housecarl_asset_status`. On the tested profile, its provider chain included `Skyrim - Misc.bsa` with `read_incomplete=false`. Other profiles may still report genuine missing configuration or unreadable archive sources.
+
+To roll back, quit the MCP hosts again and run:
+
+```sh
+python3 install-linux.py rollback
+```
+
+Then reopen the host. This restores the previous server package, not Amethyst's database or game state. A previous 2.1.0 server still cannot read a schema-10 filegraph.
+
 
 If installation reports an unfinished transaction, preserve its journal and inspect that exact ID with `housecarl_staging_status` in the current compatible server. Use the supported recovery action for its recorded state before retrying installation. If no compatible server is available, stop and request recovery help. Do not delete journals or select a different state root to bypass the check. Older development test runs could leave journals referencing deleted temporary fixtures; establish their origin and preserve a backup before quarantining any such records.
 

@@ -1,4 +1,10 @@
-﻿# Changelog
+# Changelog
+
+## 2.1.1 — Linux preview (25 October 2026)
+
+- Added a separately pinned Amethyst 2.6.0-beta.7 schema-10/rules-14 reader while retaining schema-9/rules-13 support. Unknown contracts and sources that change during a call still refuse.
+- Corrected the blanket vanilla BSA warning for confirmed absent archive names such as Skyrim - Patch.bsa. Existing archives remain searchable; unreadable sources and archive changes remain explicit.
+- Updated download, shutdown, upgrade, verification and rollback instructions for 2.1.1. The Amethyst headless API refactor remains deferred.
 
 ## 2.0.5 — Linux preview (15 October 2026)
 
