@@ -324,7 +324,7 @@ public sealed class PublishedSchemaDepthTests : IClassFixture<CappedSchemaServer
     static (int Exit, string Stderr) Boot(string value)
     {
         var exe = Path.Combine(HarnessPaths.RepoRoot, "src", "housecarl-mcp", "bin",
-                               HarnessPaths.Configuration, "net9.0", OperatingSystem.IsWindows() ? "housecarl-mcp.exe" : "housecarl-mcp");
+                               HarnessPaths.Configuration, HarnessPaths.TargetFramework, OperatingSystem.IsWindows() ? "housecarl-mcp.exe" : "housecarl-mcp");
         var psi = new ProcessStartInfo(exe)
         {
             RedirectStandardInput = true,

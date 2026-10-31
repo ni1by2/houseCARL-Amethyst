@@ -37,9 +37,9 @@ public static class Program
     private const string McpServerName    = "housecarl"; // server key under mcpServers / [mcp_servers.*]
 
     // Major version of the runtimes the bundled SERVER needs (keep in sync with housecarl-mcp's
-    // TargetFramework). The default roll-forward policy stays within a major, so "10.x installed"
-    // does not satisfy a net9.0 framework-dependent server.
-    private const string ServerRuntimeMajor = "9";
+    // TargetFramework). The default roll-forward policy stays within a major, so "9.x installed"
+    // does not satisfy a net10.0 framework-dependent server.
+    private const string ServerRuntimeMajor = "10";
 
     public enum Target { Claude, Codex, Both }
 
@@ -116,7 +116,7 @@ public static class Program
             // and the runtimes the bundled server needs. Reading only, so a run cancelled at the plan below
             // leaves everything as it found it.
             //
-            // The bundled server is framework-dependent net9.0 + ASP.NET Core: it needs BOTH the
+            // The bundled server is framework-dependent net10.0 + ASP.NET Core: it needs BOTH the
             // base .NET Runtime (Microsoft.NETCore.App) and the ASP.NET Core Runtime
             // (Microsoft.AspNetCore.App). On Windows those are TWO separate installers, and the
             // ASP.NET Core one does NOT include the base runtime -- a real-world install trap.

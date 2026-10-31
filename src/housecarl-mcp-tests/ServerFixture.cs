@@ -55,7 +55,7 @@ public sealed class ServerFixture : IDisposable
     internal ServerFixture(IReadOnlyDictionary<string, string>? environment)
     {
         var exe = Path.Combine(HarnessPaths.RepoRoot, "src", "housecarl-mcp", "bin",
-                               HarnessPaths.Configuration, "net9.0", OperatingSystem.IsWindows() ? "housecarl-mcp.exe" : "housecarl-mcp");
+                               HarnessPaths.Configuration, HarnessPaths.TargetFramework, OperatingSystem.IsWindows() ? "housecarl-mcp.exe" : "housecarl-mcp");
         if (!File.Exists(exe))
             throw new InvalidOperationException(
                 $"housecarl-mcp.exe is not built at '{exe}'. Build the solution in " +
