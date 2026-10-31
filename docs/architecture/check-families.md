@@ -13,6 +13,10 @@ sweep, dialogue seed accounting, and EditorID near-miss hint have their own cont
 
 ## Contracts
 
+### A reference into an excluded plugin
+
+A link `ErrorCheck` cannot resolve whose target a parse-excluded plugin defines or overrides is still listed, but as into that plugin (`DanglingRef.ExcludedBy`, json `target_in_excluded`), not as defined by no active plugin. It still counts as dangling, and the headline (text) and `dangling_into_excluded` (json) say how many of them point into an excluded plugin; a `counts_only=` target row keeps the plugin name as its key and says how many of its refs point into an excluded plugin (text clause, json `into_excluded`).
+
 ### A DELETED record has no live body
 
 A major record flagged Deleted carries no content by engine rule: the game reads the header, sees the flag, and

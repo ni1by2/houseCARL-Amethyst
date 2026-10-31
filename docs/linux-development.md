@@ -4,9 +4,11 @@ The source build and CI target Ubuntu 24.04 x64. Version 2.1.1 supports API 13 w
 
 For the 2.1.1 Linux preview downloads, use the [installation guide](linux-install.md). The [release verification record](testing/upstream-211-compat-2026-10-25.md) lists the completed compatibility and package checks. The commands below build the same supported contracts from source.
 
+The development branch targets .NET 10 and includes the unreleased Asset Walk integration. Published 2.1.1 binaries still bundle .NET 9. Updating the source SDK does not replace an installed server.
+
 ## Requirements
 
-- Linux x64, .NET 9 SDK and Python 3.12 or newer.
+- Linux x64, .NET 10 SDK (10.0.400 or newer) and Python 3.12 or newer.
 - Git, Rust/Cargo, a C compiler and the normal Rust build prerequisites for Amethyst's filegraph.
 - To build Caprica and Champollion from source: Clang/Clang++, Clang's dependency scanner (`clang-tools-18` on Ubuntu 24.04), CMake, Ninja, curl, zip, unzip and tar.
 - Claude Code or OpenAI Codex to run the MCP server.

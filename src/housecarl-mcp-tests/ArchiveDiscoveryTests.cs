@@ -8,6 +8,7 @@ namespace HousecarlMcpTests;
 /// base archives rank below every plugin archive, a later plugin outranks an earlier one, a duplicate archive name
 /// resolves to the higher-priority mod's copy, and a missing Skyrim.ini is a warning rather than a silent gap.</summary>
 [Trait("tier", "unit")]
+[Collection(MyGamesIsolation.Serial)]
 public sealed class ArchiveDiscoveryTests : IDisposable
 {
     readonly string _root, _mods, _data, _prof;
@@ -32,7 +33,7 @@ public sealed class ArchiveDiscoveryTests : IDisposable
             File.WriteAllText(Path.Combine(_prof, "Skyrim.ini"), "[Archive]\r\nsResourceArchiveList=" + archiveList + "\r\n");
     }
 
-    ArchiveDiscoveryResult Discover() => ArchiveDiscovery.Discover(_prof, _mods, _data, "", Path.Combine(_root, "game"));
+    ArchiveDiscoveryResult Discover() => ArchiveDiscovery.Discover(_prof, _mods, _data, "");
 
     /// <summary>PluginA ships PluginA.bsa and its Textures archive, PluginB ships PluginB.bsa, Data holds a base
     /// archive listed in Skyrim.ini; PluginB loads last.</summary>
@@ -106,5 +107,71 @@ public sealed class ArchiveDiscoveryTests : IDisposable
                                            && w.Contains("base", StringComparison.OrdinalIgnoreCase));
         Assert.DoesNotContain(res.Archives, x => x.OwningPlugin == ArchiveDiscovery.IniArchiveOwner);
         Assert.Contains(res.Archives, x => x.OwningPlugin == "PluginA.esp");
+    }
+
+    /// <summary>The base list is read from the INI the game reads: SkyrimCustom.ini's list over Skyrim.ini's.</summary>
+    [Fact]
+    public void SkyrimCustomIniListsTheBaseArchivesOverSkyrimIni()
+    {
+        Write(_data, "Custom.bsa", A());
+        Write(_data, "Plain.bsa", B());
+        Profile(Array.Empty<string>(), Array.Empty<string>(), "Plain.bsa");
+        File.WriteAllText(Path.Combine(_prof, "SkyrimCustom.ini"), "[Archive]\r\nsResourceArchiveList=Custom.bsa\r\n");
+
+        var baseArc = Assert.Single(Discover().Archives, x => x.OwningPlugin == ArchiveDiscovery.IniArchiveOwner);
+        Assert.Equal("Custom.bsa", Path.GetFileName(baseArc.Path));
+    }
+
+    /// <summary>A profile MO2 runs on the My Games INIs (LocalSettings=false) takes the base list from there, not from
+    /// a Skyrim.ini left in the profile.</summary>
+    [Fact]
+    public void LocalSettingsFalseReadsTheBaseListFromMyGames()
+    {
+        Write(_data, "MyGames.bsa", A());
+        Write(_data, "Profile.bsa", B());
+        Profile(Array.Empty<string>(), Array.Empty<string>(), "Profile.bsa");
+        File.WriteAllText(Path.Combine(_prof, "settings.ini"), "[General]\r\nLocalSettings=false\r\n");
+        var myGames = Path.Combine(_root, "MyGames");
+        Directory.CreateDirectory(myGames);
+        File.WriteAllText(Path.Combine(myGames, "Skyrim.ini"), "[Archive]\r\nsResourceArchiveList=MyGames.bsa\r\n");
+
+        var res = ArchiveDiscovery.Discover(Mo2LoadOrder.ReadComposition(_prof), MyGamesIsolation.Pointed(myGames, () => GameIni.For(_prof)), _mods, _data, "");
+
+        var baseArc = Assert.Single(res.Archives, x => x.OwningPlugin == ArchiveDiscovery.IniArchiveOwner);
+        Assert.Equal("MyGames.bsa", Path.GetFileName(baseArc.Path));
+    }
+
+    /// <summary>A My Games list that cannot be read names that folder, and does not tell the user to fix the profile's
+    /// Skyrim.ini, which the game does not read.</summary>
+    [Fact]
+    public void AnUnreadableMyGamesListNamesMyGames()
+    {
+        Profile(Array.Empty<string>(), Array.Empty<string>(), "Profile.bsa");
+        File.WriteAllText(Path.Combine(_prof, "settings.ini"), "[General]\r\nLocalSettings=false\r\n");
+        var myGames = Path.Combine(_root, "MyGames");
+        Directory.CreateDirectory(myGames);
+
+        var res = ArchiveDiscovery.Discover(Mo2LoadOrder.ReadComposition(_prof), MyGamesIsolation.Pointed(myGames, () => GameIni.For(_prof)), _mods, _data, "");
+
+        var warning = Assert.Single(res.Warnings);
+        Assert.Contains($"(looked in {myGames})", warning);
+        Assert.DoesNotContain("Make sure the active profile", warning);
+    }
+
+    /// <summary>Which folder answers: LocalSettings=true is the profile even with no Skyrim.ini in it; a profile with no
+    /// flag and no Skyrim.ini (not one MO2 wrote) falls to My Games.</summary>
+    [Fact]
+    public void GameIniFollowsTheLocalSettingsFlagAndFallsToMyGames()
+    {
+        var myGames = Path.Combine(_root, "MyGames");
+        File.WriteAllText(Path.Combine(_prof, "settings.ini"), "[General]\r\nLocalSettings=true\r\n");
+        var flagged = MyGamesIsolation.Pointed(myGames, () => GameIni.For(_prof));
+        Assert.Equal(_prof, flagged.Folder);
+        Assert.True(flagged.ProfileLocal);
+
+        File.Delete(Path.Combine(_prof, "settings.ini"));
+        var unflagged = MyGamesIsolation.Pointed(myGames, () => GameIni.For(_prof));
+        Assert.Equal(myGames, unflagged.Folder);
+        Assert.False(unflagged.ProfileLocal);
     }
 }

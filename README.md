@@ -19,7 +19,7 @@ It also handles absent archive names in Skyrim's default INI without a blanket
 vanilla BSA coverage warning. Unreadable sources still report failures.
 The adapter continues to read Amethyst's saved snapshot; the headless API refactor is deferred.
 
-Source builds additionally require the .NET 9 SDK and Rust/C/C++ build tools. See the [Linux development and build guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
+Source builds additionally require the .NET 10 SDK (10.0.400 or newer) and Rust/C/C++ build tools. See the [Linux development and build guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
 
 ## Install
 
@@ -108,7 +108,7 @@ the manager GUI workflow and gameplay were not tested.
 
 | | |
 |---|---|
-| Process | C#/.NET 9 MCP over stdio; Linux snapshot reads use a short-lived Python helper |
+| Process | C#/.NET 10 MCP over stdio; Linux snapshot reads use a short-lived Python helper |
 | Substrate | Mutagen.Bethesda.Skyrim 0.54.4 |
 | Tools | 34 registered; Linux availability described above |
 | Skills | 7 |
@@ -285,3 +285,7 @@ You can run the program and make private changes without publishing your source.
 - [papyrus-index](https://github.com/BellCubeDev/papyrus-index) by BellCube, the source corpus for `papyrus-reference`.
 - Zzyxzz for SkyPatcher and powerofthree for SPID and KID. Their public documentation informed the distributor grammars.
 - DrHeisen for the `open-animation-replacer` skill and two earlier skills that have since been retired.
+
+## Asset dependency walks
+
+The development branch includes upstream 2.1.2 asset traversal adapted to Amethyst. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [Asset Walk guide](docs/asset-walk.md). These additions are unreleased; the downloadable 2.1.1 preview remains the current published package.

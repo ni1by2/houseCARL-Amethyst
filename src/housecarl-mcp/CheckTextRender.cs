@@ -14,7 +14,8 @@ static class CheckTextRender
         bool didDangling = r.Classes.HasFlag(ErrorFindingClass.Dangling);
         bool didMasters = r.Classes.HasFlag(ErrorFindingClass.MissingMasters);
         sb.Append("scanned ").Append(r.PluginsScanned).Append(r.PluginsScanned == 1 ? " plugin · " : " plugins · ")
-          .Append(didDangling ? $"{r.TotalDangling} dangling ref(s)" : "dangling refs NOT CHECKED (findings= excluded 'dangling')").Append(" · ")
+          .Append(didDangling ? $"{r.TotalDangling} dangling ref(s)" + (r.DanglingIntoExcluded > 0 ? $" ({r.DanglingIntoExcluded} of them into an excluded plugin houseCARL could not read)" : "")
+                              : "dangling refs NOT CHECKED (findings= excluded 'dangling')").Append(" · ")
           .Append(didMasters ? $"{r.TotalMissingMasters} missing master(s)" : "missing masters NOT CHECKED (findings= excluded 'missing_masters')").Append(" · ")
           .Append(didDangling ? $"{r.TotalUnscannableRecords} unscannable record(s)" : "unscannable records NOT COUNTED (the record walk was skipped)");
         // The excluded roster is on the result, so the head line names what it is holding.
@@ -83,7 +84,10 @@ static class CheckTextRender
     {
             return "    " + d.Source + " (" + d.SourceType
                      + (string.IsNullOrEmpty(d.SourceEditorId) ? "" : " '" + d.SourceEditorId + "'")
-                     + ") -> " + d.Target + "   [target not defined by any active plugin]\n";
+                     + ") -> " + d.Target
+                     + (d.ExcludedBy.Count > 0
+                         ? "   [target in excluded plugin " + string.Join(", ", d.ExcludedBy) + ", which houseCARL could not read]\n"
+                         : "   [target not defined by any active plugin]\n");
     }
 
     /// <summary>One unread-plugin row, the <c>counts_only</c> lane's honesty layer, shared for the same reason.</summary>
@@ -103,7 +107,8 @@ static class CheckTextRender
     /// <summary>One histogram row; the first row of an axis carries the axis head, so the demand pass must ask with the row index the write will use.</summary>
     internal static string ComposeHistogramRow(HistogramAxis axis, SweepCount row, bool first)
     {
-        var line = "  " + row.Count.ToString().PadLeft(6) + "  " + row.Key + "\n";
+        var line = "  " + row.Count.ToString().PadLeft(6) + "  " + row.Key
+                   + (row.IntoExcluded > 0 ? $" ({row.IntoExcluded} of them into an excluded plugin houseCARL could not read)" : "") + "\n";
         return first ? axis.Head + line : line;
     }
 

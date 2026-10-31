@@ -17,7 +17,8 @@ and the SNAM marker. The modder-facing guide is [`docs/dialogue.md`](../dialogue
 Mutagen omits a null/unset optional subrecord on write; the Creation Kit writes it unconditionally, nulls included.
 A record authored through houseCARL that sets only the fields the author cared about therefore differs STRUCTURALLY
 from a CK-authored one of the same content. `DialogueCkParity` closes that by default-populating the nullable fields
-the CK always emits, at create time, inside the Mutagen model.
+the CK always emits, at create time, inside the Mutagen model. A non-nullable field Mutagen writes EMPTY is a
+different case, outside these fills: the create says so and fills nothing ([`write-path.md`](write-path.md)).
 
 Three invariants hold for every default, and the DialogTopic SNAM marker follows the same pattern:
 
@@ -65,9 +66,25 @@ validating within {plugin + its masters} alone is a deliberately deferred capabi
 resolve or asset failure rides `CheckError` rather than being swallowed.
 
 A Quest, Branch, PNAM or LinkTo target's TYPE is read off the index (the fold's own record where the fold wins it),
-and a wrong type is named from that class: no target body is fetched. Every fetch from a plugin copies its whole
+and a wrong type is named from that class: the type check fetches no body. Every fetch from a plugin copies its whole
 top-level group, so fetching each target sank a large follower quest past 8 GB. A target whose plugin changes
 mid-call is caught by ruling F's stamp check (pending that PR), which re-checks every plugin the call relied on.
+
+Beyond the per-INFO voice and condition checks, which resolve their own targets, and the SNAM gate's base copy, the
+topic's wiring fetches only these bodies, each through the run's cached, fold-aware resolve: the owning quest, whenever
+the Quest is set and has a winner in the load order (or the fold wins it), whatever its type (a body that is not a QUST
+feeds neither lint; a set Quest no plugin holds fetches nothing), and, where it is a QUST, each of its
+non-null text-display global entries with no type read first, for the alias-index and `<Global=X>` lints; and the branch. A
+Branch that resolves to a DLBR while the Quest resolves to a QUST is read (once per distinct branch per run, a
+DLBR-group seek), and a set branch Quest that is a QUST (typed off the index, as above) and differs from the topic's
+Quest is a Warning naming both quests and the branch, as xEdit warns. A TopLevel
+branch (or one with no DNAM) says its menu entry can show twice in game; any other says the topic is filed under two
+quests' branch maps. An unset Quest on either side, a branch Quest that is dangling or not a QUST (xEdit skips it
+too), or a wiring that already failed its type check, adds nothing. The clean line reads "quest + branch wiring resolve and
+agree" only where the two quests were compared; otherwise it ends at "resolve". The
+check runs per topic, so a quest input lists only topics whose own Quest names it: a foreign topic in that quest's
+branch is found from its own quest, not this one. DLVW and DLBR inputs stay record-level: vanilla views legitimately
+hold other quests' branches.
 
 Standing limits a render must state rather than let "checks passed" read as "this will play": CTDA conditions are
 semantic and only the game evaluates them, and lip-sync and audio content are outside the data layer.
@@ -111,9 +128,16 @@ defaulting to the widest set. The same table decides what the epoch stamp names:
 substrate throughout and the stamp caveats nothing.
 
 ## Pinned by
-- `DialogueTypeCheckTests` — Branch, PNAM and LinkTo targets in a held-open plugin fetch no body, right type or
-  wrong, and a wrong type is still reported by name; a fold that wins a link target as another record type is
-  judged by the fold's type, and a record only the fold holds counts as present.
+- `DialogueTypeCheckTests` — PNAM and LinkTo targets in a held-open plugin fetch no body, right type or wrong, nor
+  does a wrong-typed Branch, and each wrong type is still reported by name; a right-typed Branch there is not read
+  while the topic's Quest is unset or unresolved; a fold that wins a link target as another record type is judged
+  by the fold's type, and a record only the fold holds counts as present.
+- `DialogueBranchQuestTests` — a topic whose Quest differs from its branch's warns, with the duplicate-menu wording
+  for a TopLevel branch or one with no DNAM and the branch-maps wording otherwise, naming the branch by EditorID or
+  by FormID alone; the topic's quest input carries the same finding and the branch's quest input lists no foreign
+  topic; a same-quest pair, an unset Quest on either side, an unresolved topic Quest, a dangling Branch, and a branch
+  Quest that is dangling or a WEAP add no Warning; a DLVW holding another quest's branch is not flagged; a fold is
+  judged by its own branch and its own QUST; the clean line says "agree" only where the quests were compared.
 - `DialogueCkParityPairTests` and `DialogueCkParityCreateTests` — the fill and gap pairs; their `*-WINS` tests pin
   NON-OVERRIDE, their `*-AUTOFILL` tests NEVER SILENT, `DIAL-PNAM-WINS` an explicit `0` Priority, and
   `QUST-ALIAS-LOCATION` VTCK's scope to reference aliases.

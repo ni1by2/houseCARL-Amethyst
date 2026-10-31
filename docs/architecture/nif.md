@@ -1,6 +1,6 @@
 ---
-updated: 2026-10-09
-covers: [src/housecarl-core/NifService.cs, src/housecarl-mcp/NifTools.cs]
+updated: 2026-10-30
+covers: [src/housecarl-core/NifService.cs, src/housecarl-core/NifLinks.cs, src/housecarl-mcp/NifTools.cs]
 ---
 # The NIF layer: reading mesh values, and the two write gates
 
@@ -85,6 +85,19 @@ be reflected out of the library at all (nifly models slots as a bare path list; 
 so `SlotName` is a small explicit interpreter, each arm keyed to the flag or type that decides it, returning null
 rather than a best guess. The index is always printed beside the name, because the index is what `nif_set`'s
 `texture_slot=` takes.
+
+A slot string is printed as the NIF spells it, and in the `paths` section a `data path:` line under it gives the Data
+path that string names and its winner in the load order, even when `source_provider=` reads the mesh from a named
+mod. The mapping is the asset layer's one door from a link to a Data path ([assets.md](assets.md), From a link to a
+Data path), so a FaceGen head's three forms (`Actors\…`, `textures\…`, `data\textures\…`) name the winner a direct
+`asset_status` call on the mapped path names. A miss is a bare `ABSENT`: none of `asset_status`'s per-path hedges rides
+it, so an unread archive or an unlisted root is named only in the header's notes. A string the door refuses is its own
+`data path: none` line naming the slot string. The `shapes` section keeps the raw string only, and `nif_set` writes the string it is given (Pinned by: `AssetLinkDataPathTests`).
+
+`NifService.Load` is the parse the two reads share, `Inspect` and `NifLinks.Read`; `nif_set`'s write, its byte
+normalizer and its read-back each still load their own `NifFile`. `NifLinks` is the file
+layer's reader of a mesh's links (slots, effect-shader textures, the root's SMP and `BODYTRI` strings); its contract
+is in [assets.md](assets.md), A mesh's links. `nif_inspect` does not render it.
 
 An `INiShader` widening is narrowed back on read: emissive is a Color3 on disk and the interface widens it to Color4,
 so the fourth component is a synthetic 0 that would render as a fully transparent emissive. RGB only, on read, on

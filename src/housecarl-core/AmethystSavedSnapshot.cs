@@ -80,6 +80,8 @@ public sealed class AmethystSavedSnapshot
     readonly Dictionary<string, string[]> _papyrusTreeListings = new(StringComparer.Ordinal);
     readonly HashSet<string> _protectedRoots = new(StringComparer.Ordinal);
     readonly Dictionary<string, string> _effectiveIniPaths = new(StringComparer.OrdinalIgnoreCase);
+    readonly Dictionary<string, (string Strings, string Archives)> _stringFolders = new(StringComparer.Ordinal);
+    string? _stringScratch;
     readonly Dictionary<string, string[]> _watchedEntries = new(StringComparer.Ordinal);
     readonly Dictionary<string, string[]> _watchedCandidates = new(StringComparer.Ordinal);
     /// <summary>Configured or plugin-bound archives confirmed absent from the vanilla root; appearance invalidates this capture.</summary>
@@ -713,6 +715,107 @@ public sealed class AmethystSavedSnapshot
     /// <summary>Saved Data-relative asset keys; this does not discover out-of-band staging additions.</summary>
     public IEnumerable<string> AssetPaths => _winners.Keys.Select(k => k.Destination).Where(d => d.StartsWith("data/", StringComparison.OrdinalIgnoreCase))
         .Select(d => d[5..].Replace('/', '\\')).Distinct(StringComparer.OrdinalIgnoreCase);
+
+    /// <summary>Names in this capture's selected variants, including disabled donors; never probes staging folders.</summary>
+    public bool HasSavedProvider(string name) => _candidates.Values.Any(c => Named(c, name));
+
+    public bool HasActiveProvider(string name) => _providers.Values.Any(copies => copies.Any(c => Named(c, name)));
+
+    static bool Named(Candidate c, string name) => AssetSourceSelection.NameMatches(
+        c.Kind == 3 ? Path.GetFileName(c.Source) : c.ModKey == "[overwrite]" ? "overwrite" : c.Mod,
+        c.Kind == 3 ? c.Mod : null, name);
+
+    /// <summary>An explicit donor read from the selected saved variant, respecting routing and file exclusions.</summary>
+    public OffOrderLookup ResolveNamedAsset(string? provider, string relative)
+    {
+        if (string.IsNullOrWhiteSpace(provider)) return OffOrderLookup.NotConsulted;
+        var destination = "Data/" + AssetResolver.ValidateRelPath(relative).Replace('\\', '/');
+        if (!HasSavedProvider(provider))
+            throw new InvalidOperationException($"Provider '{provider}' is not in Amethyst's saved inventory; Refresh the selected profile before reading it");
+        var choices = _candidates.Values.Where(c => Named(c, provider) && c.Target == "game"
+            && c.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase) && (c.Kind == 3 || c.Deployable))
+            .OrderBy(c => c.Kind == 3).ThenByDescending(SavedCopyRank).ToList();
+        if (choices.Count == 0) return new(null, OffOrderReason.NoCopyInFolder);
+        var candidate = choices[0];
+        var path = SourcePath(candidate);
+        var copy = candidate.Kind == 3
+            ? new PlacementSource(provider, AssetKind.Bsa, null, path, candidate.LegacyRel.Replace('/', '\\'),
+                OffOrder: true, OwningMod: candidate.Mod, OwnerEnabled: candidate.Enabled)
+            : new PlacementSource(provider, AssetKind.Loose, path, null, relative, OffOrder: true, OwnerEnabled: candidate.Enabled);
+        return new(copy, OffOrderReason.Found);
+    }
+
+    /// <summary>A value from the already-captured effective INIs, with SkyrimCustom overriding Skyrim key by key.</summary>
+    public (string? Value, string Ini) IniValue(string section, string key)
+    {
+        foreach (var name in new[] { "SkyrimCustom.ini", "Skyrim.ini" })
+        {
+            if (!_effectiveIniPaths.TryGetValue(name, out var path) || CapturedInput(path) is not { } bytes) continue;
+            bool inside = false;
+            using var input = new MemoryStream(bytes, writable: false);
+            using var reader = new StreamReader(input, new UTF8Encoding(false, true), detectEncodingFromByteOrderMarks: true);
+            while (reader.ReadLine() is { } raw)
+            {
+                var line = raw.Trim();
+                if (line.StartsWith('[')) { inside = line.Equals("[" + section + "]", StringComparison.OrdinalIgnoreCase); continue; }
+                if (!inside || line.StartsWith(';') || line.StartsWith('#')) continue;
+                var eq = line.IndexOf('=');
+                if (eq >= 0 && line[..eq].Trim().Equals(key, StringComparison.OrdinalIgnoreCase) && line[(eq + 1)..].Trim() is { Length: > 0 } value)
+                    return (value, path);
+            }
+        }
+        return (null, _effectiveIniPaths.GetValueOrDefault("Skyrim.ini") ?? "captured Amethyst effective INIs");
+    }
+
+    /// <summary>Give Mutagen a private, exact set of winning tables, including split folders and archive providers.
+    /// It must never discover a disabled table beside another table or the plugin itself.</summary>
+    internal (string Strings, string Archives) StringFolders(string pluginPath, Mutagen.Bethesda.Strings.Language language)
+    {
+        var cacheKey = Path.GetFullPath(pluginPath) + ":" + language;
+        if (_stringFolders.TryGetValue(cacheKey, out var found)) return found;
+        _stringScratch ??= Directory.CreateTempSubdirectory("hc-amethyst-strings-").FullName;
+        var folder = Path.Combine(_stringScratch, _stringFolders.Count.ToString());
+        Directory.CreateDirectory(folder);
+        var archiveFolder = Path.Combine(folder, "archives");
+        Directory.CreateDirectory(archiveFolder);
+        // Read the fixed TES4 flags directly: the generic header reader opens through ReadFor and would recurse here.
+        Span<byte> header = stackalloc byte[12];
+        using (var stream = File.OpenRead(pluginPath)) stream.ReadExactly(header);
+        if (!header[..4].SequenceEqual("TES4"u8)) throw new InvalidOperationException("String source has no TES4 header");
+        if ((BinaryPrimitives.ReadUInt32LittleEndian(header[8..]) & 0x80) != 0)
+        {
+            string? donor = null;
+            if (!OrderedPluginPaths.Contains(Path.GetFullPath(pluginPath), StringComparer.Ordinal))
+            {
+                var candidate = _candidates.Values.FirstOrDefault(c => c.Kind != 3
+                    && Path.GetFullPath(Path.Combine(ModsDir, c.Mod, c.Source)) == Path.GetFullPath(pluginPath));
+                if (candidate is null) throw new InvalidOperationException("Localized source is outside Amethyst's saved inventory; Refresh the selected profile before reading");
+                donor = candidate.Mod;
+            }
+            using var resolver = AssetResolver.BuildSavedSnapshot(this);
+            foreach (var kind in LocalizedStrings.Kinds)
+            {
+                var name = $"{Path.GetFileNameWithoutExtension(pluginPath)}_{language}.{kind}";
+                var relative = "Strings/" + name;
+                var copy = donor is null ? resolver.ResolveForPlacement(relative).Sources.FirstOrDefault()
+                    : ResolveNamedAsset(donor, relative).Source;
+                if (copy is null)
+                    throw new GameLanguageRefusedException($"Amethyst's saved view has no {name} for localized plugin {Path.GetFileName(pluginPath)}; refresh the profile or restore its language files");
+                var (bytes, error) = AssetResolver.ReadPlacementSource(copy);
+                if (bytes is null) throw new GameLanguageRefusedException($"Could not read saved string table {name}: {error}");
+                File.WriteAllBytes(Path.Combine(folder, name), bytes);
+            }
+        }
+        return _stringFolders[cacheKey] = (folder, archiveFolder);
+    }
+
+    /// <summary>Remove only private string-table copies after the request's overlays have closed.</summary>
+    public void ReleaseStringFiles()
+    {
+        if (_stringScratch is { } root) Directory.Delete(root, recursive: true);
+        _stringScratch = null;
+        _stringFolders.Clear();
+    }
 
     /// <summary>Top-level Data files supplied by an enabled saved loose provider; never discovers new staging files.</summary>
     public IReadOnlyCollection<string> LooseRootFiles(string provider) => _providers.Values.SelectMany(p => p)

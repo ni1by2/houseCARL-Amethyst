@@ -36,7 +36,7 @@ public static partial class RecordsTools
     /// <summary>PROJECT — the shape of the answer: one form, with its sub-parameters inside it, so there is no flat spelling for an illegal pairing.</summary>
     public sealed class RecordsProject
     {
-        [Description("The form: 'summary' (type, editorid, name, winner and override depth; the default) | 'fields' (named field values; takes fields= and depth=) | 'rows' (a list field folded to one line per element; takes fields= naming the list, or one element as 'Conditions[0]', and depth=, default 4. Each line is the element's own summary plus every sub-field the read found; absent optionals are omitted, and a declared but null link is kept. One call audits a whole condition stack (fields=[\"Conditions\"]). A named field that is not a list is refused) | 'everything' (the full record body; takes depth=) | 'aggregate' (a counted table; takes group_by=) | 'delta' (subject vs reference, differences only: source= is the subject, versus= the reference; takes fields= to narrow. Each line shows the subject's value with the reference's beside it, labelled by plugin; versus=\"previous_provider\" shows what a plugin changed against what sat beneath it) | 'tree' (the conflict view: every provider of each record in priority order, winner last, each showing only the fields that differ from versus=, default the winner; takes fields=. On a type that owns child records (a cell's placed references, a topic's INFO lines, a worldspace's cells) it also states, per such field, which providers declare children there, or how many do for a singular field such as Cell.Landscape, and says so when none do) | 'info_order' (DIAL topics only: the merged INFO sequence across every touching plugin, with moved lines marked; the 'why does the wrong line play' diagnostic. The game plays the first passing line from the top, and a plugin that re-lists a line without carrying its PNAM appends it to the bottom, so a reorder changes which line answers while no field differs, which a diff cannot show. Select a quest's topics with types=[\"DIAL\"] where=[\"Quest = <quest formid>\"]. source= can fold in one off-order plugin; see source=) | 'chain' (a walk's own paths, endpoints and cycles rather than the records it reached; needs walk=, and carries the NPC template inheritance report and the reverse MGEF carrier rows. A cycle is a record the walk reached again from itself, found over the nodes it entered and reported once per closing link, so the count is a lower bound on distinct loops; the search stops at 200 loops per seed and says so. No cycles over a walk that finished means none; over one cut at walk.depth or walk.max_nodes it means none in what was read). delta and tree compare by content: a list reorder is flagged, and a truncated deep read is reported, never called identical.")]
+        [Description("The form: 'summary' (type, editorid, name, winner and override depth; the default) | 'fields' (named field values; takes fields= and depth=) | 'rows' (a list field folded to one line per element; takes fields= naming the list, or one element as 'Conditions[0]', and depth=, default 4. Each line is the element's own summary plus every sub-field the read found; absent optionals are omitted, and a declared but null link is kept. One call audits a whole condition stack (fields=[\"Conditions\"]). A named field that is not a list is refused) | 'everything' (the full record body; takes depth=) | 'aggregate' (a counted table; takes group_by=) | 'delta' (subject vs reference, differences only: source= is the subject, versus= the reference; takes fields= to narrow. Each line shows the subject's value with the reference's beside it, labelled by plugin; versus=\"previous_provider\" shows what a plugin changed against what sat beneath it) | 'tree' (the conflict view: every provider of each record in priority order, the winner marked (a partial-form override, flag 0x4000 on a CELL, WRLD or DIAL, does not win), each showing only the fields that differ from versus=, default the winner; takes fields=. On a type that owns child records (a cell's placed references, a topic's INFO lines, a worldspace's cells) it also states, per such field, which providers declare children there, or how many do for a singular field such as Cell.Landscape, and says so when none do) | 'info_order' (DIAL topics only: the merged INFO sequence across every touching plugin, with moved lines marked; the 'why does the wrong line play' diagnostic. The game plays the first passing line from the top, and a plugin that re-lists a line without carrying its PNAM appends it to the bottom, so a reorder changes which line answers while no field differs, which a diff cannot show. Select a quest's topics with types=[\"DIAL\"] where=[\"Quest = <quest formid>\"]. source= can fold in one off-order plugin; see source=) | 'chain' (a walk's own paths, endpoints and cycles rather than the records it reached; needs walk=, and carries the NPC template inheritance report and the reverse MGEF carrier rows. A cycle is a record the walk reached again from itself, found over the nodes it entered and reported once per closing link, so the count is a lower bound on distinct loops; the search stops at 200 loops per seed and says so. No cycles over a walk that finished means none; over one cut at walk.depth or walk.max_nodes it means none in what was read). delta and tree compare by content: a list reorder is flagged, and a truncated deep read is reported, never called identical.")]
         public string? form { get; set; }
 
         [Description("Dotted field paths: read on the fields form, folded on the rows form, narrowed to on delta and tree. E.g. [\"BasicStats.Damage\", \"Keywords\", \"Effects\"]. Index a list or dict element with brackets ('Effects[0].Data.Magnitude'). A path may lead with '*parent', the record that contains this one, as in where=; it chains. On the rows form these name the list(s) to fold, one line per element. On the fields form a step may be quantified: 'Effects[*count]' is one number per record, 'Effects[*]' one row per element in the rows form's row shape, and 'Effects[*].Data.Magnitude' that leaf per element; under format='dense' the extra rows repeat the record's identity columns.")]
@@ -282,14 +282,25 @@ public static partial class RecordsTools
             depth = Math.Max(depth, foldPlan.Depth);
             foldPlan = foldPlan with { Depth = depth, CallerDepth = project?.depth is { } cd && cd > 0 ? cd : 1 };
         }
-        var projFields = bodyFields || comparisonForm ? project?.fields : null;
+        IReadOnlyList<string>? projFields = bodyFields || comparisonForm ? project?.fields : null;
         // The read runs the LIST path a quantifier binds to and the fold puts the caller's spelling back; each path
         // is read once, at the depth that path's column needs.
         string[]? foldReadPaths = null; (int Depth, string[]? Tail)[]? readDepths = null;
         if (foldPlan is not null) (foldReadPaths, readDepths) = foldPlan.Read();
         // Paths whose every column is a [*count] carry no list line, so they take the child union's index-only tier.
         var countFields = foldPlan?.CountOnlyPaths;
-        var readPaths = foldPlan is null ? projFields : foldReadPaths;
+        IReadOnlyList<string>? readPaths = foldPlan is null ? projFields : foldReadPaths;
+        // The projection's plan, made once before any read through the walk where= plans with: a path no type in scope
+        // carries refuses here, and one a type lacks reads as a short token, said once; docs/architecture/read-engine.md.
+        PlannedFields? fieldPlan = null;
+        if (readPaths is { Count: > 0 } && form != "chain")
+        {
+            // A walk's types= narrows what it reaches, not what the rows are, so its rows plan untyped.
+            var (plan, planErr) = svc.PlanFields(readPaths, walk is null ? types : null);
+            if (planErr is not null) return Wire.Refuse(json, "error: " + planErr);
+            readPaths = fieldPlan = plan;
+            if (foldPlan is null) projFields = plan;
+        }
         bool resolveNames = project?.resolve_names ?? false;
         // The lever vocabulary is a function of (tool, FORM); docs/architecture/records-tool-front.md.
         var formLevers = form == "everything" ? LeverNames.Records.WithoutFieldSelector() : LeverNames.Records;
@@ -521,7 +532,7 @@ public static partial class RecordsTools
 
         // ---- the response envelope (form + resolved source arm) -----------------------------------------
         // Text renders get it as a header line; json renders carry the same pairs as top-level fields.
-        var envelope = new List<KeyValuePair<string, string>> { new("form", form) };
+        var envelope = new List<EnvelopePair> { new("form", form) };
         string headerLine = $"records  form={form}";
         void Arm(string statement)
         {
@@ -530,13 +541,21 @@ public static partial class RecordsTools
             envelope.Add(new("source", statement));
             headerLine += $"  source={statement}";
         }
-        // A consumed scan's owed notes, appended after the header's own lines when the header is written.
+        // A consumed scan's owed notes, then the field plan's, appended after the header's own lines when the header is written.
         CrossQueryOutcome? owed = null;
         void OweNotes(CrossQueryOutcome scan) => owed = scan;
-        string Head(SpillState? sp) => owed is null ? headerLine
-            : headerLine + string.Concat(owed.OwedNotes(sp?.Spill is not null).Select(n => "\n" + n));
-        List<KeyValuePair<string, string>> Env(SpillState? sp) => owed is null ? envelope
-            : envelope.Concat(owed.OwedNotes(sp?.Spill is not null).Select(n => new KeyValuePair<string, string>("notes", n))).ToList();
+        IReadOnlyList<string> Owed(SpillState? sp) =>
+            (owed?.OwedNotes(sp?.Spill is not null) ?? Array.Empty<string>()).Concat(fieldPlan?.Notes() ?? Array.Empty<string>()).ToList();
+        string Head(SpillState? sp) => headerLine + string.Concat(Owed(sp).Select(x => "\n" + x));
+        List<EnvelopePair> Env(SpillState? sp) => Owed(sp) is { Count: > 0 } n
+            ? envelope.Concat(n.Select(x => new EnvelopePair("notes", x))).ToList() : envelope;
+        // The scan renders read their rows lazily and state the scan's owed notes, so the plan's ride the scan there.
+        CrossQueryOutcome WithPlanNotes(CrossQueryOutcome scan)
+        {
+            if (fieldPlan is null) return scan;
+            if (scan.Prefilled is { } rowsTyped) fieldPlan.Expect(rowsTyped.Select(m => m.Type));
+            return scan with { FieldNotes = fieldPlan.Notes() };
+        }
         // A census is a text render too, so it is held to the same ceiling and says so when max_chars is smaller
         // than the statements it carries whatever the budget.
         string Census(string body) => RenderCap.Settle(body, Wire.Cap(max_chars));
@@ -557,7 +576,7 @@ public static partial class RecordsTools
         // What every post-state overlay read states: the layer is outside the epoch, and its warnings that bear on the rows.
         void OverlayPostNotes()
         {
-            envelope.Add(new("epoch_covers_source", "false"));
+            envelope.Add(new("epoch_covers_source", false));
             headerLine += "\n(the SkyPatcher INI layer's files are OUTSIDE the epoch fingerprint — an INI edit changes answers " +
                           "without changing the epoch; a record whose type SkyPatcher cannot patch reads as its plain winner)";
             StateOverlayWarnings();
@@ -619,7 +638,7 @@ public static partial class RecordsTools
             : RenderBudget.ComparisonScanLever;
 
         // The comparison floor, before any read: past the budget even at the cheapest measured row, it refuses.
-        bool cmpNarrowed = projFields is { Length: > 0 };
+        bool cmpNarrowed = projFields is { Count: > 0 };
         string? ComparisonCost(int rows, string lever) =>
             RenderBudget.RefuseComparison(svc.Bounds, rows, cmpNarrowed, form, RenderBudget.ComparisonLever(lever, cmpNarrowed));
 
@@ -650,7 +669,7 @@ public static partial class RecordsTools
                 var e = new List<KeyValuePair<string, string>> { new("formids", echoSrc ?? $"{ids.Length} inline formid(s)") };
                 e.Add(new("form", form));
                 if (srcName is not null) e.Add(new("source", srcName + (srcMod is not null ? $" (mod '{srcMod}')" : "")));
-                if (projFields is { Length: > 0 }) e.Add(new("fields", string.Join(", ", projFields)));
+                if (projFields is { Count: > 0 }) e.Add(new("fields", string.Join(", ", projFields)));
                 if (depth > 1) e.Add(new("depth", depth.ToString()));
                 return e;
             }
@@ -740,7 +759,7 @@ public static partial class RecordsTools
                 Arm($"{pole!.Plugin} — {pole.Where}");
                 if (!pole.EpochCoversPole)
                 {
-                    envelope.Add(new("epoch_covers_source", "false"));
+                    envelope.Add(new("epoch_covers_source", false));
                     headerLine += "\n(the off-order file's content is OUTSIDE the epoch fingerprint — an edit to it changes answers without changing the epoch)";
                 }
             }
@@ -1115,7 +1134,7 @@ public static partial class RecordsTools
                     new("source", srcSpec.Label),
                 };
                 if (versusSpec is not null) e.Add(new("versus", versusSpec.Label));
-                if (projFields is { Length: > 0 }) e.Add(new("fields", string.Join(", ", projFields)));
+                if (projFields is { Count: > 0 }) e.Add(new("fields", string.Join(", ", projFields)));
                 return e;
             }
 
@@ -1168,10 +1187,14 @@ public static partial class RecordsTools
             int noVerdict = rows.Count(x => x.Error is null && x.Diff!.NoVerdictCount > 0);
             int noField = rows.Count(x => x.Error is null && x.Diff!.NoFieldCount > 0 && x.Diff.NoFieldCount == x.Diff.NoVerdictCount);
             int errs = rows.Count(x => x.Error is not null);
+            // A planned path its type lacks and no line left on either side; also in no_verdict when other paths could not be read on both. Named only when there are any.
+            int notCompared = rows.Count(x => x.Error is null && x.Diff!.NothingCompared);
+            var notComparedCount = notCompared > 0 ? new[] { KvI("not_compared", notCompared) } : Array.Empty<KeyValuePair<string, int>>();
+            var deltaCounts = CmpCounts(new[] { KvI("count", rows.Count), KvI("differing", differing), KvI("identical", identical), KvI("no_verdict", noVerdict), KvI("errors", errs) }.Concat(notComparedCount).ToArray());
             if (counts_only)
                 return json
-                    ? JsonWire.RenderNamedCounts(Env(null), CmpCounts(KvI("count", rows.Count), KvI("differing", differing), KvI("identical", identical), KvI("no_verdict", noVerdict), KvI("errors", errs)), epoch, max_chars)
-                    : Census($"{Head(null)}\ncount={rows.Count} differing={differing} identical={identical} no_verdict={noVerdict} errors={errs}" + Wire.EpochLine(epoch));
+                    ? JsonWire.RenderNamedCounts(Env(null), deltaCounts, epoch, max_chars)
+                    : Census($"{Head(null)}\ncount={rows.Count} differing={differing} identical={identical} no_verdict={noVerdict} errors={errs}" + (notCompared > 0 ? $" not_compared={notCompared}" : "") + Wire.EpochLine(epoch));
             var winRows = Windowed(rows);
             SpillState? spill = null;
             if (wantFile)
@@ -1180,10 +1203,9 @@ public static partial class RecordsTools
                 if (aerr is not null) return json ? JsonWire.RenderError(aerr, epoch) : "error: " + aerr;
                 spill = SpillState.Spilled(s!, manifestOnly: true);
             }
-            var deltaCounts = CmpCounts(KvI("count", rows.Count), KvI("differing", differing), KvI("identical", identical), KvI("no_verdict", noVerdict), KvI("errors", errs));
             string Render(SpillState? sp, out bool trunc) => json
                 ? JsonWire.RenderDelta(winRows, max_chars, epoch, Env(sp), deltaCounts, sp, out trunc)
-                : RenderRecordsDelta(winRows, rows.Count, differing, identical, noVerdict, errs, Head(sp), epoch, max_chars, sp, out trunc, noField: noField);
+                : RenderRecordsDelta(winRows, rows.Count, differing, identical, noVerdict, errs, Head(sp), epoch, max_chars, sp, out trunc, noField: noField, notCompared: notCompared);
             var rendered = Render(spill, out var truncated);
             if (spill is null && truncated)
             {
@@ -1203,7 +1225,9 @@ public static partial class RecordsTools
             var refStatement = versusSpec!.Kind == RecordReads.PoleKind.Winner ? "winner" : rArm ?? versusSpec.Label;
             envelope.Add(new("versus", refStatement));
             headerLine += $"  versus={refStatement}";
-            Arm("every provider of each record (the touching stack, winner last)");
+            Arm(rows.All(x => x.WinnerAt < 0 || x.WinnerAt == x.Touchers.Count - 1)
+                ? "every provider of each record (the touching stack, winner last)"
+                : "every provider of each record (the touching stack in load order; a partial form above the winner does not win)");
             CoverageNote(covers);
             StateOverlayWarnings();
             int contested = rows.Count(x => x.Error is null && x.Touchers.Count > 1);
@@ -1223,7 +1247,7 @@ public static partial class RecordsTools
             var treeCounts = CmpCounts(KvI("count", rows.Count), KvI("contested", contested), KvI("errors", errs));
             string Render(SpillState? sp, out bool trunc) => json
                 ? JsonWire.RenderTree(winRows, max_chars, epoch, Env(sp), treeCounts, sp, out trunc, LeverNames.Records)
-                : RenderRecordsTree(winRows, rows.Count, contested, errs, projFields is { Length: > 0 }, Head(sp), epoch, max_chars, sp, out trunc);
+                : RenderRecordsTree(winRows, rows.Count, contested, errs, projFields is { Count: > 0 }, Head(sp), epoch, max_chars, sp, out trunc);
             var rendered = Render(spill, out var truncated);
             if (spill is null && truncated)
             {
@@ -1294,7 +1318,7 @@ public static partial class RecordsTools
         void CoverageNote(bool covers)
         {
             if (covers) return;
-            envelope.Add(new("epoch_covers_source", "false"));
+            envelope.Add(new("epoch_covers_source", false));
             headerLine += "\n(a pole reads content OUTSIDE the epoch fingerprint — an off-order file or the INI layer; an edit there changes answers without changing the epoch)";
         }
 
@@ -1480,7 +1504,7 @@ public static partial class RecordsTools
                 Add("where", where is { Length: > 0 } ? string.Join(" AND ", where) : null);
                 Add("where_source", where_source);
                 Add("group_by", groupBy);
-                Add("fields", projFields is { Length: > 0 } ? string.Join(", ", projFields) : null);
+                Add("fields", projFields is { Count: > 0 } ? string.Join(", ", projFields) : null);
                 if (depth > 1) Add("depth", depth.ToString());
                 if (winnerFields) Add("fields_source", "winner");
                 Add("source", srcName ?? (srcSpec.Kind != RecordReads.PoleKind.Winner ? srcSpec.Label : null));
@@ -1506,7 +1530,7 @@ public static partial class RecordsTools
             if (walk is not null && outcome.Error is null && outcome.Groups is null)
             {
                 var seedKeys = outcome.Keys.Select(k => k.ToString()).ToArray();
-                envelope.Add(new("total", outcome.Total.ToString()));
+                envelope.Add(new("total", outcome.Total));
                 headerLine += $"\n{outcome.Total} match(es) selected by the scan as walk seeds";
                 expectEpoch = outcome.Epoch;
                 return WalkLane(seedKeys, null, null);
@@ -1523,7 +1547,7 @@ public static partial class RecordsTools
             //      two captures' seam is epoch-compared.
             if (comparisonForm && outcome.Error is null && outcome.Groups is null)
             {
-                envelope.Add(new("total", outcome.Total.ToString()));
+                envelope.Add(new("total", outcome.Total));
                 headerLine += $"\n{outcome.Total} match(es) selected by the scan";
                 var cmpKeys = ComparisonWindow(outcome.Keys, outcome.Total);
                 if (ComparisonCost(cmpKeys.Count, ComparisonLever()) is { } cmpTooBig)
@@ -1565,7 +1589,7 @@ public static partial class RecordsTools
             if (form == "info_order" && outcome.Error is null && outcome.Groups is null)
             {
                 var ioKeys = outcome.Keys.Select(k => k.ToString()).ToList();
-                envelope.Add(new("total", outcome.Total.ToString()));
+                envelope.Add(new("total", outcome.Total));
                 headerLine += $"\n{outcome.Total} match(es) selected by the scan";
                 // The scan selects out of the ACTIVE order's index, which the folded file is not in, so a topic only
                 // that file defines is reached by naming it in formids= — said here rather than left to be found.
@@ -1670,7 +1694,7 @@ public static partial class RecordsTools
                     int notTouched = bodies.Count(o => o.Error is not null && (o.Error.Contains("does not touch") || o.Error.Contains("does not define or override")));
                     if (notTouched > 0)
                     {
-                        envelope.Add(new("not_touched", notTouched.ToString()));
+                        envelope.Add(new("not_touched", notTouched));
                         headerLine += $"\nnot_touched={notTouched} — scoped match(es) the source pole has no version of (each row names its actual touchers)";
                     }
                 }
@@ -1684,7 +1708,7 @@ public static partial class RecordsTools
                     return json ? JsonWire.RenderError(tear, outcome.Stamp) : "error: " + tear;
                 }
                 var bodyEpoch = bodyEpochs.FirstOrDefault() ?? outcome.Stamp;
-                envelope.Add(new("total", outcome.Total.ToString()));
+                envelope.Add(new("total", outcome.Total));
                 headerLine += $"\n{outcome.Total} match(es); bodies for the {keys.Count}-row window below";
                 // Selected by a scan, not a formids list, so the batch notice's selection clause names limit=.
                 var evLevers = formLevers.OnScanSelection();
@@ -1718,9 +1742,10 @@ public static partial class RecordsTools
             // ---- summary / fields / aggregate: the scan renders, envelope-stamped. ----
             // Summary rows the scan left unfilled are filled once here, for the render and the spill alike.
             if (outcome.Prefilled is null && outcome.Error is null && outcome.Groups is null
-                && !(projFields is { Length: > 0 } && readPaths is { Length: > 0 })
+                && !(projFields is { Count: > 0 } && readPaths is { Count: > 0 })
                 && svc.FillSummaries(outcome, ct) is { } fill)
                 outcome = outcome with { Prefilled = fill };
+            outcome = WithPlanNotes(outcome);
             SpillState? spill = null;
             if (wantFile && outcome.Error is null)
             {
@@ -1730,7 +1755,7 @@ public static partial class RecordsTools
                 spill = SpillState.Spilled(s!, manifestOnly: true);
             }
             // "drop project=" is only actionable on detail rows; a summary-form scan has no project= to drop.
-            var qLevers = projFields is { Length: > 0 } ? LeverNames.Records : LeverNames.Records.WithNothingToDrop();
+            var qLevers = projFields is { Count: > 0 } ? LeverNames.Records : LeverNames.Records.WithNothingToDrop();
             string Render(SpillState? sp, out bool trunc) => fmt switch
             {
                 Wire.QueryFormat.Dense => JsonWire.RenderCrossQueryDense(svc, outcome, readPaths, max_chars, resolveNames, winnerFields, sp, out trunc, envelope, qLevers, foldPlan, ct),
@@ -1757,7 +1782,7 @@ public static partial class RecordsTools
             // The file is the SELECTION statement, stated for every form except delta, whose pipeline names the
             // same file as its subject.
             if (form != "delta") Arm($"{pole.Plugin} — {pole.Where}");
-            envelope.Add(new("epoch_covers_source", "false"));
+            envelope.Add(new("epoch_covers_source", false));
             headerLine += "\n(the off-order file's content is OUTSIDE the epoch fingerprint — an edit to it changes answers without changing the epoch)";
             if (conflicts_only)
                 return Wire.Refuse(json, "error: conflicts_only= has no meaning on an out-of-load-order file — it is not in the conflict frame. Drop it, or read the winner (source=\"winner\").", pole.Stamp);
@@ -1852,7 +1877,7 @@ public static partial class RecordsTools
             // Comparisons over the file's matches: the file IS the subject pole (its version of each match).
             if (comparisonForm && outcome.Error is null && outcome.Groups is null)
             {
-                envelope.Add(new("total", outcome.Total.ToString()));
+                envelope.Add(new("total", outcome.Total));
                 headerLine += $"\n{outcome.Total} match(es) selected from the file";
                 var cmpKeys = ComparisonWindow(outcome.Keys, outcome.Total);
                 if (ComparisonCost(cmpKeys.Count, ComparisonLever()) is { } offCmpTooBig)
@@ -1918,7 +1943,7 @@ public static partial class RecordsTools
                                $"(epoch={string.Join(", ", offBodyEpochs.Where(e => e != outcome.Epoch))}) — the two halves would mix builds. Retry the call.";
                     return json ? JsonWire.RenderError(tear, outcome.Stamp) : "error: " + tear;
                 }
-                envelope.Add(new("total", outcome.Total.ToString()));
+                envelope.Add(new("total", outcome.Total));
                 headerLine += $"\n{outcome.Total} match(es); bodies for the {keys.Count}-row window below";
                 // Selected by the off-order file scan, so the remedy vocabulary matches the body lane above.
                 var offLevers = formLevers.OnScanSelection();

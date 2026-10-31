@@ -29,7 +29,7 @@ public static class NifTools
          "Use it for 'what shapes / bones / textures / partitions / alpha does this mesh have', 'does it glow / use " +
          "soft lighting / subsurface skin / env-mapping', a facegen mesh's baked shape names and tint path, a " +
          "skeleton's bone names, or a dark-face mesh's flags, alpha and partitions. It reads inside a file; " +
-         ToolNames.AssetStatus + " says which mod's copy wins.\n\n" +
+         ToolNames.AssetStatus + " says which mod's copy wins, though sections=paths names each texture slot's winner.\n\n" +
          "Select — mesh_paths= | npc=; one is required, and the two compose into one batch.\n" +
          "Source — source_provider= (empty = the VFS winner).\n" +
          "Project — sections= (empty = the summary).\n" +
@@ -58,7 +58,9 @@ public static class NifTools
                      "scale, with that shape's partitions, alpha, texture-set paths and bones inline; 'partitions' " +
                      "the BSDismember partitions (decoded to SBP_* names); 'alpha' the alpha property (blend / test / " +
                      "threshold); 'paths' the embedded texture-set paths, with slot names where the shader determines " +
-                     "them; 'shader' the shader property (block type, the shader type such as SkinTint / FaceTint / " +
+                     "them, and under each the Data path it names with the load order's winner or ABSENT, or, when it names " +
+                     "none, why; " +
+                     "'shader' the shader property (block type, the shader type such as SkinTint / FaceTint / " +
                      "HairTint / EnvironmentMap / Parallax, the SLSF1+SLSF2 flags by name, and on a Skyrim-layout " +
                      "shader the lighting values: emissive colour and multiple, glossiness, specular strength and " +
                      "colour, alpha; anything not reported is named with its reason, either the library does not " +
@@ -110,7 +112,7 @@ public static class NifTools
         // Sections requested but none resolved: fail rather than render the summary as if that were the answer.
         if (SectionsError(want, unknownTokens) is { } sectionsErr) return sectionsErr;
 
-        var data = svc.NifInspect(selected, string.IsNullOrWhiteSpace(source_provider) ? null : source_provider);
+        var data = svc.NifInspect(selected, string.IsNullOrWhiteSpace(source_provider) ? null : source_provider, want.Contains("paths"));
         return NifWire.Render(data, want, unknownTokens, Wire.Cap(max_chars));
     });
 
@@ -427,7 +429,7 @@ static class NifWire
             s => string.Join(", ", s.Partitions.Select(p => $"{p.BodyPartId} ({p.BodyPartName}, flags {p.PartFlags})")))) missed++;
         if (want.Contains("alpha") && !RenderPerShape(sb, nif, room, "alpha", s => s.Alpha is not null,
             s => AlphaLine(s.Alpha!))) missed++;
-        if (want.Contains("paths") && !RenderPaths(sb, nif, room)) missed++;
+        if (want.Contains("paths") && !RenderPaths(sb, nif, d.SlotLinks, room)) missed++;
         if (want.Contains("shader") && !RenderShader(sb, nif, room)) missed++;
         if (want.Contains("bones") && !RenderPerShape(sb, nif, room, "bones", s => s.Bones.Count > 0,
             s => string.Join(", ", s.Bones))) missed++;
@@ -493,7 +495,7 @@ static class NifWire
         return true;
     }
 
-    static bool RenderPaths(StringBuilder sb, NifInspect nif, RenderCap cap)
+    static bool RenderPaths(StringBuilder sb, NifInspect nif, IReadOnlyDictionary<string, NifSlotLink>? links, RenderCap cap)
     {
         // Charged with the heading, for the same reason the shapes section charges it there.
         if (!cap.TryAppend(sb, "\n--- paths (embedded texture-set slots; material/.tri/physics-xml refs appear under sections=strings) ---\n"
@@ -504,7 +506,11 @@ static class NifWire
         {
             int mark = sb.Length;
             sb.Append("  '").Append(s.Name).Append("':\n");
-            foreach (var t in s.Textures) AppendTexture(sb, t);
+            foreach (var t in s.Textures)
+            {
+                AppendTexture(sb, t);
+                if (links is not null && links.TryGetValue(t.Path, out var link)) AppendSlotLink(sb, link);
+            }
             if (Cut(sb, cap, mark, textured.Count - shown)) return true;
             shown++;
         }
@@ -519,6 +525,19 @@ static class NifWire
         sb.Append("    tex[").Append(t.Slot).Append(']');
         if (t.SlotName is not null) sb.Append(" (").Append(t.SlotName).Append(')');
         sb.Append(": ").Append(t.Path).Append('\n');
+    }
+
+    /// <summary>Under a slot line, the Data path the slot names and which copy of it the game loads, so a slot spelt
+    /// with data\ or without textures\ is read the way the engine opens it.</summary>
+    static void AppendSlotLink(StringBuilder sb, NifSlotLink link)
+    {
+        sb.Append("      data path: ");
+        if (link.Error is not null) { sb.Append("none — ").Append(link.Error).Append('\n'); return; }
+        var hit = link.Hit!;
+        sb.Append(hit.RelPath).Append("  ");
+        if (hit is { Exists: true, Winner: { } w }) sb.Append("WINS: ").Append(AssetWire.Provider(w));
+        else sb.Append("ABSENT");
+        sb.Append('\n');
     }
 
     /// <summary>The shader section: per shape, the block type and shader type, the decoded flag words, and the lighting

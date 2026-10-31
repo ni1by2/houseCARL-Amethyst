@@ -9,6 +9,11 @@ internal sealed partial class RecordReads
 {
     // ---- cross-plugin query ----------------------------------------------------------------------------
 
+    /// <summary>Matches exist BEYOND the returned window; the matches offset= skipped were asked to be, a group_by=
+    /// tally has no window, and limit 0 (counts_only) asks for none.</summary>
+    static bool WindowCapped(Dictionary<string, int>? groups, int limit, int total, int offset, int returned) =>
+        groups is null && limit > 0 && total > offset + returned;
+
     /// <summary>Scan the order for records matching a filter, in a SINGLE enumeration pass with the matching record's
     /// body in hand: type= streams the winner body, plugins= each scoped plugin's own, conflicts_only= alone reads
     /// the index.</summary>
@@ -656,8 +661,7 @@ internal sealed partial class RecordReads
         // The group_by= TALLY is not limit-capped (the render's table rows are), so Capped is a match-line concern only.
         var groupRows = groups?.Select(kv => new GroupCount(kv.Key, kv.Value))
                               .OrderByDescending(g => g.Count).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
-        // Capped means matches exist BEYOND the returned window; the matches offset= skipped were asked to be.
-        return new CrossQueryOutcome(keys, prefilled, total, groups is null && total > offset + keys.Count, null,
+        return new CrossQueryOutcome(keys, prefilled, total, WindowCapped(groups, limit, total, offset, keys.Count), null,
                                      predicate?.AccountingNote(), sources, scanNote,
                                      matched, groupRows, groupBy, definedIn ? string.Join(", ", plugins!) : null, offset,
                                      whereWinner, whereSourceNote)
@@ -678,13 +682,21 @@ internal sealed partial class RecordReads
     }
 
     /// <summary>The schema's plan for the where= set over the scan's types, or over every record type without types=; null when the scan may run.</summary>
-    string? SchemaPlanRefusal(IReadOnlyList<string>? typeTokens, FieldPredicateSet predicate)
+    string? SchemaPlanRefusal(IReadOnlyList<string>? typeTokens, FieldPredicateSet predicate) =>
+        predicate.Plan(_host.Rulebook.PathWalk, PlanRoots(typeTokens));
+
+    /// <summary>The schema's plan for a projection's field paths over the scan's types, or over every record type without them, through the walk where= plans with.</summary>
+    internal (PlannedFields? Plan, string? Refusal) PlanFields(IReadOnlyList<string> paths, IReadOnlyList<string>? typeTokens) =>
+        PlannedFields.Of(_host.Rulebook.PathWalk, paths, PlanRoots(typeTokens));
+
+    /// <summary>The record types the scan's type tokens name, once each, or null for any record type.</summary>
+    IReadOnlyList<TypeSchema>? PlanRoots(IReadOnlyList<string>? typeTokens)
     {
         var roots = new List<TypeSchema>();
         foreach (var token in typeTokens ?? Array.Empty<string>())
             foreach (var ts in _host.Rulebook.RecordTypesNamed(token))
                 if (!roots.Contains(ts)) roots.Add(ts);
-        return predicate.Plan(_host.Rulebook.PathWalk, roots.Count == 0 ? null : roots);
+        return roots.Count == 0 ? null : roots;
     }
 
     /// <summary>The one sentence a scan owes for records it filtered only after reading around content Mutagen
@@ -939,7 +951,7 @@ internal sealed partial class RecordReads
             scanNote = scanNote is null ? scopeMissingNote : scopeMissingNote + " " + scanNote;
         var groupRows = groups?.Select(kv => new GroupCount(kv.Key, kv.Value))
                               .OrderByDescending(g => g.Count).ThenBy(g => g.Key, StringComparer.Ordinal).ToList();
-        return new CrossQueryOutcome(keys, prefilled, total, groups is null && total > offset + keys.Count, null,
+        return new CrossQueryOutcome(keys, prefilled, total, WindowCapped(groups, limit, total, offset, keys.Count), null,
                                      predicate?.AccountingNote(), sources, scanNote, matched, groupRows, groupBy,
                                      definedIn ? pole.Plugin : null, offset, false, null)
                { Stamp = view.Stamp, Pin = pin,

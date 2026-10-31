@@ -129,7 +129,15 @@ internal static class AmethystSnapshotFilter
             catch (Exception cleanup) { message += $"; could not remove a result artifact from the failed call: {cleanup.Message}"; }
             return Error(message);
         }
-        finally { staging?.Dispose(); service.SnapshotCalls.Release(); }
+        finally
+        {
+            try { staging?.Dispose(); }
+            finally
+            {
+                try { snapshot?.ReleaseStringFiles(); }
+                finally { service.SnapshotCalls.Release(); }
+            }
+        }
     };
 
     static string NearestExistingExternalRoot(string path, HousecarlCore.AmethystSavedSnapshot snapshot)

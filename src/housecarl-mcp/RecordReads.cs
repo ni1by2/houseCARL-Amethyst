@@ -114,7 +114,7 @@ internal sealed partial class RecordReads
             var touchers = view.TouchingPlugins(fk) ?? Array.Empty<string>();
             return ReadOutcome.Fail(fk,
                 $"Plugin '{plugin}' does not touch {FormIdToken.Of(fk)} — it has no version of this record. " +
-                $"Touched by (load order, winner last): {string.Join(", ", touchers)}.");
+                TouchedBy(view, fk, touchers, "load order"));
         }
 
         // materialise while the session (overlay) is open; the *parent hop climbs the index's containment map and
@@ -261,7 +261,7 @@ internal sealed partial class RecordReads
         }
     }
 
-    /// <summary>Why a FormID resolved to nothing, naming which of the three causes it is: the defining plugin was
+    /// <summary>Why a FormID resolved to nothing, naming which of the three causes it is: the defining plugin (or the excluded one injecting it) was
     /// excluded, it is not in the order, or it IS in the order and defines no such record. The ESL-compaction
     /// clause is stated only where the index says that plugin is light-flagged — pinned by
     /// <c>RuntimeFormIdTests.AMissingRecordInAnEslFlaggedPluginIsToldAboutCompaction</c> and
@@ -271,6 +271,10 @@ internal sealed partial class RecordReads
         var defining = FormIdToken.Plugin(fk.ModKey.FileName.String);
         if (view.ExcludedPlugins.TryGetValue(defining, out var why))
             return $"FormID {FormIdToken.Of(fk)} is not resolvable: its plugin '{defining}' was excluded from this session: {why}";
+        // A key an excluded plugin injects under another plugin's FormID space: name the plugin that defines it.
+        if (view.ExcludedTouchers(fk) is { Count: > 0 } by)
+            return $"FormID {FormIdToken.Of(fk)} is not resolvable: it is defined only by {string.Join(", ", by)}, excluded from this session " +
+                   "(housecarl_load_order_status gives the reason).";
         if (view.ContainsPlugin(defining))
         {
             var esl = view.IsLightFlagged(defining)
@@ -367,22 +371,31 @@ internal sealed partial class RecordReads
     /// <summary>The conflict-tree fill off a pinned build, so the tree's membership and the response's epoch stamp
     /// name the same build.</summary>
     internal TreeFill? FoldTreePinned(LoadOrderService.ViewPin p, FormKey fk, IReadOnlyList<string>? fields,
-                                      Func<string, RecordFields, bool, bool> onNode)
+                                      Func<int, string, RecordFields, bool> onNode)
     {
         using var session = p.Resolver.OpenSession();
         return FoldTreeChunkPinned(p, session, new[] { fk }, fields,
-                                   (_, _, plugin, read, isWinner) => onNode(plugin, read, isWinner))[0];
+                                   (_, node, plugin, read, _) => onNode(node, plugin, read))[0];
     }
 
-    /// <summary>The whole tree materialised — every provider's fields at once, in priority order with the winner
-    /// last. For a caller that genuinely needs the providers side by side; the render does not.</summary>
+    /// <summary>The whole tree materialised — every provider's fields at once, in priority order. For a caller that
+    /// genuinely needs the providers side by side; the render does not.</summary>
     internal ConflictTreeView? ResolveTreePinned(LoadOrderService.ViewPin p, FormKey fk, IReadOnlyList<string>? fields)
     {
-        var nodes = new List<ConflictNodeView>();
-        var fill = FoldTreePinned(p, fk, fields, (plugin, read, _) => { nodes.Add(new ConflictNodeView(plugin, read)); return true; });
+        var nodes = new ConflictNodeView[p.View.TouchingPlugins(fk)?.Count ?? 0];
+        // Node 0 is the top provider; the tree reads in load order.
+        var fill = FoldTreePinned(p, fk, fields, (node, plugin, read) => { nodes[nodes.Length - 1 - node] = new ConflictNodeView(plugin, read); return true; });
         if (fill is null) return null;
-        nodes.Reverse();                                        // the fold reads winner first; the tree reads winner last
-        return new ConflictTreeView(nodes, fill.ChildDeclarers);
+        return new ConflictTreeView(nodes, fill.ChildDeclarers, p.View.WinnerAt(fk));
+    }
+
+    /// <summary>The touchers a refusal names, in load order; when a partial form tops them it names the winner.</summary>
+    internal static string TouchedBy(LoadOrderResolver.IndexView view, FormKey fk, IReadOnlyList<string> touchers, string order = "active order")
+    {
+        int at = view.WinnerAt(fk);
+        return at < 0 || at == touchers.Count - 1
+            ? $"Touched by ({order}, winner last): {string.Join(", ", touchers)}."
+            : $"Touched by ({order}; the winner is {touchers[at]}, a partial form above it does not win): {string.Join(", ", touchers)}.";
     }
 
     /// <summary>The name-resolution caches one lane carries: a target's identity per FormKey, and the absence clauses its rows share.</summary>
@@ -445,6 +458,9 @@ internal sealed partial class RecordReads
         /// <summary>What tells this pole apart from a same-named one on the other arm — the mod folder it was read
         /// out of, or "off-order". Set on the off-order arm only.</summary>
         internal string? Qualifier { get; init; }
+
+        /// <summary>The located file the off-order arm was read from; null in order.</summary>
+        internal string? Path { get; init; }
 
         /// <summary>The pole's label for a render that shows both sides, qualified only when the other side
         /// carries the same filename.</summary>
@@ -779,7 +795,7 @@ internal sealed partial class RecordReads
                     results[index] = ReadOutcome.Fail(fk,
                         $"file '{plugin}' ({poleWhere}) does not define or override {FormIdToken.Of(fk)} — it has no version of this record. " +
                         (touchers.Count > 0
-                            ? $"Touched by (active order, winner last): {string.Join(", ", touchers)}."
+                            ? TouchedBy(view, fk, touchers)
                             : "No active plugin touches it either."))
                         with { Stamp = view.Stamp, Pin = pin };
                     continue;

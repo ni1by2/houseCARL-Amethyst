@@ -43,8 +43,14 @@ internal sealed partial class RecordReads
     public sealed record DeltaRow(string Formid, DiffPole? Subject, DiffPole? Reference, FieldsDiff.Result? Diff,
                                   IReadOnlyList<string>? StackAbove, string? Note, string? Error)
     {
+        /// <summary>The winner, when a partial form tops <see cref="StackAbove"/> so its last plugin is not it; else null.</summary>
+        public string? StackWinner { get; init; }
+
         /// <summary>The shared-EditorID note the record's FormID owes, read off the batch's pin.</summary>
         public string? SharedNote { get; init; }
+
+        /// <summary>The note a record an excluded plugin also touches owes, read off the batch's pin.</summary>
+        public string? ExcludedNote { get; init; }
     }
 
     /// <summary>The project=delta batch: every pole of every record resolves against ONE captured build, so a
@@ -109,14 +115,19 @@ internal sealed partial class RecordReads
             if (s.Error is not null) return new DeltaRow(FormIdToken.Of(fk), s.Pole, null, null, null, null, "subject: " + s.Error);
             // previous_provider is measured from the SUBJECT, so the reference reader is handed the subject's plugin.
             var r = rReader(fk, s.Pole!.Plugin);
-            if (r.Error is not null) return new DeltaRow(FormIdToken.Of(fk), s.Pole, r.Pole, null, r.StackAbove, null, "versus: " + r.Error);
+            if (r.Error is not null) return new DeltaRow(FormIdToken.Of(fk), s.Pole, r.Pole, null, r.StackAbove, null, "versus: " + r.Error) { StackWinner = r.StackWinner };
             string? note = string.Equals(s.Pole.Plugin, r.Pole!.Plugin, StringComparison.OrdinalIgnoreCase) && s.Pole.Where == r.Pole.Where
                 ? "the two poles resolved to the SAME provider — the diff is trivially empty by construction"
                 : null;
             // Two copies of one filename on opposite arms: the delta line names the off-order side's mod folder.
             var diff = FieldsDiff.Compare(s.Fields!, r.Fields!, referenceLabel: r.Pole.LabelVersus(s.Pole.Plugin));
             return new DeltaRow(FormIdToken.Of(fk), s.Pole, r.Pole, diff, r.StackAbove, note, null)
-                   { SharedNote = s.Pole.InOrder ? SharedEditorIds.Note(pin, fk, s.Pole.RecordType, s.Pole.Plugin) : null };
+                   { StackWinner = r.StackWinner,
+                     SharedNote = s.Pole.InOrder ? SharedEditorIds.Note(pin, fk, s.Pole.RecordType, s.Pole.Plugin) : null,
+                     // A subject read off the excluded plugin's own file carries its version, so that row owes no note.
+                     ExcludedNote = !s.Pole.InOrder && s.Pole.Path is { } own && pin?.View.PluginPath(Path.GetFileName(own)) is { } served
+                                    && pin.View.ExcludedPlugins.ContainsKey(Path.GetFileName(own)) && PluginPaths.SamePluginFile(served, own)
+                         ? null : Wire.ExcludedNote(pin, fk) };
         }
 
         // An off-order subject is swept first: the sweep is what says which ids it holds.
@@ -182,7 +193,11 @@ internal sealed partial class RecordReads
 
     /// <summary>A pole reader's per-record result: the deep-read fields plus the pole identity for the render, or
     /// a per-item error. <see cref="StackAbove"/> names what outranks the subject.</summary>
-    internal sealed record PoleReading(RecordFields? Fields, DiffPole? Pole, IReadOnlyList<string>? StackAbove, string? Error);
+    internal sealed record PoleReading(RecordFields? Fields, DiffPole? Pole, IReadOnlyList<string>? StackAbove, string? Error)
+    {
+        /// <summary>The winner, when a partial form tops the stack so the last plugin above is not it; else null.</summary>
+        public string? StackWinner { get; init; }
+    }
 
     internal delegate PoleReading PoleReader(FormKey fk, string? subjectPlugin);
 
@@ -239,7 +254,7 @@ internal sealed partial class RecordReads
                     if (idx < 0)   // the subject doesn't touch the record at all
                         return new PoleReading(null, null, null,
                             $"the subject '{subjectPlugin}' does not touch {FormIdToken.Of(fk)}, so it has no position to measure previous_provider from. " +
-                            $"Touched by (active order, winner last): {string.Join(", ", touchers)}.");
+                            TouchedBy(view, fk, touchers));
                     if (idx == 0)  // the subject IS the origin; never a silent empty diff
                         return new PoleReading(null, null, null,
                             $"no previous provider — '{subjectPlugin}' DEFINES {FormIdToken.Of(fk)} (bottom of the touching list); there is nothing beneath it to compare against.");
@@ -249,9 +264,11 @@ internal sealed partial class RecordReads
                         return new PoleReading(null, null, null, $"the previous provider '{refPlugin}' of {FormIdToken.Of(fk)} could not be read.");
                     // Mid-stack subject: what sits above is surfaced as neutral fact, never advice.
                     IReadOnlyList<string>? above = idx < touchers.Count - 1 ? touchers.Skip(idx + 1).ToList() : null;
+                    int winnerAt = view.WinnerAt(fk);
                     return new PoleReading(ReadEngine.ReadFields(body, fields, ConflictDiffDepth, parentOf: hop),
                                            new DiffPole(refPlugin, $"previous provider (immediately below '{subjectPlugin}')", true,
-                                                        RecordNaming.StripOverlay(body.GetType().Name), body.EditorID), above, null);
+                                                        RecordNaming.StripOverlay(body.GetType().Name), body.EditorID), above, null)
+                           { StackWinner = above is not null && winnerAt != touchers.Count - 1 ? touchers[winnerAt] : null };
                 };
 
             case PoleKind.Overlay:
@@ -282,7 +299,7 @@ internal sealed partial class RecordReads
                             return new PoleReading(null, null, null,
                                 $"'{arm.Plugin}' does not define or override {FormIdToken.Of(fk)} — it has no version of this record. " +
                                 (touchers.Count > 0
-                                    ? $"Touched by (active order, winner last): {string.Join(", ", touchers)}."
+                                    ? TouchedBy(view, fk, touchers)
                                     : "No active plugin touches it either."));
                         }
                         return new PoleReading(ReadEngine.ReadFields(body, fields, ConflictDiffDepth, parentOf: hop),
@@ -306,11 +323,11 @@ internal sealed partial class RecordReads
                         return new PoleReading(null, null, null,
                             $"file '{arm.Plugin}' ({arm.Where}) does not define or override {FormIdToken.Of(fk)} — it has no version of this record. " +
                             (touchers.Count > 0
-                                ? $"Touched by (active order, winner last): {string.Join(", ", touchers)}."
+                                ? TouchedBy(view, fk, touchers)
                                 : "No active plugin touches it either."));
                     }
                     return new PoleReading(rec, new DiffPole(arm.Plugin, arm.Where, false, rec.Type, rec.EditorId)
-                                                { Qualifier = arm.Layer ?? "off-order" }, null, null);
+                                                { Qualifier = arm.Layer ?? "off-order", Path = arm.Path }, null, null);
                 };
         }
     }
@@ -545,13 +562,16 @@ internal sealed partial class RecordReads
             if (f.Result is { } r) sink.Add(r);
     }
 
-    /// <summary>One provider's node in a project=tree row: its position plus its delta against the row's reference
-    /// pole. Empty deltas together with Complete means genuinely identical to the reference.</summary>
-    public sealed record TreeNodeDelta(string Plugin, bool IsWinner, bool IsReference,
-                                       IReadOnlyList<string> Deltas, int AgreedCount, bool Complete, string? Error, string Why = "");
+    /// <summary>One provider's node in a project=tree row: its position plus its comparison against the row's reference
+    /// pole, null on the reference node itself.</summary>
+    public sealed record TreeNodeDelta(string Plugin, bool IsWinner, FieldsDiff.Result? Diff)
+    {
+        /// <summary>The reference node, the one the others are compared against.</summary>
+        public bool IsReference => Diff is null;
+    }
 
-    /// <summary>One record's project=tree row: every provider in priority order, winner last, each diffed against the
-    /// reference pole; a non-null Error is a per-item refusal.</summary>
+    /// <summary>One record's project=tree row: every provider in priority order, the winner at <see cref="WinnerAt"/>,
+    /// each diffed against the reference pole; a non-null Error is a per-item refusal.</summary>
     public sealed record TreeRow(string Formid, string? Type, string? EditorId,
                                  IReadOnlyList<string> Touchers, string? ReferencePlugin,
                                  IReadOnlyList<TreeNodeDelta> Nodes, string? Error,
@@ -559,9 +579,15 @@ internal sealed partial class RecordReads
     {
         /// <summary>The shared-EditorID note the record's FormID owes, read off the batch's pin.</summary>
         public string? SharedNote { get; init; }
+
+        /// <summary>The note a record an excluded plugin also touches owes, read off the batch's pin.</summary>
+        public string? ExcludedNote { get; init; }
+
+        /// <summary>The winner's position in <see cref="Touchers"/>, off the index; a partial form above it does not move it.</summary>
+        public int WinnerAt { get; init; } = -1;
     }
 
-    /// <summary>The project=tree batch: per record, the full provider stack (touching list, winner last) with each
+    /// <summary>The project=tree batch: per record, the full provider stack (touching list, in load order) with each
     /// provider diffed against the reference pole — the winner by default, or a named plugin under the one-pole
     /// rule, with untouched records refused by naming the touchers. One captured build for everything.</summary>
     public IReadOnlyList<TreeRow> TreeBatch(
@@ -682,9 +708,8 @@ internal sealed partial class RecordReads
                     }
                     bool isRef = refReader is null ? isWinner
                                : refIsActiveProvider[j] && string.Equals(plugin, refPlugin[j], StringComparison.OrdinalIgnoreCase);
-                    if (isRef) { nodes[j][node] = new TreeNodeDelta(plugin, isWinner, true, Array.Empty<string>(), 0, true, null); return true; }
-                    var d = FieldsDiff.Compare(read, refFields[j]!, referenceLabel: refLabel[j]);
-                    nodes[j][node] = new TreeNodeDelta(plugin, isWinner, false, d.Deltas, d.AgreedCount, d.Complete, null, d.Why);
+                    if (isRef) { nodes[j][node] = new TreeNodeDelta(plugin, isWinner, null); return true; }
+                    nodes[j][node] = new TreeNodeDelta(plugin, isWinner, FieldsDiff.Compare(read, refFields[j]!, referenceLabel: refLabel[j]));
                     return true;
                 });
 
@@ -699,21 +724,22 @@ internal sealed partial class RecordReads
                 {
                     rows[i] = new TreeRow(FormIdToken.Of(fk), fills[j]?.Type, fills[j]?.EditorId,
                                           touchers, null, Array.Empty<TreeNodeDelta>(), versusError[j],
-                                          Array.Empty<ChildDeclarers>());
+                                          Array.Empty<ChildDeclarers>()) { WinnerAt = view.WinnerAt(fk) };
                     continue;
                 }
                 var ordered = new List<TreeNodeDelta>(nodes[j].Length);
-                for (int node = nodes[j].Length - 1; node >= 0; node--)   // the fold read winner first; the row reads winner last
+                for (int node = nodes[j].Length - 1; node >= 0; node--)   // node 0 is the top provider; the row reads in load order
                     if (nodes[j][node] is { } nd) ordered.Add(nd);
                 if (fills[j] is null || ordered.Count == 0)
                 {
                     rows[i] = new TreeRow(FormIdToken.Of(fk), null, null, touchers, null, Array.Empty<TreeNodeDelta>(),
-                                          $"the provider bodies of {FormIdToken.Of(fk)} could not be read.", Array.Empty<ChildDeclarers>());
+                                          $"the provider bodies of {FormIdToken.Of(fk)} could not be read.", Array.Empty<ChildDeclarers>())
+                              { WinnerAt = view.WinnerAt(fk) };
                     continue;
                 }
                 rows[i] = new TreeRow(FormIdToken.Of(fk), fills[j]!.Type, fills[j]!.EditorId,
                                       touchers, refLabel[j], ordered, null, fills[j]!.ChildDeclarers)
-                          { SharedNote = SharedEditorIds.Note(pin, fk, fills[j]!.Type, null) };
+                          { SharedNote = SharedEditorIds.Note(pin, fk, fills[j]!.Type, null), ExcludedNote = Wire.ExcludedNote(pin, fk), WinnerAt = view.WinnerAt(fk) };
             }
             // Past the budget the rows are dropped and nothing further is read.
             if (meter.Check(end, liveRow.Count) is { } tooDear)

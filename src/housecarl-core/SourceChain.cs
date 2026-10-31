@@ -40,13 +40,15 @@ public enum ModFolderStanding
 public sealed record SourceLayer(
     SourceLayerKind Kind, string Name, ModFolderStanding Folder = ModFolderStanding.Live);
 
-/// <summary>One element of an ordered source universe: the caller's verbatim spelling, how it resolved, where it resolved to, the fetch, and the MO2 layer behind it.</summary>
+/// <summary>One element of an ordered source universe: the caller's verbatim spelling, how it resolved, where it resolved to, the fetch, and the MO2 layer behind it.
+/// <paramref name="Batch"/>, when set, reads many keys at once through the read door and answers a fetch over what it read; contract in docs/architecture/walk-and-reverse.md.</summary>
 public sealed record SourceArm(
     string Spelling,
     SourceArmKind Kind,
     string Where,
     Func<FormKey, IMajorRecordGetter?> Fetch,
-    SourceLayer? Layer = null);
+    SourceLayer? Layer = null,
+    Func<IReadOnlyCollection<FormKey>, Func<FormKey, IMajorRecordGetter?>>? Batch = null);
 
 /// <summary>One arm as a READBACK names it, with the fetch left off; <paramref name="Kind"/> travels because a null <paramref name="Layer"/> means two different things.</summary>
 public sealed record SourceArmRef(string Spelling, SourceArmKind Kind, SourceLayer? Layer)
@@ -90,16 +92,35 @@ public sealed class SourceChain
     public SourceFetch Fetch(FormKey key, string pulledBy = "")
     {
         for (int i = 0; i < Arms.Count; i++)
-        {
-            IMajorRecordGetter? body;
-            try { body = Arms[i].Fetch(key); }
-            catch (Exception ex)
-            {
-                return new SourceFetch(null, new SourceFault(key, pulledBy, i, Arms[i], ex.Message));
-            }
-            if (body is not null) return new SourceFetch(new SourceHit(body, i, Arms[i]), null);
-        }
+            if (Ask(i, Arms[i].Fetch, key, pulledBy) is { } answered) return answered;
         return new SourceFetch(null, null);
+    }
+
+    /// <summary>Resolve many keys, each arm reading the keys still unanswered at once through its batch read; how its answers differ from <see cref="Fetch"/>'s is in docs/architecture/walk-and-reverse.md.</summary>
+    public IReadOnlyDictionary<FormKey, SourceFetch> FetchMany(IReadOnlyCollection<FormKey> keys)
+    {
+        var got = new Dictionary<FormKey, SourceFetch>(keys.Count);
+        var left = keys.Distinct().ToList();
+        for (int i = 0; i < Arms.Count && left.Count > 0; i++)
+        {
+            var fetch = Arms[i].Batch?.Invoke(left) ?? Arms[i].Fetch;
+            var next = new List<FormKey>();
+            foreach (var key in left)
+                if (Ask(i, fetch, key, "") is { } answered) got[key] = answered;
+                else next.Add(key);
+            left = next;
+        }
+        foreach (var key in left) got[key] = new SourceFetch(null, null);
+        return got;
+    }
+
+    /// <summary>One arm's answer for one key: a hit, a fault, or null when the arm does not have it.</summary>
+    SourceFetch? Ask(int i, Func<FormKey, IMajorRecordGetter?> fetch, FormKey key, string pulledBy)
+    {
+        IMajorRecordGetter? body;
+        try { body = fetch(key); }
+        catch (Exception ex) { return new SourceFetch(null, new SourceFault(key, pulledBy, i, Arms[i], ex.Message)); }
+        return body is null ? null : new SourceFetch(new SourceHit(body, i, Arms[i]), null);
     }
 
     public SourceMiss Miss(FormKey key, string pulledBy) => new(key, pulledBy, Arms);

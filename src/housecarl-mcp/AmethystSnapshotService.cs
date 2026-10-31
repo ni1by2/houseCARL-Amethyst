@@ -37,17 +37,21 @@ public sealed partial class LoadOrderService
     void ApplySavedSnapshot(AmethystSavedSnapshot snapshot)
     {
         if (ReferenceEquals(_savedSnapshot, snapshot)) return;
-        if (_savedSnapshot?.Provenance != snapshot.Provenance || !_resolvedPaths.SequenceEqual(snapshot.OrderedPluginPaths, StringComparer.Ordinal))
+        if (_savedSnapshot?.Provenance != snapshot.Provenance || !_resolvedPaths.SequenceEqual(snapshot.OrderedPluginPaths, StringComparer.Ordinal)
+            || !_savedSnapshot.InputSha256.SequenceEqual(snapshot.InputSha256))
         {
             _resolver?.Dispose(); _resolver = null;
             InvalidateClassParents();
             System.Threading.Interlocked.Increment(ref _gameRootsGen);
         }
+        _savedSnapshot?.ReleaseStringFiles();
         _savedSnapshot = snapshot;
         _profileDir = snapshot.ProfileDir; _profileName = Path.GetFileName(snapshot.ProfileDir);
         _modsDir = snapshot.ModsDir; _dataDir = snapshot.VanillaDataDir; _overwriteDir = snapshot.OverwriteDir;
         _resolvedPaths = snapshot.OrderedPluginPaths;
         _orderWarnings = [AmethystSnapshotProvenance.Warning];
+        _text = GameLanguage.ReadSavedSnapshot(snapshot);
+        GameLanguage.Bind(_text);
         InvalidateAssetResolver();
     }
 
@@ -63,6 +67,7 @@ public sealed partial class LoadOrderService
     LoadOrderResolver SavedResolverLocked()
     {
         var snapshot = CurrentSavedSnapshot();
+        GameLanguage.Bind(_text);
         if (snapshot.OrderedPluginPaths.Count == 0)
             throw new InvalidOperationException("No active plugins resolved from Amethyst's saved profile; enable plugins and Refresh the selected profile in Amethyst");
         _resolver ??= LoadOrderResolver.Build(snapshot.OrderedPluginPaths,

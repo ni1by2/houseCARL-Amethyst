@@ -154,9 +154,11 @@ internal sealed partial class RecordWrites
                 if (!plan.Success) return WritePatchBuilder.CompactOutcome.Fail(plan.Error!);
                 remapDict = plan.Dict;
             }
+            // The records this run moves; an entry already at its compacted id changes no link, file or count (#1205).
+            var movedMap = remapDict.Where(kv => kv.Key != kv.Value).ToDictionary(kv => kv.Key, kv => kv.Value);
 
-            // The identify pass: which plugins outside the target reference a record being renumbered.
-            var targets = remapDict.Keys.ToHashSet();
+            // The identify pass: which plugins outside the target reference a record this run moves.
+            var targets = movedMap.Keys.ToHashSet();
             var transformSet = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { name };
             var id = targets.Count == 0
                 ? new RemapEngine.IdentifyResult(Array.Empty<RemapEngine.ExternalRef>(), Array.Empty<string>(), 0, 0,
@@ -183,7 +185,7 @@ internal sealed partial class RecordWrites
                           + " Until that is resolved, handle the references yourself instead.";
                     return WritePatchBuilder.CompactOutcome.Fail(
                         $"refused — {id.ExternalPlugins.Count} plugin(s) outside '{name}' reference records it is about to renumber; compacting it " +
-                        $"WOULD BREAK those references (they would point at FormIDs that no longer exist). Referencers: {refList}. " +
+                        $"WOULD BREAK those references (each keeps its old id, which after the renumber may name a different record of this plugin, or nothing). Referencers: {refList}. " +
                         repointClause + " Nothing was written.");
                 }
                 // Repointing is only coherent paired with in_place.
@@ -276,7 +278,7 @@ internal sealed partial class RecordWrites
             // Build and validate privately; the transaction receives no destination bytes until riders/referencers are ready.
             WritePatchBuilder.CompactBuildResult build;
             using (AmethystTransactionWriteScope.SuspendPublication())
-                build = WritePatchBuilder.CompactBuild(srcPath, modKey, remapDict, view.PluginPath, stagedPlugin, esl, floor, view.DataDir);
+                build = WritePatchBuilder.CompactBuild(srcPath, modKey, remapDict, view.PluginPath, stagedPlugin, esl, floor, view.DataDir, OwnerRanks.FactionIn(view));
             if (!build.Success)
             {
                 if (!inPlace && createdFresh) OutputLocations.RemoveOrNameRiderResidue(rf);   // a refused build leaves no orphan folder
@@ -291,11 +293,11 @@ internal sealed partial class RecordWrites
                     var repath = Path.Combine(scratch.Root, "referencers", ext);
                     RemapEngine.RepointResult rep;
                     using (AmethystTransactionWriteScope.SuspendPublication())
-                        rep = RemapEngine.RepointInPlace(resolver, ext, remapDict, repath);
+                        rep = RemapEngine.RepointInPlace(resolver, ext, movedMap, repath);
                     repointed.Add(new WritePatchBuilder.RepointReport(ext, rep.Success, rep.Error));
                 }
 
-            // Carry the FormID-keyed assets a renumber moves — FaceGen head mesh and tint, voice .fuz/.lip — into the P′
+            // Carry the FormID-keyed assets the output folder must hold — FaceGen head mesh and tint, voice .fuz/.lip — into the P′
             // mod-folder root. Best-effort and reported, since the records are already written. One captured asset view feeds
             // both carries and the SEQ gate, which asks the VFS whether the source SHIPPED a .seq rather than one folder.
             AssetRenameOutcome assetRename;
@@ -307,8 +309,9 @@ internal sealed partial class RecordWrites
                 var assetView = _host.Assets.Capture();
                 seqGate = assetView.ResolveForPlacement(srcSeqRel).Sources.Count > 0;   // VFS-aware (loose roots + active BSAs)
                 var outDir = scratch.Root;
-                assetRename = AssetRenameService.CarryFaceGen(stagedPlugin, remapDict, assetView, outDir);
-                voiceRename = AssetRenameService.CarryVoice(stagedPlugin, remapDict, assetView, outDir);
+                var carryMap = inPlace ? movedMap : remapDict;
+                assetRename = AssetRenameService.CarryFaceGen(stagedPlugin, carryMap, assetView, outDir);
+                voiceRename = AssetRenameService.CarryVoice(stagedPlugin, carryMap, assetView, outDir);
             }
             catch (Exception ex)
             {
@@ -377,7 +380,7 @@ internal sealed partial class RecordWrites
 
             return new WritePatchBuilder.CompactOutcome(
                 true, null, false, outPath, name, inPlace, esl, build.Masters, build.RecordsCopied, build.RecordsRenumbered,
-                build.Bytes, id.ExternalPlugins, repointed, id.PluginsScanned, id.UnscannableRecords, id.UnscannableSamples,
+                movedMap.Count, build.Bytes, id.ExternalPlugins, repointed, id.PluginsScanned, id.UnscannableRecords, id.UnscannableSamples,
                 markerNotes.Count > 0 ? string.Join(" ", markerNotes) : null, assetRename, id.ExternalOverriders, voiceRename, seqRegen,
                 id.UnscannablePlugins);
         }
@@ -442,8 +445,9 @@ internal sealed partial class RecordWrites
         var remedy = unlistable
             ? $"Let houseCARL read {folder} — close whatever is holding it open, or fix its permissions — and run "
               + "this again."
-            : "Put this plugin's .STRINGS where houseCARL can see them — enable the mod that provides them, or place "
-              + "them in a Strings folder beside the plugin — and run this again.";
+            : $"Put this plugin's {(a.OrderLanguage is { } language ? language + " " : "")}.STRINGS where houseCARL can "
+              + "see them — enable the mod that provides them, or place them in a Strings folder beside the plugin — and "
+              + "run this again.";
         return $"refused — houseCARL did not {verb} '{name}'. "
              + LocalizedTargetUnsupportedException.WhereTheTextIs(a) + " "
              + $"So {consequence}, and a {verb} writes whatever this read produced into a NEW plugin you keep, with "
@@ -663,7 +667,7 @@ internal sealed partial class RecordWrites
             WritePatchBuilder.MergeBuildResult build;
             using (AmethystTransactionWriteScope.SuspendPublication())
                 build = WritePatchBuilder.MergeBuild(
-                    donorInfos.Select(d => (d.Name, d.Path, d.Key)).ToList(), outKey, plan.Dict, masterSet, view.PluginPath, stagedOutPath, view.DataDir);
+                    donorInfos.Select(d => (d.Name, d.Path, d.Key)).ToList(), outKey, plan.Dict, masterSet, view.PluginPath, stagedOutPath, view.DataDir, OwnerRanks.FactionIn(view));
             if (!build.Success)
             {
                 return FailAfterFolder(build.Error!);                      // a refused build leaves no orphan folder

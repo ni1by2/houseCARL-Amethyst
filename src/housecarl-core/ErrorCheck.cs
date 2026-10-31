@@ -52,6 +52,7 @@ public static class ErrorCheck
         // counts_only=: the dangling-by-target-plugin tally, over every dangling ref in scope, never limit-capped.
         // Built only when the walk that fills it runs, so null means "not computed", never "empty".
         var histogram = countsOnly && wantDangling ? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) : null;
+        var histogramInto = histogram is null ? null : new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);   // of those, refs into an excluded plugin's record
         // The SOURCE axis, tallied on every sweep the walk runs on, and uncapped by limit= like the totals it decomposes.
         var bySource = wantDangling ? new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase) : null;
         // Which plugins the link walk actually EXAMINED a record in, under the scope in force — not which it opened.
@@ -134,6 +135,7 @@ public static class ErrorCheck
 
         var reports = new List<PluginErrors>();
         int totalDangling = 0, totalMissing = 0, totalUnscannable = 0;
+        int intoExcluded = 0;   // of totalDangling, refs into a record an excluded plugin touches
         int danglingBudget = limit;
 
         // The per-plugin sweep, called in two phases below so the vanilla baseline cannot consume limit= before any
@@ -188,10 +190,14 @@ public static class ErrorCheck
                             if (ownerVarExempt.TryGetValue(target, out int rank) && rank > 0) { ownerVarExempt[target] = rank - 1; continue; }
                             totalDangling++;
                             Bump(bySource, plugin);                                                   // the SOURCE axis, on every mode
-                            if (histogram is not null) { BumpTarget(histogram, target); continue; }   // counts_only=: tally, list nothing
+                            var by = view.ExcludedTouchers(target);
+                            bool into = by.Count > 0;
+                            if (into) intoExcluded++;
+                            if (histogram is not null) { BumpTarget(histogram, target); if (into) BumpTarget(histogramInto!, target); continue; }   // counts_only=: tally, list nothing
                             if (danglingBudget > 0)
                             {
-                                dangling.Add(new DanglingRef(fk, RecordNaming.StripOverlay(body.GetType().Name), body.EditorID, target));
+                                dangling.Add(new DanglingRef(fk, RecordNaming.StripOverlay(body.GetType().Name), body.EditorID, target)
+                                    { ExcludedBy = by });
                                 danglingBudget--;
                             }
                         }
@@ -291,10 +297,14 @@ public static class ErrorCheck
                                     if (ownerVarExempt.TryGetValue(target, out int rank) && rank > 0) { ownerVarExempt[target] = rank - 1; continue; }
                                     totalDangling++;
                                     Bump(bySource, name);                                                     // the SOURCE axis, keyed by the off-order FILE (which can itself be a base master — see BaseMastersSwept below)
-                                    if (histogram is not null) { BumpTarget(histogram, target); continue; }   // counts_only=
+                                    var by = view.ExcludedTouchers(target);
+                                    bool into = by.Count > 0;
+                                    if (into) intoExcluded++;
+                                    if (histogram is not null) { BumpTarget(histogram, target); if (into) BumpTarget(histogramInto!, target); continue; }   // counts_only=
                                     if (danglingBudget > 0)
                                     {
-                                        dangling.Add(new DanglingRef(rec.FormKey, RecordNaming.StripOverlay(rec.GetType().Name), rec.EditorID, target));
+                                        dangling.Add(new DanglingRef(rec.FormKey, RecordNaming.StripOverlay(rec.GetType().Name), rec.EditorID, target)
+                                            { ExcludedBy = by });
                                         danglingBudget--;
                                     }
                                 }
@@ -363,11 +373,11 @@ public static class ErrorCheck
 
         return new ErrorCheckResult(reports, targets.Count + offOrderScanned.Count, totalDangling, totalMissing,
                                     totalUnscannable, view.ExcludedPlugins, null, offOrderScanned,
-                                    filterNote, classes, histogram is null ? null : SweepFindings.Histogram(histogram),
+                                    filterNote, classes, histogram is null ? null : SweepFindings.Histogram(histogram, histogramInto),
                                     countsOnly, view.Epoch,
                                     bySource is null ? null : SweepFindings.Histogram(bySource),
                                     baselineDangling, baseSwept, nonBaseInScope, limit,
-                                    recordScope?.TypeScopeLabel);
+                                    recordScope?.TypeScopeLabel) { DanglingIntoExcluded = intoExcluded };
     }
 
     /// <summary>Bump the <c>counts_only=</c> dangling histogram for one broken target, keyed by the PLUGIN the target
@@ -408,9 +418,13 @@ public static class ErrorCheck
     }
 }
 
-/// <summary>One broken reference: the SOURCE record (FormKey, catalog type, editorid) and the TARGET FormKey no active
-/// plugin defines.</summary>
-public sealed record DanglingRef(FormKey Source, string SourceType, string? SourceEditorId, FormKey Target);
+/// <summary>One broken reference: the SOURCE record (FormKey, catalog type, editorid) and the TARGET FormKey the index
+/// resolves to nothing — no active plugin defines it, or only an excluded one does (<see cref="DanglingRef.ExcludedBy"/>).</summary>
+public sealed record DanglingRef(FormKey Source, string SourceType, string? SourceEditorId, FormKey Target)
+{
+    /// <summary>The excluded plugins that touch the target: a reference into a plugin houseCARL could not read, not one nothing defines. Empty otherwise.</summary>
+    public IReadOnlyList<string> ExcludedBy { get; init; } = Array.Empty<string>();
+}
 
 /// <summary>Every error found in one plugin: its dangling references (capped across the sweep), the masters it declares
 /// that are not present in the active order, the count and samples of records that could not be scanned, and a
@@ -458,6 +472,10 @@ public sealed record ErrorCheckResult(
 
 {
     public bool Success => Error is null;
+
+    /// <summary>Of <see cref="TotalDangling"/>, the references into a record an excluded plugin touches: unread, not undefined.</summary>
+    public int DanglingIntoExcluded { get; init; }
+
     public static ErrorCheckResult Fail(string error) =>
         new(Array.Empty<PluginErrors>(), 0, 0, 0, 0,
             new Dictionary<string, string>(), error);

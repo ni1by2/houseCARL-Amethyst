@@ -7,7 +7,8 @@ using Xunit;
 namespace HousecarlMcpTests;
 
 /// <summary>The dialogue check judges a Branch, PNAM or LinkTo target's type off the index (the fold's own record
-/// where the fold wins it), so no target body is fetched, right type or wrong.</summary>
+/// where the fold wins it): no PNAM or LinkTo body is fetched, right type or wrong, nor a wrong-typed Branch's, and a
+/// right-typed Branch is read only once the topic's Quest resolves.</summary>
 [Trait("tier", "integration")]
 public sealed class DialogueTypeCheckTests : IDisposable
 {
@@ -38,9 +39,9 @@ public sealed class DialogueTypeCheckTests : IDisposable
     [Fact]
     public void TargetsInAHeldOpenPluginFetchNoBodyAndWrongTypesAreStillReported()
     {
-        // The Branch, PNAM and LinkTo targets sit in one plugin, held open while the check runs: any body fetch
-        // from it fails, so a clean answer proves none was made. The Quest stays in the seed: its body is read
-        // once for its aliases.
+        // The wrong-type Branch, PNAM and LinkTo targets sit in one plugin, held open while the check runs: any body
+        // fetch from it fails, so a clean answer proves none was made. The Quest stays in the seed: its body is read
+        // once for its aliases. A right-type branch's body is read for its Quest, so the branch target is wrong-type.
         var t = new SkyrimMod(new ModKey("HcDtTargets", ModType.Master), SkyrimRelease.SkyrimSE);
         var lines = new List<FormKey>();
         var topics = new List<FormKey>();
@@ -51,14 +52,13 @@ public sealed class DialogueTypeCheckTests : IDisposable
             dt.Responses.Add(i);
             topics.Add(dt.FormKey); lines.Add(i.FormKey);
         }
-        var branch = t.DialogBranches.AddNew(); branch.EditorID = "HcDtBranch";
         var weap = t.Weapons.AddNew(); weap.EditorID = "HcDtWeap";
         string tPath = Write(t);
 
         var s = new SkyrimMod(new ModKey("HcDtSeed", ModType.Plugin), SkyrimRelease.SkyrimSE);
         var quest = s.Quests.AddNew(); quest.EditorID = "HcDtQuest";
         var topic = s.DialogTopics.AddNew(); topic.EditorID = "HcDtSeedTopic";
-        topic.Quest.SetTo(quest.FormKey); topic.Branch.SetTo(branch.FormKey); topic.SubtypeName = new RecordType("CUST");
+        topic.Quest.SetTo(quest.FormKey); topic.Branch.SetTo(weap.FormKey); topic.SubtypeName = new RecordType("CUST");
         for (int n = 0; n < 20; n++)
         {
             var i = new DialogResponses(s.GetNextFormKey(), SkyrimRelease.SkyrimSE) { EditorID = $"HcDtSeedI{n}" };
@@ -83,9 +83,40 @@ public sealed class DialogueTypeCheckTests : IDisposable
 
         Assert.Equal(new[]
         {
+            $"DialogTopic.Branch points at {weap.FormKey}, which resolves to a Weapon, not a dialogue branch (DLBR) — the branch wiring is broken.",
             $"INFO {FormIdToken.Of(bad.FormKey)} has a previous-link (PNAM -> {FormIdToken.Of(weap.FormKey)}) that resolves to a Weapon, not a dialogue line (INFO).",
             LinkTo(bad.FormKey, weap.FormKey, "resolves to a Weapon, not a dialogue topic (DIAL)"),
         }, issues);
+    }
+
+    [Fact]
+    public void ARightTypedBranchIsNotFetchedWhenTheTopicsQuestIsUnsetOrUnresolved()
+    {
+        // The branch sits in a held-open plugin: its body is read only to compare quests, which needs the topic's.
+        var t = new SkyrimMod(new ModKey("HcDtbTargets", ModType.Master), SkyrimRelease.SkyrimSE);
+        var qB = t.Quests.AddNew(); qB.EditorID = "HcDtbQuestB";
+        var br = t.DialogBranches.AddNew(); br.EditorID = "HcDtbBranch"; DialogueCkParity.ApplyBranchDefaults(br);
+        br.Quest.SetTo(qB.FormKey);
+        string tPath = Write(t);
+
+        var sKey = new ModKey("HcDtbSeed", ModType.Plugin);
+        var s = new SkyrimMod(sKey, SkyrimRelease.SkyrimSE);
+        var unset = s.DialogTopics.AddNew(); unset.EditorID = "HcDtbUnset";
+        var unresolved = s.DialogTopics.AddNew(); unresolved.EditorID = "HcDtbUnresolved";
+        unresolved.Quest.SetTo(new FormKey(sKey, 0x00ABCDEF));
+        foreach (var topic in new[] { unset, unresolved })
+        {
+            topic.Branch.SetTo(br.FormKey); topic.SubtypeName = new RecordType("CUST");
+        }
+        string sPath = Write(s, t);
+
+        using var resolver = LoadOrderResolver.Build(new[] { tPath, sPath });
+        using var assets = AssetResolver.Build("", "", _dir, Array.Empty<string>(), Array.Empty<ActiveArchive>());
+        resolver.Capture();
+
+        using var hold = HeldOpen.Hold(tPath);
+        Assert.Empty(LinkIssues(DialogueValidate.Run(resolver, assets, unset.FormKey)));
+        Assert.Empty(LinkIssues(DialogueValidate.Run(resolver, assets, unresolved.FormKey)));
     }
 
     [Fact]
