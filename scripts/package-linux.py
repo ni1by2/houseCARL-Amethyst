@@ -160,7 +160,7 @@ def build(repo: Path, output: Path, native_tools: Path) -> None:
             files.append({"path": rel, "sha256": sha256(path), "size": path.stat().st_size,
                           "mode": 0o755 if os.access(path, os.X_OK) else 0o644})
         manifest = {"schema": 1, "name": "houseCARL-Amethyst-Linux-x64", "version": version,
-                    "transaction_journal_schema": 1, "runtime": "linux-x64-self-contained-net9-untrimmed",
+                    "transaction_journal_schema": 1, "runtime": "linux-x64-self-contained-net10-untrimmed",
                     "python_minimum": "3.12", "native_filegraph_api": 13, "native_filegraph_schema": 9,
                     "native_filegraph_schemas": [9, 10], "native_filegraph_rules": {"9": 13, "10": 14},
                     "files": files}

@@ -37,7 +37,7 @@ done
 "$dotnet" build "$repo/src/housecarl-generator" -c Release --no-restore -m:1
 rm -rf -- "$out/server"
 mkdir -p -- "$out/generated" "$out/references" "$out/server"
-"$dotnet" "$repo/src/housecarl-generator/bin/Release/net9.0/housecarl-generator.dll" \
+"$dotnet" "$repo/src/housecarl-generator/bin/Release/net10.0/housecarl-generator.dll" \
   "$out/generated" "$out/references"
 "$dotnet" restore "$repo/src/housecarl-mcp" -r linux-x64 --disable-parallel -m:1
 "$dotnet" publish "$repo/src/housecarl-mcp" -c Release -r linux-x64 \
