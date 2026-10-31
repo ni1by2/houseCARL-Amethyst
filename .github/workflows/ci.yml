@@ -83,6 +83,7 @@ jobs:
       - name: Build and start the Linux release archive
         run: |
           scripts/build-linux-base.sh
+          pwsh -File scripts/generate-notices.ps1 -PublishDir dist/linux-base/server -Check
           python3 scripts/package-linux.py
           python3 scripts/probes/check_linux_package.py dist/housecarl-amethyst-linux-x64.tar.gz
 
