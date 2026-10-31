@@ -1,5 +1,6 @@
 using System.Security.Cryptography;
 using System.Text;
+using System.Text.RegularExpressions;
 
 namespace HousecarlCore;
 
@@ -150,13 +151,7 @@ public sealed class AmethystTransactionWriteScope : IDisposable
             return Journal.Artifacts.Single(a => a.Destination == path);
         var item = _metadata[path];
         var contents = item.Contents;
-        if (pluginHash is not null)
-        {
-            const string marker = "pendingDeployment=true\r\n";
-            contents = contents.Contains(marker, StringComparison.Ordinal)
-                ? contents.Replace(marker, marker + $"patchSha256={pluginHash}\r\n", StringComparison.Ordinal)
-                : contents + $"\r\npatchSha256={pluginHash}\r\n";
-        }
+        if (pluginHash is not null) contents = WithPluginHash(contents, pluginHash);
         using var metadata = new MemoryStream(Encoding.UTF8.GetBytes(contents));
         var metadataArtifact = _coordinator.PrepareArtifact(_transactionId, unitId ?? _metadataUnitId, path, "owner_metadata", metadata, _allowedRoot);
         if (item.ExpectedOriginalSha256 is not null && metadataArtifact.OriginalSha256 != item.ExpectedOriginalSha256 ||
@@ -166,6 +161,21 @@ public sealed class AmethystTransactionWriteScope : IDisposable
             throw new IOException("owner metadata changed while preparing the transaction; retry without overwriting concurrent edits");
         }
         return metadataArtifact;
+    }
+
+    // Replace the owner's hash within its section, including duplicates left by an earlier patch update.
+    static string WithPluginHash(string contents, string pluginHash)
+    {
+        var section = Regex.Match(contents, @"(?im)^[ \t]*\[houseCARL\][ \t]*(?:\r?\n|$)");
+        if (!section.Success) throw new IOException("plugin owner metadata has no [houseCARL] section");
+        int start = section.Index + section.Length;
+        var next = Regex.Match(contents[start..], @"(?m)^[ \t]*\[");
+        int end = next.Success ? start + next.Index : contents.Length;
+        var body = Regex.Replace(contents[start..end], @"(?im)^[ \t]*patchSha256[ \t]*=[^\r\n]*(?:\r?\n|$)", "");
+        var newline = contents.Contains("\r\n", StringComparison.Ordinal) ? "\r\n" : "\n";
+        var header = contents[..start];
+        if (!header.EndsWith('\n')) header += newline;
+        return header + $"patchSha256={pluginHash}" + newline + body + contents[end..];
     }
 
     public AmethystTransactionOutcome Abort()
