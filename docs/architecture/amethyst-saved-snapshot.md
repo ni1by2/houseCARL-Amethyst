@@ -136,6 +136,11 @@ is optional future work, not a prerequisite for this mode.
 
 ## Writes and deployment
 
+Plugin publication records exactly one `patchSha256` in the metadata's
+`[houseCARL]` section. Updating an owned patch replaces its old hash and removes
+duplicates in that section, preserving other sections and their values. The
+metadata still publishes through the same journaled transaction as its plugin.
+
 Managed record and asset writes use durable staging transactions. New patches
 preserve source files. Existing-plugin edits require their explicit lane, consent
 and redeployment guards; see the [write contract](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/architecture/write-path.md). A failed source

@@ -376,6 +376,8 @@ public sealed class AmethystSnapshotWireTests
         Assert.True(staging.GetProperty("immediate_visibility").GetBoolean());
         Assert.Equal(plugin, Assert.Single(staging.GetProperty("outputs").EnumerateArray()).GetProperty("path").GetString());
         Assert.NotEqual(beforeMetaHash, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(metaPath))).ToLowerInvariant());
+        var hashLine = Assert.Single(File.ReadAllLines(metaPath), line => line.StartsWith("patchSha256=", StringComparison.OrdinalIgnoreCase));
+        Assert.Equal("patchSha256=" + Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(plugin))).ToLowerInvariant(), hashLine);
     }
 
     [Fact]

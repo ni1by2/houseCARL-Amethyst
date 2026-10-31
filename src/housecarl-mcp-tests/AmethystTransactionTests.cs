@@ -667,6 +667,60 @@ public sealed class AmethystTransactionTests
         Assert.Equal("owner data", File.ReadAllText(metaPath));
     }
 
+    [Theory]
+    [InlineData(false, "\r\n", 0)]
+    [InlineData(false, "\r\n", 1)]
+    [InlineData(false, "\r\n", 2)]
+    [InlineData(false, "\n", 0)]
+    [InlineData(false, "\n", 1)]
+    [InlineData(false, "\n", 2)]
+    [InlineData(true, "\r\n", 0)]
+    [InlineData(true, "\r\n", 1)]
+    [InlineData(true, "\r\n", 2)]
+    [InlineData(true, "\n", 0)]
+    [InlineData(true, "\n", 1)]
+    [InlineData(true, "\n", 2)]
+    public void UpdatingOwnedPatchKeepsOneCurrentHashInItsOwnSection(bool grouped, string newline, int previousHashes)
+    {
+        using var fixture = new TransactionFixture();
+        var metaPath = Path.Combine(Path.GetDirectoryName(fixture.Destination)!, "meta.ini");
+        var oldHashes = previousHashes switch
+        {
+            0 => "",
+            1 => "patchSha256=old" + newline,
+            _ => "patchSha256=old" + newline + " PATCHSHA256 = older" + newline
+        };
+        var pending = previousHashes == 0 ? "" : "pendingDeployment=" + (previousHashes == 1 ? "true" : "false") + newline;
+        var general = "[General]" + newline + "version=1.0" + newline;
+        var retained = "generated=true" + newline + pending + "plugin=patch.esp" + newline;
+        var other = "[Other]" + newline + "patchSha256=unrelated" + newline + "note=keep this" + newline;
+        File.WriteAllText(metaPath, general + "[houseCARL]" + newline + oldHashes + retained + other);
+        File.WriteAllText(fixture.Destination, "original plugin");
+        var coordinator = new AmethystTransactionCoordinator(fixture.State);
+        for (int update = 0; update < 2; update++)
+        {
+            var originalMeta = File.ReadAllBytes(metaPath);
+            var staged = Path.Combine(Path.GetDirectoryName(fixture.State)!, "staged.esp");
+            File.WriteAllText(staged, "updated plugin " + update);
+            var pluginHash = Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(staged))).ToLowerInvariant();
+            var journal = coordinator.Begin(fixture.Request());
+            using var locks = coordinator.AcquireWriteLocks(fixture.Library, fixture.ManagerLock);
+            using var scope = new AmethystTransactionWriteScope(coordinator, journal, locks, fixture.Library,
+                () => { }, unitId: "unit-1", metadataUnitId: "unit-1");
+            scope.DeferOwnerMetadata(metaPath, Encoding.UTF8.GetString(originalMeta),
+                Convert.ToHexString(SHA256.HashData(originalMeta)).ToLowerInvariant());
+            if (grouped) scope.CommitArtifactGroup("unit-1", [(staged, fixture.Destination, "plugin")]);
+            else scope.CommitPlugin(staged, fixture.Destination);
+            scope.PublishOwnerMetadata();
+            scope.Seal();
+
+            var metadata = File.ReadAllText(metaPath);
+            Assert.Equal(general + "[houseCARL]" + newline + "patchSha256=" + pluginHash + newline + retained + other, metadata);
+            Assert.Equal(pluginHash, Convert.ToHexString(SHA256.HashData(File.ReadAllBytes(fixture.Destination))).ToLowerInvariant());
+            Assert.Equal(AmethystTransactionState.PendingDeployment, coordinator.ReadJournal(journal.Id).State);
+        }
+    }
+
     sealed class TransactionFixture : IDisposable
     {
         readonly string _root = Path.Combine(Path.GetTempPath(), "housecarl-tx-test-" + Guid.NewGuid().ToString("N"));
