@@ -132,7 +132,13 @@ foreach ($p in $target.PSObject.Properties) {
   # First-party assemblies are ours, not third-party: they belong in no notices file.
   if ($lib -and $lib.type -eq 'project') { continue }
 
-  $facts = Get-NuspecFacts $id $version
+  # Self-contained Linux publishes name framework packs as runtimepack.<NuGet id> in deps.json.
+  # The cache retains the actual NuGet id, so resolve its declared licence under that name.
+  $packageId = $id
+  if ($lib -and $lib.type -eq 'runtimepack' -and $id.StartsWith('runtimepack.')) {
+    $packageId = $id.Substring('runtimepack.'.Length)
+  }
+  $facts = Get-NuspecFacts $packageId $version
   $licence = $null
   if ($facts) { $licence = $facts.Licence }
   $exception = Get-Prop $exceptions $id
