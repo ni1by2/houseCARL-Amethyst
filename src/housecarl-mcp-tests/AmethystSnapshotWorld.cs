@@ -134,11 +134,12 @@ sealed class AmethystSnapshotWorld : IDisposable
     /// <summary>Run a test mutation; product code uses a separate read-only connection.</summary>
     public void Execute(string sql) { using var connection = Open(); using var command = connection.CreateCommand(); command.CommandText = sql; command.ExecuteNonQuery(); }
 
-    void AddVoiceAssetToCatalog()
+    void AddVoiceAssetToCatalog() => AddSavedFile("Beta", "Sound/Voice/Fixture.esp/MaleEvenToned/HcQ_HcT_00000A11_1.fuz", [0x48, 0x43, 0x56, 0x01]);
+
+    /// <summary>Add a physical file and its selected variant row to this disposable native fixture.</summary>
+    public void AddSavedFile(string mod, string relative, byte[] bytes, bool included = true)
     {
-        const string relative = "Sound/Voice/Fixture.esp/MaleEvenToned/HcQ_HcT_00000A11_1.fuz";
-        var path = Path.Combine(Library, "mods", "Beta", "Sound", "Voice", "Fixture.esp", "MaleEvenToned", "HcQ_HcT_00000A11_1.fuz");
-        var bytes = new byte[] { 0x48, 0x43, 0x56, 0x01 };
+        var path = BethesdaPath.Under(Path.Combine(Library, "mods", mod), relative);
         Directory.CreateDirectory(Path.GetDirectoryName(path)!);
         File.WriteAllBytes(path, bytes);
         var stamp = LinuxFileIdentity.Of(path);
@@ -146,8 +147,10 @@ sealed class AmethystSnapshotWorld : IDisposable
         using var transaction = connection.BeginTransaction();
         using var command = connection.CreateCommand();
         command.Transaction = transaction;
-        command.CommandText = "SELECT mod_id FROM mods WHERE name_key='beta'";
+        command.CommandText = "SELECT mod_id FROM mods WHERE name_key=$name";
+        command.Parameters.AddWithValue("$name", mod.ToLowerInvariant());
         var modId = Convert.ToInt64(command.ExecuteScalar());
+        command.Parameters.Clear();
         command.CommandText = "SELECT variant_id FROM route_variants WHERE mod_id=$mod";
         command.Parameters.AddWithValue("$mod", modId);
         var variantId = Convert.ToInt64(command.ExecuteScalar());
@@ -159,11 +162,15 @@ sealed class AmethystSnapshotWorld : IDisposable
         command.CommandText = "SELECT COALESCE(MAX(candidate_id),0)+1 FROM candidates";
         var candidateId = Convert.ToInt64(command.ExecuteScalar());
         command.Parameters.Clear();
-        command.CommandText = "INSERT INTO destinations(destination_id,target_id,path_key,path_display) VALUES($id,1,$key,$display)";
+        command.CommandText = "INSERT OR IGNORE INTO destinations(destination_id,target_id,path_key,path_display) VALUES($id,1,$key,$display)";
         command.Parameters.AddWithValue("$id", destinationId);
         command.Parameters.AddWithValue("$key", System.Text.Encoding.UTF8.GetBytes(("data/" + relative).ToLowerInvariant()));
         command.Parameters.AddWithValue("$display", "Data/" + relative);
         command.ExecuteNonQuery();
+        command.Parameters.Clear();
+        command.CommandText = "SELECT destination_id FROM destinations WHERE path_key=$key";
+        command.Parameters.AddWithValue("$key", System.Text.Encoding.UTF8.GetBytes(("data/" + relative).ToLowerInvariant()));
+        destinationId = Convert.ToInt64(command.ExecuteScalar());
         command.Parameters.Clear();
         command.CommandText = "INSERT INTO raw_files(file_id,mod_id,source_rel,source_display,index_display,size,mtime_ns,ordinal,flags) " +
                               "VALUES($id,$mod,$rel,$display,$display,$size,$time,2,64)";
@@ -182,7 +189,8 @@ sealed class AmethystSnapshotWorld : IDisposable
         command.ExecuteNonQuery();
         command.Parameters.Clear();
         command.CommandText = "INSERT INTO candidates(candidate_id,variant_id,file_id,destination_id,provider_kind,deployable,legacy_root,legacy_rel,flags) " +
-                              "VALUES($id,$variant,$file,$destination,0,1,0,$rel,0)";
+                              "VALUES($id,$variant,$file,$destination,0,$deployable,0,$rel,0)";
+        command.Parameters.AddWithValue("$deployable", included ? 1 : 0);
         command.Parameters.AddWithValue("$id", candidateId);
         command.Parameters.AddWithValue("$variant", variantId);
         command.Parameters.AddWithValue("$file", fileId);
@@ -190,12 +198,30 @@ sealed class AmethystSnapshotWorld : IDisposable
         command.Parameters.AddWithValue("$rel", relative);
         command.ExecuteNonQuery();
         command.Parameters.Clear();
-        command.CommandText = "INSERT INTO winners(profile_id,namespace,destination_id,candidate_id,generation) VALUES($profile,0,$destination,$candidate,1)";
+        command.CommandText = "INSERT OR REPLACE INTO winners(profile_id,namespace,destination_id,candidate_id,generation) VALUES($profile,0,$destination,$candidate,1)";
         command.Parameters.AddWithValue("$profile", Profile);
         command.Parameters.AddWithValue("$destination", destinationId);
         command.Parameters.AddWithValue("$candidate", candidateId);
         command.ExecuteNonQuery();
         transaction.Commit();
+    }
+
+    /// <summary>Rewrite a synthetic plugin and update its inventory stamp before capturing the fixture.</summary>
+    public void EditPlugin(string mod, string name, Action<SkyrimMod> edit)
+    {
+        var path = Path.Combine(Library, "mods", mod, name);
+        var plugin = SkyrimMod.CreateFromBinary(path, SkyrimRelease.SkyrimSE);
+        edit(plugin);
+        var temporary = Path.Combine(Root, name);
+        plugin.BeginWrite.ToPath(temporary).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
+        File.Move(temporary, path, true);
+        var stamp = LinuxFileIdentity.Of(path);
+        using var connection = Open();
+        using var command = connection.CreateCommand();
+        command.CommandText = "UPDATE raw_files SET size=$size,mtime_ns=$time WHERE mod_id=(SELECT mod_id FROM mods WHERE name_display=$mod) AND source_display=$name";
+        command.Parameters.AddWithValue("$mod", mod); command.Parameters.AddWithValue("$name", name);
+        command.Parameters.AddWithValue("$size", checked((long)stamp.Size)); command.Parameters.AddWithValue("$time", stamp.MtimeNs);
+        command.ExecuteNonQuery();
     }
 
     /// <summary>Remove only this fixture's temporary tree.</summary>

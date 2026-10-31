@@ -55,7 +55,7 @@ Implementation takes place in the existing `codex/amethyst-linux-integration` wo
 | Filegraph contract | native API 13, schema 9, engine 1, rules 13 |
 | Caprica Linux release | `1.0.0-linux`, source `e03d73bf39b7cd0c3db925d8ec8bcef27754fba6` on prepare-app-image; executable version 0.3.0 |
 | Champollion Linux release | `1.0.0-linux`, source `5cd9082189b1a60f9d8a292a9071bca74611bd69`; executable version 1.3.2 |
-| Runtime | .NET 9 self-contained, trimming disabled; Python 3.12+ for the native snapshot helper |
+| Runtime | .NET 10 self-contained, trimming disabled; Python 3.12+ for the native snapshot helper |
 | Candidate fork version | `2.0.4-amethyst.1`, provided it remains unused when implementation begins |
 
 Do not silently advance these pins while implementing. A changed dependency requires a focused compatibility review and updated evidence. Caprica's default branch is not the release branch; do not substitute it.

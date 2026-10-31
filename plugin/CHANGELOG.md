@@ -1,5 +1,12 @@
 # Changelog
 
+## Unreleased
+
+- Integrated upstream houseCARL 2.1.2 engine fixes: partial-form winners, faction ownership ranks, excluded-plugin diagnostics, compaction headers, record agreement, header flags and UTF-8 preservation.
+- Added asset dependency walks, mesh links, filename searches and provider selection against Amethyst’s saved filegraph. File exclusions and routing remain native; explicit disabled donors use recorded inventory. Voice template loops report a refusal.
+- Moved source builds and self-contained Linux packaging to .NET 10. Runtime installation is still unnecessary for downloaded Linux packages.
+- Replaced duplicate owned-patch hashes when updating metadata, preventing malformed `meta.ini` files that can blank Amethyst’s version columns.
+
 ## 2.1.1 — Linux preview (25 October 2026)
 
 - Added a separately pinned Amethyst 2.6.0-beta.7 schema-10/rules-14 reader while retaining schema-9/rules-13 support. Unknown contracts and sources that change during a call still refuse.

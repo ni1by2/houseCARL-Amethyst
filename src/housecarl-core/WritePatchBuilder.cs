@@ -174,6 +174,9 @@ public static class WritePatchBuilder
 
         /// <summary>The file check examined this record; false ⇒ no verify ran and the render says not checked.</summary>
         public bool VerifyAttempted { get; init; }
+
+        /// <summary>One sentence per subrecord Mutagen wrote at 0 bytes on this record and no edit set (<see cref="EmptyOnCreate"/>).</summary>
+        public IReadOnlyList<string> EmptySubrecords { get; init; } = Array.Empty<string>();
     }
 
     /// <summary>The outcome of a <see cref="CreateRecords"/> call; <see cref="Created"/> lists every new record with its allocated FormKey.</summary>
@@ -209,6 +212,10 @@ public static class WritePatchBuilder
 
         /// <summary>The structural-shell report for the cells this call created, filled by the SERVICE post-write.</summary>
         public CellShellReport? CellShell { get; init; }
+
+        /// <summary>Each created record's <see cref="CreatedRecord.EmptySubrecords"/> sentences, once per kind, for the renders to hoist.</summary>
+        public IReadOnlyList<string> EmptySubrecordLines =>
+            Created.SelectMany(c => c.EmptySubrecords).Distinct(StringComparer.Ordinal).ToList();
 
         public static CreateOutcome Fail(string error) =>
             new(false, error, "", false, Array.Empty<CreatedRecord>(), Array.Empty<string>(), 0);
@@ -301,7 +308,7 @@ public static class WritePatchBuilder
         var gather = new BodyGather(view, session);
         foreach (var e in edits)
         {
-            if (view.ResolveWinner(e.Target) is { } gw) gather.Want(gw.WinnerPlugin, e.Target);
+            if (view.ResolveWinner(e.Target) is { } gw && view.ExcludedTouchRefusal(e.Target) is null) gather.Want(gw.WinnerPlugin, e.Target);
             if (!string.Equals(e.Verb, "CopyFrom", StringComparison.Ordinal)) continue;
             if (TryOffOrderCopyBody(copyFromSources, e, view, out _)) continue;       // pre-fetched by the service
             var srcPole = ResolveCopyPole(e, view, out var poleErr);
@@ -317,6 +324,7 @@ public static class WritePatchBuilder
             order++;
             if (order == 1) InsidePhase1ResolveForGuard?.Invoke();         // test seam; null in the product
             IMajorRecordGetter? body = null; string? winnerPlugin = null; IMajorRecord? patchLocal = null;
+            if (view.ExcludedTouchRefusal(e.Target) is { } touched) { Problem(touched); continue; }
             var w = view.ResolveWinner(e.Target);
             if (w is not null)
             {
@@ -431,7 +439,7 @@ public static class WritePatchBuilder
                 // CopyFrom transplants the field FROM the source body into ov; every other verb applies to ov directly.
                 string? applyNote = null;
                 if (string.Equals(req.Verb, "CopyFrom", StringComparison.Ordinal))
-                    WriteEngine.CopyField(srcBody!, ov, req.Path);
+                    PluginTextEncoding.CopyInto(patchMod, () => WriteEngine.CopyField(srcBody!, ov, req.Path));
                 else
                     applyNote = WriteEngine.ApplyVerb(ov, req);
                 var (after, landed, _, _, display) = DescribeApplied(ov, req);
@@ -477,7 +485,7 @@ public static class WritePatchBuilder
 
         // --- Phase 4: serialize ONCE with the FULL known-master set, behind the two-part active-patch self-lock. ---
         session.ReleaseOverlay(patchMod.ModKey.FileName.String);
-        try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath); }
+        try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath, isFaction: OwnerRanks.FactionIn(view)); }
         catch (Exception ex)
             { return PatchOutcome.Fail(SerializeFailure("writing the patch failed (serialize or commit; the existing file is untouched): ", ex, session)); }
 
@@ -554,7 +562,8 @@ public static class WritePatchBuilder
                     "plugin in from_source.";
             return null;
         }
-        return w.Value.WinnerPlugin;
+        error = view.ExcludedTouchRefusal(e.CopySource);   // the winner's body would lack the excluded plugin's version
+        return error is null ? w.Value.WinnerPlugin : null;
     }
 
     /// <summary>The same-runtime-record-type gate for a CROSS-record copy, compared on the OVERLAY-STRIPPED type name.</summary>
@@ -819,7 +828,7 @@ public static class WritePatchBuilder
 
         // --- Phase 4: re-serialize the WHOLE target over itself via WriteInPlace, self-lock first, against the WHOLE known-master set. ---
         session.ReleaseOverlay(fileName);
-        try { WriteEngine.WriteInPlace(targetMod, session.AllMastersExcept(fileName), targetPath, resolver.DataDir); }
+        try { WriteEngine.WriteInPlace(targetMod, session.AllMastersExcept(fileName), targetPath, resolver.DataDir, isFaction: OwnerRanks.FactionIn(view)); }
         catch (MissingModException ex)
         {
             // This arm fires FIRST, so an unopenable-but-ACTIVE master lands here and prefers the named cause over "NOT active".
@@ -888,6 +897,9 @@ public static class WritePatchBuilder
         masters = Array.Empty<string>();
         var priority = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         for (int i = 0; i < resolver.PluginNames.Count; i++) priority[resolver.PluginNames[i]] = i;
+
+        // The write retypes faction owners before its serialize, so the preview does too, by the same lookup.
+        OwnerRanks.Settle(mod, OwnerRanks.FactionIn(resolver.Capture(null)));
 
         var referenced = new Dictionary<ModKey, FormKey>();   // referenced plugin -> first record referencing it (for the refusal)
         foreach (var rec in mod.EnumerateMajorRecords())
@@ -1008,7 +1020,8 @@ public static class WritePatchBuilder
         // Per-call overlay session: the known-master set for the re-serialize is opened through it and disposed on return.
         using var session = resolver.OpenSession();
         // This lane resolves no winner but is not build-free: the re-serialize's master context is the session's.
-        epoch = resolver.Capture().Stamp;
+        var view = resolver.Capture();
+        epoch = view.Stamp;
 
         var fileName = Path.GetFileName(outPath);
         if (!File.Exists(outPath))
@@ -1067,7 +1080,7 @@ public static class WritePatchBuilder
 
         // Serialize ONCE with the full known-master set, behind the two-part self-lock; an orphaned master drops from the lean header.
         session.ReleaseOverlay(patchMod.ModKey.FileName.String);
-        try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath); }
+        try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath, isFaction: OwnerRanks.FactionIn(view)); }
         catch (Exception ex) { return RemovalOutcome.Fail(SerializeFailure("writing the patch after removal failed (serialize or commit; the existing file is untouched): ", ex, session)); }
 
         // Re-open: report the master header and how many records remain (0 ⇒ an inert plugin). Dispose the overlay.
@@ -1215,7 +1228,7 @@ public static class WritePatchBuilder
 
             // --- Phase 5: re-serialize the target over itself against its OWN declared masters, self-lock first. ---
             session.ReleaseOverlay(fileName);
-            try { WriteEngine.WriteInPlace(targetMod, ownMasters, targetPath, resolver.DataDir); }
+            try { WriteEngine.WriteInPlace(targetMod, ownMasters, targetPath, resolver.DataDir, isFaction: OwnerRanks.FactionIn(view)); }
             // The localized-target refusal names its own whole sentence, which this lane's lead would contradict.
             catch (LocalizedTargetUnsupportedException ex) { return RemovalOutcome.Fail(ex.Message); }
             catch (Exception ex)
@@ -1278,6 +1291,7 @@ public static class WritePatchBuilder
         {
             if (!seen.Add(s.Target))
             { problems.Add($"{FormIdToken.Of(s.Target)}: forwarded more than once in this call — name each target once (one source per record)."); continue; }
+            if (view.ExcludedTouchRefusal(s.Target) is { } touched) { problems.Add(touched); continue; }
             // Is the source THE FILE THIS CALL IS ABOUT TO WRITE? By NAME in order, by FULL-PATH identity off-order.
             bool sourceIsSelf = IsOffOrderSource(offOrder, s, view)
                 ? SameFile(offOrder!.Path, targetPath)
@@ -1461,7 +1475,7 @@ public static class WritePatchBuilder
 
         // --- Phase 4: re-serialize over the original (WriteInPlace, whole known-master set; the self-lock first, atomic swap). ---
         session.ReleaseOverlay(fileName);
-        try { WriteEngine.WriteInPlace(targetMod, session.AllMastersExcept(fileName), targetPath, resolver.DataDir); }
+        try { WriteEngine.WriteInPlace(targetMod, session.AllMastersExcept(fileName), targetPath, resolver.DataDir, isFaction: OwnerRanks.FactionIn(view)); }
         catch (MissingModException ex)
         {
             // Same shadowing as the apply twin — see there.
@@ -1696,7 +1710,7 @@ public static class WritePatchBuilder
     /// <summary>The outcome of a <see cref="LoadOrderService.CompactPlugin"/> call; <see cref="NeedsAcknowledge"/> is a consent prompt, not an error.</summary>
     public sealed record CompactOutcome(
         bool Success, string? Error, bool NeedsAcknowledge, string OutputPath, string PluginName, bool InPlace, bool Esl,
-        IReadOnlyList<string> Masters, int RecordsCopied, int RecordsRenumbered, long Bytes,
+        IReadOnlyList<string> Masters, int RecordsCopied, int RecordsRenumbered, int RecordsMoved, long Bytes,
         IReadOnlyList<string> ExternalPlugins, IReadOnlyList<RepointReport> Repointed,
         int PluginsScanned, int UnscannableRecords, IReadOnlyList<string> UnscannableSamples, string? Note = null,
         AssetRenameOutcome? AssetRename = null, IReadOnlyList<string>? ExternalOverriders = null,
@@ -1704,10 +1718,10 @@ public static class WritePatchBuilder
         IReadOnlyList<RemapEngine.UnscannablePlugin>? UnscannablePlugins = null)
     {
         public static CompactOutcome Fail(string error) =>
-            new(false, error, false, "", "", false, false, Array.Empty<string>(), 0, 0, 0,
+            new(false, error, false, "", "", false, false, Array.Empty<string>(), 0, 0, 0, 0,
                 Array.Empty<string>(), Array.Empty<RepointReport>(), 0, 0, Array.Empty<string>());
         public static CompactOutcome Confirm(string prompt) =>
-            new(false, prompt, true, "", "", false, false, Array.Empty<string>(), 0, 0, 0,
+            new(false, prompt, true, "", "", false, false, Array.Empty<string>(), 0, 0, 0, 0,
                 Array.Empty<string>(), Array.Empty<RepointReport>(), 0, 0, Array.Empty<string>());
     }
 
@@ -1857,7 +1871,7 @@ public static class WritePatchBuilder
 
         // --- Phase 4: serialize ONCE with the FULL known-master set (Apply Phase 4's two-part self-lock). ---
         session.ReleaseOverlay(patchMod.ModKey.FileName.String);
-        try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath); }
+        try { WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath, isFaction: OwnerRanks.FactionIn(view)); }
         catch (MissingModException ex)
         {
             // Named, not just loud: the generic catch would render a disabled mod's missing master as a disk fault with no remedy.
@@ -1908,7 +1922,7 @@ public static class WritePatchBuilder
         catch (Exception ex) { return CreatePluginOutcome.Fail($"could not build the plugin in memory: {ex.GetType().Name}: {ex.Message}"); }
 
         // Serialize through the single WritePatch chokepoint with an EMPTY known-master set → zero masters.
-        try { WriteEngine.WritePatch(mod, Array.Empty<ISkyrimModGetter>(), outPath); }
+        try { WriteEngine.WritePatch(mod, Array.Empty<ISkyrimModGetter>(), outPath, isFaction: null); }
         catch (Exception ex)
             { return CreatePluginOutcome.Fail($"writing the plugin failed (serialize or commit; nothing left on disk): {WriteEngine.Describe(ex)}"); }
 
@@ -1956,7 +1970,7 @@ public static class WritePatchBuilder
         ISkyrimModGetter? ov = null;
         try
         {
-            ov = MidCallChange.Open(srcPath, () => SkyrimMod.CreateFromBinaryOverlay(srcPath, SkyrimRelease.SkyrimSE));
+            ov = MidCallChange.Open(srcPath, () => SkyrimMod.CreateFromBinaryOverlay(srcPath, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(srcPath)));
             var originating = new List<FormKey>();
             var carried = new List<FormKey>();
             var records = new List<FormKey>();
@@ -2067,7 +2081,8 @@ public static class WritePatchBuilder
     /// <summary>Build the compacted plugin P′ and write it to <paramref name="outPath"/>, which in place is <paramref name="srcPath"/> itself.</summary>
     public static CompactBuildResult CompactBuild(
         string srcPath, ModKey modKey, IReadOnlyDictionary<FormKey, FormKey> dict,
-        Func<string, string?> resolveMasterPath, string outPath, bool esl, uint floor, string? dataDir)
+        Func<string, string?> resolveMasterPath, string outPath, bool esl, uint floor, string? dataDir,
+        Func<FormKey, bool> isFaction)
     {
         // 1. Build P′ in memory, then DISPOSE the source overlay, whose handle the in-place swap must not hold.
         SkyrimMod pPrime;
@@ -2079,9 +2094,13 @@ public static class WritePatchBuilder
             // The strings-aware factory: a LOCALIZED source opened bare reads every string EMPTY and the renumber bakes it in.
             srcOv = MidCallChange.Open(srcPath, () => LoadOrderResolver.OpenOverlay(srcPath, dataDir));
             declaredMasters = srcOv.ModHeader.MasterReferences.Select(m => m.Master.FileName.String).ToList();
-            // A compaction builds a FRESH mod with no header flags, so a compacted localized plugin comes out DE-LOCALIZED.
-            pPrime = new SkyrimMod(modKey, SkyrimRelease.SkyrimSE) { IsSmallMaster = esl };
-            ren = RemapEngine.RenumberModInto(pPrime, srcOv, dict);
+            pPrime = new SkyrimMod(modKey, SkyrimRelease.SkyrimSE);
+            // The same plugin renumbered keeps its whole header (#1215); the renumber's RemapLinks maps ONAM, NextObjectID is
+            // set below, the write sets masters and the record count. LOCALIZED is dropped: P′ carries its strings inline.
+            pPrime.ModHeader.DeepCopyIn(srcOv.ModHeader);
+            pPrime.ModHeader.Flags &= ~SkyrimModHeader.HeaderFlag.Localized;
+            pPrime.IsSmallMaster = esl;
+            ren = RemapEngine.RenumberModInto(pPrime, srcOv, dict, isFaction);
         }
         catch (Exception ex)
         {
@@ -2118,8 +2137,8 @@ public static class WritePatchBuilder
                 }
                 overlays.Add((IDisposable)mov); resolved.Add(mov);
             }
-            // P′ is a fresh mod and never flagged localized, so its serialize emits no string tables.
-            try { WriteEngine.WriteInPlace(pPrime, resolved, outPath, dataDir); }
+            // P′ has LOCALIZED cleared, so its serialize emits no string tables.
+            try { WriteEngine.WriteInPlace(pPrime, resolved, outPath, dataDir, isFaction: null); }
             catch (Exception ex)
             {
                 return CompactBuildResult.Fail(
@@ -2144,11 +2163,29 @@ public static class WritePatchBuilder
             new(false, error, Array.Empty<string>(), 0, 0, Array.Empty<RemapEngine.MergeConflict>(), 0);
     }
 
+    /// <summary>The one sentence a merge that cannot write returns: what failed, its cause once, and what to try.</summary>
+    internal static string MergeWriteFailure(string fileName, Exception ex)
+    {
+        // A null required arm is a merged record Mutagen cannot write; no folder fix reaches it, and its own text is several sentences.
+        if (ex is NullArmSerializeException)
+            return $"houseCARL did not write the merged plugin '{fileName}' and left nothing behind: a merged record has a "
+                 + "required part that is empty, such as a condition, leveled-list entry or effect; find it in the donors "
+                 + "with xEdit's Check for Errors, fix or drop that donor, then run the merge again.";
+        var causes = ex is AggregateException agg
+            ? agg.Flatten().InnerExceptions.Select(e => e.Message)
+            : ex.InnerException is { } inner && !ex.Message.Contains(inner.Message, StringComparison.Ordinal)
+                ? new[] { ex.Message, inner.Message }
+                : new[] { ex.Message };
+        var cause = string.Join("; ", causes.Select(c => c.Trim().TrimEnd('.')).Where(c => c.Length > 0).Distinct());
+        return $"houseCARL did not write the merged plugin '{fileName}' and left nothing behind ({cause}); "
+             + "check that the mods folder is writable and has free space, then run the merge again.";
+    }
+
     /// <summary>Build the merged plugin M from the donors in LOAD ORDER; a link still pointing INTO a donor REFUSES the build.</summary>
     public static MergeBuildResult MergeBuild(
         IReadOnlyList<(string Name, string Path, ModKey Key)> donorsByLoadOrder, ModKey outKey,
         IReadOnlyDictionary<FormKey, FormKey> dict, IReadOnlyList<string> masters,
-        Func<string, string?> resolveMasterPath, string outPath, string? dataDir)
+        Func<string, string?> resolveMasterPath, string outPath, string? dataDir, Func<FormKey, bool> isFaction)
     {
         // 1. Open every donor overlay, build M in memory, dispose the donors before the write — no handle held at rest.
         var m = new SkyrimMod(outKey, SkyrimRelease.SkyrimSE);
@@ -2179,7 +2216,7 @@ public static class WritePatchBuilder
                 if (!string.IsNullOrWhiteSpace(ov.ModHeader.Author) || !string.IsNullOrWhiteSpace(ov.ModHeader.Description))
                     headerMetaDonors.Add(name);
             }
-            mr = RemapEngine.MergeModsInto(m, mods, dict);
+            mr = PluginTextEncoding.CopyInto(m, () => RemapEngine.MergeModsInto(m, mods, dict, isFaction));
         }
         finally { foreach (var d in overlays) { try { d.Dispose(); } catch { /* best-effort */ } } }
         if (!mr.Success) return MergeBuildResult.Fail(mr.Error!);
@@ -2233,12 +2270,8 @@ public static class WritePatchBuilder
                 }
                 masterOverlays.Add((IDisposable)mov); resolved.Add(mov);
             }
-            try { WriteEngine.WriteInPlace(m, resolved, outPath, dataDir); }
-            catch (Exception ex)
-            {
-                return MergeBuildResult.Fail(
-                    $"writing the merged plugin failed (serialize or commit; nothing partial left): {WriteEngine.Describe(ex)}.");
-            }
+            try { WriteEngine.WriteMerged(m, resolved, outPath, dataDir); }
+            catch (Exception ex) { return MergeBuildResult.Fail(MergeWriteFailure(outKey.FileName, ex)); }
         }
         finally { foreach (var d in masterOverlays) { try { d.Dispose(); } catch { /* best-effort; never mask the write result */ } } }
 
@@ -2724,7 +2757,10 @@ public static class WritePatchBuilder
             var parentKey = parentPlans[i] is { } plan2
                 ? plan2.body?.FormKey ?? plan2.patchParent?.FormKey : null;
             created.Add(new CreatedRecord(rec.FormKey, s.RecordType, s.EditorId, ops, replaced)
-            { ParentHost = parentHosts[i], ParentContested = parentContested[i], ParentKey = parentKey });
+            {
+                ParentHost = parentHosts[i], ParentContested = parentContested[i], ParentKey = parentKey,
+                EmptySubrecords = EmptyOnCreate.Warnings(rulebook, rec, s.Edits),
+            });
         }
 
         // A nested create overrides its PARENT into the artifact, which forks it like any other override.
@@ -2737,9 +2773,9 @@ public static class WritePatchBuilder
         {
             if (inPlace)
                 // Re-emit the WHOLE target over itself, counter preserved and no baseline force-include, against the same whole-master set.
-                WriteEngine.WriteInPlace(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath, resolver.DataDir);
+                WriteEngine.WriteInPlace(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath, resolver.DataDir, isFaction: OwnerRanks.FactionIn(view));
             else
-                WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath);
+                WriteEngine.WritePatch(patchMod, session.AllMastersExcept(patchMod.ModKey.FileName.String), outPath, isFaction: OwnerRanks.FactionIn(view));
         }
         catch (Exception ex) { return CreateOutcome.Fail(SerializeFailure($"writing {(inPlace ? $"'{fileName}' in place" : "the patch")} after create failed (serialize or commit; the existing file is untouched): ", ex, session)); }
 

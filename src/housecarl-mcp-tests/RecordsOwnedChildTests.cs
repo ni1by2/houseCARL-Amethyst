@@ -1373,7 +1373,7 @@ public sealed class RecordsOwnedChildTests : IClassFixture<OwnedChildFixture>
     [Fact]
     public void Json_TheSameNoChildrenRowFitsWithRoomToSpareIsNotMarkedTruncated()
     {
-        using var doc = JsonDocument.Parse(Tree(_w.Weapon, format: "json", maxChars: 1081));
+        using var doc = JsonDocument.Parse(Tree(_w.Weapon, format: "json", maxChars: 1461));
         Assert.False(doc.RootElement.GetProperty("truncated").GetBoolean());
     }
 
@@ -1413,7 +1413,7 @@ public sealed class RecordsOwnedChildTests : IClassFixture<OwnedChildFixture>
     static RecordReads.TreeRow FiveDeclarerRow() => new(
         "000001:Test.esm", "Cell", "TestCell",
         new[] { "A.esp", "B.esp", "C.esp", "D.esp", "E.esp" }, "E.esp",
-        new[] { new RecordReads.TreeNodeDelta("E.esp", true, true, Array.Empty<string>(), 0, true, null) },
+        new[] { new RecordReads.TreeNodeDelta("E.esp", true, null) },
         null,
         new[] { new ChildDeclarers("Persistent", OwnedChildShape.Collection,
                                    new[] { "A.esp", "B.esp", "C.esp", "D.esp", "E.esp" }, Array.Empty<string>()) });
@@ -1453,7 +1453,7 @@ public sealed class RecordsOwnedChildTests : IClassFixture<OwnedChildFixture>
     static RecordReads.TreeRow UnreadableRow(OwnedChildShape shape, int declaring, int unreadable) => new(
         "000001:Test.esm", "Cell", "TestCell",
         new[] { "A.esp", "B.esp", "C.esp", "D.esp", "E.esp" }, "E.esp",
-        new[] { new RecordReads.TreeNodeDelta("E.esp", true, true, Array.Empty<string>(), 0, true, null) },
+        new[] { new RecordReads.TreeNodeDelta("E.esp", true, null) },
         null,
         new[] { new ChildDeclarers("Landscape", shape,
                                    Names("D", declaring), Names("U", unreadable)) });

@@ -413,14 +413,28 @@ static partial class WriteTools
               .Append("' mod in MO2 (same basename — MO2 serves one). Review in xEdit first.\n");
 
         int overrides = o.RecordsCopied - o.RecordsRenumbered;
-        sb.Append(o.Esl ? "light master (ESPFE): yes — " : "renumbered (not light-flagged): ");
-        sb.Append(o.RecordsRenumbered).Append(o.RecordsRenumbered == 1 ? " originating record renumbered " : " originating records renumbered ");
-        sb.Append(o.Esl ? "into the light range 0x800–0xFFF" : "contiguously from 0x800");
+        bool movedNothing = o.RecordsMoved == 0 && o.RecordsRenumbered > 0;
+        int stayed = o.RecordsRenumbered - o.RecordsMoved;
+        if (movedNothing)
+            sb.Append(o.Esl ? "light master (ESPFE): yes — " : "not light-flagged — ")
+              .Append(stayed).Append(stayed == 1 ? " originating record already at its compacted id" : " originating records already at their compacted ids");
+        else if (o.RecordsRenumbered == 0)
+            sb.Append(o.Esl ? "light master (ESPFE): yes — " : "not light-flagged — ").Append("no originating records, so nothing was renumbered");
+        else
+        {
+            sb.Append(o.Esl ? "light master (ESPFE): yes — " : "renumbered (not light-flagged): ")
+              .Append(o.RecordsMoved).Append(o.RecordsMoved == 1 ? " originating record renumbered " : " originating records renumbered ")
+              .Append(o.Esl ? "into the light range 0x800–0xFFF" : "contiguously from 0x800");
+            if (stayed > 0) sb.Append("; ").Append(stayed).Append(stayed == 1 ? " already at its compacted id" : " already at their compacted ids");
+        }
         if (overrides > 0) sb.Append("; ").Append(overrides).Append(overrides == 1 ? " override kept at its master FormID" : " overrides kept at their master FormIDs");
         sb.Append(".\n");
+        if (movedNothing) sb.Append(WriteSentences.CompactMovedNothing);
         sb.Append(WriteSentences.Masters(o.Masters));
 
-        if (o.ExternalPlugins.Count == 0)
+        if (movedNothing)
+            sb.Append("external referencers: none to repoint, since no id moved.\n");
+        else if (o.ExternalPlugins.Count == 0)
             sb.Append("external referencers: none — clean compaction (nothing outside this plugin pointed at a renumbered record).\n");
         else if (o.Repointed.Count > 0)
         {
@@ -453,9 +467,10 @@ static partial class WriteTools
               .Append("'external referencers: none' may be incomplete — verify in xEdit. Samples: ").Append(string.Join("; ", o.UnscannableSamples)).Append('\n');
         }
         AppendUnscannablePlugins(sb, o.UnscannablePlugins);
-        sb.Append("identify-pass scanned ").Append(o.PluginsScanned).Append(" plugin(s) for external references.\n");
-        // The plugin NAME survives a compaction, so what moves is the object id, and only the ids this run moved.
-        sb.Append(WriteSentences.CompactRuntimeConfigs);
+        // The identify pass runs only when an id moved; the runtime-config sentence names that pass, so both go together.
+        if (o.RecordsMoved > 0)
+            sb.Append("identify-pass scanned ").Append(o.PluginsScanned).Append(" plugin(s) for external references.\n")
+              .Append(WriteSentences.CompactRuntimeConfigs);
 
         AppendFacegenCarry(sb, o.AssetRename, o.InPlace);
         // One asset build backs both passes, so the voice note names only a root the facegen note did not.
@@ -524,9 +539,9 @@ static partial class WriteTools
     {
         if (outcome is not { } ar) return;
         if (ar.FacegenFilesCarried > 0)
-            sb.Append("facegen: carried ").Append(ar.FacegenFilesCarried).Append(ar.FacegenFilesCarried == 1 ? " file for " : " files for ")
-              .Append(ar.FacegenNpcsCarried).Append(ar.FacegenNpcsCarried == 1 ? " NPC to the new FormIDs" : " NPCs to the new FormIDs")
-              .Append(inPlace ? " (old-FormID facegen left as harmless orphans).\n" : " (in the new mod folder — enabling it carries the faces).\n");
+            sb.Append(inPlace ? "facegen: carried " : "facegen: copied ").Append(ar.FacegenFilesCarried).Append(ar.FacegenFilesCarried == 1 ? " file for " : " files for ")
+              .Append(ar.FacegenNpcsCarried).Append(ar.FacegenNpcsCarried == 1 ? " NPC" : " NPCs")
+              .Append(inPlace ? " to the new FormIDs (old-FormID facegen left as harmless orphans).\n" : " into the new mod folder (enabling it carries the faces).\n");
         else if (ar.NpcCount > 0 && ar.Failures.Count == 0)
             sb.Append("facegen: none found for ").Append(ar.NpcCount).Append(ar.NpcCount == 1 ? " NPC — nothing to carry.\n" : " NPCs — nothing to carry.\n");
         foreach (var f in ar.Failures.Take(25)) sb.Append("  facegen WARN: ").Append(f).Append('\n');
@@ -542,9 +557,9 @@ static partial class WriteTools
     {
         if (outcome is not { } vr) return;
         if (vr.FilesCarried > 0)
-            sb.Append("voice: carried ").Append(vr.FilesCarried).Append(vr.FilesCarried == 1 ? " file for " : " files for ")
-              .Append(vr.LinesCarried).Append(vr.LinesCarried == 1 ? " dialogue line to the new FormIDs" : " dialogue lines to the new FormIDs")
-              .Append(inPlace ? " (old-FormID voice left as harmless orphans).\n" : " (in the new mod folder — enabling it carries the voice).\n");
+            sb.Append(inPlace ? "voice: carried " : "voice: copied ").Append(vr.FilesCarried).Append(vr.FilesCarried == 1 ? " file for " : " files for ")
+              .Append(vr.LinesCarried).Append(vr.LinesCarried == 1 ? " dialogue line" : " dialogue lines")
+              .Append(inPlace ? " to the new FormIDs (old-FormID voice left as harmless orphans).\n" : " into the new mod folder (enabling it carries the voice).\n");
         else if (vr.FilesScanned > 0 && vr.Failures.Count == 0)
             sb.Append("voice: ").Append(vr.FilesScanned).Append(vr.FilesScanned == 1 ? " voice file found, none keyed to a renumbered line" : " voice files found, none keyed to a renumbered line")
               .Append(" — nothing to carry.\n");
@@ -829,6 +844,9 @@ static partial class WriteTools
         if (contested.Count > Wire.ContestedHostsShown)
             sb.Append("  ! … and ").Append(contested.Count - Wire.ContestedHostsShown)
               .Append(" further contested parent(s) — each is named on its own record's `parent:` line below.\n");
+        // Each subrecord Mutagen wrote at 0 bytes, said once per kind and outside the row budget.
+        foreach (var empty in o.EmptySubrecordLines)
+            sb.Append("  ! ").Append(empty).Append('\n');
         int listed = 0;
         for (int ci = 0; ci < o.Created.Count; ci++)
         {

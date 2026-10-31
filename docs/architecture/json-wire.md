@@ -140,17 +140,25 @@ and the document would stop being json. `AssetTools`'s manifest-only lane guards
 
 ### Envelope keys must stay disjoint
 
-Response-envelope pairs are written as top-level string fields at the START of a document. `Utf8JsonWriter` does not
-dedupe, so an envelope key colliding with a renderer's own top-level key (`count`, `epoch`, `records`, `rendered`,
-`truncated`, `total`, …) emits a duplicate-key document. The current set is disjoint; keep it that way when adding
-pairs.
+Response-envelope pairs are written as top-level fields at the START of a document. Each pair (`EnvelopePair`) carries
+its JSON kind: a count (`total`, `not_touched`) is a number, a flag (`epoch_covers_source`) a boolean, everything else a
+string. `Utf8JsonWriter` does not dedupe, so an envelope key colliding with a renderer's own top-level key (`count`,
+`epoch`, `records`, `rendered`, `truncated`, …) emits a duplicate-key document. The current set is disjoint; keep it
+that way when adding pairs. `total` is both: the lanes that consume a scan (a body read, a comparison, `info_order`, a
+walk) put the scan's total in the envelope, and the dense list census writes its own `total`. A walk puts the scan's
+total in the envelope and then enters the list lane, so what keeps the two apart is that dense refuses a walk up front
+(`DenseRefusal`, before any lane runs); every other lane that reaches the census carries no envelope `total`.
 
-The one exception is `notes`: every `notes` pair is written as one `notes` array after the string pairs. A form that
+The one exception is `notes`: every `notes` pair is written as one `notes` array after the other pairs. A form that
 consumes a scan (a body read, a comparison, `info_order`, a walk) carries the scan's owed notes that way, the same
-member the scan's own render writes. Every response reads those notes from one list,
-`CrossQueryOutcome.OwedNotes` (predicate, unmatched, scan coverage, where_source, reverse index), written when the
-header or envelope is, so the unmatched note can point at a manifest the response wrote; every artifact manifest
-reads `ManifestNotes`, the same list naming every unmatched member, and adds only its own. Each note is said once:
+member the scan's own render writes. A response reads its notes from two sources, written when the header or
+envelope is, so the unmatched note can point at a manifest the response wrote: the scan's
+`CrossQueryOutcome.OwedNotes` (predicate, unmatched, scan coverage, where_source, reverse index), and the
+`project.fields` plan's notes (`PlannedFields.Notes`, read-engine.md). On the list, pole, comparison and body lanes
+the plan's notes follow the scan's through `Head` / `Env`; on the scan renders, which read rows lazily, they ride
+inside `OwedNotes` as `CrossQueryOutcome.FieldNotes`. Every artifact manifest reads `ManifestNotes`, the scan's list
+naming every unmatched member, and adds only its own, so a scan render's manifest carries the plan's notes and a
+to_file or ceiling-spill manifest on the list, delta, tree and body lanes does not (the response does). Each note is said once:
 no separate `scan_note` or `reverse_index` member beside the array (the MGEF carrier result's `scan_note` is its own).
 
 ### Measuring a unit means writing it
@@ -239,6 +247,14 @@ own lane can survive.
   renderers take a cap.
 - *The read-back block*: `WriteSurfaceInPlaceTransportTests.ForcedReadbackIsReportedFull` — "json: an in-place
   lane that FORCED the read-back reports readback_full:true, ask kept separately".
+- *Envelope keys must stay disjoint*: `RecordsOutputAgreementTests` (`Envelope_*`) — `total` and `not_touched` are json
+  numbers carrying the count and `epoch_covers_source` a boolean on the body, tree, delta, walk, off-order and
+  `info_order` lanes, and `ToFile_TheQueryEchoStaysStrings` keeps the artifact's query echo strings;
+  `RecordsOverlayEnvelopeKindTests` covers the overlay post-state pole. The same class pins the delta and tree rows'
+  `matched_list_count`, `matched_item_count` and `both_absent_count` inline, and a delta `to_file` row and its
+  `row_schema` (`matched_list_count`, `both_absent_count`, `unresolved_string_count`); `unresolved_string_count` inline
+  on a delta row; `PresentNullLinkAgreementTests` pins `present_null_link_count` inline on a delta and a tree row. No
+  test reads a tree `to_file` row, whose `row_schema` lists `nodes`.
 
 ## Where
 

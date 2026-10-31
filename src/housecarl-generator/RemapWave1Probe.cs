@@ -246,7 +246,7 @@ public static class RemapWave1Probe
                 var pPrime = new SkyrimMod(modKey, SkyrimRelease.SkyrimSE) { IsSmallMaster = true };
                 // Wave 2: the STRUCTURAL renumber (flat + nested — cells/placed/INFO), so a cell-bearing real mod compacts
                 // too (the flat RenumberRecordsInto would refuse it loud). Same path the housecarl_compact_plugin tool uses.
-                var ren = RemapEngine.RenumberModInto(pPrime, ov, plan.Dict);
+                var ren = RemapEngine.RenumberModInto(pPrime, ov, plan.Dict, _ => false);
                 if (!ren.Success) { Console.WriteLine($"   REFUSE (Q3): {ren.Error}"); }
                 else
                 {
@@ -263,7 +263,7 @@ public static class RemapWave1Probe
                     if (!missing)
                     {
                         // dataDir: null — synthetic, non-localized fixture, so there is no game-Data set to rule out.
-                        try { WriteEngine.WriteInPlace(pPrime, resolved, pPrimePath, dataDir: null); wroteP = true; Console.WriteLine($"   WROTE compacted P′ → {pPrimePath}  ({ren.RecordsCopied} records, {ren.RecordsRenumbered} renumbered into 0x800+)"); }
+                        try { WriteEngine.WriteInPlace(pPrime, resolved, pPrimePath, dataDir: null, isFaction: null); wroteP = true; Console.WriteLine($"   WROTE compacted P′ → {pPrimePath}  ({ren.RecordsCopied} records, {ren.RecordsRenumbered} renumbered into 0x800+)"); }
                         catch (Exception ex) { Console.WriteLine($"   WRITE FAILED ({WriteEngine.Describe(ex)}) — note a sub-0x800 originating record is rejected by the light floor."); }
                     }
                 }

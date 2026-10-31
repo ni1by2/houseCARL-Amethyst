@@ -5,6 +5,9 @@ using Mutagen.Bethesda.Plugins;
 
 namespace HousecarlMcp;
 
+/// <summary>One response-envelope pair, written as its value's JSON kind: a count (int) a number, a flag a boolean, text a string.</summary>
+readonly record struct EnvelopePair(string Key, object Value);
+
 /// <summary>The format="json" twin of the text <see cref="Wire"/> renderer: one serializer per read tool over the
 /// SAME outcome objects, so text and JSON differ only in formatting; contracts in docs/architecture/json-wire.md.</summary>
 static class JsonWire
@@ -65,13 +68,22 @@ static class JsonWire
         WriteNullable(w, "error", error);
     }
 
-    /// <summary>Optional response-envelope pairs written as top-level string fields at the START of a document, every "notes" pair one array;
+    /// <summary>Optional response-envelope pairs written as top-level fields of their own kind at the START of a document, every "notes" pair one array;
     /// their keys must stay disjoint from every renderer's own — docs/architecture/json-wire.md.</summary>
-    static void WriteEnvelope(Utf8JsonWriter w, IReadOnlyList<KeyValuePair<string, string>>? envelope)
+    static void WriteEnvelope(Utf8JsonWriter w, IReadOnlyList<EnvelopePair>? envelope)
     {
         if (envelope is null) return;
-        foreach (var kv in envelope) if (kv.Key != "notes") w.WriteString(kv.Key, kv.Value);
-        var notes = envelope.Where(kv => kv.Key == "notes").Select(kv => kv.Value).ToList();   // a consumed scan's owed notes, one array
+        foreach (var kv in envelope)
+        {
+            if (kv.Key == "notes") continue;
+            switch (kv.Value)
+            {
+                case int n: w.WriteNumber(kv.Key, n); break;
+                case bool f: w.WriteBoolean(kv.Key, f); break;
+                default: w.WriteString(kv.Key, kv.Value.ToString()); break;
+            }
+        }
+        var notes = envelope.Where(kv => kv.Key == "notes").Select(kv => (string)kv.Value).ToList();   // a consumed scan's owed notes, one array
         if (notes.Count > 0) WriteStringArray(w, "notes", notes);
     }
 
@@ -258,6 +270,7 @@ static class JsonWire
                 WriteNullable(w, "editorid", link.EditorId);
                 WriteNullable(w, "name", link.Name);
             }
+            else if (link.Error is not null) w.WriteString("error", link.Error);
             w.WriteEndObject();
         }
     }
@@ -320,6 +333,7 @@ static class JsonWire
         w.WriteString("type", r.Type);
         WriteNullable(w, "editorid", r.EditorId);
         WriteSharedName(w, SharedEditorIds.Note(o.Pin, o.FormKey, r.Type, o.SourcePlugin));
+        WriteExcludedNote(w, Wire.ExcludedNote(o.Pin, o.FormKey));
         WriteNullable(w, "winner", o.WinnerPlugin);
         w.WriteNumber("override_depth", o.OverrideDepth);
         WriteNullable(w, "source", o.SourcePlugin);   // the body these field VALUES came from (scoped plugin vs winner)
@@ -348,7 +362,7 @@ static class JsonWire
     /// <param name="bodyCost">What reading these bodies cost; the count is the BODIES READ, short of the list (#582, #607).</param>
     /// <param name="matches">Which multi-target references= target(s) each row hit; null when there was no such lookup (#576).</param>
     public static string RenderBatch(IReadOnlyList<ReadOutcome> outcomes, int maxChars, SpillState? spill, out bool truncated,
-                                     IReadOnlyList<KeyValuePair<string, string>>? envelope = null, LeverNames? levers = null,
+                                     IReadOnlyList<EnvelopePair>? envelope = null, LeverNames? levers = null,
                                      (int RowsRead, long Millis)? bodyCost = null,
                                      IReadOnlyList<string?>? matches = null)
     {
@@ -399,7 +413,7 @@ static class JsonWire
     /// <param name="maxChars">the caller's max_chars: this document has no rows to cut, so the cap can only be
     /// missed outright, and it says so with the member every other capped document closes on (#809). REQUIRED, with
     /// no default, so a call site that forgets it does not compile into a silent server-default ceiling.</param>
-    public static string RenderCounts(IReadOnlyList<KeyValuePair<string, string>> envelope, int count, int ok, int errors, OrderStamp? epoch,
+    public static string RenderCounts(IReadOnlyList<EnvelopePair> envelope, int count, int ok, int errors, OrderStamp? epoch,
                                       int maxChars)
     {
         int cap = Wire.Cap(maxChars);
@@ -420,7 +434,7 @@ static class JsonWire
 
     /// <summary>records counts_only for forms with named counters (delta, tree): the envelope and the counters, no rows.</summary>
     /// <param name="maxChars">as <see cref="RenderCounts"/>: no rows to cut, so an over-cap census says so.</param>
-    public static string RenderNamedCounts(IReadOnlyList<KeyValuePair<string, string>> envelope,
+    public static string RenderNamedCounts(IReadOnlyList<EnvelopePair> envelope,
                                            IReadOnlyList<KeyValuePair<string, int>> counts, OrderStamp? epoch,
                                            int maxChars)
     {
@@ -440,7 +454,7 @@ static class JsonWire
 
     /// <summary>records form=summary on the list lane: one identity+winner row per outcome, or its per-item error.</summary>
     public static string RenderRecordsSummary(IReadOnlyList<ReadOutcome> outcomes, int maxChars,
-                                              IReadOnlyList<KeyValuePair<string, string>> envelope,
+                                              IReadOnlyList<EnvelopePair> envelope,
                                               SpillState? spill, (int RowsRead, long Millis) bodyCost, out bool truncated,
                                               IReadOnlyList<string?>? matches = null)
     {
@@ -494,7 +508,7 @@ static class JsonWire
     public static string RenderListAggregate(string groupBy, IReadOnlyList<KeyValuePair<string, int>> rows,
                                              int count, int errors, OrderStamp? epoch,
                                              (int RowsRead, long Millis) bodyCost, int maxChars,
-                                             IReadOnlyList<KeyValuePair<string, string>>? envelope = null,
+                                             IReadOnlyList<EnvelopePair>? envelope = null,
                                              IReadOnlyList<string>? emptyGroups = null,
                                              int rowLimit = 0)
     {
@@ -552,6 +566,7 @@ static class JsonWire
         {
             w.WriteString("error", row.Error);
             if (row.StackAbove is { Count: > 0 }) WriteStringArray(w, "stack_above", row.StackAbove);
+            if (row.StackWinner is not null) w.WriteString("winner", row.StackWinner);   // a partial form tops the stack
             w.WriteEndObject();
             return;
         }
@@ -559,9 +574,11 @@ static class JsonWire
         WriteNullable(w, "type", s.RecordType);
         WriteNullable(w, "editorid", s.EditorId);
         WriteSharedName(w, row.SharedNote);
+        WriteExcludedNote(w, row.ExcludedNote);
         WriteDiffPole(w, "subject", s);
         WriteDiffPole(w, "reference", r);
         if (row.StackAbove is { Count: > 0 }) WriteStringArray(w, "stack_above", row.StackAbove);
+        if (row.StackWinner is not null) w.WriteString("winner", row.StackWinner);   // a partial form tops the stack
         if (row.Note is not null) w.WriteString("note", row.Note);
         var d = row.Diff!;
         w.WriteBoolean("complete", d.Complete);
@@ -579,14 +596,35 @@ static class JsonWire
         // How many of those lines are NO-VERDICTS rather than value differences.
         w.WriteNumber("no_verdict_count", d.NoVerdictCount);
         if (d.NoFieldCount > 0) w.WriteNumber("no_field_count", d.NoFieldCount);
+        WriteNotOnType(w, d);
         if (cut) { w.WriteNumber("deltas_rendered", rendered); w.WriteBoolean("deltas_truncated", true); }
         w.WriteNumber("agreed_count", d.AgreedCount);
+        WriteOtherAgreement(w, d);
         w.WriteEndObject();
+    }
+
+    /// <summary>The planned paths this record's type lacks, which were not compared, and whether nothing else was; written only when there are any.</summary>
+    static void WriteNotOnType(Utf8JsonWriter w, FieldsDiff.Result d)
+    {
+        if (d.NotOnType is not { Count: > 0 } notOn) return;
+        WriteStringArray(w, "not_on_type", notOn);
+        if (d.NothingCompared) w.WriteBoolean("nothing_compared", true);
+    }
+
+    /// <summary>What <c>agreed_count</c> does not count: lists whose contents match, fields absent on both sides, links
+    /// null on both sides with the subrecord present, and localized strings that did not resolve.</summary>
+    static void WriteOtherAgreement(Utf8JsonWriter w, FieldsDiff.Result d)
+    {
+        w.WriteNumber("matched_list_count", d.MatchedListCount);
+        w.WriteNumber("matched_item_count", d.MatchedItemCount);
+        w.WriteNumber("both_absent_count", d.BothAbsentCount);
+        w.WriteNumber("present_null_link_count", d.PresentNullLinkCount);
+        w.WriteNumber("unresolved_string_count", d.UnresolvedStringCount);
     }
 
     /// <summary>records form=delta. The identical count only counts COMPLETE comparisons (<c>complete:false</c> otherwise).</summary>
     public static string RenderDelta(IReadOnlyList<RecordReads.DeltaRow> rows, int maxChars, OrderStamp? epoch,
-                                     IReadOnlyList<KeyValuePair<string, string>> envelope,
+                                     IReadOnlyList<EnvelopePair> envelope,
                                      IReadOnlyList<KeyValuePair<string, int>> counts,
                                      SpillState? spill, out bool truncated)
     {
@@ -622,6 +660,12 @@ static class JsonWire
         return Finish(ms);
     }
 
+    /// <summary>The row's winner, written only when a partial form tops its touchers so their last plugin is not it.</summary>
+    static void WriteTreeWinner(Utf8JsonWriter w, RecordReads.TreeRow row)
+    {
+        if (row.WinnerAt >= 0 && row.WinnerAt != row.Touchers.Count - 1) w.WriteString("winner", row.Touchers[row.WinnerAt]);
+    }
+
     /// <summary>One tree row — the provider stack with per-node deltas, shared by the json render and the artifact writer.</summary>
     /// <returns>true if any part of the row hit <paramref name="cap"/>; the caller must merge it into <c>truncated</c>.</returns>
     internal static bool WriteTreeRow(Utf8JsonWriter w, RecordReads.TreeRow row, CharCountedStream ms, int cap,
@@ -636,14 +680,17 @@ static class JsonWire
         {
             w.WriteString("error", row.Error);
             if (row.Touchers.Count > 0) WriteStringArray(w, "touchers", row.Touchers);
+            WriteTreeWinner(w, row);
             w.WriteEndObject();
             return false;
         }
         WriteNullable(w, "type", row.Type);
         WriteNullable(w, "editorid", row.EditorId);
         WriteSharedName(w, row.SharedNote);
+        WriteExcludedNote(w, row.ExcludedNote);
         WriteNullable(w, "reference", row.ReferencePlugin);
-        WriteStringArray(w, "touchers", row.Touchers);   // priority order, winner LAST
+        WriteStringArray(w, "touchers", row.Touchers);   // priority order, winner LAST unless a partial form tops it
+        WriteTreeWinner(w, row);
         // The precise owned-child answer, from the same TreeRow the text lane renders.
         if (row.ChildDeclarers.Count > 0)
         {
@@ -685,12 +732,14 @@ static class JsonWire
             w.WriteString("plugin", n.Plugin);
             w.WriteBoolean("is_winner", n.IsWinner);
             w.WriteBoolean("is_reference", n.IsReference);
-            if (!n.IsReference)
+            if (n.Diff is { } nd)
             {
-                w.WriteBoolean("complete", n.Complete);
-                WriteStringArray(w, "deltas", n.Deltas);
-                w.WriteNumber("delta_count", n.Deltas.Count);
-                w.WriteNumber("agreed_count", n.AgreedCount);
+                w.WriteBoolean("complete", nd.Complete);
+                WriteStringArray(w, "deltas", nd.Deltas);
+                w.WriteNumber("delta_count", nd.Deltas.Count);
+                WriteNotOnType(w, nd);
+                w.WriteNumber("agreed_count", nd.AgreedCount);
+                WriteOtherAgreement(w, nd);
             }
             w.WriteEndObject();
         }
@@ -701,7 +750,7 @@ static class JsonWire
 
     /// <summary>records form=tree: <c>{…envelope, count, contested, errors, epoch, rows:[…]}</c>.</summary>
     public static string RenderTree(IReadOnlyList<RecordReads.TreeRow> rows, int maxChars, OrderStamp? epoch,
-                                    IReadOnlyList<KeyValuePair<string, string>> envelope,
+                                    IReadOnlyList<EnvelopePair> envelope,
                                     IReadOnlyList<KeyValuePair<string, int>> counts,
                                     SpillState? spill, out bool truncated, LeverNames? levers = null)
     {
@@ -820,7 +869,7 @@ static class JsonWire
 
     /// <summary>records form=chain: <c>{…envelope, seeds, errors, epoch, rows:[…]}</c>.</summary>
     public static string RenderChain(IReadOnlyList<RecordReads.WalkSeedResult> rows, int maxChars, OrderStamp? epoch,
-                                     IReadOnlyList<KeyValuePair<string, string>> envelope,
+                                     IReadOnlyList<EnvelopePair> envelope,
                                      IReadOnlyList<KeyValuePair<string, int>> counts,
                                      SpillState? spill, out bool truncated)
     {
@@ -858,7 +907,7 @@ static class JsonWire
     /// <summary>records form=chain, walk=reverse: per seed the carriers with the MATCHING entry's payload —
     /// magnitudes AS AUTHORED, conditions not evaluated.</summary>
     public static string RenderEffectChains(IReadOnlyList<(string Seed, EffectChainResult Result)> results,
-                                            int maxChars, IReadOnlyList<KeyValuePair<string, string>> envelope,
+                                            int maxChars, IReadOnlyList<EnvelopePair> envelope,
                                             IReadOnlyList<KeyValuePair<string, int>> counts, OrderStamp? epoch,
                                             SpillState? spill, out bool outTruncated)
     {
@@ -979,7 +1028,7 @@ static class JsonWire
 
     /// <summary>records form=info_order: <c>{…envelope, count, contested, errors, epoch, rows:[…]}</c>.</summary>
     public static string RenderInfoOrder(IReadOnlyList<RecordReads.InfoOrderRow> rows, int maxChars, OrderStamp? epoch,
-                                         IReadOnlyList<KeyValuePair<string, string>> envelope,
+                                         IReadOnlyList<EnvelopePair> envelope,
                                          IReadOnlyList<KeyValuePair<string, int>> counts,
                                          SpillState? spill, out bool truncated)
     {
@@ -1026,7 +1075,7 @@ static class JsonWire
     /// own term (#810); <c>cut_by</c> names whichever knob stopped it.</param>
     public static string RenderCrossQuery(LoadOrderService svc, CrossQueryOutcome q, IReadOnlyList<string>? fields, int maxChars, bool resolveNames, bool winnerFields, int depth,
                                           SpillState? spill, out bool truncated,
-                                          IReadOnlyList<KeyValuePair<string, string>>? envelope = null, LeverNames? levers = null,
+                                          IReadOnlyList<EnvelopePair>? envelope = null, LeverNames? levers = null,
                                           CancellationToken ct = default, int rowLimit = 0)
     {
         truncated = false;
@@ -1163,7 +1212,7 @@ static class JsonWire
 
     public static string RenderCrossQueryDense(LoadOrderService svc, CrossQueryOutcome q, IReadOnlyList<string>? fields, int maxChars, bool resolveNames, bool winnerFields,
                                                SpillState? spill, out bool truncated,
-                                               IReadOnlyList<KeyValuePair<string, string>>? envelope = null, LeverNames? levers = null,
+                                               IReadOnlyList<EnvelopePair>? envelope = null, LeverNames? levers = null,
                                                FoldPlan? fold = null, CancellationToken ct = default)
     {
         truncated = false;
@@ -1217,7 +1266,7 @@ static class JsonWire
     /// <summary>The dense render of a list read's bodies (a formids= read or a scan's body lane), through the scan's table.</summary>
     public static string RenderBatchDense(IReadOnlyList<ReadOutcome> outcomes, IReadOnlyList<string>? fields, FoldPlan? fold,
                                           int maxChars, SpillState? spill, out bool truncated,
-                                          IReadOnlyList<KeyValuePair<string, string>>? envelope, (int RowsRead, long Millis) bodyCost,
+                                          IReadOnlyList<EnvelopePair>? envelope, (int RowsRead, long Millis) bodyCost,
                                           IReadOnlyList<string?>? matches = null, bool countsOnly = false)
     {
         int cap = Wire.Cap(maxChars);
@@ -1264,11 +1313,11 @@ static class JsonWire
         w.WriteEndArray();
 
         List<(string Formid, string Error, string? Matches)>? errors = null;
-        List<(string Formid, string Note)>? sharedNotes = null;   // a rendered record's shared-EditorID note, beside the rows like errors
+        List<(string Formid, string Note, string Member)>? sharedNotes = null;   // a rendered record's shared-EditorID or excluded-plugin note, beside the rows like errors
         int notesChars = 0;                                       // what the notes trailer will cost, charged against the cap as rows are
-        void AddNote(string formid, string note)
+        void AddNote(string formid, string note, string member = "editorid_note")
         {
-            (sharedNotes ??= new()).Add((formid, note));
+            (sharedNotes ??= new()).Add((formid, note, member));
             notesChars += note.Length + formid.Length + NoteEntryFraming;
         }
         int rendered = 0; bool rowsTruncated = false;
@@ -1344,6 +1393,7 @@ static class JsonWire
                     }
                     if (cut) break;                                   // a half-written record is not a rendered one
                     if (sharedNote is not null) AddNote(FormIdToken.Of(fk), sharedNote);
+                    if (Wire.ExcludedNote(o.Pin, fk) is { } foldExcluded) AddNote(FormIdToken.Of(fk), foldExcluded, "excluded_note");
                     rendered++;
                     continue;
                 }
@@ -1361,6 +1411,7 @@ static class JsonWire
                 if (hasMatches) WriteCell(w, matches);
                 w.WriteEndArray();
                 if (sharedNote is not null) AddNote(FormIdToken.Of(fk), sharedNote);
+                if (Wire.ExcludedNote(o.Pin, fk) is { } excludedNote) AddNote(FormIdToken.Of(fk), excludedNote, "excluded_note");
             }
             else
             {
@@ -1377,6 +1428,7 @@ static class JsonWire
                 if (hasMatches) WriteCell(w, matches);
                 w.WriteEndArray();
                 if (SharedEditorIds.Note(m.Pin, m.FormKey, m.Type, m.Source) is { } note) AddNote(FormIdToken.Of(m.FormKey), note);
+                if (Wire.ExcludedNote(m.Pin, m.FormKey) is { } excludedNote) AddNote(FormIdToken.Of(m.FormKey), excludedNote, "excluded_note");
             }
             rendered++;
         }
@@ -1395,9 +1447,9 @@ static class JsonWire
         if (sharedNotes is not null)
         {
             w.WriteStartArray("editorid_notes");
-            foreach (var (nfk, note) in sharedNotes)
+            foreach (var (nfk, note, member) in sharedNotes)
             {
-                w.WriteStartObject(); w.WriteString("formid", nfk); w.WriteString("editorid_note", note); w.WriteEndObject();
+                w.WriteStartObject(); w.WriteString("formid", nfk); w.WriteString(member, note); w.WriteEndObject();
             }
             w.WriteEndArray();
         }
@@ -1431,6 +1483,11 @@ static class JsonWire
         if (note is not null) w.WriteString("editorid_note", note);
     }
 
+    static void WriteExcludedNote(Utf8JsonWriter w, string? note)
+    {
+        if (note is not null) w.WriteString("excluded_note", note);
+    }
+
     /// <summary>The runtime-FormID cell in a dense row: the eight-hex form, else the reason in parentheses, else null.</summary>
     static string? RuntimeCell(string? runtime, string? note) => runtime ?? (note is null ? null : $"({note})");
 
@@ -1450,6 +1507,7 @@ static class JsonWire
             w.WriteString("type", m.Type);
             WriteNullable(w, "editorid", m.EditorId);
             WriteSharedName(w, SharedEditorIds.Note(m.Pin, m.FormKey, m.Type, m.Source));
+            WriteExcludedNote(w, Wire.ExcludedNote(m.Pin, m.FormKey));
             if (m.Name is not null) w.WriteString("name", m.Name);
             if (m.Source is not null) w.WriteString("source", m.Source);
             if (m.Winner is not null) w.WriteString("winner", m.Winner);   // an off-order pole's row has no winner in the order
@@ -1484,6 +1542,7 @@ static class JsonWire
         // null (not 0) for a class nobody looked for — see the summary.
         if (didDangling) { w.WriteNumber("dangling", r.TotalDangling); w.WriteNumber("unscannable_records", r.TotalUnscannableRecords); }
         else { w.WriteNull("dangling"); w.WriteNull("unscannable_records"); }
+        if (didDangling && r.DanglingIntoExcluded > 0) w.WriteNumber("dangling_into_excluded", r.DanglingIntoExcluded);
         if (didMasters) w.WriteNumber("missing_masters", r.TotalMissingMasters); else w.WriteNull("missing_masters");
         WriteStringArray(w, "classes_checked", ClassNames(r.Classes));
         WriteNullable(w, "filter_note", r.FilterNote);
@@ -1569,6 +1628,7 @@ static class JsonWire
         w.WriteString("source_type", d.SourceType);
         WriteNullable(w, "source_editorid", d.SourceEditorId);
         w.WriteString("target", FormIdToken.Of(d.Target));
+        if (d.ExcludedBy.Count > 0) WriteStringArray(w, "target_in_excluded", d.ExcludedBy);
         w.WriteEndObject();
     }
 
@@ -2175,6 +2235,7 @@ static class JsonWire
         w.WriteStartObject();
         w.WriteString("key", row.Key);
         w.WriteNumber("count", row.Count);
+        if (row.IntoExcluded > 0) w.WriteNumber("into_excluded", row.IntoExcluded);
         w.WriteEndObject();
     }
 
@@ -2424,6 +2485,8 @@ static class JsonWire
             w.WriteStartArray("contested_parent_hosts");
             foreach (var host in contestedHosts.Take(Wire.ContestedHostsShown)) w.WriteStringValue(host);
             w.WriteEndArray();
+            // Each subrecord Mutagen wrote at 0 bytes, once per kind, hoisted above the budget like the hosts.
+            WriteStringArray(w, "empty_subrecords", o.EmptySubrecordLines);
 
             // Did the per-record file check RUN at all? Outside the `created` budget: a cut must not remove it.
             w.WriteBoolean("verify_ran", o.Created.Any(c => c.VerifyAttempted));
@@ -2771,6 +2834,7 @@ static class JsonWire
         {
             w.WriteStartObject();
             w.WriteString("profile", d.ProfileName.Length > 0 ? d.ProfileName : "(unconfigured)");
+            if (d.Provider is { } provider) w.WriteString("provider", provider);
             // The caveats lead, as in the text render: an ABSENT below is authoritative only when both are empty.
             w.WriteBoolean("read_incomplete", d.ReadIncomplete);
             int caveatsOmitted = WriteCappedStringArray(w, ms, "bsa_failures", d.BsaFailures, budget)
@@ -2804,13 +2868,15 @@ static class JsonWire
         return Finish(ms);
     }
 
-    /// <summary>The <c>counts_only=</c> twin of <see cref="RenderAssetStatus"/>: no path rows, and the layer table is the shared axis.</summary>
+    /// <summary>The <c>counts_only=</c> twin of <see cref="RenderAssetStatus"/>: no path rows, and the two layer tables are shared axes.</summary>
     public static string RenderAssetCensus(AssetStatusData d, int maxChars, int limit)
     {
         int cap = Wire.Cap(maxChars);
         var c = AssetCensus.Tally(d);
-        // What this document writes whatever the budget says comes out of max_chars before the caveats.
-        int budget = Math.Max(cap - AssetCensusFixedReserve(d, c), 1);
+        // What this document writes whatever the budget says comes out of max_chars before the caveats, and the axis
+        // frames too; the axes, written after the counters, owe only the trailing flag and reserve their frames themselves.
+        int caveatBudget = Math.Max(cap - AssetCensusFixedReserve(d, c, out int frame, out int tail) - frame, 1);
+        int budget = Math.Max(cap - tail, 1);
         using var ms = new CharCountedStream();
         using (var w = new Utf8JsonWriter(ms, Opts))
         {
@@ -2818,17 +2884,17 @@ static class JsonWire
             w.WriteString("profile", d.ProfileName.Length > 0 ? d.ProfileName : "(unconfigured)");
             // The caveats lead here too: an absent= count is authoritative only where both are empty.
             w.WriteBoolean("read_incomplete", d.ReadIncomplete);
-            int omitted = WriteCappedStringArray(w, ms, "bsa_failures", d.BsaFailures, budget)
-                        + RootFailuresJson(w, ms, d, budget)
-                        + WriteCappedStringArray(w, ms, "warnings", d.Warnings, budget);
+            int omitted = WriteCappedStringArray(w, ms, "bsa_failures", d.BsaFailures, caveatBudget)
+                        + RootFailuresJson(w, ms, d, caveatBudget)
+                        + WriteCappedStringArray(w, ms, "warnings", d.Warnings, caveatBudget);
             if (d.SelectorNotes is null) { w.WriteNull("selector_notes"); w.WriteNumber("selector_notes_omitted", 0); }
-            else omitted += WriteCappedStringArray(w, ms, "selector_notes", d.SelectorNotes, budget);
+            else omitted += WriteCappedStringArray(w, ms, "selector_notes", d.SelectorNotes, caveatBudget);
 
             WriteCensusCounters(w, c);
-            // The layer table through the shared axis: the frame is reserved before its rows are offered to it.
+            // The layer tables through the shared axes: each frame is reserved before its rows are offered to it.
             var body = new BoundedBody(acct: null, budget: budget, () => Size(w, ms));
-            WriteHistogramAxes(w, body, AssetCensus.RowLimit(limit), AssetCensus.Axis(c));
-            w.WriteBoolean("truncated", omitted > 0 || body.Stopped(SweepSubject.AssetWinnerRows));
+            WriteHistogramAxes(w, body, AssetCensus.RowLimit(limit), AssetCensus.Axes(c));
+            w.WriteBoolean("truncated", omitted > 0 || AssetCensus.Axes(c).Any(a => body.Stopped(a.Subject)));
             WriteCapOverrun(w, ms, cap);
             w.WriteEndObject();
         }
@@ -2844,13 +2910,22 @@ static class JsonWire
         w.WriteNumber("errors", c.Errors);
         w.WriteNumber("loose", c.Loose);
         w.WriteNumber("bsa", c.Bsa);
+        if (c.Named is { } n)
+        {
+            w.WriteStartObject("provider");
+            w.WriteString("name", n.Name);
+            w.WriteNumber("provides", n.Provides);
+            w.WriteNumber("wins", n.Wins);
+            w.WriteNumber("shadowed", n.Shadowed);
+            w.WriteEndObject();
+        }
     }
 
-    /// <summary>What the census document carries whatever the budget says: the counters, the axis frame and the
-    /// trailing flag, measured under the response's own writer options at the depth they are written.</summary>
-    static int AssetCensusFixedReserve(AssetStatusData d, AssetCensus.Counts c)
+    /// <summary>What the census document carries whatever the budget says: the counters and the trailing flag, measured
+    /// under the response's own writer options at the depth they are written; <paramref name="frame"/> is the axis
+    /// frames, <paramref name="tail"/> what the axes still owe once written: the trailing flag and one rows array's closing line.</summary>
+    static int AssetCensusFixedReserve(AssetStatusData d, AssetCensus.Counts c, out int frame, out int tail)
     {
-        int frame;
         using var ms = new CharCountedStream();
         using (var w = new Utf8JsonWriter(ms, Opts))
         {
@@ -2863,11 +2938,30 @@ static class JsonWire
             w.WriteNumber("selector_notes_omitted", d.SelectorNotes?.Count ?? 0);
             WriteCensusCounters(w, c);
             // Read at the same depth the render writes the axis at, so the two measure one object.
-            frame = HistogramFrameCostFor(AssetCensus.Axis(c), new JsonUnitDepths(w.CurrentDepth).AxisFrame);
+            var depths = new JsonUnitDepths(w.CurrentDepth);
+            frame = AssetCensus.Axes(c).Sum(a => HistogramFrameCostFor(a, depths.AxisFrame));
+            int before = Size(w, ms);
             w.WriteBoolean("truncated", true);
             w.WriteEndObject();
+            // The frame is measured with an empty rows array; one that holds a row closes on its own line, and only the
+            // axis being written has that line still to come.
+            tail = Size(w, ms) - before + (AssetCensus.Axes(c).Any(a => a.Rows is { Count: > 0 }) ? RowsCloseLine(depths) : 0);
         }
-        return Chars(ms) + frame;
+        return Chars(ms);
+    }
+
+    /// <summary>What an axis's rows array costs to close once it holds a row, beyond the empty array its frame measures.</summary>
+    static int RowsCloseLine(JsonUnitDepths depths)
+    {
+        int Axis(bool withRow) => MeasureMember(depths.AxisFrame, w =>
+        {
+            w.WriteStartObject("a");
+            w.WriteStartArray("rows");
+            if (withRow) w.WriteNullValue();
+            w.WriteEndArray();
+            w.WriteEndObject();
+        });
+        return Axis(true) - Axis(false) - MeasureUnit(depths.HistogramRows, false, w => w.WriteNullValue());
     }
 
     /// <summary>The <c>to_file=</c> twin of <see cref="RenderAssetStatus"/>: the caveats an ABSENT row in the FILE
@@ -2966,6 +3060,9 @@ static class JsonWire
         foreach (var p in hit.Providers) WriteAssetProvider(w, null, p);
         w.WriteEndArray();
         w.WriteBoolean("ambiguous", hit.Ambiguous);
+        // On a provider= call only, so a plain row is byte-for-byte the document it always was.
+        if (r.Standing is { } st) w.WriteString("provider_standing", st.Token());
+        WriteNifLinks(w, r);
         // On a formids= row only: the OWNER the pair's `differs` verdict is decided on, not the bare OwningMod.
         if (r.FormId is not null)
             WriteNullable(w, "winner_mod", hit.Winner is { } owner ? AssetPathResult.Owner(owner) : null);
@@ -2997,6 +3094,31 @@ static class JsonWire
             w.WriteEndObject();
         }
         w.WriteEndObject();
+    }
+
+    /// <summary>A row's <c>links</c> and <c>links_error</c>, on a links= call only, so a plain row is byte-for-byte the
+    /// row it always was; the inline document and the artifact row write the same members.</summary>
+    internal static void WriteNifLinks(Utf8JsonWriter w, AssetPathResult r)
+    {
+        if (r.LinksError is not null) w.WriteString("links_error", r.LinksError);
+        if (r.Links is not { } links) return;
+        w.WriteStartArray("links");
+        foreach (var l in links)
+        {
+            w.WriteStartObject();
+            w.WriteString("where", l.Link.Where);
+            w.WriteString("kind", l.Link.Kind.Token());
+            w.WriteString("raw", l.Link.Raw);
+            WriteNullable(w, "data_path", l.Link.DataPath);
+            if (l.Link.Error is not null) w.WriteString("error", l.Link.Error);
+            if (l.Hit is { } lh)
+            {
+                w.WriteBoolean("exists", lh.Exists);
+                if (lh.Winner is { } lw) WriteAssetProvider(w, "winner", lw); else w.WriteNull("winner");
+            }
+            w.WriteEndObject();
+        }
+        w.WriteEndArray();
     }
 
     /// <summary>One provider. <paramref name="name"/> null writes it as an array element.</summary>
@@ -3251,6 +3373,7 @@ static class JsonWire
         SweepSubject.FaceGenClassRows => "facegen_by_class",
         SweepSubject.FaceGenModRows => "facegen_by_owning_mod",
         SweepSubject.AssetWinnerRows => "winners_by_layer",
+        SweepSubject.AssetShadowedRows => "shadowed_by_layer",
         _ => s.ToString(),
     };
 }

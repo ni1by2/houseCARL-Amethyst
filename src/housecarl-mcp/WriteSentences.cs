@@ -77,6 +77,13 @@ internal static class WriteSentences
         "addresses a record by an object id this compaction moved no longer reaches that record once the compacted " +
         "plugin is the one loading.\n";
 
+    /// <summary>A compaction whose map moved no id (#1205): it renumbers nothing, and repairs no earlier run.</summary>
+    [MustState("no object id moved", "does not repair")]
+    internal const string CompactMovedNothing =
+        "no object id moved: every originating record already sits at its compacted id, so this run changed no FormIDs. " +
+        "If an earlier compaction's referencer repoint failed, this run does not repair it: a link that run left on an " +
+        "old id is not detected here, and it may now resolve to a different record of this plugin.\n";
+
     /// <summary>What the in-place round-trip check proved before the write (#961), on every in-place render that ran it.</summary>
     [MustState("kept every subrecord at its length", "values not compared")]
     internal const string RoundTripChecked =
@@ -297,6 +304,13 @@ internal static class WriteSentences
         ToolNames.AssetStatus + ", then place what you keep with " + ToolNames.Place + "; a path only the mod you " +
         "read FROM provides reads as absent in asset_status if MO2 does not load that mod, and is still placed by " +
         "naming it in source_provider=):";
+
+    /// <summary>After the copy's asset list, which is first-hop only.</summary>
+    [MustState("walk=true")]
+    internal const string CopyAssetPathsWalk =
+        "these are the files the records name, not the files those files need: " + ToolNames.AssetStatus +
+        " walk=true with these as asset_paths= (and source_provider= the mod you read from) lists what they reach in " +
+        "turn — a mesh's textures and SMP XML, a script's parent.";
 
     // ---- dry run -------------------------------------------------------------------------------------
     [MustState("NOTHING was written", "originals untouched")]

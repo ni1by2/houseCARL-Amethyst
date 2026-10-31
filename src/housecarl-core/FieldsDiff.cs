@@ -8,11 +8,41 @@ public static class FieldsDiff
     /// <summary>Field-level deltas, preformatted for the conflict-tree render; <see cref="Complete"/> false means an empty <see cref="Deltas"/> must NOT be rendered as "identical to winner".</summary>
     /// <param name="NoVerdictCount">How many of <paramref name="Deltas"/> are no-verdict lines (UNREADABLE, or NO FIELD on both sides) rather than value differences.</param>
     /// <param name="NoFieldCount">How many of those no-verdicts are NO FIELD on both sides: a wrong path, not a read fault.</param>
+    /// <param name="MatchedListCount">Positional lists whose contents match in the same order (a list or dict empty on both sides among them), holding <paramref name="MatchedItemCount"/> items in all.</param>
+    /// <param name="BothAbsentCount">Fields absent on both sides: the same state, never a value leaf in <paramref name="AgreedCount"/>.</param>
+    /// <param name="UnresolvedStringCount">Fields carrying no value on either side where a side's localized string did not
+    /// resolve: not compared, and never counted absent.</param>
+    /// <param name="PresentNullLinkCount">Links whose subrecord is present and null on both sides: the same state, never
+    /// absent and never a value leaf.</param>
+    /// <param name="NothingCompared">Not capped, at least one planned path this record's type lacks, and on each side no
+    /// line left besides those (every other path could not be read on that side): not complete, never "identical", and
+    /// also a no-verdict when other paths were read. A one-side read fault or a both-sides no-field path leaves a line, so
+    /// that row is a plain no-verdict; an absent, unresolved or present-null path is a compared state.</param>
     public sealed record Result(IReadOnlyList<string> Deltas, bool Complete,
-        int AgreedCount, IReadOnlyList<string> AgreedSample, int NoVerdictCount, int NoFieldCount = 0, bool Capped = false)
+        int AgreedCount, IReadOnlyList<string> AgreedSample, int NoVerdictCount, int NoFieldCount = 0, bool Capped = false,
+        int MatchedListCount = 0, int MatchedItemCount = 0, int BothAbsentCount = 0, int UnresolvedStringCount = 0,
+        int PresentNullLinkCount = 0, IReadOnlyList<string>? NotOnType = null, bool NothingCompared = false)
     {
         /// <summary>Why the comparison is incomplete, in words; empty when it is complete.</summary>
         public string Why => IncompleteWhy(NoVerdictCount - NoFieldCount, NoFieldCount, Capped);
+
+        /// <summary>What agreed, as one phrase ("3 leaf/leaves agree, 1 list with the same 2 items"), each kind named only
+        /// when present; null when nothing was counted.</summary>
+        public string? Agreement(string leaves)
+        {
+            var parts = new List<string>();
+            if (AgreedCount > 0) parts.Add($"{AgreedCount} {leaves} agree");
+            if (MatchedListCount > 0 && MatchedItemCount == 0) parts.Add(MatchedListCount == 1 ? "1 list empty on both" : $"{MatchedListCount} lists empty on both");
+            else if (MatchedListCount == 1) parts.Add($"1 list with the same {MatchedItemCount} item(s)");
+            else if (MatchedListCount > 1) parts.Add($"{MatchedListCount} lists with the same items ({MatchedItemCount} in all)");
+            if (BothAbsentCount > 0) parts.Add(BothAbsentCount == 1 ? "1 field absent on both" : $"{BothAbsentCount} fields absent on both");
+            if (PresentNullLinkCount > 0)
+                parts.Add(PresentNullLinkCount == 1 ? "1 link null on both, subrecord present" : $"{PresentNullLinkCount} links null on both, subrecord present");
+            if (UnresolvedStringCount > 0)
+                parts.Add(UnresolvedStringCount == 1 ? "1 localized string unresolved, not compared" : $"{UnresolvedStringCount} localized strings unresolved, not compared");
+            if (NotOnType is { Count: > 0 }) parts.Add(string.Join(" and ", NotOnType) + " not compared");
+            return parts.Count > 0 ? string.Join(", ", parts) : null;
+        }
     }
 
     /// <summary>The causes of an incomplete comparison as one phrase; a fields= narrowing is offered only where it helps.</summary>
@@ -38,15 +68,20 @@ public static class FieldsDiff
         var wValueLeaves = new HashSet<string>(StringComparer.Ordinal);
         var tUnreadable = new Dictionary<string, string>(StringComparer.Ordinal);
         var wUnreadable = new Dictionary<string, string>(StringComparer.Ordinal);
-        var (tLines, tCapped) = CleanLines(theirs, tValueLeaves, tUnreadable);
-        var (wLines, wCapped) = CleanLines(winner, wValueLeaves, wUnreadable);
+        var tEmpty = new HashSet<string>(StringComparer.Ordinal);
+        var wEmpty = new HashSet<string>(StringComparer.Ordinal);
+        var notOn = new List<string>();
+        var (tLines, tCapped) = CleanLines(theirs, tValueLeaves, tUnreadable, tEmpty, notOn);
+        var (wLines, wCapped) = CleanLines(winner, wValueLeaves, wUnreadable, wEmpty, null);
         bool capped = tCapped || wCapped;
         // A path with no field on either side is a wrong path, never two equal values.
         var wNoField = wLines.Where(l => ReadEngine.IsNoSuchFieldNote(l.val)).Select(l => l.path).ToHashSet(StringComparer.Ordinal);
         var noField = new Dictionary<string, string>(StringComparer.Ordinal);
         foreach (var (p, v) in tLines) if (ReadEngine.IsNoSuchFieldNote(v) && wNoField.Contains(p)) noField.TryAdd(p, v);
         var noVerdict = tUnreadable.Keys.Union(wUnreadable.Keys).Union(noField.Keys).OrderBy(p => p, StringComparer.Ordinal).ToList();
-        bool complete = !capped && noVerdict.Count == 0;
+        // A planned type-lacking path and no line left on either side: nothing was compared, which is not two equal records.
+        bool nothingCompared = !capped && notOn.Count > 0 && tLines.Count == 0 && wLines.Count == 0;
+        bool complete = !capped && noVerdict.Count == 0 && !nothingCompared;
 
         // A path is OUT of the comparison when it, or a path it hangs under, could not be read on either side.
         bool Suppressed(string p) => noVerdict.Any(s => p.StartsWith(s, StringComparison.Ordinal)
@@ -96,7 +131,7 @@ public static class FieldsDiff
         // Exact-path comparison: scalars, substructs, dict children, and the summary line of a root whose elements are not compared.
         var tScalar = ExactPathLines(tLines, listRoots, comparedRoots, Suppressed);
         var wScalar = ExactPathLines(wLines, listRoots, comparedRoots, Suppressed);
-        int agreedCount = 0;
+        int agreedCount = 0, bothAbsent = 0, unresolved = 0, presentNull = 0, matchedLists = 0, matchedItems = 0;
         var agreedSample = new List<string>();
         foreach (var (path, val) in tScalar)
         {
@@ -105,7 +140,9 @@ public static class FieldsDiff
                 bool tAbsent = IsAbsentSentinel(val), wAbsent = IsAbsentSentinel(wv);
                 if (tAbsent && wAbsent)
                 {
-                    // Both carry nothing here — same state, no delta and not an agreement.
+                    // Both carry nothing here — no delta and not a value agreement; an unresolved string is unread, not absent.
+                    if (val == ReadEngine.UnresolvedStringNote || wv == ReadEngine.UnresolvedStringNote) unresolved++;
+                    else bothAbsent++;
                 }
                 else if (tAbsent)
                 {
@@ -120,6 +157,16 @@ public static class FieldsDiff
                 else if (!string.Equals(NormalizeForCompare(val), NormalizeForCompare(wv), StringComparison.Ordinal))
                 {
                     deltas.Add($"{path}={val} ({referenceLabel} {wv})");
+                }
+                else if (tEmpty.Contains(path) && wEmpty.Contains(path))
+                {
+                    // Empty on both sides: no element lines, so never a list root; the same (no) items.
+                    matchedLists++;
+                }
+                else if (val == ReadEngine.PresentNullLinkNote)
+                {
+                    // The same "I am first" marker on both sides: equal, but neither absent nor a value leaf.
+                    presentNull++;
                 }
                 else if (tValueLeaves.Contains(path) && wValueLeaves.Contains(path))
                 {
@@ -146,14 +193,16 @@ public static class FieldsDiff
                 // Equal multisets mean the same contents; an ordered fingerprint mismatch is a pure reorder, which for some types IS the semantics.
                 if (!tElems.Select(e => e.Fingerprint).SequenceEqual(wElems.Select(e => e.Fingerprint)))
                     deltas.Add($"{root}: same {tElems.Count} item(s), ORDER DIFFERS from {referenceLabel}");
+                else { matchedLists++; matchedItems += tElems.Count; }
                 continue;
             }
             deltas.Add(DescribeListDelta(root, tElems.Count, wElems.Count, onlyT, onlyW, referenceLabel));
         }
 
         // On a CAPPED comparison the agreed set would be a where-the-cap-fell artifact; an unreadable leaf does not touch it.
-        if (capped) { agreedCount = 0; agreedSample.Clear(); }
-        return new Result(deltas, complete, agreedCount, agreedSample, noVerdict.Count, noField.Count, capped);
+        if (capped) { agreedCount = 0; agreedSample.Clear(); bothAbsent = 0; unresolved = 0; presentNull = 0; matchedLists = 0; matchedItems = 0; }
+        return new Result(deltas, complete, agreedCount, agreedSample, noVerdict.Count, noField.Count, capped,
+                          matchedLists, matchedItems, bothAbsent, unresolved, presentNull, notOn, nothingCompared);
     }
 
     /// <summary>How many agreed-field paths to keep for the render — a small sample, not the full set.</summary>
@@ -167,17 +216,21 @@ public static class FieldsDiff
         return null;
     }
 
-    /// <summary>The read's lines minus the expansion-cap sentinel and the UNREADABLE ones, keyed on <c>Readable</c>.</summary>
+    /// <summary>The read's lines minus the expansion-cap sentinel and the UNREADABLE ones, keyed on <c>Readable</c>;
+    /// <paramref name="empty"/> collects the containers the read counted 0 elements in, and <paramref name="notOn"/> the planned
+    /// paths this record's type lacks, which are not compared.</summary>
     static (List<(string path, string val)> lines, bool capped) CleanLines(RecordFields rf,
-        HashSet<string> valueLeaves, Dictionary<string, string> unreadable)
+        HashSet<string> valueLeaves, Dictionary<string, string> unreadable, HashSet<string> empty, List<string>? notOn)
     {
         var lines = new List<(string, string)>(rf.Fields.Count);
         bool capped = false;
         foreach (var f in rf.Fields)
         {
             if (f.Path == "…") { capped = true; continue; }            // ReadEngine's expansion-cap sentinel
+            if (PlannedFields.IsNotOnNote(f.Note)) { notOn?.Add($"{f.Path} {f.Note}"); continue; }
             if (!f.Readable && !ReadEngine.IsNoSuchFieldNote(f.Note)) { unreadable[f.Path] = f.Note ?? ""; continue; }
             if (f.HasValue) valueLeaves.Add(f.Path);
+            if (f.Count == 0) empty.Add(f.Path);
             // A flags leaf carries its decode beside the token; the decode is a function of the bits, so equality holds.
             var shown = f is { HasValue: true, Bytes: null, Display: { } d } ? $"{f.Token} [{d}]" : f.Token ?? "";
             lines.Add((f.Path, f.HasValue ? shown : f.Note ?? ""));

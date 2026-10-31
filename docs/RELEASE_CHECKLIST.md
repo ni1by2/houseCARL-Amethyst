@@ -17,7 +17,7 @@ candidate. Do not mark the roadmap complete from synthetic evidence alone.
 
 ## Automated Linux gates
 
-- [ ] `dotnet restore` succeeds with .NET 9.
+- [ ] `dotnet restore` succeeds with the SDK selected by `global.json`.
 - [ ] `dotnet build housecarl.sln --configuration Release` completes with no
   warnings or errors.
 - [ ] `ci-all` passes all 111 registered CI probes.

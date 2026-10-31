@@ -98,8 +98,11 @@ public sealed record CrossQueryOutcome(
     public IReadOnlyList<string> ManifestNotes() =>
         Owed(Unmatched.Count == 0 ? null : FieldPredicateSet.UnmatchedSentence(Unmatched, Unmatched.Count, UnmatchedGap, true));
 
+    /// <summary>The projection plan's notes, one per field path some row type lacks.</summary>
+    public IReadOnlyList<string> FieldNotes { get; init; } = Array.Empty<string>();
+
     IReadOnlyList<string> Owed(string? unmatched) =>
-        new[] { PredicateNote, unmatched, ScanNote, WhereSourceNote, ReverseIndexNote }.OfType<string>().ToList();
+        new[] { PredicateNote, unmatched, ScanNote, WhereSourceNote, ReverseIndexNote }.OfType<string>().Concat(FieldNotes).ToList();
 
 
     /// <summary>The scan's pinned resolver and view, so the render's per-match fills read off the same build the scan matched. Never serialized.</summary>
@@ -145,11 +148,11 @@ public sealed record RecordSummary(FormKey FormKey, string Type, string? EditorI
     public RecordSummary WithRuntime(RuntimeAddress a) => this with { RuntimeFormId = a.FormId, RuntimeFormIdNote = a.Note };
 }
 
-/// <summary>The MATERIALISED conflict tree the render layer consumes — each touching plugin's name and the fields read off its own body, winner last; it carries no live overlay, so the renderer never holds a handle.</summary>
+/// <summary>The MATERIALISED conflict tree the render layer consumes — each touching plugin's name and the fields read off its own body, in priority order with the winner at <c>WinnerAt</c>; it carries no live overlay, so the renderer never holds a handle.</summary>
 public sealed record ConflictTreeView(IReadOnlyList<ConflictNodeView> Nodes,
-                                      IReadOnlyList<ChildDeclarers> ChildDeclarers)
+                                      IReadOnlyList<ChildDeclarers> ChildDeclarers, int WinnerAt)
 {
-    public ConflictNodeView Winner => Nodes[^1];
+    public ConflictNodeView Winner => Nodes[WinnerAt];
 }
 
 /// <summary>The precise owned-child answer for one child-bearing field: which of the record's providers declare child records there, and which could not be read. Both lists empty means nobody declares anything, rendered as a sentence.</summary>

@@ -28,6 +28,12 @@ public sealed class CopyServiceWorld : IDisposable
     public FormKey ShadowNpc { get; }
     /// <summary>Dawnguard.esm's NPC, overridden by Shadow.esp to point at Shadow's head part.</summary>
     public FormKey DawnguardNpc { get; }
+    /// <summary>Src.esp's NPC whose DeathItem is a Src.esp leveled list with entries owned by HcBase.esm's faction at rank -1 and 7.</summary>
+    public FormKey OwnedNpc { get; }
+    /// <summary>HcBase.esm's faction, the owner of <see cref="OwnedNpc"/>'s leveled entries.</summary>
+    public FormKey BaseFaction { get; }
+    /// <summary>Follower.esp's NPC whose one inventory item is owned by <see cref="BaseFaction"/> at rank -1.</summary>
+    public FormKey OwnedTargetNpc { get; }
 
     public static readonly string[] HeadParts = { "HeadParts" };
     public static readonly WalkExclusion[] NoExclusions = Array.Empty<WalkExclusion>();
@@ -53,6 +59,8 @@ public sealed class CopyServiceWorld : IDisposable
         baseMod.Races.Add(new Race(raceFk, SkyrimRelease.SkyrimSE) { EditorID = "HcRace" });
         baseMod.Keywords.Add(new Keyword(kwFk, SkyrimRelease.SkyrimSE) { EditorID = "HcKeyword" });
         baseMod.Armors.Add(new Armor(armorFk, SkyrimRelease.SkyrimSE) { EditorID = "HcArmor" });
+        BaseFaction = new FormKey(baseKey, 0x803);
+        baseMod.Factions.Add(new Faction(BaseFaction, SkyrimRelease.SkyrimSE) { EditorID = "HcBaseFaction" });
         Write(baseMod, "BaseMod");
 
         var folKey = new ModKey("Follower", ModType.Plugin);
@@ -63,6 +71,15 @@ public sealed class CopyServiceWorld : IDisposable
         tgt.WornArmor.SetTo(armorFk);
         tgt.Keywords = new Noggog.ExtendedList<IFormLinkGetter<IKeywordGetter>> { new FormLink<IKeywordGetter>(kwFk) };
         folMod.Npcs.Add(tgt);
+        OwnedTargetNpc = new FormKey(folKey, 0x801);
+        var ownedTgt = new Npc(OwnedTargetNpc, SkyrimRelease.SkyrimSE) { EditorID = "OwnedTargetNpc" };
+        ownedTgt.Race.SetTo(raceFk);
+        ownedTgt.Items = new() { new ContainerEntry
+        {
+            Item = new ContainerItem { Count = 1, Item = new FormLink<IItemGetter>(armorFk) },
+            Data = new ExtraData { ItemCondition = 1f, Owner = new FactionOwner { Faction = new FormLink<IFactionGetter>(BaseFaction), RequiredRank = -1 } },
+        } };
+        folMod.Npcs.Add(ownedTgt);
         Write(folMod, "FollowerMod", baseMod);
 
         var ghostKey = new ModKey("Ghost", ModType.Plugin);
@@ -138,6 +155,19 @@ public sealed class CopyServiceWorld : IDisposable
         wideNpc.HeadParts.Add(extraHpFk);
         wideNpc.HeadTexture.SetTo(ghostTexFk);
         srcMod.Npcs.Add(wideNpc);
+        var owned = new LeveledItem(new FormKey(srcKey, 0x806), SkyrimRelease.SkyrimSE) { EditorID = "SrcOwnedList" };
+        LeveledItemEntry OwnedEntry(int rank) => new()
+        {
+            Data = new LeveledItemEntryData { Level = 1, Count = 1, Reference = new FormLink<IItemGetter>(armorFk) },
+            ExtraData = new ExtraData { ItemCondition = 1f, Owner = new FactionOwner { Faction = new FormLink<IFactionGetter>(BaseFaction), RequiredRank = rank } },
+        };
+        owned.Entries = new() { OwnedEntry(-1), OwnedEntry(7) };
+        srcMod.LeveledItems.Add(owned);
+        OwnedNpc = new FormKey(srcKey, 0x807);
+        var ownedNpc = new Npc(OwnedNpc, SkyrimRelease.SkyrimSE) { EditorID = "OwnedNpc" };
+        ownedNpc.Race.SetTo(raceFk);
+        ownedNpc.DeathItem.SetTo(owned.FormKey);
+        srcMod.Npcs.Add(ownedNpc);
         Write(srcMod, "SrcMod", baseMod, extraMod, ghostMod, shadowMod);
 
         File.WriteAllText(Path.Combine(prof, "modlist.txt"),

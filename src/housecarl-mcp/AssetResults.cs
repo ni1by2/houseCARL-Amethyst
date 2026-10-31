@@ -17,12 +17,24 @@ public sealed record AssetPathResult(string RelPath, AssetHit? Hit, string? Erro
 
     /// <summary>Who ships this copy: the mod folder behind a BSA, else the provider's own name — the same fallback <see cref="FaceGenCheck"/>'s pair classifier uses, empty string included.</summary>
     internal static string Owner(AssetProvider p) => p.OwningMod is { Length: > 0 } m ? m : p.Source;
+
+    /// <summary>The named provider's standing on this path; null when the call named no provider or the row did not resolve.</summary>
+    public ProviderStanding? Standing { get; init; }
+
+    /// <summary>The files this mesh names, each with its winner, on a links= call; null on any other row.</summary>
+    public IReadOnlyList<ResolvedNifLink>? Links { get; init; }
+
+    /// <summary>Why a links= call could not read this mesh's links; null when it did or was not asked.</summary>
+    public string? LinksError { get; init; }
 }
+
+/// <summary>One file a mesh names, with the load order's answer for its Data path; <see cref="Hit"/> is null when the string names no Data path.</summary>
+public sealed record ResolvedNifLink(NifLink Link, AssetHit? Hit);
 
 /// <summary>One entry of <c>asset_status</c>'s <c>formids=</c> SELECT: the caller's raw token, the FormKey it parsed to, or the sentence to report instead. A malformed token is ONE error row, never a failed call.</summary>
 public sealed record FaceGenSeed(string Token, FormKey? Key, string? Error);
 
-/// <summary>The data behind housecarl_asset_status: one <see cref="AssetPathResult"/> per queried path, the build-level caveats that make an Exists=false answer provisional, what each <c>under=</c> selector had to say, the paging window (a negative <see cref="Total"/> means nothing paged), and <see cref="BoundRefusal"/>, the declared-cost refusal under which nothing was resolved and no other member carries an answer.</summary>
+/// <summary>The data behind housecarl_asset_status: one <see cref="AssetPathResult"/> per queried path, the build-level caveats that make an Exists=false answer provisional, what each <c>under=</c> selector had to say, the paging window (a negative <see cref="Total"/> means nothing paged), <see cref="Refusal"/>, the declared-cost or unknown-provider refusal under which nothing was resolved and no other member carries an answer, and the <see cref="Provider"/> every row is read against.</summary>
 public sealed record AssetStatusData(
     IReadOnlyList<AssetPathResult> Results,
     IReadOnlyList<string> BsaFailures,
@@ -35,10 +47,36 @@ public sealed record AssetStatusData(
     int Total = -1,
     int Offset = 0,
     int Limit = 0,
-    string? BoundRefusal = null)
+    string? Refusal = null,
+    string? Provider = null)
 {
     /// <summary>How many paths the selection named — <see cref="Results"/>'s own count when nothing paged.</summary>
     public int Selected => Total < 0 ? Results.Count : Total;
+
+}
+
+/// <summary>A named provider's standing on one path: its copy wins, another layer's copy wins over it, or it ships no copy.</summary>
+public enum ProviderStanding { Wins, Shadowed, NotProvided }
+
+internal static class ProviderStandings
+{
+    /// <summary>Where <paramref name="provider"/> stands on one resolved path; null when no provider was named.</summary>
+    internal static ProviderStanding? Of(AssetHit hit, string? provider)
+    {
+        if (provider is null) return null;
+        foreach (var p in hit.Providers)
+            if (AssetSourceSelection.NameMatches(p, provider))
+                return AssetSourceSelection.NameMatches(hit.Winner!, provider) ? ProviderStanding.Wins : ProviderStanding.Shadowed;
+        return ProviderStanding.NotProvided;
+    }
+
+    /// <summary>The machine token both the json row and the artifact column carry.</summary>
+    internal static string Token(this ProviderStanding s) => s switch
+    {
+        ProviderStanding.Wins => "wins",
+        ProviderStanding.Shadowed => "shadowed",
+        _ => "not_provided",
+    };
 }
 
 /// <summary>One provider of an SKSE-layer file: the mod, "overwrite", "Data" or BSA filename, and whether it is a "loose" file or a "BSA" entry.</summary>
@@ -256,11 +294,17 @@ public sealed record NifInspectData(
     bool Ambiguous,
     bool Absent,
     HousecarlCore.NifInspect? Inspect,
-    string? Error)
+    string? Error,
+    /// <summary>Each texture-set slot string, keyed as the NIF spells it, to the Data path it names and that path's resolution.</summary>
+    IReadOnlyDictionary<string, NifSlotLink>? SlotLinks = null)
 {
     public static NifInspectData Fail(string relPath, string error)
         => new(relPath, null, Array.Empty<NifProvider>(), false, false, null, error);
 }
+
+/// <summary>One texture slot's link: the resolution of the Data path it names through <see cref="HousecarlCore.AssetDataPath"/>
+/// (the path is the hit's), or the named reason the string is no Data path.</summary>
+public sealed record NifSlotLink(HousecarlCore.AssetHit? Hit, string? Error);
 
 /// <summary>The batch behind housecarl_nif_inspect: per-path <see cref="Results"/> in INPUT ORDER, plus the build-level caveats one asset capture pins for the whole batch, which is what makes an ABSENT result provisional.</summary>
 public sealed record NifInspectBatchData(

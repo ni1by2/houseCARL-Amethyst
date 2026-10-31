@@ -1,4 +1,4 @@
-﻿using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Plugins;
 using Mutagen.Bethesda.Plugins.Aspects;
 using Mutagen.Bethesda.Plugins.Records;
 using Mutagen.Bethesda.Skyrim;
@@ -16,6 +16,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     string _overwriteDir = "";                     // MO2's overwrite layer (instance mode: derived; explicit mode: none)
     bool _configured;                              // false ⇒ tools return the trained prompt instead of resolving
     string? _unavailableManagerReason;              // Linux integration builds refuse unverified Amethyst reads
+    InstanceText? _text;                           // the order build's game language and string-table winners; bound to each call that reads this order
     readonly UserConfigStore _store;               // the sole owner of houseCARL.user.json (MO2 instance dir + tool paths)
     readonly InPlaceConsent _inPlaceConsent;       // the in-place consent over _store; writes and assets take it through the door
     InPlaceConsent ILoadOrderHost.InPlaceConsent => _inPlaceConsent;
@@ -95,7 +96,15 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
 
     public void Dispose()
     {
-        lock (_gate) { _resolver?.Dispose(); _resolver = null; _assetResolver?.Dispose(); _assetResolver = null; }
+        lock (_gate) { _resolver?.Dispose(); _resolver = null; _assetResolver?.Dispose(); _assetResolver = null; _savedSnapshot?.ReleaseStringFiles(); }
+    }
+
+    /// <summary>The order's game language and string-table winners, from the profile read the build just made; a language houseCARL cannot read throws here, before anything is published.</summary>
+    InstanceText ReadInstanceText(Mo2Roots r, Mo2OrderResult order)
+    {
+        var ini = GameIni.For(r.ProfileDir);
+        var discovery = ArchiveDiscovery.Discover(order.Composition, ini, r.ModsDir, r.DataDir, r.OverwriteDir);
+        return GameLanguage.Read(ini, order.Composition, discovery, r.ModsDir, r.DataDir, r.OverwriteDir, order.OrderedPaths);
     }
 
     /// <summary>The corpus rulebook (corpus.json), loaded from the absolute CorpusPath on first use; the write pre-flight and the read scan's quantifier check share it.</summary>
@@ -190,7 +199,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                     // A kept asset build must not be stranded by advancing the baseline here;
                     // contract in docs/architecture/load-order-service.md.
                     bool assetBuildIsBehind = _profileHeld is not null || _resolvedPaths.Count == 0;
+                    var text = ReadInstanceText(RootsLocked(), order);
+                    GameLanguage.Bind(text);
                     _resolver = LoadOrderResolver.Build(paths, ExplainPluginAbsence, Counters);
+                    _text = text;
                     _resolvedPaths = paths;
                     _profileStamps = profileStamps;
                     if (assetBuildIsBehind) { InvalidateAssetResolver(); _profileHeld = null; }
@@ -208,6 +220,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                     }
                     finally { Monitor.Exit(_writeGate); }
                 }
+                GameLanguage.Bind(_text);
                 return _resolver;
             }
         }
@@ -282,14 +295,19 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
 
     // The assets area's tool-facing surface; the bodies are in AssetLayers.cs and SkyPatcherReplay.cs.
     public AssetStatusData AssetStatus(IReadOnlyList<string> relPaths, IReadOnlyList<string>? under = null, int limit = 0, int offset = 0,
-                                       IReadOnlyList<FaceGenSeed>? seeds = null, bool wholeSelection = false)
-        => _assetLayers.AssetStatus(relPaths, under, limit, offset, seeds, wholeSelection);
+                                       IReadOnlyList<FaceGenSeed>? seeds = null, bool wholeSelection = false,
+                                       string? provider = null, bool links = false)
+        => _assetLayers.AssetStatus(relPaths, under, limit, offset, seeds, wholeSelection, provider, links);
+    public AssetWalkData AssetWalk(IReadOnlyList<string> seedPaths, IReadOnlyList<FormKey> seedRecords,
+                                   IReadOnlyList<string>? fromSource, string? sourceProvider,
+                                   IReadOnlySet<string>? keyedSeeds = null)
+        => _assetLayers.AssetWalk(seedPaths, seedRecords, fromSource, sourceProvider, keyedSeeds);
     public SkseInventoryData SkseInventory(string? peekFilter = null) => _assetLayers.SkseInventory(peekFilter);
     public SkseConfigAuditData SkseConfigAudit() => _assetLayers.SkseConfigAudit();
     public NativePairingAuditData NativePairingAudit() => _assetLayers.NativePairingAudit();
     public SkyPatcherLayerData SkyPatcherLayer() => _assetLayers.SkyPatcherLayer();
     public T SkyPatcherLayer<T>(Func<SkyPatcherLayerData, T> use, CancellationToken ct = default) => _assetLayers.SkyPatcherLayer(use, ct: ct);
-    public NifInspectBatchData NifInspect(IReadOnlyList<string> relPaths, string? sourceProvider) => _assetLayers.NifInspect(relPaths, sourceProvider);
+    public NifInspectBatchData NifInspect(IReadOnlyList<string> relPaths, string? sourceProvider, bool slotLinks = false) => _assetLayers.NifInspect(relPaths, sourceProvider, slotLinks);
     public NifSetResult NifSet(string relPath, IReadOnlyList<NifSetOp> ops, string? sourceProvider, string? patchName, string? into, bool inPlace, bool acknowledge)
         => _assetLayers.NifSet(relPath, ops, sourceProvider, patchName, into, inPlace, acknowledge);
     public PlaceOutcome PlaceAssets(IReadOnlyList<PlaceRequest> requests, string? patchName, string? into) => _assetLayers.PlaceAssets(requests, patchName, into);
@@ -329,6 +347,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                                        Func<IMajorRecordGetter, FormKey, IMajorRecordGetter?>? heldParent = null)
         => _reads.ResolveReadOn(q, fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo, containerHint, depths, session, prefetched, countFields, heldParent);
     internal RecordSummary ResolveSummaryOn(CrossQueryOutcome q, FormKey fk) => _reads.ResolveSummaryOn(q, fk);
+    internal (PlannedFields? Plan, string? Refusal) PlanFields(IReadOnlyList<string> paths, IReadOnlyList<string>? typeTokens) => _reads.PlanFields(paths, typeTokens);
     internal IReadOnlyList<RecordSummary>? FillSummaries(CrossQueryOutcome q, CancellationToken ct) => _reads.FillSummaries(q, ct);
     public IReadOnlyList<ReadOutcome> ResolveBatch(IReadOnlyList<string> formids, IReadOnlyList<string>? fields, bool conflictTree, int depth = 1,
                                                    bool resolveNames = false, string? plugin = null,
@@ -567,12 +586,15 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
             return AssetResolver.BuildSavedSnapshot(saved);
         }
         var comp = Mo2LoadOrder.ReadComposition(_profileDir);                       // EnabledMods (priority) — cheap text parse
-        var gamePath = _dataDir.Length > 0 ? Path.GetDirectoryName(_dataDir.TrimEnd('\\', '/')) ?? "" : "";
-        var discovery = ArchiveDiscovery.Discover(_profileDir, _modsDir, _dataDir, _overwriteDir, gamePath);
-        _assetWarnings = discovery.Warnings;
+        var discovery = ArchiveDiscovery.Discover(comp, GameIni.For(_profileDir), _modsDir, _dataDir, _overwriteDir);
+        // Explicit mode has no ModOrganizer.ini, so MO2's default skip lists apply.
+        var (skip, skipWarnings) = _instanceDir is null
+            ? (Mo2SkipRules.Default, Array.Empty<string>())
+            : Mo2Instance.ReadSkipRules(_instanceDir);
+        _assetWarnings = discovery.Warnings.Concat(skipWarnings).ToList();
         _activeArchives = discovery.Archives;   // kept alongside the resolver: archive filename → owning plugin (native-pairing provenance)
         _enabledModsAtBuild = comp.EnabledMods; // same build: the mod set behind this resolver (native-pairing loader scan)
-        return AssetResolver.Build(_overwriteDir, _modsDir, _dataDir, comp.EnabledMods, discovery.Archives);
+        return AssetResolver.Build(_overwriteDir, _modsDir, _dataDir, comp.EnabledMods, discovery.Archives, skip);
     }
 
     /// <summary>Every asset lane's warnings: the build's own, plus the kept-build sentence when a profile change could not be re-read. Caller holds <see cref="_gate"/>.</summary>
@@ -1032,8 +1054,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
 
         if (paths.Count > 0 && !paths.SequenceEqual(_resolvedPaths, StringComparer.OrdinalIgnoreCase))
         {
-            // The set or order genuinely changed: build FIRST so the old snapshot survives a throw, then dispose and swap.
+            // The set or order genuinely changed: read the language and build FIRST so the old snapshot survives a throw, then dispose and swap.
+            var text = ReadInstanceText(roots, order);
             InvalidateAssetResolver();   // the active mod/archive set changed → the asset resolver rebuilds lazily
+            GameLanguage.Bind(text);
             if (_resolver is not null)
             {
                 // The rebuild carries the explainer too, or a profile change would drop every refusal to the flat not-found.
@@ -1043,6 +1067,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                 _resolver.Dispose();
                 _resolver = rebuilt;
             }
+            _text = text;
             _resolvedPaths = paths;
             _orderWarnings = order.Warnings;
             _profileStamps = profileStamps;
@@ -1050,8 +1075,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         }
         if (paths.Count > 0)
         {
-            // The profile was touched but the resolved order is identical, so no deep re-index; the asset resolver still drops and the baseline advances.
+            // The profile was touched but the resolved order is identical, so no deep re-index; the language is re-read
+            // (a refusal throws before anything moves), the asset resolver drops and the baseline advances.
+            var text = ReadInstanceText(roots, order);
             InvalidateAssetResolver();
+            GameLanguage.Bind(_text = text);
             _orderWarnings = order.Warnings;
             _profileStamps = profileStamps;
             return true;
@@ -1075,7 +1103,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
 
     Mo2Roots ILoadOrderHost.CaptureRoots()
     {
-        lock (_gate) { EnsurePathsDerived(); return RootsLocked(); }
+        lock (_gate) { EnsurePathsDerived(); GameLanguage.Bind(_text); return RootsLocked(); }
     }
 
     /// <summary>One <c>_gate</c> hold: the configured check, the roots and the built plugin names; throws the unconfigured prompt when there is no instance.</summary>
@@ -1086,6 +1114,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
             if (UsesSavedSnapshot && !AmethystStagingWrite.IsActive) throw new InvalidOperationException(SnapshotWriteRefusal);
             if (!_configured) throw NotConfigured();
             EnsurePathsDerived();
+            GameLanguage.Bind(_text);
             return new OutputRoots(RootsLocked(), _resolver?.PluginNames);
         }
     }
@@ -1162,6 +1191,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     }
 
     string? IAssetHost.InstalledGameRuntime() => InstalledGameRuntime();
+
+    SourceChain? IAssetHost.BuildWalkSources(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, Mo2Roots roots,
+                                            IReadOnlyList<string> poles, List<IDisposable> overlays, out string? error)
+        => _writes.BuildSourceChain(view, session, roots, poles, "from_source", overlays, out error);
 
     /// <summary>The game dirs to search for the Creation Kit's compiler, in priority order: the load order's own, then the located real Skyrim SE install. De-duplicated, best-effort.</summary>
     public IReadOnlyList<string> CompilerGameDirHints()

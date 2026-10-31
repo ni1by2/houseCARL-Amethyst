@@ -613,6 +613,9 @@ public static class WriteEngine
     /// <summary>Generic <c>GetOrAddAsOverride</c>: a flat-group record through its <c>SkyrimGroup&lt;T&gt;</c>, anything else through the nested path.</summary>
     public static IMajorRecord GenericGetOrAddAsOverride(
         SkyrimMod patchMod, IMajorRecordGetter source, ILinkCache? sourceLinkCache = null)
+        => PluginTextEncoding.CopyInto(patchMod, () => GetOrAddAsOverride(patchMod, source, sourceLinkCache));
+
+    static IMajorRecord GetOrAddAsOverride(SkyrimMod patchMod, IMajorRecordGetter source, ILinkCache? sourceLinkCache)
     {
         if (TryResolveGroup(patchMod, source, out var group, out var tMajor, out var tMajorGetter))
         {
@@ -1093,7 +1096,7 @@ public static class WriteEngine
     }
 
     /// <summary>The element type of an <c>IList&lt;T&gt;</c>-shaped property, else null.</summary>
-    static Type? ListElementType(Type t)
+    internal static Type? ListElementType(Type t)
     {
         if (t == typeof(string) || !typeof(System.Collections.IEnumerable).IsAssignableFrom(t)) return null;
         if (t.IsGenericType && t.GetGenericArguments() is { Length: 1 } ga) return ga[0];
@@ -1243,11 +1246,12 @@ public static class WriteEngine
 
     /// <summary>Ties output filename to ModKey; the single-known-master case, delegating to the overload below.</summary>
     internal static void WritePatch(SkyrimMod patchMod, ISkyrimModGetter sourceMod, string outputPath)
-        => WritePatch(patchMod, new[] { sourceMod }, outputPath);
+        => WritePatch(patchMod, new[] { sourceMod }, outputPath, isFaction: null);
 
     /// <summary>Multi-master WritePatch: the FULL known-master set goes to the serializer so cross-plugin references
     /// resolve, while Mutagen keeps the header list lean; a referenced master absent from it still fails loud.</summary>
-    internal static void WritePatch(SkyrimMod patchMod, IReadOnlyList<ISkyrimModGetter> knownMasters, string outputPath)
+    internal static void WritePatch(SkyrimMod patchMod, IReadOnlyList<ISkyrimModGetter> knownMasters, string outputPath,
+                                    Func<FormKey, bool>? isFaction)
     {
         var expected = patchMod.ModKey.FileName.String;
         var actual = Path.GetFileName(outputPath);
@@ -1277,6 +1281,7 @@ public static class WriteEngine
         // complete file; it does not relax the handle discipline before the serialize.
         // SERIALIZE-BOUNDARY NULL-ARM CATCH: a composed record missing a REQUIRED sub-arm is a bare, field-nameless
         // NRE in Mutagen's writer that pre-flight has no by-construction signal to gate on, so only that is named.
+        if (isFaction is not null) OwnerRanks.Settle(patchMod, isFaction);   // the lane's faction test, for every owner its records brought in; null only where the caller settled already or has no owners
         string staged;
         try { staged = WritePatchStaged(patchMod, ordered, baseline, outputPath); }
         catch (Exception ex) when (RootNullArm(ex) is { } nre) { throw new NullArmSerializeException(nre); }
@@ -1330,23 +1335,29 @@ public static class WriteEngine
 
         try
         {
-            if (PluginTextEncoding.NewFileIsUtf8(patchMod)) Serialize(PluginTextEncoding.Utf8Bundle);
-            else
-                // The strict encoder is the CHECK: a value the language default cannot spell stops the write rather
-                // than landing as '?'. A new file has no bytes to preserve, so the whole thing goes out as UTF-8.
-                try { Serialize(PluginTextEncoding.LegacyBundle); }
-                catch (Exception ex) when (PluginTextEncoding.RootUnspellable(ex) is not null)
-                {
-                    CleanupStaged(tmpPath);
-                    Directory.CreateDirectory(tmpDir);
-                    Serialize(PluginTextEncoding.Utf8Bundle);
-                }
+            SerializeNew(PluginTextEncoding.NewFileIsUtf8(patchMod), tmpPath, Serialize);
             return tmpPath;
         }
         catch
         {
             CleanupStaged(tmpPath);
             throw;
+        }
+    }
+
+    /// <summary>Serialize a NEW file: UTF-8 when its provenance says so, else the strict language default, and the whole
+    /// file again as UTF-8 when that cannot spell a value.</summary>
+    static void SerializeNew(bool utf8, string tmpPath, Action<Mutagen.Bethesda.Plugins.Binary.Streams.EncodingBundle> serialize)
+    {
+        if (utf8) { serialize(PluginTextEncoding.Utf8Bundle); return; }
+        // The strict encoder is the CHECK: a value the language default cannot spell stops the write rather than
+        // landing as '?'. A new file has no bytes to preserve, so the whole thing goes out as UTF-8.
+        try { serialize(PluginTextEncoding.LegacyBundle); }
+        catch (Exception ex) when (PluginTextEncoding.RootUnspellable(ex) is not null)
+        {
+            CleanupStaged(tmpPath);
+            Directory.CreateDirectory(Path.GetDirectoryName(tmpPath)!);
+            serialize(PluginTextEncoding.Utf8Bundle);
         }
     }
 
@@ -1376,11 +1387,22 @@ public static class WriteEngine
         catch (IOException) { } catch (UnauthorizedAccessException) { }
     }
 
-    /// <summary>Serialize a plugin edited IN PLACE back over ITSELF. DELIBERATELY NOT <see cref="WritePatch"/>: no
-    /// baseline force-include and no floor, because this re-emits an EXISTING authored plugin. The caller MUST have
+    /// <summary>Serialize a plugin rewritten from its OWN text: edited IN PLACE back over ITSELF, or compacted to a copy
+    /// that keeps its basename. DELIBERATELY NOT <see cref="WritePatch"/>: no baseline force-include and no floor,
+    /// because this re-emits an EXISTING authored plugin. The caller MUST have
     /// released every overlay it holds on the target; see docs/architecture/write-path.md.</summary>
     public static void WriteInPlace(SkyrimMod targetMod, IReadOnlyList<ISkyrimModGetter> ownMasters, string outputPath,
-                                    string? dataDir)
+                                    string? dataDir, Func<FormKey, bool>? isFaction)
+        => WriteOwnShape(targetMod, ownMasters, outputPath, dataDir, isFaction, merged: false);
+
+    /// <summary>Serialize a MERGE: a new file in the in-place shape (own masters, counter verbatim, no baseline), whose
+    /// encoding is the new-file rule's, since its text is its donors' and no file of its name was read.</summary>
+    public static void WriteMerged(SkyrimMod merged, IReadOnlyList<ISkyrimModGetter> ownMasters, string outputPath, string? dataDir)
+        => WriteOwnShape(merged, ownMasters, outputPath, dataDir, isFaction: null, merged: true);
+
+    /// <summary>The in-place shape's write: a merge takes the new-file encoding, anything else its own file's lane.</summary>
+    static void WriteOwnShape(SkyrimMod targetMod, IReadOnlyList<ISkyrimModGetter> ownMasters, string outputPath,
+                              string? dataDir, Func<FormKey, bool>? isFaction, bool merged)
     {
         var expected = targetMod.ModKey.FileName.String;
         var actual = Path.GetFileName(outputPath);
@@ -1398,8 +1420,9 @@ public static class WriteEngine
         Directory.CreateDirectory(Path.GetDirectoryName(outputPath)!);
         var ordered = ownMasters as ISkyrimModGetter[] ?? ownMasters.ToArray();
         // Same composed-null-arm serialize guard as WritePatch — an in-place edit can compose a record too.
+        if (isFaction is not null) OwnerRanks.Settle(targetMod, isFaction);   // the lane's faction test, for every owner its records brought in; null only where the caller settled already or has no owners
         string staged;
-        try { staged = WriteInPlaceStaged(targetMod, ordered, outputPath); }
+        try { staged = WriteInPlaceStaged(targetMod, ordered, outputPath, merged); }
         // A value this file's own encoding cannot spell: in place there is no second pass, so this is a refusal.
         catch (Exception ex) when (PluginTextEncoding.RootUnspellable(ex) is { } bad)
         {
@@ -1425,14 +1448,17 @@ public static class WriteEngine
     };
 
     /// <summary>Stage 1 of the in-place write: own declared masters, the counter verbatim with NO floor, no baseline, staged in the sibling temp.</summary>
-    static string WriteInPlaceStaged(SkyrimMod targetMod, ISkyrimModGetter[] ordered, string outputPath)
+    static string WriteInPlaceStaged(SkyrimMod targetMod, ISkyrimModGetter[] ordered, string outputPath, bool merged)
     {
         var tmpDir = Path.Combine(Path.GetDirectoryName(outputPath)!, $".housecarl-{Guid.NewGuid():N}.tmp");
         var tmpPath = Path.Combine(tmpDir, Path.GetFileName(outputPath));
         Directory.CreateDirectory(tmpDir);
         try
         {
-            SerializeInPlace(targetMod, ordered, outputPath, tmpPath, fileSystem: null);
+            if (merged)
+                SerializeNew(PluginTextEncoding.MergedIsUtf8(targetMod), tmpPath, e => SerializeInPlace(targetMod, ordered, tmpPath, null, e));
+            else
+                SerializeInPlace(targetMod, ordered, tmpPath, null, PluginTextEncoding.WriteInPlace(outputPath));
             return tmpPath;
         }
         catch
@@ -1443,13 +1469,14 @@ public static class WriteEngine
     }
 
     /// <summary>The one in-place serialize, shared by the staged write and the round-trip check; a null order is the check's missing-master retry.</summary>
-    internal static void SerializeInPlace(SkyrimMod targetMod, ISkyrimModGetter[]? ordered, string outputPath,
-                                          string writePath, System.IO.Abstractions.IFileSystem? fileSystem)
+    internal static void SerializeInPlace(SkyrimMod targetMod, ISkyrimModGetter[]? ordered, string writePath,
+                                          System.IO.Abstractions.IFileSystem? fileSystem,
+                                          Mutagen.Bethesda.Plugins.Binary.Streams.EncodingBundle encodings)
     {
         var target = targetMod.BeginWrite.ToPath(writePath, fileSystem);
         (ordered is null ? target.WithNoLoadOrder() : target.WithLoadOrder(ordered))   // the target's OWN masters — no whole-order, no baseline
             .NoNextFormIDProcessing()          // persist the author's NextObjectID verbatim (no EnsureFormIdFloor)
-            .WithEmbeddedEncodings(PluginTextEncoding.WriteInPlace(outputPath))
+            .WithEmbeddedEncodings(encodings)
             .Write();
     }
 
@@ -2930,6 +2957,12 @@ public sealed class LocalizedTargetUnsupportedException : InvalidOperationExcept
             + "houseCARL could put matching files is beside the plugin — where they would SHADOW the archive's rather "
             + "than replace them, leaving the archive carrying a table that no longer describes the plugin." + Settled,
 
+        LocalizedShape.GameDataOnly when a.StringsModFolder is not null =>
+            "A localized plugin's text is not in the plugin, and a plugin write does not reach " + StringsHome(a) + ". "
+            + "Rewriting the plugin renumbers the indices its text is looked up by, and the only place houseCARL could "
+            + "put matching files is beside the plugin, which leaves that set on disk describing a plugin that has "
+            + "changed underneath it." + Settled,
+
         LocalizedShape.GameDataOnly =>
             "A localized plugin's text is not in the plugin, and a plugin write does not reach your game's Data folder. "
             + "Rewriting the plugin renumbers the indices its text is looked up by, and the only place houseCARL could "
@@ -2971,12 +3004,21 @@ public sealed class LocalizedTargetUnsupportedException : InvalidOperationExcept
              + "would do to its text.",
     };
 
-    /// <summary>Where the archive naming this plugin's tables was found — beside the plugin, or in the game folder.</summary>
-    static string BsaWhere(LocalizedAssessment a) => a.BsaInGameData ? "in your game's Data folder" : "beside the plugin";
+    /// <summary>Where the archive naming this plugin's tables was found — beside the plugin, in another mod folder, or in the game folder.</summary>
+    static string BsaWhere(LocalizedAssessment a)
+        => a.BsaModFolder is { } mod ? AssetResolver.LayerPlace(mod)
+         : a.BsaInGameData ? "in your game's Data folder" : "beside the plugin";
+
+    /// <summary>The loose Strings folder a GameDataOnly plugin's text resolves from: another MO2 layer's, or the game's Data.</summary>
+    static string StringsHome(LocalizedAssessment a)
+        => a.StringsModFolder is { } mod ? "the Strings folder " + AssetResolver.LayerPlace(mod) : "your game's Data\\Strings folder";
 
     /// <summary>What the <c>Strings\</c> folder beside the plugin holds, for a plugin nothing in it matched; it asserts no unchecked absence.</summary>
     static string NothingMatched(LocalizedAssessment a)
     {
+        // Tables in another language than the game's read nothing, as in the game.
+        if (a.OrderLanguage is { } language && a.Languages.Count > 0)
+            return $".STRINGS files beside it in {string.Join(", ", a.Languages)} only, none in {language}, the game's language";
         var u = a.UnmatchedTables;
         // A CHECKED absence: an unlistable folder classifies as StringsFolderUnreadable and never arrives here.
         if (u.Total == 0)
@@ -2987,6 +3029,11 @@ public sealed class LocalizedTargetUnsupportedException : InvalidOperationExcept
              + (u.Unnamed > 0 ? ", and " + u.Unnamed + " more" : "")
              + " — but houseCARL matched none of them to this plugin in a language it recognises";
     }
+
+    /// <summary>The kinds missing from a <see cref="LocalizedShape.GameDataOnly"/> set the read takes, when it is partial.</summary>
+    static string MissingThere(LocalizedAssessment a)
+        => a.IncompleteLanguages.Count == 0 ? ""
+         : ", of which " + string.Join("; ", a.IncompleteLanguages.Select(kv => $"{kv.Key} has no .{string.Join("/.", kv.Value)} file"));
 
     /// <summary>The SECOND location, when the archive shape carries one — naming one while two are on disk misleads.</summary>
     static string AlsoLoose(LocalizedAssessment a)
@@ -3029,8 +3076,8 @@ public sealed class LocalizedTargetUnsupportedException : InvalidOperationExcept
                 + BsaWhere(a) + AlsoLoose(a) + ".",
 
             LocalizedShape.GameDataOnly =>
-                "It is flagged LOCALIZED and its text is not beside it — it resolves from your game's Data\\Strings "
-                + "folder (" + string.Join(", ", a.GameDataLanguages) + ").",
+                "It is flagged LOCALIZED and its text is not beside it — it resolves from " + StringsHome(a) + " ("
+                + string.Join(", ", a.GameDataLanguages) + ")" + MissingThere(a) + ".",
 
             // The folder is THERE, and nothing is claimed about its contents, so it is not described as empty.
             LocalizedShape.StringsFolderUnreadable =>
@@ -3103,7 +3150,7 @@ public sealed class LocalizedTargetUnsupportedException : InvalidOperationExcept
             "It is flagged LOCALIZED and its text lives inside " + Path.GetFileName(a.BsaPath) + AlsoLoose(a) + ".",
         LocalizedShape.GameDataOnly =>
             "It is flagged LOCALIZED and its text lives in separate .STRINGS files in your game's Data\\Strings folder, "
-            + "not beside the plugin.",
+            + "not beside the plugin" + MissingThere(a) + ".",
         // The same absence discipline as WhereTheTextIs's arm: it says it could not FIND them, never that none exist.
         LocalizedShape.Nowhere =>
             "It is flagged LOCALIZED and houseCARL cannot find its .STRINGS files: " + NothingMatched(a) + ".",

@@ -78,16 +78,15 @@ internal static class CorpusGenerator
 
         var seenRecordGetters = new HashSet<Type>();
         var sigByName = new Dictionary<string, string>(StringComparer.Ordinal); // record catalog name -> xEdit 4-char signature
-        foreach (var c in asm.GetTypes())
+        var recordClasses = new Dictionary<Type, string>(); // concrete record class -> its catalog name, for the empty-subrecord probe
+        foreach (var c in RecordClasses(asm))
         {
-            if (!c.IsClass || c.IsAbstract) continue;
-            if (IsOverlayTwin(c)) continue; // Mutagen's lazy-read overlay of the real class; not a distinct type
-            if (!typeof(IMajorRecordGetter).IsAssignableFrom(c)) continue;
             var gi = GetterInterfaceFor(c);
             if (gi == null) { CoverageAnomalies.Add(UnextractableWarning("record class", c)); continue; }
             if (seenRecordGetters.Add(gi))
             {
                 seeds.Add(new RefItem(gi, "record", null));
+                recordClasses[c] = CatalogName(gi);
                 // Capture the signature here, where the concrete class is in hand (the BFS below works from
                 // getter interfaces). Verified reachable + correct for all 133 records (Probe.RunSig).
                 var sig = RecordSignature(c);
@@ -164,6 +163,10 @@ internal static class CorpusGenerator
         // Attach each record's xEdit signature (captured at seed time, where the concrete class was in hand).
         foreach (var (cname, sig) in sigByName)
             if (catalog.TryGetValue(cname, out var ts)) ts.Signature = sig;
+
+        // Which subrecords Mutagen writes at 0 bytes on a bare new record; a create that leaves one says so.
+        foreach (var (cls, empties) in EmptyOnCreateProbe.Run(recordClasses.Keys.ToList(), CoverageAnomalies))
+            if (catalog.TryGetValue(recordClasses[cls], out var ts)) ts.EmptyOnCreate = empties;
 
         // ---- 3. Assemble + emit. ----
         var corpus = new Corpus
@@ -711,6 +714,10 @@ internal static class CorpusGenerator
                $"properties are authorable (public settable, or a mutable collection). It is excluded from the " +
                $"catalog. {ReachabilityCheck}";
     }
+
+    /// <summary>Every concrete major-record class of <paramref name="asm"/>, overlay twins left out.</summary>
+    internal static IEnumerable<Type> RecordClasses(Assembly asm) =>
+        asm.GetTypes().Where(c => c.IsClass && !c.IsAbstract && !IsOverlayTwin(c) && typeof(IMajorRecordGetter).IsAssignableFrom(c));
 
     /// <summary>
     /// True for Mutagen's lazy-read overlay class (e.g. ArmorBinaryOverlay), which

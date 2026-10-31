@@ -40,6 +40,12 @@ internal sealed partial class RecordWrites
             catch { return null; }
         }
 
+        // An active-order arm reading each key from the plugin pluginOf names: one key at a time, or many through the read door.
+        SourceArm InOrder(string spelling, string where, Func<FormKey, string?> pluginOf, SourceLayer? layer = null)
+            => new(spelling, SourceArmKind.ActiveOrder, where,
+                   fk => pluginOf(fk) is { } p ? view.GetRecord(session, p, fk) : null, layer,
+                   keys => BodyGather.Copies(view, session, keys, pluginOf));
+
         // A THROW out of the loop would bypass every Fail path and leak the overlays opened so far.
         try
         {
@@ -56,12 +62,8 @@ internal sealed partial class RecordWrites
             // ---- pole: winner ----------------------------------------------------------------------------
             if (string.Equals(spelling, SourcePoles.Winner, StringComparison.OrdinalIgnoreCase))
             {
-                arms.Add(new SourceArm(SourcePoles.Winner, SourceArmKind.ActiveOrder, "the active load order (each record's winning version)",
-                    fk =>
-                    {
-                        var w = view.ResolveWinner(fk);
-                        return w is null ? null : view.GetRecord(session, w.Value.WinnerPlugin, fk);
-                    }));
+                arms.Add(InOrder(SourcePoles.Winner, "the active load order (each record's winning version)",
+                                 fk => view.ResolveWinner(fk)?.WinnerPlugin));
                 continue;
             }
 
@@ -82,15 +84,13 @@ internal sealed partial class RecordWrites
             if (view.ContainsPlugin(spelling))
             {
                 var active = spelling;
-                arms.Add(new SourceArm(spelling, SourceArmKind.ActiveOrder, $"'{active}' (active in the load order)",
-                    fk => view.GetRecord(session, active, fk), ActiveLayer(active)));
+                arms.Add(InOrder(spelling, $"'{active}' (active in the load order)", _ => active, ActiveLayer(active)));
                 continue;
             }
             // A path that names the order's own copy of an active plugin is that plugin, not an off-order file.
             if (PluginPaths.LooksLikePath(spelling) && PluginPaths.ActiveNameForPath(view, spelling) is { } activeName)
             {
-                arms.Add(new SourceArm(activeName, SourceArmKind.ActiveOrder, $"'{activeName}' (active in the load order; named by path)",
-                    fk => view.GetRecord(session, activeName, fk), ActiveLayer(activeName)));
+                arms.Add(InOrder(activeName, $"'{activeName}' (active in the load order; named by path)", _ => activeName, ActiveLayer(activeName)));
                 continue;
             }
 
@@ -141,7 +141,13 @@ internal sealed partial class RecordWrites
         }
 
         overlays.AddRange(openedHere);
-        return new SourceChain(arms);
+        // Each record as the copy takes it, faction owners settled, so no walk follows a rank word as a link.
+        var isFaction = OwnerRanks.FactionIn(view);
+        return new SourceChain(arms.Select(a => a with
+        {
+            Fetch = fk => OwnerRanks.Settled(a.Fetch(fk), isFaction),
+            Batch = a.Batch is { } batch ? keys => { var read = batch(keys); return fk => OwnerRanks.Settled(read(fk), isFaction); } : null,
+        }).ToList());
         }
         catch { foreach (var d in openedHere) { try { d.Dispose(); } catch { } } throw; }
     }
@@ -235,6 +241,7 @@ internal sealed partial class RecordWrites
                     mk => view.ContainsPlugin(mk.FileName.String),
                     pf => { session.ReleaseOverlay(pf); return session.AllMastersExcept(pf); },
                     consulted,
+                    OwnerRanks.FactionIn(view),
                     ex => WritePatchBuilder.SerializeFailure("", ex, session, ""),
                     patch => WritePatchBuilder.ExtendRoundTripRefusal(patch, outPath, session));
 

@@ -28,7 +28,21 @@ path walk, and containment comes off Mutagen's context walk.
   cannot express, and whose operand is a bit value or a flag name, or several split the way an `in`
   list splits with the flags decode's `|` as a separator too (`[Body, Hands]` = `Body, Hands` =
   `Body | Hands`), and the decode's `slotNN` (biped) or `bitN` token for an unnamed bit; `=` and `!=`
-  on a flags leaf resolve the same spellings, once per operand and enum. On a list or dict path the
+  on a flags leaf resolve the same spellings, once per operand and enum. On `SkyrimMajorRecordFlags`
+  of a record type with its own `MajorFlag`, `has`, `=`, `!=`, `in` and `not in` all take the read's
+  vocabulary: that type's own names first, then the generic header names for the bits those leave
+  unnamed (`GLOB … = Constant | CantWait`). A literal no type in scope can name (a typo, or
+  `STAT … = NotPlayable`, a generic name the type renames) is refused at plan time under `=`, `!=`,
+  `in` and `not in`, with a did-you-mean and what to try: one type's own names and `MajorFlags` (and the generic names
+  when a type with no `MajorFlag` of its own is in scope), or under several such types a bit value,
+  `MajorFlags` and listing one type alone in `types=` to see its names.
+  `has`, `has_any` and `has_none` refuse such a literal when they read the first record, with no
+  did-you-mean: with the type's own names and `MajorFlags` when that record's type has a `MajorFlag`
+  of its own, with the generic sentence ("is not a bit value or a valid `<enum>` flag name") otherwise. Known limit:
+  on a multi-type `types=` or an untyped (`plugins=`, `formids=`) scope, any literal one type in scope
+  can name and another cannot (a generic name one type renames, or one type's own name) passes plan
+  time; `has`, `has_any` and `has_none` then refuse the call at the first record of a type that cannot
+  name it, while `=`/`in` are false there and `!=`/`not in` true, with no note. On a list or dict path the
   has-family refuses the call from the schema, before any record is read:
   a form-link list with form operands gets the list members' own spelling (`Keywords[*none] in [X]`),
   other form links a `->` step (`Keywords->editorid = X`), a dict one entry, any other list the
@@ -37,7 +51,8 @@ path walk, and containment comes off Mutagen's context walk.
 - On an enum leaf the schema names, a `=`, `!=`, `in` or `not in` literal that is neither a whole number (compared to
   the enum's underlying value) nor one of that enum's names (a comma list only on a `[Flags]` enum) refuses the call at
   plan time with a "did you mean", when every enum the path can end on rejects it; a `->` right side is checked over
-  the target types that carry the field.
+  the target types that carry the field. The header leaf is checked in each record type's vocabulary above, so a
+  literal one type in `types=` holds still passes.
 - Whether a path names a field is decided from the generated schema before any record is read (#1160),
   by `SchemaPathWalk`: one walk over each side of a term that carries the SET of types a step can be on —
   struct fields, list elements, dict values, every arm of a union, `.Male`/`.Female` and `[0]`/`[1]` on a
@@ -177,6 +192,10 @@ path walk, and containment comes off Mutagen's context walk.
   brute-force set from the records' known values.
 - `GenderedArmAccountingTests` / `AbsentStepAccountingTests`: the #1071 bullet: a missing gendered arm,
   absent list or index past the end is unset (and answers `missing`), and a genuine parse failure stays a read fault.
+- `RecordsOutputAgreementTests` (`Has_*`, `EqAndIn_*`, `NeAndNotIn_*`, `Eq_*`, `In_*`) — the header leaf's
+  vocabulary: `has`, `=`, `in` and their complements take a type's own names and the generic remainder, refuse a
+  generic name the type renames with the type's names and `MajorFlags` as the remedy, keep integer operands and KYWD's
+  generic names, and a multi-type `types=` keeps a literal one of its types holds.
 
 ## Where
 

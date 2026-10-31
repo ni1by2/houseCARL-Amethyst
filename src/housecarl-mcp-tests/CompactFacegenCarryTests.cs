@@ -76,6 +76,39 @@ public sealed class CompactFacegenCarryTests
         Assert.True(File.Exists(BethesdaPath.Under(inst.ModDir, FaceGenPath.For(new FormKey(inst.Key, 0xB20), FaceGenSlot.Mesh))));
     }
 
+    // NEW-FILE, UNMOVED: an NPC already at its compacted id still gets its face in the new mod folder, which starts empty
+    [Fact]
+    public void ANewFileCompactCarriesTheFaceOfAnNpcThatKeepsItsId()
+    {
+        using var inst = OneFacedNpc("FaceStay", 0x800, "HcStayNpc");
+        var o = inst.Compact();
+        Assert.True(o.Success, o.Error);
+        Assert.Equal(0, o.RecordsMoved);
+        var nk = NpcKey(o.OutputPath, "HcStayNpc");
+        Assert.Equal(0x800u, nk.ID);
+        var root = Path.GetDirectoryName(o.OutputPath)!;
+        Assert.NotEqual(inst.ModDir, root);
+        Assert.True(CompactCarryInstance.Holds(BethesdaPath.Under(root, FaceGenPath.For(nk, FaceGenSlot.Mesh)), Mesh));
+        Assert.True(CompactCarryInstance.Holds(BethesdaPath.Under(root, FaceGenPath.For(nk, FaceGenSlot.Tint)), Tint));
+        Assert.Equal(2, o.AssetRename?.FacegenFilesCarried);
+        var text = HousecarlMcp.WriteTools.RenderCompact(o);
+        Assert.Contains("facegen: copied 2 files for 1 NPC into the new mod folder", text);
+        Assert.DoesNotContain("to the new FormIDs", text);
+    }
+
+    // IN-PLACE, UNMOVED: an NPC already at its compacted id keeps its face where it is and nothing is re-copied
+    [Fact]
+    public void AnInPlaceCompactLeavesTheFaceOfAnNpcThatKeepsItsId()
+    {
+        using var inst = OneFacedNpc("FaceStayIp", 0x800, "HcStayIpNpc");
+        var o = inst.Compact(inPlace: true);
+        Assert.True(o.Success, o.Error);
+        Assert.Equal(0, o.RecordsMoved);
+        Assert.Equal(0, o.AssetRename?.FacegenFilesCarried ?? 0);
+        Assert.True(CompactCarryInstance.Holds(
+            BethesdaPath.Under(inst.ModDir, FaceGenPath.For(new FormKey(inst.Key, 0x800), FaceGenSlot.Mesh)), Mesh));
+    }
+
     // IN-PLACE ALIASING: P (old 0x900, enumerated first) renumbers to 0x800, which is Q's OLD id; each keeps its OWN face
     [Fact]
     public void OverlappingOldAndNewIdsKeepEachNpcsOwnFace()

@@ -16,6 +16,9 @@ public sealed class LooseRootFilesTests : IDisposable
         foreach (var d in new[] { overwrite, Path.Combine(mods, "ModA"), Path.Combine(mods, "Data"), data })
             Directory.CreateDirectory(d);
         File.WriteAllText(Path.Combine(mods, "ModA", "A.esp"), "x");
+        File.WriteAllText(Path.Combine(mods, "ModA", "B.esp.mohidden"), "x");   // MO2 hides it, so the root does not ship it
+        File.WriteAllText(Path.Combine(mods, "ModA", "meta.ini"), "x");         // MO2 leaves a root meta.ini and readme.txt out of Data
+        File.WriteAllText(Path.Combine(mods, "ModA", "readme.txt"), "x");
         File.WriteAllText(Path.Combine(mods, "Data", "Shadow.esp"), "x");
         File.WriteAllText(Path.Combine(data, "Game.esm"), "x");
         // "Gone" is enabled but has no folder on disk.

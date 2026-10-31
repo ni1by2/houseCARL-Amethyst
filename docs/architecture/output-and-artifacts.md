@@ -13,10 +13,10 @@ The files listed above cite the shared contracts below under ADR 0001.
 
 ### Where output lands
 
-- **A houseCARL-owned mod folder, by default.** Plugins and every non-`.esp` rider (compiled scripts, a packed
-  `.bsa`, extracted loose files, a generated `.seq`) go into `<ModsDir>\houseCARL - <stem>`. Ownership is
-  `[houseCARL] generated=true` in the folder's `meta.ini`, the one mod-root file MO2 does not deploy into Data. A
-  missing or stripped marker reads as NOT owned.
+- **A houseCARL-owned mod folder, by default.** Plugins and every non-`.esp` rider — compiled scripts, a packed
+  `.bsa`, extracted loose files, a generated `.seq` — go into `<ModsDir>\houseCARL - <stem>`. Ownership is
+  `[houseCARL] generated=true` in the folder's `meta.ini`, a mod-root file USVFS still maps but MO2's Data view and
+  houseCARL leave out (assets.md, Visibility). A missing or stripped marker reads as NOT owned.
 - **`into=` extends an owned folder** through one resolver shared by the `.esp`, rider and asset lanes. Four
   ownership-gated arms, in order: canonical `houseCARL - <stem>`; the owned folder holding `<stem>.esp` (the `.esp`
   basename is fixed by whatever binds the patch, the folder name is the user's to rename); the folder's own name;

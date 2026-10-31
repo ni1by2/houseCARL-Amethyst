@@ -91,15 +91,67 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
         Assert.Equal(AssetSelectWorld.FaceGeomFiles, deep.Selected);
     }
 
-    /// <summary>A glob with no directory in front of it would enumerate every loose file and every archive entry in
-    /// the order before rendering anything, so it is refused instead of paid.</summary>
+    /// <summary>A glob with no directory in front of it is "where does a file named this live": it walks the whole
+    /// order, loose and archive, under the same match bound as any other sweep (#1089).</summary>
     [Fact]
-    public void AnUnanchoredGlobIsRefusedRatherThanSweepingTheWholeLoadOrder()
+    public void AnUnanchoredGlobFindsTheNameInEveryFolderLooseAndArchive()
     {
         var d = _w.Svc.AssetStatus(Array.Empty<string>(), new[] { @"**\*.nif" });
 
+        Assert.Equal(AssetSelectWorld.AllFaceGeomNifs, d.Selected);
+        Assert.Null(d.SelectorNotes is { Count: > 0 } ? d.SelectorNotes[0] : null);
+
+        // A name deep in a mod folder, and one only an archive carries, each found with no folder named.
+        var loose = _w.Svc.AssetStatus(Array.Empty<string>(), new[] { "**/*0004*" });
+        Assert.Equal(_w.Rel("0004.nif"), Assert.Single(loose.Results).RelPath);
+        Assert.Equal("FaceHigher", loose.Results[0].Hit!.Winner!.Source);
+        var archived = _w.Svc.AssetStatus(Array.Empty<string>(), new[] { "**/0005.nif" });
+        Assert.Equal("HcArch.bsa", Assert.Single(archived.Results).Hit!.Winner!.Source);
+    }
+
+    /// <summary>'*' stays inside one segment even with no folder in front, so a bare name glob reads the Data root
+    /// only; when it matches nothing there the note says how to search every folder instead.</summary>
+    [Fact]
+    public void ABareNameGlobThatMatchesNothingSaysHowToSearchEveryFolder()
+    {
+        var d = _w.Svc.AssetStatus(Array.Empty<string>(), new[] { "*0004*" });
+
         Assert.Empty(d.Results);
-        Assert.Contains(d.SelectorNotes!, n => n.Contains("anchored under a directory", StringComparison.Ordinal));
+        var note = Assert.Single(d.SelectorNotes!);
+        Assert.Contains("'**/*0004*' searches every folder", note, StringComparison.Ordinal);
+    }
+
+    /// <summary>A leading '**' already crosses folders, so a bare '**name*' that matches nothing gets no Data-root hint.</summary>
+    [Fact]
+    public void ADoubleStarNameThatMatchesNothingGetsNoDataRootHint()
+    {
+        var note = Assert.Single(_w.Svc.AssetStatus(Array.Empty<string>(), new[] { "**zzzgold*" }).SelectorNotes!);
+
+        Assert.Contains("matched no file", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("Data root only", note, StringComparison.Ordinal);
+    }
+
+    /// <summary>A bare filename that lives in a subfolder matches nothing at the Data root, and the note names the '**/' form.</summary>
+    [Fact]
+    public void ABareFilenameThatMatchesNothingNamesTheEveryFolderForm()
+    {
+        var note = Assert.Single(_w.Svc.AssetStatus(Array.Empty<string>(), new[] { "0004.nif" }).SelectorNotes!);
+
+        Assert.Contains("'**/0004.nif' finds it in every folder", note, StringComparison.Ordinal);
+        Assert.Equal(_w.Rel("0004.nif"),
+                     Assert.Single(_w.Svc.AssetStatus(Array.Empty<string>(), new[] { "**/0004.nif" }).Results).RelPath);
+    }
+
+    /// <summary>A bare folder name deep in meshes, or a mod's name, finds no file under '**/', so no '**/' form is named.</summary>
+    [Theory]
+    [InlineData("facegeom")]
+    [InlineData("FaceBase")]
+    public void ABareNameTheEveryFolderFormCannotFindNamesNoGlob(string bare)
+    {
+        var note = Assert.Single(_w.Svc.AssetStatus(Array.Empty<string>(), new[] { bare }).SelectorNotes!);
+
+        Assert.Contains("matched no file", note, StringComparison.Ordinal);
+        Assert.DoesNotContain("**/", note, StringComparison.Ordinal);
     }
 
     /// <summary>Explicit paths and a directory compose in one call: the paths keep their place and their order, and the
@@ -339,7 +391,7 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
     [Fact]
     public void ARefusedSelectorReadsAsOnePlainSentenceWithNoParameterSuffix()
     {
-        var d = _w.Svc.AssetStatus(Array.Empty<string>(), new[] { @"**\*.nif", @"C:\Windows", @"meshes\..\secrets" });
+        var d = _w.Svc.AssetStatus(Array.Empty<string>(), new[] { @"meshes\hcnothing", @"C:\Windows", @"meshes\..\secrets" });
 
         var text = AssetWire.Render(d, 80_000);
         Assert.DoesNotContain("(Parameter", text, StringComparison.Ordinal);
@@ -475,10 +527,10 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
             .Concat(Enumerable.Range(0, 40).Select(i => @"meshes\hcnothing" + i)).ToArray();
 
         var text = AssetTools.AssetStatus(_w.Svc, under: many, counts_only: true, max_chars: 1_200);
-        var json = AssetTools.AssetStatus(_w.Svc, under: many, counts_only: true, format: "json", max_chars: 1_000);
+        var json = AssetTools.AssetStatus(_w.Svc, under: many, counts_only: true, format: "json", max_chars: 1_100);
 
         Assert.True(text.Length <= 1_200, $"the text census is {text.Length} chars on max_chars=1200");
-        JsonOverrun.StatesTheThreeNumbers(json, 1_000);
+        JsonOverrun.StatesTheThreeNumbers(json, 1_100);
         JsonOverrun.ClearsAtAWideCap(cap => AssetTools.AssetStatus(_w.Svc, under: many, counts_only: true, format: "json", max_chars: cap), 80_000);
         // The counters and the alarm counts survive the pressure: what gives is the cuttable selector list.
         Assert.Contains("census: counted=5 present=5 absent=0 errors=0", text);
@@ -493,6 +545,7 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
     [Fact]
     public void TheJsonCensusFitsTheMaxCharsItWasGiven()
     {
+        string Census(int cap) => AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir }, counts_only: true, format: "json", max_chars: cap);
         int Cap = JsonRenderBoundary.First(cap => System.Text.Json.JsonDocument.Parse(
             AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir }, counts_only: true, format: "json", max_chars: cap))
             .RootElement.GetProperty("winners_by_layer").GetProperty("rendered").GetInt32() == 3) - 1;
@@ -500,12 +553,45 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
                                           counts_only: true, format: "json", max_chars: Cap);
 
         var root = System.Text.Json.JsonDocument.Parse(text).RootElement;
-        // A real cut: some rows in, the rest disclosed by the axis's own frame.
         Assert.Equal(3, root.GetProperty("winners_by_layer").GetProperty("distinct").GetInt32());
         Assert.Equal(2, root.GetProperty("winners_by_layer").GetProperty("rendered").GetInt32());
         Assert.Equal("max_chars", root.GetProperty("winners_by_layer").GetProperty("cut_by").GetString());
         Assert.True(root.GetProperty("truncated").GetBoolean());
         Assert.True(text.Length <= Cap, $"the census document is {text.Length} chars on max_chars={Cap}");
+        // Every cap from where the fixed part fits up to the whole document stays inside it.
+        for (int cap = 960; cap <= Census(0).Length; cap++)
+            Assert.True(Census(cap).Length <= cap, $"the census document overran max_chars={cap}");
+    }
+
+    /// <summary>At a cap the whole json census fits in, every row of both axes renders and nothing is cut: the counters
+    /// and axis frames are charged once. The few chars of slack are the frame's widest-member reserve.</summary>
+    [Fact]
+    public void TheJsonCensusRendersWholeAtTheCapItFitsIn()
+    {
+        string Census(int cap) => AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir },
+                                                         counts_only: true, format: "json", max_chars: cap);
+        int cap = Census(0).Length + 16;
+
+        var root = System.Text.Json.JsonDocument.Parse(Census(cap)).RootElement;
+        Assert.False(root.GetProperty("truncated").GetBoolean());
+        foreach (var axis in new[] { "winners_by_layer", "shadowed_by_layer" })
+            Assert.Equal(root.GetProperty(axis).GetProperty("distinct").GetInt32(),
+                         root.GetProperty(axis).GetProperty("rendered").GetInt32());
+    }
+
+    /// <summary>A cut on the second axis alone still marks the document truncated, not only a cut on the first.</summary>
+    [Fact]
+    public void AJsonCensusCutOnlyOnTheShadowedAxisIsTruncated()
+    {
+        string Census(int cap) => AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir },
+                                                         counts_only: true, format: "json", max_chars: cap);
+        // A few chars short of the whole document: every winning row fits, the one shadowed row does not.
+        var root = System.Text.Json.JsonDocument.Parse(Census(Census(0).Length - 2)).RootElement;
+
+        var winners = root.GetProperty("winners_by_layer");
+        Assert.Equal(winners.GetProperty("distinct").GetInt32(), winners.GetProperty("rendered").GetInt32());
+        Assert.Equal(0, root.GetProperty("shadowed_by_layer").GetProperty("rendered").GetInt32());
+        Assert.True(root.GetProperty("truncated").GetBoolean());
     }
 
     /// <summary>counts_only= and to_file= ask for opposite dispositions of the same result, so the pair is refused
@@ -529,14 +615,14 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
         // A cap that admits SOME rows and refuses the rest — the partial cut this is about. A cap small enough to
         // admit none proves only that the counters survive a collapse.
         var text = AssetTools.AssetStatus(_w.Svc, under: new[] { AssetSelectWorld.FaceGeomDir },
-                                          counts_only: true, max_chars: 550);
+                                          counts_only: true, max_chars: 740);
 
         Assert.Contains("census: counted=5 present=5", text);       // the counters are exact whatever the cut
         Assert.Contains("winning layers (3 distinct):", text);      // and so is the distinct count
         Assert.Equal(2, Rows(text));
         // The knob named is the one that stopped the axis: these rows were refused room, not capped by limit=.
         Assert.Contains("1 more row(s) — raise max_chars= to see them", text);
-        Assert.True(text.Length <= 550, $"the census is {text.Length} chars on max_chars=550");
+        Assert.True(text.Length <= 740, $"the census is {text.Length} chars on max_chars=740");
     }
 
     /// <summary>limit= pages the census TABLE, which is the thing here that needs paging — the census itself covers
@@ -550,7 +636,7 @@ public sealed class AssetSelectTests : IClassFixture<AssetSelectWorld>
 
         Assert.Contains("census: counted=5 present=5 absent=0 errors=0", text);   // the whole selection, not a window
         Assert.Contains("winning layers (3 distinct):", text);
-        Assert.Equal(1, Rows(text));
+        Assert.Equal(2, Rows(text));                                               // one per table: winning and shadowed
         Assert.Contains("2 more row(s) — raise limit= to see them", text);
     }
 

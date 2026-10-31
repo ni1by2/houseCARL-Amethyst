@@ -150,7 +150,7 @@ static class StatusWire
     {
         if (excluded.Count == 0) return;
         sb.Append("\n[!] EXCLUDED plugins (").Append(excluded.Count)
-          .Append(") — dropped from the index this session; houseCARL does NOT read these, every OTHER plugin works:\n");
+          .Append(") — dropped from the index this session; houseCARL does NOT read these, so any record they override is answered without their version:\n");
         int shown = 0;
         foreach (var kv in excluded)
         {
@@ -257,7 +257,7 @@ static class StatusWire
 
         // An active plugin can still be excluded from the index, so the ACTIVE line above must not be taken as the whole truth.
         if (excluded.TryGetValue(name, out var why))
-            sb.Append("  [!] EXCLUDED this session: ").Append(why).Append("\n      → houseCARL does NOT read this plugin (every other plugin is unaffected).\n");
+            sb.Append("  [!] EXCLUDED this session: ").Append(why).Append("\n      → houseCARL does NOT read this plugin, so any record it overrides is answered without its version.\n");
 
         // A name the profile lists as a plugin: its copies, then the header facts and the LOCALIZED flag the in-place write lanes refuse on.
         if (facts is null) return;

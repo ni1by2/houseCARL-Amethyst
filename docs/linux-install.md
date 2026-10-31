@@ -78,6 +78,8 @@ Then reopen the host. This restores the previous server package, not Amethyst's 
 
 If installation reports an unfinished transaction, preserve its journal and inspect that exact ID with `housecarl_staging_status` in the current compatible server. Use the supported recovery action for its recorded state before retrying installation. If no compatible server is available, stop and request recovery help. Do not delete journals or select a different state root to bypass the check. Older development test runs could leave journals referencing deleted temporary fixtures; establish their origin and preserve a backup before quarantining any such records.
 
+The unreleased development branch targets .NET 10 and adds Asset Walk. It has not replaced the 2.1.1 downloads above. Linux archives bundle their runtime; upgrading one does not require installing a system .NET runtime.
+
 ## Select an Amethyst connection
 
 Installation registers the MCP server; it does not select or change an Amethyst profile. After restarting Claude Code or Codex, select your existing schema-v1 connection manifest with `housecarl_set_amethyst_connection`, passing its absolute path as `manifest_path` and explicitly setting `filegraph_mode="saved-snapshot"`.

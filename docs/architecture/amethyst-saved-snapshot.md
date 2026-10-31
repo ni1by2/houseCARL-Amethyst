@@ -210,3 +210,9 @@ fixtures to 11, with no new failing cases. It still exposes Linux acceptance gap
 expectations, native source/destination paths, and MO2-only instance switching).
 Those failures are not hidden or counted as a full Linux suite pass. The native
 placement fixture repair is separate from the staging transaction change.
+
+## Asset traversal and language
+
+Asset walks, provider selectors and filename globs use native saved Data destinations. MO2 visibility rules never filter a managed Amethyst result. An explicit disabled donor is read through the selected saved variant, including its routed destination and exclusions. Unrecorded folders are refused until Refresh; source identity changes invalidate the call.
+
+The effective `SkyrimCustom.ini` and `Skyrim.ini` are read from the already captured profile/prefix inputs. Localized reads copy only the selected language’s winning tables into a private temporary directory, allowing table kinds to come from different mods or archives without discovering excluded files beside them. Missing or unreadable required tables refuse. Private copies are removed after the MCP request or service disposal. The native readers and headless API integration remain unchanged.

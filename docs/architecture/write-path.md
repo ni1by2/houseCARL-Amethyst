@@ -5,7 +5,7 @@ covers: [src/housecarl-mcp/RecordWrites.cs, src/housecarl-mcp/RecordCopy.cs, src
   src/housecarl-mcp/WriteSentences.cs, src/housecarl-core/WriteEngine.cs,
   src/housecarl-core/WriteVerbs.cs, src/housecarl-core/RemapEngine.cs, src/housecarl-core/ClosureCopy.cs,
   src/housecarl-core/MergeInjection.cs, src/housecarl-core/MergeLoadPosition.cs,
-  src/housecarl-core/WritePatchBuilder.cs,
+  src/housecarl-core/WritePatchBuilder.cs, src/housecarl-core/OwnerRanks.cs,
   src/housecarl-mcp/ApplyTools.cs, src/housecarl-mcp/CreateTools.cs, src/housecarl-mcp/ForwardTools.cs,
   src/housecarl-mcp/RemoveTools.cs, src/housecarl-mcp/CopyTools.cs, src/housecarl-mcp/WriteTools.cs,
   src/housecarl-mcp/WriteTextRender.cs, src/housecarl-core/LocalizedStrings.cs, src/housecarl-core/SubrecordInventory.cs]
@@ -55,6 +55,31 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - A write response states only what it re-read from the written FILE: the file's value, `not-checked` where the file
   could not answer, and a did-not-land verdict only off a walk that succeeded. Never the applied in-memory value.
   An opaque `bytes` leaf re-reads as a byte count with its structure NOT checked.
+- A file's text encoding follows whose text it carries, never a file name standing in for it. A file rewritten from
+  its own text (in place, or compacted to a copy that keeps its basename, so its lane, keyed by that name, is the source's) keeps the lane its read resolved to
+  (`PluginTextEncoding.WriteInPlace`) and refuses a value that lane cannot spell; an all-ASCII file there takes the
+  language's code page, UTF-8 only in a language with none (DECISIONS 2026-10-25 (11)). Every other file is new
+  text: a patch (`WritePatch`, `NewFileIsUtf8`) and a merge (`WriteEngine.WriteMerged`, `MergedIsUtf8`) go out UTF-8
+  when a copy decoded UTF-8 text into them, else in the strict code page with the whole file written again as UTF-8
+  when that cannot spell a value; a merge in a language with no code page is UTF-8 outright, as xEdit's is, and an
+  `into=` patch whose own read was UTF-8 stays UTF-8. A copy is any record or field taken out of a plugin into the
+  file, each run through `PluginTextEncoding.CopyInto`: `GenericGetOrAddAsOverride` (apply, forward, create's parents,
+  copy onto a target), CopyFrom's field, the closure copy's renumber, and the merge's build. The provenance is text
+  decoded inside the copy, so an override whose own name is Windows-1252 keeps it whatever its record's origin, and a
+  localized plugin's tables count only where they count toward its lane (English). Text decoded before the copy does
+  not count: the copy lane's source chain (`RecordCopy.cs`, through `OwnerRanks.Settled`) deep-copies, before the
+  scope opens, every record it fetches, root or dependency, attach or clone, that holds an entry whose owner Mutagen
+  left untyped and the faction test resolves to a faction. That record's text does not mark the file, so the file goes
+  out in the code page unless something else marks it or the code page cannot spell its text (then the second pass
+  writes it UTF-8). Text decoded during the copy counts even
+  when it is not kept: a merge whose UTF-8 donor loses every non-ASCII record to a Windows-1252 donor goes out UTF-8.
+  This rule replaces 2.0.1's (a new file is UTF-8 if its own name, a master's, or a record's origin resolved as UTF-8)
+  and changes three outputs on purpose: a merge of a UTF-8 and a Windows-1252 donor rewrites the Windows-1252 donor's
+  text as UTF-8; a patch over a Windows-1252 override of a UTF-8 plugin's record stays Windows-1252; and, with the
+  master-name and record-origin arms gone, a file whose only tie to a UTF-8 plugin is mastering it or holding a record
+  it defines goes out in the code page when that can spell its text, so an `into=` patch mastering a UTF-8 plugin
+  keeps its own Windows-1252 text. A merge keeps the in-place shape
+  (own masters, the counter verbatim, no baseline) but none of its encoding: no file of its name was read.
 - Every lane that rewrites a file it read runs the round-trip check in `SubrecordInventory` before any op touches
   it, dry run included: apply, create, remove and forward in place; apply, create, forward, copy and remove on an
   existing patch (`into=`); and the in-place compact over its target and every referencer it would repoint, on the
@@ -69,7 +94,12 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   so the lane's own write meets it in its own words; one that fails to open mid-call refuses in its own sentence. The `into=` lanes stage through `WritePatch`,
   whose chain differs in the header masters, the FormID floor and the text encoding: the check embeds the encoding the
   file was read in, while `WritePatch` goes to UTF-8 when `NewFileIsUtf8` holds, so a non-ASCII string in a patch read
-  in the legacy encoding can come back at another length on the real write. That is a re-encode, not a loss; the check
+  in the legacy encoding can come back at another length on the real write. The legacy encoding is the code page
+  Mutagen gives the call's game language (`PluginTextEncoding.LegacyBundle`: Windows-1252 for English and Western
+  languages, 1250, 1251, 1253, 1254, 1256 and 932 for the others, and Windows-1252 for every language Mutagen gives no
+  code page, so a legacy file's bytes round-trip there and a new file needing more goes out UTF-8, as does an
+  ASCII-only file written in place), wherever the file lands, and the unspellable-value refusal names it (for a
+  language with no code page, it says the file's text is not UTF-8). That is a re-encode, not a loss; the check
   models the in-place encoding on purpose, since modelling the write's would refuse every such re-encode as a length
   change, and the `into=` renders claim nothing about the check. The file's bytes and those bytes are walked the same way (per FormKey through each side's
   own master list, a multiset of (signature, payload length), through Mutagen's record and subrecord framing
@@ -88,8 +118,10 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   parse, cannot be read, or the walk faults) the call is refused in the check's own sentence, never passed. A serialize
   fault on an in-place lane is reported as one the write would meet the same way; on an `into=` lane, whose write goes
   through another chain, it is reported as the check not running.
-  A localized target is not walked: the service lanes refuse it before consent and `WriteInPlace` and `WritePatch`
-  refuse it before staging, so no write the check could stop lands. The header is out of scope (unused masters are
+  A localized target is not walked: the service lanes refuse it before consent and `WriteInPlace`, `WriteMerged` and
+  `WritePatch` refuse it before staging, so no write the check could stop lands. Compaction never reaches that guard:
+  in place it is refused at the service, and the new-file lane clears LOCALIZED in `CompactBuild` and writes the
+  plugin de-localized. The header is out of scope (unused masters are
   dropped there on purpose). Merge, a compact into a new plugin and a fresh patch do not run it: their output is a new
   file whose content is the parse, which is the read half of #961, not a write that destroys the original. The check
   reads the target through the full parse while the in-place compact copies from the overlay, so on compact it
@@ -138,6 +170,24 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
 - A patch write is handed the whole load order to resolve and sort masters while Mutagen derives the lean list from
   the records' own links, and force-includes Skyrim.esm + Update.esm filtered to the ones that order carries; an
   in-place write force-includes nothing and declares only the target's own masters.
+- Every write lane retypes each `UntypedOwner` whose owner is a faction into a `FactionOwner` (`OwnerRanks.Settle`).
+  Plugins open with no link cache, so an owner in another plugin reads untyped and its rank word as a FormID; written,
+  remapped or walked as one, -1 is a link into a record that does not exist and the plugin it seems to point into
+  becomes a master (#1204). The rank is the word's low 24 bits sign-extended, exact for any rank within ±2^23. The
+  faction test is one lookup, `OwnerRanks.FactionIn(view)`: the order's winning record for the owner's key is a FACT,
+  wherever it lives, so an injected faction counts; the dry-run master preview uses the same lookup. It runs where a
+  lane takes its records: the renumber, merge and repoint lanes on their copies before the remap, so the merge
+  build's donor-dangling check sees a typed owner; closure copy on each record its source chain fetches, so the walk never
+  follows the word, and on the patch it extends; and at the serialize doors, `WritePatch` and `WriteInPlace`, before
+  their catch blocks, with the faction test the lane hands them, for the owners an opened file, an override or a field
+  copy brought in. The test is a required argument: the apply, remove, forward, record-create and closure-copy lanes
+  hand one; the renumber, merge and repoint lanes, settled before their remap, and plugin creation pass `null`; the
+  round-trip check serializes through `SerializeInPlace`, which settles nothing. An NPC owner and an owner
+  the order cannot name stay untyped. A load-order link cache on the open was measured instead and rejected: on ARR its
+  first owner lookup cost 13 s and 4 GB. The getter-side walks still see the word: records reads, the reverse-reference
+  index and `references=`, the compaction and merge referencer scans, the errors check, and two that refuse a write:
+  merge's donor pre-flight (`TryScanMergeDonor` and `MergeInjection.UnremappableLink`, before the build) and closure
+  copy's leak check on an attach target (`FindBoundLeak`, on the target's override before it is settled) (#1235).
 - Every write stages into a `.housecarl-tmp` sibling of the target and commits through `AtomicFile.Commit`, so the
   target only ever holds the old or the new complete file; the caller must release every handle it holds on the
   target first, and a failed stage leaves nothing behind.
@@ -280,6 +330,24 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   that RENAMES the set has anything to report.
 - Allocation into an id window refuses LOUD when the source overflows it and never truncates; for an ESL compaction
   that is the light-master ceiling, the usable window being 0x800–0xFFF INCLUSIVE, 2048 ids.
+- A compaction is the same plugin renumbered, so `CompactBuild` deep-copies the source's whole header onto the output
+  in both lanes (#1215): flags, the HEDR version as-is (an old 0.94 or 1.70 header stays at it), author (CNAM),
+  description (SNAM), overridden forms (ONAM, mapped by the renumber's `RemapLinks`), INTV and INCC. It then clears
+  LOCALIZED (the output carries its strings inline), sets LIGHT from `esl` and sets NextObjectID to the floor plus the
+  originating record count, moved or not; the write sets the masters and the record count. Merge does not do this: it names each donor
+  header it drops instead.
+- The plugin itself is renumbered and serialised whole, but everything downstream of the renumber gets only the
+  records it MOVES, the map entries whose id changes (#1205): the identify pass, the referencer repoint and the
+  report's count. The facegen and voice carries go by lane: in place they take the moved records only, since an
+  unmoved record keeps its id and so its file paths, and whatever wins them still applies; into a new file they take
+  every record the plugin defines, since the new mod folder starts empty and an unmoved NPC or voiced line would
+  otherwise lose its face or voice once the original mod is disabled. A new-file copy takes the face or voice winning
+  at compaction time, so a later change to the mod that won it no longer reaches the compacted plugin. A run where every originating record already sits at its compacted id
+  (a re-run, or a first compaction of an already-contiguous plugin) therefore finds no referencer to refuse or
+  rewrite, and in place carries nothing; it says that no id moved and, conditionally, that it does not repair an earlier
+  failed repoint, and does not call itself a clean compaction. A partial move repoints only a referencer of a moved
+  record. The referencer refusal says a link left on an old id may resolve to a different record of the plugin, not only dangle,
+  because the renumber starts at 0x800 where the plugin's records usually already sit.
 - A merge KEEPS an object id wherever it is in-window and unclaimed, donors claiming in load order, and allocates a
   fresh id only for a collision or an id below the write floor.
 - A record living only in a NESTED group has no flat top-level group, so the flat renumber refuses it by name rather
@@ -393,8 +461,39 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   unlistable) because "enumerated it and found nothing" and "could not enumerate it" are different
   facts, and collapsing them makes an absence claim nothing checked.
 
+- A target record a parse-excluded plugin overrides after its winner is refused by default-lane apply and by forward (default and in-place), per edit, with `IndexView.ExcludedTouchRefusal`'s sentence: the patch would be built without that plugin's version and could undo its change. In-place apply does not refuse. Contract in docs/architecture/load-order-resolver.md, Exclusion.
+
+- Mutagen writes a few non-nullable fields as 0-byte subrecords on a record it constructs (today MESG INAM, IDLE
+  ANAM, CPTH ANAM, PACK XNAM, FSTS DATA), where vanilla always carries data. houseCARL fills none of them, since
+  a default it chose would be hand-written coverage, and the gap is Mutagen's to fix; the create says so, one
+  sentence per subrecord on `CreatedRecord.EmptySubrecords`, hoisted once per kind above the budgeted rows
+  (`empty_subrecords` on the json wire). The write still happens.
+- Membership is generated, not listed: `EmptyOnCreateProbe` (generator) creates every record type bare through the
+  create door, writes it, and lists the 0-byte subrecords into `TypeSchema.EmptyOnCreate` with the fields that fill
+  each. Its one data table is the vanilla 0-byte markers (NPC_ DATA, QUST NEXT, the RACE markers, SCEN HNAM, from
+  Skyrim.esm); a 0-byte subrecord that is neither a marker nor filled by a field is a coverage anomaly. When Mutagen
+  fixes a field the probe stops listing it and the sentence goes with no code change.
+- The rule is per created record. A probed field that one of that record's own edits touches is the author's value and
+  silent, an explicit empty or a value of the wrong size included; a probed field no edit of that record touched is
+  reported, and in a batch the hoisted line stands while any record left it untouched. Records read from disk and
+  carried (forward, copy-as-new, merge, compact, in-place re-emit) keep their bytes and carry no sentence: only
+  `CreateRecords` says it.
+
 ## Pinned by
-- `InPlaceGuardContractTests`: the `in_place`⇔`target=` contract and the `into=` / `patch=` exclusion on the edit,
+- `NewFileTextEncodingTests` — under English a rename of a UTF-8 Japanese or accented plugin keeps its UTF-8 bytes,
+  and a merge of a UTF-8 and a Windows-1252 donor is UTF-8 throughout (Japanese plus 1252 written, not refused);
+  under Japanese a rename of a UTF-8 Japanese-only or accented plugin is UTF-8, not Shift-JIS or refused; a 1252
+  rename keeps its bytes in English and Japanese, and a Korean one is UTF-8; a merge that cannot write names the merge
+  with no exception type or `in_place=`; a compacted copy keeps its source's encoding; a clone, a patch over a UTF-8
+  override, a forward of it and a CopyFrom of a UTF-8 name are UTF-8; a patch over a 1252 override of a UTF-8 record
+  stays 1252; removing from a UTF-8 patch keeps it UTF-8; Japanese typed into a patch with no UTF-8 contributor is
+  Shift-JIS under Japanese; Japanese in place into an all-ASCII plugin under English refuses.
+- `EmptyOnCreateTests` — each of the five probed fields written at 0 bytes and named by a bare create (text and json);
+  a Message upsert-replace and a Message create editing an unrelated field still name INAM; an explicit empty and an
+  author value silent; a batch of one type says the line once, and a row cut keeps it (text and json); vanilla
+  markers, GLOB / GMST / interior cell / nested creates silent; forward, merge and compact carry a 4-byte INAM
+  unchanged; the probe reaches every record type with no anomaly and lists exactly the class with each member's fields.
+- `InPlaceGuardContractTests` — the `in_place`⇔`target=` contract and the `into=` / `patch=` exclusion on the edit,
   create and remove lanes, and a target that is not an active plugin refused; `ForwardFromPluginTests`'
   `TheInPlaceContractIsRefusedByNameOnTheForwardLane` for the forward lane's three halves.
 - `InPlaceGuardConsentTests`: the handshake refuses, then writes under `acknowledge=true`, does not re-prompt,
@@ -516,7 +615,12 @@ through, and the home of the `PatchEdit` / `CreateSpec` / `ForwardSpec` shapes t
   load-order winner and reported with winner and loser named, and the losing donor's un-relisted INFO grafted into the
   winning topic; `MergeServiceRenameTests` (arm HEADER) — the light, master and header-text notes keyed on what the
   donors carried; `MergeServiceDeclarerTests` (arm DECLARER) — a declarer-only dependent reaching the rendered report.
-- `CompactOverriderDetectTests`: an overrider is a warn that lets the compaction succeed
+- `CompactHeaderTests` — an ESM-flagged plugin with author, description, ONAM (a self entry mapped), INTV, INCC and
+  HEDR 1.70 keeps all of them and gets the compaction's own NextObjectID, in place and into a new plugin; a second
+  compaction moves nothing, neither refuses nor rewrites the referencer, and its report says so with no renumber count
+  or clean line; a partial move repoints only a referencer of a moved record; the referencer refusal no longer claims
+  the old ids cease to exist.
+- `CompactOverriderDetectTests` — an overrider is a warn that lets the compaction succeed
   while a referencer is refused and named, the contrast that holds the two apart.
 - `MasterDeclarerScanTests.ADeclarerOnlyDependentIsFoundAndNamed`, `AReferencerIsNotAlsoListedAsADeclarer`,
   `APluginThePassCouldNotReadIsNotCalledADeclarer`, `APluginDeclaringAMasterOutsideTheTransformSetIsNotADeclarer` and
@@ -580,7 +684,8 @@ The writes area is one class, `RecordWrites`, across `RecordWrites.cs`, `RecordC
   (`GenericGetOrAddAsOverride`, `NestedGetOrAddAsOverride`, `EnumerateFlatGroups`, `RemovalTypeFor`, `SeekTypeFor`),
   create (`CanCreateType`, `GenericAddNew`, `GenericUpsertNew`, `NestedAddNew`, `AddExteriorCell`, `AddInteriorCell`,
   `EnsureFormIdFloor`), the child-group carry (`CaptureChildGroup`, `RestoreChildGroup`, `ChildBearingProperties`),
-  the serialize (`WritePatch`, `WriteInPlace`, `CommitStagedPatch`, `RootNullArm`, `PluginIsLocalized`), path
+  the serialize (`WritePatch`, `WriteInPlace`, `WriteMerged`, `SerializeNew`, `SerializeInPlace`, `CommitStagedPatch`,
+  `RootNullArm`, `PluginIsLocalized`), path
   navigation and the verbs (`ApplyVerb`, `ApplyScalarVerb`, `ApplyListVerb`, `ApplyDictVerb`, `BuildStruct`,
   `StepIntoElement`, `SetFloi`, `CopyField`), the coercion family (`Coerce` / `CanCoerce` and the `Try*` rules), the
   refusal types (`ExpectedApplyRejectionException`, `MalformedTargetDataException`, `NullArmSerializeException`,

@@ -75,7 +75,8 @@ public static class CheckTools
              // ---- family: errors ---------------------------------------------------------------------------
              "Errors family — the data-layer counterpart of the Creation Kit's 'Check For Errors' and xEdit's error check. For each plugin " +
              "in scope it walks every record's links and reports: dangling references (a non-null link whose target " +
-             "no plugin in the active order defines); missing masters (a declared master absent from the active " +
+             "no plugin in the active order defines, or only a plugin excluded as unparseable does: such a link is labelled as into that " +
+             "plugin, json target_in_excluded); missing masters (a declared master absent from the active " +
              "order); parse failures (records that could not be read, and plugins excluded as unparseable). It does " +
              "not check navmesh or terrain integrity, flag a required field left null (a null link is a legal " +
              "optional), list unused masters, or link-check an owned item's ownership variable (a rank or global). " +
@@ -89,7 +90,7 @@ public static class CheckTools
              ".pex is not on disk reads unverifiable, never clean. " +
              // ---- family: dialogue -------------------------------------------------------------------------
              "Dialogue family — each seeded topic's graph as the game sees it: the topic is wired to a quest, the " +
-             "branch resolves, no INFO.LinkTo target or previous link (PNAM) is dangling (an empty PNAM is normal " +
+             "branch resolves and, where both quests are set and are QUSTs, names the topic's own quest, no INFO.LinkTo target or previous link (PNAM) is dangling (an empty PNAM is normal " +
              "and never flagged), each voiced line's .fuz is on disk, each result script is bound and compiled, " +
              "non-ASCII player-facing text (topic name, prompt, response) is flagged as likely mojibake, each line's " +
              "conditions are checked for some malformed shapes (a dangling form reference, a dead quest-alias " +

@@ -13,6 +13,10 @@ internal interface IAssetHost : ILoadOrderHost
 
     /// <summary>The installed game runtime version, or null.</summary>
     string? InstalledGameRuntime();
+
+    /// <summary>A walk's ordered record source universe (the from_source= pole list), off-order overlays appended to <paramref name="overlays"/> open.</summary>
+    SourceChain? BuildWalkSources(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, Mo2Roots roots,
+                                  IReadOnlyList<string> poles, List<IDisposable> overlays, out string? error);
 }
 
 /// <summary>The assets area: asset status, the SKSE layer, NIF, the SkyPatcher layer scan and replay, place.</summary>
@@ -37,17 +41,28 @@ internal sealed partial class AssetLayers
     /// source provides each, and which copy wins. ONE <see cref="AssetResolver.Capture"/> for the batch, so every
     /// path and the build-level caveats describe a single build; a bad path is a per-path error, never a batch
     /// failure. <paramref name="under"/> is the directory/glob SELECT (<see cref="AssetGlob"/>),
-    /// <paramref name="seeds"/> the FaceGen one, and <paramref name="wholeSelection"/> <see cref="AssetArtifact"/>'s never-a-window <c>to_file=</c> disposition.</summary>
+    /// <paramref name="seeds"/> the FaceGen one, <paramref name="wholeSelection"/> <see cref="AssetArtifact"/>'s never-a-window <c>to_file=</c> disposition,
+    /// and <paramref name="provider"/> the one provider whose files <paramref name="under"/> walks (all of them when no under=, asset_paths= or formids= is given) and every row is read against.</summary>
     public AssetStatusData AssetStatus(
         IReadOnlyList<string> relPaths,
         IReadOnlyList<string>? under,
         int limit,
         int offset,
         IReadOnlyList<FaceGenSeed>? seeds,
-        bool wholeSelection)
+        bool wholeSelection,
+        string? provider = null,
+        bool links = false)
     {
         var captured = _host.CaptureAssets();   // the view is pinned and handle-free, so the body runs outside the gate
         var view = captured.View; var warnings = captured.Warnings; var profileName = captured.ProfileName;
+        provider = provider?.Trim() is { Length: > 0 } named ? named : null;
+        // A provider the build does not have would walk nothing and read every row as not provided, so it is refused by name.
+        if (provider is not null && !view.HasProvider(provider))
+            return new AssetStatusData(Array.Empty<AssetPathResult>(), view.BsaFailures, view.RootFailures,
+                                       view.ReadIncomplete, warnings, profileName,
+                                       Refusal: $"error: provider '{provider}' is not in the active load order — name an " +
+                                                "enabled mod folder, 'overwrite', 'Data' or an active archive's filename, " +
+                                                "as a row's providers line spells it.");
         var notes = new List<string>();
         var selected = new List<Selection>(relPaths.Count);
         foreach (var p in relPaths) selected.Add(new Selection(p ?? "", null, null, null));   // explicit paths first, in the order given, never deduped
@@ -74,7 +89,20 @@ internal sealed partial class AssetLayers
         // The bound is on what this call RESOLVES: a window's walk runs to the end, while a whole-selection resolve stops the enumeration the moment it would cross it.
         bool wholeIsResolved = wholeSelection || limit <= 0;
         bool overBound = false;
-        foreach (var raw in under ?? Array.Empty<string>())
+        // A provider with no other selector walks everything it ships: '**', narrowed to that provider.
+        bool wholeProvider = provider is not null && under is not { Count: > 0 } && relPaths.Count == 0 && seeds is not { Count: > 0 };
+        string NoMatchNote(string sel)
+        {
+            if (wholeProvider) return $"provider '{provider}' provides no file in the active load order.";
+            var scope = provider is null ? "the active load order" : $"provider '{provider}'";
+            var lit = AssetGlob.LiteralPrefix(AssetResolver.ValidateRelPath(sel));
+            var hidden = !view.UsesSavedSnapshot && (lit.Length > 0 ? AssetResolver.NamesHiddenRoot(lit) : Mo2SkipRules.MatchesHiddenRootFile(AssetGlob.Matcher(sel)));
+            var why = hidden
+                ? $" — {Mo2SkipRules.HiddenRootSentence}; the same name below the root is a normal file."
+                : " — check the spelling, or nothing enabled provides that folder.";
+            return $"under '{sel}' matched no file in {scope}{why}" + AssetGlob.BareNameHint(view, sel, provider);
+        }
+        foreach (var raw in wholeProvider ? new[] { "**" } : under ?? Array.Empty<string>())
         {
             if (overBound) break;
             var sel = (raw ?? "").Trim();
@@ -83,14 +111,14 @@ internal sealed partial class AssetLayers
             {
                 // One past what is left of the budget: a selector that fills it has proved the selection is over. 0 = no cap.
                 int room = wholeIsResolved ? Math.Max(MaxAssetPaths - selected.Count, 0) + 1 : 0;
-                var matched = AssetGlob.Select(view, sel, out var namedOneFile, room, out var stopped);
+                var matched = AssetGlob.Select(view, sel, out var namedOneFile, room, out var stopped, provider);
                 overBound |= stopped;
                 // A selector that named a FILE is said out loud too, so the sweep's own count is explained.
                 if (namedOneFile)
                     notes.Add($"under '{sel}' names a file, not a directory — it was resolved as that one path.");
                 // A selector that matched nothing is said out loud: silent, a typo would read as a clean sweep.
                 else if (matched.Count == 0)
-                    notes.Add($"under '{sel}' matched no file in the active load order — check the spelling, or nothing enabled provides that folder.");
+                    notes.Add(NoMatchNote(sel));
                 foreach (var m in matched) if (seen.Add(m)) selected.Add(new Selection(m, null, null, null));
             }
             catch (ArgumentException ex) { notes.Add($"under '{sel}': {ex.Message}"); }
@@ -143,7 +171,14 @@ internal sealed partial class AssetLayers
                 var suggest = hit.Exists ? Array.Empty<string>()
                                          : AssetPathHint.VerifiedPrefixes(view, p, AssetPathHint.AssetRoots);
                 var pair = sel.PairPath is null ? null : Resolve(sel.PairPath);
-                results.Add(new AssetPathResult(p, hit, null, suggest, sel.FormId, sel.Slot, sel.PairPath, pair));
+                var row = new AssetPathResult(p, hit, null, suggest, sel.FormId, sel.Slot, sel.PairPath, pair)
+                          { Standing = ProviderStandings.Of(hit, provider) };
+                if (links && hit.Exists && p.EndsWith(".nif", StringComparison.OrdinalIgnoreCase))
+                {
+                    var (read, readErr) = ReadMeshLinks(view, view.ResolveForPlacement(p).Sources[0]);
+                    row = row with { Links = read, LinksError = readErr };
+                }
+                results.Add(row);
                 seenA = p; seenAHit = hit;
                 seenB = sel.PairPath; seenBHit = pair;
             }
@@ -153,7 +188,16 @@ internal sealed partial class AssetLayers
         return new AssetStatusData(results, view.BsaFailures, view.RootFailures, view.ReadIncomplete,
                                    warnings, profileName,
                                    notes, total, Math.Max(offset, 0),    // the offset ASKED for, so a past-the-end page can say so
-                                   Math.Max(limit, 0));                  // the limit ASKED for, so the next-page advice repeats it
+                                   Math.Max(limit, 0),                   // the limit ASKED for, so the next-page advice repeats it
+                                   Provider: provider);
+    }
+
+    /// <summary>The files one copy of a mesh names, each resolved against the load order; or why they could not be read.</summary>
+    internal static (IReadOnlyList<ResolvedNifLink>? Links, string? Error) ReadMeshLinks(AssetResolver.AssetView view, PlacementSource copy)
+    {
+        var (links, err) = MeshLinks(copy);
+        if (links is null) return (null, err);
+        return (links.Select(l => new ResolvedNifLink(l, l.DataPath is { } d ? view.Resolve(d) : null)).ToList(), null);
     }
 
     /// <summary>One entry of an <c>asset_status</c> selection: the path, and on a <c>formids=</c> row the NPC, the slot and the other half's path. <c>Error</c> answers as its own row.</summary>
@@ -527,7 +571,7 @@ internal sealed partial class AssetLayers
             view.BsaFailures, view.RootFailures, view.ReadIncomplete, warnings, profileName);
     }
 
-    /// <summary>An archive is OFFICIAL — its scripts' natives are the engine's own — when it loads from Skyrim.ini's base block or is owned by a base master (Mutagen's implicit list, never a name list).</summary>
+    /// <summary>An archive is OFFICIAL — its scripts' natives are the engine's own — when it loads from the game INI's base block or is owned by a base master (Mutagen's implicit list, never a name list).</summary>
     internal static bool IsOfficialArchive(ActiveArchive a, IReadOnlyList<ModKey> baseMasters) =>
         a.OwningPlugin.Equals(ArchiveDiscovery.IniArchiveOwner, StringComparison.OrdinalIgnoreCase)   // ignore-case like every other archive compare — this must not hinge on the marker's casing
         || (ModKey.TryFromNameAndExtension(a.OwningPlugin, out var mk) && baseMasters.Contains(mk));
@@ -692,7 +736,8 @@ internal sealed partial class AssetLayers
     /// then per path and outside it resolve through the VFS to the winning copy (or <paramref name="mod"/>'s), read the
     /// bytes in process — a loose file, or one BSA entry, no disk extraction — and hand them to
     /// <see cref="NifService.Inspect"/>. A per-path failure never aborts the batch; the build-level caveats ride it.</summary>
-    public NifInspectBatchData NifInspect(IReadOnlyList<string> relPaths, string? sourceProvider)
+    /// <param name="slotLinks">Resolve each texture slot's Data path too, which only the paths section reads.</param>
+    public NifInspectBatchData NifInspect(IReadOnlyList<string> relPaths, string? sourceProvider, bool slotLinks = false)
     {
         var captured = _host.CaptureAssets();   // build/refresh the asset resolver under the gate, once per batch
         var view = captured.View; var warnings = captured.Warnings; var profileName = captured.ProfileName;
@@ -710,14 +755,14 @@ internal sealed partial class AssetLayers
                 continue;
             }
             // Per-path isolation by construction: anything unexpected becomes that path's named error.
-            try { results.Add(NifInspectOne(view, rel, sourceProvider)); }
+            try { results.Add(NifInspectOne(view, rel, sourceProvider, slotLinks)); }
             catch (Exception ex) { results.Add(NifInspectData.Fail(rel, $"unexpected error inspecting this path — {ex.GetType().Name}: {ex.Message}")); }
         }
         return new NifInspectBatchData(results, view.BsaFailures, view.RootFailures, warnings, profileName);
     }
 
     /// <summary>One path's inspect against the already-captured view. Every failure is a named per-path outcome, never a throw.</summary>
-    static NifInspectData NifInspectOne(AssetResolver.AssetView view, string rel, string? sourceProvider)
+    static NifInspectData NifInspectOne(AssetResolver.AssetView view, string rel, string? sourceProvider, bool slotLinks = false)
     {
         if (rel.Length == 0)
             return NifInspectData.Fail("", "empty mesh path. Pass a Data-relative path, e.g. 'meshes\\actors\\character\\facegendata\\facegeom\\Skyrim.esm\\00000007.nif'.");
@@ -756,7 +801,24 @@ internal sealed partial class AssetLayers
 
         var outcome = NifService.Inspect(bytes);
         return new NifInspectData(rel, NifProviderFor(chosen), providers, place.Ambiguous,
-            false, outcome.Inspect, outcome.Error);
+            false, outcome.Inspect, outcome.Error, slotLinks && outcome.Inspect is not null ? SlotLinks(view, outcome.Inspect) : null);
+    }
+
+    /// <summary>Every texture slot string of a mesh through the one link-to-Data-path door, resolved against the load order whatever source the mesh was read from.</summary>
+    static Dictionary<string, NifSlotLink> SlotLinks(AssetResolver.AssetView view, NifInspect nif)
+    {
+        var links = new Dictionary<string, NifSlotLink>(StringComparer.OrdinalIgnoreCase);
+        foreach (var t in nif.Shapes.SelectMany(s => s.Textures))
+        {
+            if (links.ContainsKey(t.Path)) continue;
+            try
+            {
+                var data = AssetDataPath.For(t.Path, AssetLinkKind.Texture);
+                links[t.Path] = new NifSlotLink(view.Resolve(data), null);
+            }
+            catch (ArgumentException ex) { links[t.Path] = new NifSlotLink(null, ex.Message); }
+        }
+        return links;
     }
 
     /// <summary>The provider record for a CHOSEN source, carrying the off-order provenance only the copy actually read can have.</summary>

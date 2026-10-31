@@ -39,6 +39,7 @@ public sealed class AssetResolver : IDisposable
     readonly IReadOnlyList<string> _enabledMods;         // mod folder names, HIGHEST priority FIRST (Mo2Composition.EnabledMods order)
     readonly IReadOnlyList<ActiveArchive> _archives;     // active BSAs (path-deduped; winner decided by PluginRank)
     readonly IReadOnlyList<(string Name, string Dir)> _looseRoots;   // loose roots in PRECEDENCE order: overwrite > mods (priority) > Data
+    readonly Mo2SkipRules _skip;                         // which loose files MO2 keeps out of the Data view
 
     /// <summary>One build's whole output, swapped in as one reference write so a concurrent Resolve never sees a half-rebuilt cache.</summary>
     internal sealed class Snapshot
@@ -137,8 +138,9 @@ public sealed class AssetResolver : IDisposable
             : snap.RootFailures.Values.OrderBy(v => v, StringComparer.OrdinalIgnoreCase).ToList();
 
     AssetResolver(string overwriteDir, string modsDir, string dataDir,
-                  IReadOnlyList<string> enabledMods, IReadOnlyList<ActiveArchive> archives)
+                  IReadOnlyList<string> enabledMods, IReadOnlyList<ActiveArchive> archives, Mo2SkipRules skip)
     {
+        _skip = skip;
         _overwriteDir = overwriteDir ?? "";
         _modsDir = modsDir ?? "";
         _dataDir = dataDir ?? "";
@@ -177,13 +179,14 @@ public sealed class AssetResolver : IDisposable
 
     /// <summary>Build a resolver over the given roots, enabled-mod priority list and active archives, reading each archive's table once.</summary>
     public static AssetResolver Build(string overwriteDir, string modsDir, string dataDir,
-                                      IReadOnlyList<string> enabledModsByPriority, IReadOnlyList<ActiveArchive> activeArchives)
-        => new(overwriteDir, modsDir, dataDir, enabledModsByPriority, activeArchives);
+                                      IReadOnlyList<string> enabledModsByPriority, IReadOnlyList<ActiveArchive> activeArchives,
+                                      Mo2SkipRules? skip = null)
+        => new(overwriteDir, modsDir, dataDir, enabledModsByPriority, activeArchives, skip ?? Mo2SkipRules.Default);
 
     /// <summary>Consume Amethyst's recorded providers; staging discovery and winner selection remain with the producer.</summary>
     public static AssetResolver BuildSavedSnapshot(AmethystSavedSnapshot snapshot)
         => new(snapshot.OverwriteDir, snapshot.ModsDir, snapshot.VanillaDataDir,
-               snapshot.Composition.EnabledMods, snapshot.SavedArchives()) { _savedSnapshot = snapshot };
+               snapshot.Composition.EnabledMods, snapshot.SavedArchives(), Mo2SkipRules.Default) { _savedSnapshot = snapshot };
 
     Snapshot BuildTables()
     {
@@ -326,6 +329,7 @@ public sealed class AssetResolver : IDisposable
         var fname = BethesdaPath.FileName(opened);
         var st = snap.LooseCache.GetOrAdd(subtreeDir, d => WarmSubtree(d, snap, pass));
         var loose = new List<PlacementSource>();
+        if (_skip.Shows(opened))
         foreach (var (rootIndex, dir, files) in st.Present)           // Present is already in precedence order
             if (files.TryGetValue(fname, out var actualName))
                 loose.Add(new PlacementSource(_looseRoots[rootIndex].Name, AssetKind.Loose,
@@ -361,6 +365,14 @@ public sealed class AssetResolver : IDisposable
 
     public const string DataLayerName = "Data";
 
+    /// <summary>Where a layer is, as a sentence names it.</summary>
+    public static string LayerPlace(string layer) => layer switch
+    {
+        DataLayerName => "in your game's Data folder",
+        OverwriteLayerName => "in MO2's overwrite folder",
+        _ => $"in the mod folder '{layer}'",
+    };
+
     /// <summary>Is <paramref name="name"/> one of the two LAYER names — the half of the reserved set that needs no built resolver? Stated once, here.</summary>
     public static bool IsReservedLayerName(string name) =>
         string.Equals(OverwriteLayerName, name, StringComparison.OrdinalIgnoreCase)
@@ -391,7 +403,9 @@ public sealed class AssetResolver : IDisposable
     public OffOrderLookup TryResolveOffOrderProvider(string? providerName, string relPath)
     {
         if (_savedSnapshot is not null)
-            throw new InvalidOperationException("Off-order asset discovery is unavailable in Amethyst saved-snapshot mode; use an explicit file tool or refresh the selected profile in Amethyst");
+            return providerName is not null && IsReservedProviderName(providerName)
+                ? new(null, OffOrderReason.ReservedName)
+                : _savedSnapshot.ResolveNamedAsset(providerName, relPath);
         var look = OffOrderAssetSource.Resolve(_modsDir, IsReservedProviderName, providerName, relPath);
         return look.Source is { } s && s.Kind == AssetKind.Bsa && IsEnabledMod(s.ProviderName)
             ? look with { Source = s with { OwnerEnabled = true } }
@@ -420,7 +434,22 @@ public sealed class AssetResolver : IDisposable
     IReadOnlyCollection<string> EnumerateUnder(string prefix, Snapshot snap)
         => EnumerateUnder(prefix, snap, null, 0, out _);
 
-    IReadOnlyCollection<string> EnumerateUnder(string prefix, Snapshot snap, Func<string, bool>? keep, int max, out bool stopped)
+    /// <summary>Is <paramref name="name"/> a provider this build has: a loose root's name, an active archive's
+    /// filename, or the MO2 layer an active archive lives in — the names <see cref="AssetSourceSelection.NameMatches(string, string?, string)"/> accepts.</summary>
+    public bool HasProvider(string name)
+    {
+        if (_savedSnapshot?.HasActiveProvider(name) == true) return true;
+        if (RootIndex(name) >= 0) return true;
+        foreach (var a in _archives)
+            if (AssetSourceSelection.NameMatches(Path.GetFileName(a.Path), a.OwningMod, name)) return true;
+        return false;
+    }
+
+    internal bool HasSourceProvider(string name) => HasProvider(name) || (_savedSnapshot is { } saved
+        ? saved.HasSavedProvider(name) : Directory.Exists(Path.Combine(_modsDir, name)));
+
+    IReadOnlyCollection<string> EnumerateUnder(string prefix, Snapshot snap, Func<string, bool>? keep, int max, out bool stopped,
+                                               string? provider = null)
     {
         stopped = false;
         var pre = NormalizeQueryPath(prefix).TrimEnd('\\');      // drive-root / '..' rejected loud, backslash-normalized
@@ -429,18 +458,23 @@ public sealed class AssetResolver : IDisposable
         var found = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         bool Full() => max > 0 && found.Count >= max;
         void Take(string rel) { if (keep is null || keep(rel)) found.Add(rel); }
+        // A named provider walks its own root only (none when it names only archives); the winner is still decided later, against every root.
+        int only = provider is null ? -1 : RootIndex(provider);
 
         if (_savedSnapshot is { } saved)
             foreach (var entry in saved.AssetPaths)
-                if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))
+                if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase)
+                    && (provider is null || saved.ResolveAssets(entry).Any(s => AssetSourceSelection.NameMatches(s, provider))))
                 {
                     Take(entry);
                     if (Full()) { stopped = true; return found; }
                 }
 
         // loose: recurse each root's copy of the prefix dir (set-UNION across roots — the per-path winner is decided later).
-        foreach (var (rootName, rootDir) in _looseRoots)
+        for (int i = 0; i < _looseRoots.Count; i++)
         {
+            if (provider is not null && i != only) continue;
+            var (rootName, rootDir) = _looseRoots[i];
             if (_savedSnapshot is not null && rootDir != _dataDir) continue;
             var baseDir = pre.Length == 0 ? rootDir : BethesdaPath.Under(rootDir, pre);
             try
@@ -458,7 +492,8 @@ public sealed class AssetResolver : IDisposable
                 foreach (var f in Directory.EnumerateFiles(baseDir, "*", SearchOption.AllDirectories))
                 {
                     // Re-rooted on the NORMALIZED prefix, not sliced off rootDir, which would carry the caller's casing.
-                    Take(withSep + BethesdaPath.FromHostRelative(Path.GetRelativePath(baseDir, f)));
+                    var rel = withSep + BethesdaPath.FromHostRelative(Path.GetRelativePath(baseDir, f));
+                    if (_savedSnapshot is not null || _skip.Shows(rel)) Take(rel);
                     if (Full()) { stopped = true; return found; }
                 }
             }
@@ -472,7 +507,12 @@ public sealed class AssetResolver : IDisposable
         }
 
         // BSA: every table entry under the prefix (the cached tables ARE the authoritative archive listing, zero handle at rest).
-        foreach (var t in snap.Tables.Values)
+        foreach (var a in _archives)
+        {
+            // Managed archive membership and visibility come only from the native saved graph.
+            if (_savedSnapshot is not null && a.OwningMod != "Data") continue;
+            if (provider is not null && !AssetSourceSelection.NameMatches(Path.GetFileName(a.Path), a.OwningMod, provider)) continue;
+            if (!snap.Tables.TryGetValue(a.Path, out var t)) continue;
             foreach (var entry in t)
                 if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))
                 {
@@ -480,6 +520,7 @@ public sealed class AssetResolver : IDisposable
                     Take(withSep + entry.Substring(withSep.Length));
                     if (Full()) { stopped = true; return found; }
                 }
+        }
 
         return found;
     }
@@ -534,6 +575,16 @@ public sealed class AssetResolver : IDisposable
 
         public IReadOnlyCollection<string> EnumerateUnder(string prefix, Func<string, bool>? keep, int max, out bool stopped)
             => _r.EnumerateUnder(prefix, _s, keep, max, out stopped);
+
+        /// <summary>As above, over ONE provider's own files: its loose root, and the active archives it names or owns.</summary>
+        public IReadOnlyCollection<string> EnumerateUnder(string prefix, Func<string, bool>? keep, int max, out bool stopped, string? provider)
+            => _r.EnumerateUnder(prefix, _s, keep, max, out stopped, provider);
+
+        public bool HasProvider(string name) => _r.HasProvider(name);
+
+        public bool HasSourceProvider(string name) => _r.HasSourceProvider(name);
+
+        public bool UsesSavedSnapshot => _r._savedSnapshot is not null;
     }
 
     /// <summary>Re-read the inputs — the active archives and every directory the warmed loose subtrees put under
@@ -748,7 +799,7 @@ public sealed class AssetResolver : IDisposable
         var (name, dir) = _looseRoots[at];
         try
         {
-            if (Directory.Exists(dir)) return new DirectoryInfo(dir).EnumerateFiles().Select(f => f.Name).ToList();
+            if (Directory.Exists(dir)) return new DirectoryInfo(dir).EnumerateFiles().Select(f => f.Name).Where(n => _savedSnapshot is not null || _skip.Shows(n)).ToList();
             if (WalkProvesAbsent(dir, dir, Directory.Exists, FreshNames)) return Array.Empty<string>();
             RecordRootFailure(name, "", snap);
             return null;
@@ -874,6 +925,9 @@ public sealed class AssetResolver : IDisposable
                 throw new ArgumentException($"expected a Data-relative asset path, got a segment of only dots or spaces, which Windows opens as no name: '{relPath}'");
         return string.Join('\\', kept);
     }
+
+    /// <summary>Does this Data-relative path, as Windows opens it, name what MO2 hides at the root whatever the skip lists say?</summary>
+    public static bool NamesHiddenRoot(string relPath) => Mo2SkipRules.NamesHiddenRoot(AsWindowsOpens(ValidateRelPath(relPath)));
 
     /// <summary>A normalized path spelt segment by segment as Windows opens it, for the loose lookup.</summary>
     static string AsWindowsOpens(string rel)

@@ -11,14 +11,14 @@ static partial class RecordsTools
     internal static string RenderRecordsDelta(IReadOnlyList<RecordReads.DeltaRow> rows, int total, int differing, int identical,
                                      int noVerdict, int errors,
                                      string headerLine, OrderStamp? epoch, int maxChars, SpillState? spill, out bool truncated,
-                                     bool unreserved = false, int noField = 0)
+                                     bool unreserved = false, int noField = 0, int notCompared = 0)
     {
         truncated = false;
         int cap = Wire.Cap(maxChars);
         if (!unreserved)
         {
             var whole = RenderRecordsDelta(rows, total, differing, identical, noVerdict, errors, headerLine, epoch,
-                                           maxChars, spill, out _, unreserved: true, noField: noField);
+                                           maxChars, spill, out _, unreserved: true, noField: noField, notCompared: notCompared);
             if (whole.Length <= cap) return whole;
         }
         bool manifestOnly = spill?.ManifestOnly ?? false;
@@ -29,6 +29,7 @@ static partial class RecordsTools
         // Named only when there are any, since such a record is in neither of the two counts above.
         if (noVerdict - noField > 0) sb.Append(noVerdict - noField).Append(" with a field that could not be read, ");
         if (noField > 0) sb.Append(noField).Append(" with a path that names no field, ");
+        if (notCompared > 0) sb.Append(notCompared).Append(" with no path read on its type (nothing compared), ");
         sb.Append(errors).Append(" error(s)");
         if (epoch is not null) sb.Append(Wire.EpochInline(epoch));
         sb.Append('\n');
@@ -50,25 +51,28 @@ static partial class RecordsTools
             {
                 sb.Append("  error=").Append(row.Error).Append('\n');
                 if (row.StackAbove is { Count: > 0 })
-                    sb.Append("  stack above the subject (closer to winning, winner last): ").Append(string.Join(", ", row.StackAbove)).Append('\n');
+                    AppendStackAbove(sb, row);
                 if (Crossed(sb, mark, budget, Notice(rendered), ref truncated)) break;
                 rendered++;
                 continue;
             }
             var s = row.Subject!; var r = row.Reference!; var d = row.Diff!;
             sb.Append("  ").Append(s.RecordType ?? "?").Append("  ").Append(s.EditorId ?? "<no editorid>").Append('\n');
-            Wire.AppendSharedName(sb, "  ", row.SharedNote);
+            Wire.AppendNote(sb, "  ", row.SharedNote);
+            Wire.AppendNote(sb, "  ", row.ExcludedNote);
             sb.Append("  subject:   ").Append(s.Plugin).Append(" [").Append(s.Where).Append("]\n");
             sb.Append("  reference: ").Append(r.Plugin).Append(" [").Append(r.Where).Append("]\n");
             if (row.StackAbove is { Count: > 0 })
-                sb.Append("  stack above the subject (closer to winning, winner last): ").Append(string.Join(", ", row.StackAbove)).Append('\n');
+                AppendStackAbove(sb, row);
             if (row.Note is not null) sb.Append("  note: ").Append(row.Note).Append('\n');
             if (d.Deltas.Count == 0)
             {
-                if (!d.Complete)
+                if (d.NothingCompared)
+                    sb.Append("  nothing compared, NOT 'identical': ").Append(string.Join(", ", d.NotOnType!)).Append(".\n");
+                else if (!d.Complete)
                     sb.Append("  no differing fields in what was read, but the deep read was TRUNCATED at the cap — NOT a clean 'identical' (Q3). Narrow with ").Append(LeverNames.Records.Fields).Append(" to compare in full.\n");
-                else if (d.AgreedCount > 0)
-                    sb.Append("  identical across the fields read (").Append(d.AgreedCount).Append(" value leaf/leaves agree).\n");
+                else if (d.Agreement("value leaf/leaves") is { } agreed)
+                    sb.Append("  identical across the fields read (").Append(agreed).Append(").\n");
                 else
                     sb.Append("  identical across the fields read (no differing fields).\n");
             }
@@ -149,7 +153,7 @@ static partial class RecordsTools
         return true;
     }
 
-    /// <summary>The tree form's text render: per record the touching list in load order with the winner last, then each provider's delta against the reference, under the delta form's own wording rules and the same max_chars ceiling.</summary>
+    /// <summary>The tree form's text render: per record the touching list in load order with the winner marked, then each provider's delta against the reference, under the delta form's own wording rules and the same max_chars ceiling.</summary>
     /// <remarks>Internal so a test can drive a node shape no fixture produces — an incomplete comparison on a record only one in-order plugin touches.</remarks>
     internal static string RenderRecordsTree(IReadOnlyList<RecordReads.TreeRow> rows, int total, int contested, int errors,
                                     bool fieldsNarrow, string headerLine, OrderStamp? epoch, int maxChars,
@@ -194,11 +198,16 @@ static partial class RecordsTools
                 rendered++; continue;
             }
             sb.Append("  ").Append(row.Type ?? "?").Append("  ").Append(row.EditorId ?? "<no editorid>").Append('\n');
-            Wire.AppendSharedName(sb, "  ", row.SharedNote);
-            sb.Append("  ").Append(row.Touchers.Count).Append(" plugin(s) touch this record (load order, winner last):\n");
+            Wire.AppendNote(sb, "  ", row.SharedNote);
+            Wire.AppendNote(sb, "  ", row.ExcludedNote);
+            // A row with no known winner position reads winner last, and none of its touchers is called partial.
+            int winnerAt = row.WinnerAt < 0 ? row.Touchers.Count - 1 : row.WinnerAt;
+            sb.Append("  ").Append(row.Touchers.Count).Append(winnerAt == row.Touchers.Count - 1
+                ? " plugin(s) touch this record (load order, winner last):\n"
+                : " plugin(s) touch this record (load order; a partial form above the winner does not win):\n");
             for (int i = 0; i < row.Touchers.Count; i++)
                 sb.Append("    ").Append(i + 1).Append(". ").Append(row.Touchers[i])
-                  .Append(i == row.Touchers.Count - 1 ? "  (winner)" : "").Append('\n');
+                  .Append(i == winnerAt ? "  (winner)" : i > winnerAt ? "  (partial form, does not win)" : "").Append('\n');
             // The row ends at the block when the block was cut or ran the budget out, and a sole provider ends
             // there too, having nothing to diff against.
             bool ended = AppendChildDeclarers(sb, row, room, row.Nodes.Count > 1 ? nodesCut.Length : 0,
@@ -231,16 +240,17 @@ static partial class RecordsTools
                 sb.Append(diffHead);
                 foreach (var n in row.Nodes)
                 {
-                    if (n.IsReference) continue;
+                    if (n.Diff is not { } nd) continue;
                     // The incompleteness note goes on EVERY incomplete node, not only the one with no deltas.
-                    string body = n.Deltas.Count > 0
-                        ? string.Join("; ", n.Deltas) +
-                          (n.Complete ? "" : " — the comparison is INCOMPLETE: " + (n.Why.Length > 0 ? n.Why : FieldsDiff.IncompleteWhy(0, 0, false))) + "\n"
-                        : !n.Complete
+                    string body = nd.Deltas.Count > 0
+                        ? string.Join("; ", nd.Deltas) + (nd.Complete ? "" : " — the comparison is INCOMPLETE: " + nd.Why) + "\n"
+                        : nd.NothingCompared
+                            ? $"nothing compared, not 'identical': {string.Join(", ", nd.NotOnType!)}\n"
+                        : !nd.Complete
                             ? "no differing fields in what was read, but the comparison is INCOMPLETE — the deep read was TRUNCATED at the cap, so this is not a clean 'identical'.\n"
                             : fieldsNarrow
-                                ? $"identical to {row.ReferencePlugin} across the fields read ({n.AgreedCount} leaf/leaves agree)\n"
-                                : $"identical to {row.ReferencePlugin} (whole record; {n.AgreedCount} leaf/leaves agree)\n";
+                                ? $"identical to {row.ReferencePlugin} across the fields read ({Agreed(nd)})\n"
+                                : $"identical to {row.ReferencePlugin} (whole record; {Agreed(nd)})\n";
                     // Composed before it is priced, so the notice cannot land past the node that crossed.
                     string line = "    " + n.Plugin + (n.IsWinner ? " (winner)" : "") + ": " + body;
                     if (sb.Length + line.Length + nodesCut.Length > budget)
@@ -268,6 +278,16 @@ static partial class RecordsTools
         sb.Append(spillText);
         return RenderCap.Settle(sb.ToString().TrimEnd('\n'), cap);
     }
+
+    /// <summary>What an identical tree node agreed on, in words.</summary>
+    static string Agreed(FieldsDiff.Result d) => d.Agreement("leaf/leaves") ?? "no differing fields";
+
+    /// <summary>The delta's stack-above line; it names the winner when a partial form tops the stack.</summary>
+    static void AppendStackAbove(StringBuilder sb, RecordReads.DeltaRow row) =>
+        sb.Append(row.StackWinner is null
+                ? "  stack above the subject (closer to winning, winner last): "
+                : "  stack above the subject (load order; the winner is " + row.StackWinner + ", a partial form above it does not win): ")
+          .Append(string.Join(", ", row.StackAbove!)).Append('\n');
 
     /// <summary>The records text lane's cut notice, composed in one place, and returned rather than written so its room can be held back before the line it follows is laid.</summary>
     /// <param name="what">What was cut — the notice claims this and nothing else.</param>
@@ -545,7 +565,7 @@ static partial class RecordsTools
 
     /// <summary>The list-lane summary render: one identity-and-winner line per outcome or its per-item error, the batch shape of the scan lane's summary rows, with the spill marker in-band on both transports.</summary>
     static string RenderRecordsSummary(IReadOnlyList<ReadOutcome> outcomes, bool json, string headerLine,
-                                       List<KeyValuePair<string, string>> envelope, int maxChars, SpillState? spill,
+                                       List<EnvelopePair> envelope, int maxChars, SpillState? spill,
                                        (int RowsRead, long Millis) bodyCost, out bool truncated,
                                        LeverNames? levers = null, IReadOnlyList<string?>? matches = null)
     {
@@ -587,7 +607,11 @@ static partial class RecordsTools
             // The scan summary's multi-target references= un-merge, on the same row.
             if (matches is { } mt && i < mt.Count && mt[i] is { } hit) sb.Append("  matches=").Append(hit);
             sb.Append('\n');
-            if (o.Error is null) Wire.AppendSharedName(sb, "    ", SharedEditorIds.Note(o.Pin, o.FormKey, o.Record!.Type, o.SourcePlugin));
+            if (o.Error is null)
+            {
+                Wire.AppendNote(sb, "    ", SharedEditorIds.Note(o.Pin, o.FormKey, o.Record!.Type, o.SourcePlugin));
+                Wire.AppendNote(sb, "    ", Wire.ExcludedNote(o.Pin, o.FormKey));
+            }
             if (sb.Length > budget)
             {
                 sb.Length = mark;
@@ -608,7 +632,7 @@ static partial class RecordsTools
     /// <param name="rowLimit">the caller's limit= as the TABLE's row cap (0 = uncapped): a count table caps with
     /// limit= and does not page (#810), and the counts above it stay the whole tally.</param>
     static string RenderListAggregate(IReadOnlyList<ReadOutcome> outcomes, string groupBy, bool json, OrderStamp? epoch,
-                                      string headerLine, List<KeyValuePair<string, string>> envelope,
+                                      string headerLine, List<EnvelopePair> envelope,
                                       (int RowsRead, long Millis) bodyCost, int maxChars,
                                       IReadOnlyList<string>? requestedTypes = null, int rowLimit = 0)
     {
