@@ -1,1 +1,0 @@
-- **Point Linux downloads and upgrade instructions at 2.1.1.** The guide now includes host shutdown, the required install action, restart, version/connection checks and rollback limits.

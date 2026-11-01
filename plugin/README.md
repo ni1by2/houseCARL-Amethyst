@@ -6,7 +6,7 @@ The server uses .NET 10 and exposes 34 MCP tools over stdio. Record coverage is 
 
 ## Install or upgrade on Linux
 
-Use the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md). Download the archive, checksum and standalone installer from the same Linux preview release. Linux x64 and Python 3.12 or newer are required; the guide lists the operating-system libraries.
+Use the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md). Download the archive, checksum and standalone installer from [2.1.2 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.2). Linux x64 and Python 3.12 or newer are required; the guide lists the operating-system libraries.
 
 The Linux archive includes the .NET 10 and ASP.NET Core runtimes. You do not need to install a system .NET runtime or SDK to run it.
 

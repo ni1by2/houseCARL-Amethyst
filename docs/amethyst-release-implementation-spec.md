@@ -2,7 +2,7 @@
 
 ## Release status — 25 October 2026
 
-Use the [2.1.1 Linux preview installation guide](linux-install.md) and [verification record](testing/upstream-211-compat-2026-10-25.md) for the current download, supported schema-9/schema-10 contracts and completed checks. The headless API refactor is deferred. The planning snapshot and older release status below are historical; they do not describe remaining 2.1.1 work.
+Use the [2.1.2 Linux preview installation guide](linux-install.md) and [verification record](testing/upstream-212-integration-2026-10-31.md) for the current download, supported schema-9/schema-10 contracts and completed checks. The headless API refactor is deferred. The planning snapshot and older release status below are historical; they do not describe remaining 2.1.2 work.
 
 ## Earlier release status — 15 October 2026
 

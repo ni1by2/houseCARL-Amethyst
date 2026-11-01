@@ -1,10 +1,10 @@
 # Installation and updates
 
-The current release is [v2.1.1 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.1), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
+The current release is [v2.1.2 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.2), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
 
 ## Install a release
 
-1. Install the [runtime prerequisites](linux-install.md#runtime-requirements), including Python 3.12 or newer. The package includes its .NET runtime. Source builds require the .NET 10 SDK; running the downloaded archive does not require an SDK.
+1. Install the [runtime prerequisites](linux-install.md#runtime-requirements), including Python 3.12 or newer. The package includes .NET 10. Source builds require the .NET 10 SDK; running the downloaded archive does not require an SDK.
 2. Quit all MCP hosts running houseCARL. Download `housecarl-amethyst-linux-x64.tar.gz`, `housecarl-amethyst-linux-x64.tar.gz.sha256` and `install-linux.py` from the release page into the same directory.
 3. From that directory, verify the archive:
 

@@ -1,14 +1,14 @@
-# Install the Linux 2.1.1 preview
+# Install the Linux 2.1.2 preview
 
-Version [2.1.1 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.1), targeting Ubuntu 24.04 x64. Python 3.12 or newer is required. It supports the tested Amethyst native contracts API 13/schema 9, engine 1/rules 13, and API 13/schema 10, engine 1/rules 14. The latter is used by Amethyst 2.6.0-beta.7. Other contracts refuse until verified.
+Version [2.1.2 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.2), targeting Ubuntu 24.04 x64. Python 3.12 or newer is required. It supports the tested Amethyst native contracts API 13/schema 9, engine 1/rules 13, and API 13/schema 10, engine 1/rules 14. The schema-10 reader was pinned from Amethyst 2.6.0-beta.7; stable 2.6.0 was reviewed with the same supported contract. Other contracts refuse until verified.
 
-The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md) covers the compatibility fix, vanilla archive handling, package checks and read-only profile acceptance. Installation, isolated host registration and a disposable Proton CachyOS round trip were checked for [2.0.5](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md); those system workflows were not repeated for 2.1.1. The installer and pinned Papyrus utilities are unchanged.
+The [2.1.2 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/testing/upstream-212-integration-2026-10-31.md) covers the upstream engine integration, Asset Walk, .NET 10, independent review and package checks. The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md) covers the compatibility fix, vanilla archive handling, package checks and read-only profile acceptance. Installation, isolated host registration and a disposable Proton CachyOS round trip were checked for [2.0.5](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md); those system workflows were not repeated for 2.1.2. The installer and pinned Papyrus utilities are unchanged.
 
 Download these three assets from **the same release** into a new directory:
 
-- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.1/housecarl-amethyst-linux-x64.tar.gz)
-- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.1/housecarl-amethyst-linux-x64.tar.gz.sha256)
-- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.1/install-linux.py)
+- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.2/housecarl-amethyst-linux-x64.tar.gz)
+- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.2/housecarl-amethyst-linux-x64.tar.gz.sha256)
+- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.2/install-linux.py)
 
 ## Quick start
 
@@ -25,7 +25,7 @@ Use the checksum asset from the same release as the archive. The release notes a
 
 ## Runtime requirements
 
-The package includes .NET itself; it also needs the operating system's runtime libraries. On Ubuntu 24.04, install Python and those libraries with:
+The package includes the .NET 10 and ASP.NET Core runtimes; it also needs the operating system's runtime libraries. On Ubuntu 24.04, install Python and those libraries with:
 
 ```sh
 sudo apt-get install python3 ca-certificates libc6 libgcc-s1 libgssapi-krb5-2 libicu74 libssl3t64 libstdc++6 zlib1g
@@ -49,19 +49,19 @@ Use `python3 install-linux.py rollback` to switch back or `python3 install-linux
 
 To update from an earlier package, run the new release's installer with its archive using the same `install` command. The previous activation is retained for rollback. Installing a version that is already present refuses to overwrite it.
 
-### Update from 2.0.5 or 2.1.0
+### Update from an earlier Linux preview
 
-1. Download all three 2.1.1 assets listed above into a new directory. Open that directory in a separate terminal.
+1. Download all three 2.1.2 assets listed above into a new directory. Open that directory in a separate terminal.
 2. Quit every Claude Code, Codex or other MCP host using houseCARL. The installer refuses to switch versions while an installed server is running. If it names PIDs, close the owning host normally and retry.
-3. Run the Quick start checksum and `install` commands above. Continue only after the checksum reports `OK`. Successful installation reports `Installed 2.1.1`.
+3. Run the Quick start checksum and `install` commands above. Continue only after the checksum reports `OK`. Successful installation reports `Installed 2.1.2`.
 4. Confirm the active package:
 
    ```sh
    readlink -f ~/.local/opt/housecarl-amethyst/current
    ```
 
-   The result should end in `/versions/2.1.1`.
-5. Reopen your MCP host and ask the assistant to verify houseCARL's version and Amethyst connection. `housecarl_load_order_status` should report server 2.1.1 and your selected saved profile. The installer-managed registration is named `housecarl`; use that entry if an older development registration also exists.
+   The result should end in `/versions/2.1.2`.
+5. Reopen your MCP host and ask the assistant to verify houseCARL's version and Amethyst connection. `housecarl_load_order_status` should report server 2.1.2 and your selected saved profile. The installer-managed registration is named `housecarl`; use that entry if an older development registration also exists.
 
 Your selected connection and transaction state are retained outside the program directory. Updating the server does not refresh, enable, reorder or deploy Amethyst mods. If a read reports that the saved profile is stale, use Amethyst's **Refresh Modlist**, let it finish, and retry the read. Deployment is not a substitute for Refresh.
 
@@ -78,7 +78,7 @@ Then reopen the host. This restores the previous server package, not Amethyst's 
 
 If installation reports an unfinished transaction, preserve its journal and inspect that exact ID with `housecarl_staging_status` in the current compatible server. Use the supported recovery action for its recorded state before retrying installation. If no compatible server is available, stop and request recovery help. Do not delete journals or select a different state root to bypass the check. Older development test runs could leave journals referencing deleted temporary fixtures; establish their origin and preserve a backup before quarantining any such records.
 
-The unreleased development branch targets .NET 10 and adds Asset Walk. It has not replaced the 2.1.1 downloads above. Linux archives bundle their runtime; upgrading one does not require installing a system .NET runtime.
+Version 2.1.2 includes Asset Walk and bundles .NET 10. Upgrading the Linux archive does not require installing a system .NET runtime or SDK.
 
 ## Select an Amethyst connection
 
@@ -98,7 +98,7 @@ If you do not have a manifest, save a separate JSON file using the following str
 }
 ```
 
-Use Amethyst's existing configuration paths. `profileRoot` is the staging root containing `mods` and `profiles`, not an individual profile directory; it must match a nonempty `staging_path` in `paths.json`. Both JSON configuration files must reside directly inside `gameConfigDir`. Do not edit those manager files to fit the example. The server validates the selected saved filegraph and refuses incompatible or incomplete inputs. Automatic connection discovery is also available through the [source-only setup command](linux-development.md#create-a-connection-manifest-from-source), which requires the .NET 10 SDK (10.0.400 or newer).
+Use Amethyst's existing configuration paths. `profileRoot` is the staging root containing `mods` and `profiles`, not an individual profile directory; it must match a nonempty `staging_path` in `paths.json`. Both JSON configuration files must reside directly inside `gameConfigDir`. Do not edit those manager files to fit the example. The server validates the selected saved filegraph and refuses incompatible or incomplete inputs. Automatic connection discovery is also available through the [source-only setup command](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-development.md#create-a-connection-manifest-from-source), which requires the .NET 10 SDK (10.0.400 or newer).
 
 Saved-snapshot responses identify the profile and generation used and warn that changes since Amethyst's last Refresh may be missing. Writes stay in staging until you review, Refresh, enable and deploy them through Amethyst. A later deployment check verifies which file wins; a successful staging write alone does not establish game visibility.
 

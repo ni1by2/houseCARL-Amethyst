@@ -1,6 +1,6 @@
 # Asset dependency walks
 
-These features are on the development branch and are not in the published 2.1.1 preview.
+These features ship in the 2.1.2 Linux preview.
 
 Ask houseCARL to follow an item or NPC to the files it needs. A walk follows record links and named assets, then reads mesh links and compiled script parents. It can reach textures, physics configuration, FaceGen, dialogue audio and script fragments. Each result names the dependency that led to it and its provider, or explains why it could not resolve it.
 

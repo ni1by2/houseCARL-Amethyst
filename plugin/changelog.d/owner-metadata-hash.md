@@ -1,1 +1,0 @@
-- **Editing an existing houseCARL patch keeps one current hash in its metadata, preventing duplicate keys from blanking Amethyst's mod information.** Refresh Modlist after updating the server to reload the columns.
