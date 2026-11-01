@@ -1,128 +1,37 @@
-# houseCARL
+# houseCARL-Amethyst
 
-houseCARL is an MCP server that exposes a Skyrim Special Edition load order at the data layer. It reads a Mod Organizer 2 instance's profile and presents every plugin record, every Data-relative asset, the compiled Papyrus, the SKSE plugin layer and the SkyPatcher INI layer to an AI assistant as a set of tools. It is built on [Mutagen](https://github.com/Mutagen-Modding/Mutagen). The host is [Claude Code](https://claude.com/claude-code) or OpenAI Codex.
+houseCARL-Amethyst gives Claude Code or Codex data-layer access to an Amethyst-managed Skyrim Special Edition load order. It reads the manager's saved profile snapshot and filegraph. New patches go to staging for review and deployment through Amethyst; editing an existing plugin requires explicit consent.
 
-A write produces a new plugin in a new MO2 mod folder. Editing an existing plugin in place is an opt-in that names the file. MO2 does not need to be running. No plugin file handle is held between calls.
+The server uses .NET 10 and exposes 34 MCP tools over stdio. Record coverage is generated from Mutagen's model. The [repository README](https://github.com/ni1by2/houseCARL-Amethyst#readme) describes the tools, skills, record operations and Asset Walk.
 
-| | |
-|---|---|
-| Process | One C#/.NET 9 executable, MCP over stdio |
-| Substrate | Mutagen.Bethesda.Skyrim 0.54.4 |
-| Tools | 31 |
-| Skills | 7 |
-| Record coverage | 133 record types, 242 sub-structures, 497 polymorphic arms, 280 enums, generated at build time |
-| Licence | GPL-3.0-only |
+## Install or upgrade on Linux
 
-## Tools
+Use the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md). Download the archive, checksum and standalone installer from the same Linux preview release. Linux x64 and Python 3.12 or newer are required; the guide lists the operating-system libraries.
 
-All 31 tools carry the `housecarl_` prefix.
+The Linux archive includes the .NET 10 and ASP.NET Core runtimes. You do not need to install a system .NET runtime or SDK to run it.
 
-| Substrate | Tools |
-|---|---|
-| Records | `records` `check` `apply` `create` `remove` `forward` `copy` `write_seq` `create_plugin` `compact_plugin` `merge_plugins` |
-| Assets | `asset_status` `place` |
-| NIF | `nif_inspect` `nif_set` |
-| Papyrus | `compile_script` `decompile_script` |
-| BSA | `bsa_list` `bsa_extract` `bsa_repack` |
-| SkyPatcher | `skypatcher_layer` |
-| SKSE | `skse` |
-| Nexus | `nexus_search` `nexus_mod` `nexus_graphql` `nexus_check_updates` `nexus_identify` |
-| Session | `set_mo2_instance` `set_tool_path` `load_order_status` `update_status` |
+Quit every Claude Code, Codex or other MCP host running houseCARL, and keep a separate terminal open. From the download directory, run as your normal user:
 
-Each operation combines independent selection, projection, and write axes: select a set of records, project what to read, apply one of a fixed set of write verbs. There is no verb per job and no single/bulk tool pair. The axes, the predicate language, the write verbs and worked examples are in the [repository README](https://github.com/Avick3110/houseCARL#readme).
-
-## Skills
-
-Seven skills ship with the plugin: `/housecarl:<name>` in Claude Code, `$housecarl` in Codex. Each is a `SKILL.md` and a `references/` tree. Reference corpora are read by grep, never loaded whole.
-
-| Skill | Carries |
-|---|---|
-| `mutagen-reference` | The schema of every modelled record type: fields, types, cardinality, writability, enum values. Emitted by the same generator pass as the server's rulebook. |
-| `papyrus-reference` | Papyrus, SKSE and shipped SKSE-plugin API signatures (PapyrusUtil, JContainers, MCMHelper, po3, SkyUI), 7,345 entries, from [papyrus-index](https://github.com/BellCubeDev/papyrus-index). A function the corpus does not carry is reported as absent. |
-| `skypatcher-authoring` | SkyPatcher 6.4.1 INI grammar and the offline check of a draft INI through the overlay. |
-| `spid-authoring` | SPID 7.3.0 `_DISTR.ini` grammar. |
-| `kid-authoring` | KID 3.5.0 `_KID.ini` grammar. |
-| `open-animation-replacer` | OAR 3.0.0 `config.json` / `user.json` conditions, submod priorities, DAR `_conditions.txt` conversion. |
-| `skse-plugin-authoring` | Native SKSE plugin DLLs on CommonLibSSE-NG: lifecycle, event sinks, trampoline and Address Library hooks, native Papyrus functions, SE + AE + VR from one DLL. |
-
-Dialogue and facegen are not skills. Their tools carry the bookkeeping: `check findings=["facegen"]` reports the dark, grey and black-face NPC bug one row per NPC, and the dialogue order rules are in [docs/dialogue.md](https://github.com/Avick3110/houseCARL/blob/main/docs/dialogue.md).
-
-## Requirements
-
-- Windows, x64.
-- .NET Runtime 9.0 and ASP.NET Core Runtime 9.0, from the [.NET 9 download page](https://dotnet.microsoft.com/download/dotnet/9.0). Both are required, both x64, and the ASP.NET Core installer does not include the base runtime. Take the x64 builds: the download page offers arm64 by default on an ARM machine, and an arm64 runtime does not run the x64 server or the x64 setup utility. houseCARL ships framework-dependent (the server and the setup utility both) so setup needs the base runtime to start at all: if its window opens and closes with nothing in it, that is the missing runtime, so install it and run setup again. Running it from an open terminal instead shows the message, which the double-clicked window closes over. Once setup starts it checks the ASP.NET Core one and names it if that is what is missing.
-- [Mod Organizer 2](https://www.modorganizer.org/) with a profile. MO2 does not need to be running.
-- Claude Code v2.1.143 or newer (the terminal CLI, or the Claude desktop app's Code tab), or OpenAI Codex.
-
-## Install
-
-### From a release
-
-1. Download `houseCARL-<version>.zip` from the [latest release](https://github.com/Avick3110/houseCARL/releases).
-2. Extract it and run `houseCARL-Setup.exe`.
-3. Select the host: `[1] Claude Code`, `[2] Codex`, `[3] Both`, `[4] Uninstall`.
-   - Claude Code: skills to `~/.claude/skills/housecarl/`, server registered in `~/.claude.json`. The terminal CLI and the desktop app's Code tab both read these.
-   - Codex: server under `%LOCALAPPDATA%\houseCARL\server\`, skills flat under `~/.agents/skills/` with a `$housecarl` entry point, server registered as `[mcp_servers.housecarl]` in `~/.codex/config.toml`.
-4. Read the plan. Setup prints what it found on the machine and then every path it is about to write, and writes nothing until Enter; `q` quits.
-5. Restart the host. The closing block says what was written and what to do next.
-
-Flags, for an unattended run: `--claude` / `--codex` / `--both` pick the host, `--yes` skips the confirm at the plan, `--uninstall` removes instead of installing, `--skip-runtime-check` skips the .NET check. A run whose input is redirected has nobody to answer a question, so it stops and names the flag that answers it rather than assuming one.
-
-Updating: quit Claude Code and Codex first. Setup cannot replace a server a session is running; if one is, it stops and says so. Setup overwrites only the files in the package, so the saved MO2 instance and tool paths in `houseCARL.user.json` survive a re-run.
-
-### By hand
-
-The package is plain enough to install without the setup utility, which is the way out if the exe will not run on a machine. This produces the same layout setup produces.
-
-1. Extract the zip and move the whole `housecarl` folder to `~/.claude/skills/housecarl`, so that folder holds `.claude-plugin/`, `server/` and `skills/`. Claude Code loads the skills out of it.
-2. Register the server in `~/.claude.json`, under the top-level `mcpServers` object, leaving everything else in the file alone:
-
-   ```json
-   "housecarl": {
-     "type": "stdio",
-     "command": "<full path to server\\housecarl-mcp.exe from step 1>",
-     "args": []
-   }
-   ```
-
-   The path is the `.exe`, not the `.dll`, and its backslashes are doubled, as JSON requires.
-3. Restart the host.
-
-`~/.claude.json` is Claude Code's file — the terminal CLI and the desktop app's Code tab. The desktop app's plain chat is a separate surface with its own file, `%APPDATA%\Claude\claude_desktop_config.json`, which takes the same `mcpServers` entry; put houseCARL there as well if that is where you want it. Neither surface reads `~/.claude/claude_mcp_config.json`, so editing that file changes nothing and leaves the host spawning whatever server it had registered before.
-
-Uninstalling: `[4] Uninstall`, or `--uninstall` with a host flag. It removes the skill folders it recorded installing, the server, the rest of the files a houseCARL package ships, and the `housecarl` entry in `~/.claude.json` and `~/.codex/config.toml` — each config copied to a `.houseCARL.uninstall.bak` beside it first, and every other byte in it left as it was. Anything under those locations that houseCARL did not install stays where it is, and the run names it. `houseCARL.user.json` sits beside the server and goes with it; the patches houseCARL wrote live in the MO2 mods folder and are left alone.
-
-### From source
-
-Requires the .NET 9 SDK, Windows and PowerShell.
-
-```powershell
-git clone https://github.com/Avick3110/houseCARL.git
-cd houseCARL
-./scripts/build-plugin.ps1
+```sh
+sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
+  python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
-The script regenerates the rulebook, publishes the server framework-dependent with trimming off, bundles the skills, builds the setup utility, and packs `release/houseCARL-<version>.zip`. Install the output with `houseCARL-Setup.exe`, with `claude --plugin-dir ./dist/housecarl`, or through the bundled local marketplace descriptor. The `--plugin-dir` and marketplace routes read the plugin manifest: builds before v2.1.143 ignore the plugin's `displayName`, and loading a zipped plugin with `--plugin-dir ./x.zip` needs v2.1.128 or newer.
+The `install` action and `--archive` argument are required. Reopen the host afterward and verify the server version and Amethyst connection. Existing connection settings are retained. A first installation needs an explicit saved-snapshot selection through `housecarl_set_amethyst_connection`; see the guide. Installation does not enable, reorder or deploy mods.
 
-## Pointing it at a modlist
+The installer retains the previous owned package for `python3 install-linux.py rollback`. Pending transaction journals block version changes and must be recovered through the supported workflow; preserve them if you need recovery help.
 
-On first use, houseCARL asks for the MO2 instance folder, the one containing `ModOrganizer.ini`. On the `--plugin-dir` and marketplace routes the folder is a required plugin setting instead, so Claude Code shows a folder picker when the plugin is enabled and the server boots already pointed at it. Everything else follows from the folder: the mods folder, the active profile, and the load order. The instance can be changed at any time by asking.
+## Build from source
 
-```
-> point houseCARL at D:\Modding\ARR
+Source builds require the **.NET 10 SDK, 10.0.400 or newer**, Python 3.12+, and the Rust/C/C++ tools listed in the [Linux development guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-development.md). `global.json` controls SDK selection. Build both pinned Amethyst native readers before packaging.
 
-> which plugins override Hulda's NPC record, and what does each change
+The retained Windows framework-dependent build requires the x64 .NET 10 Runtime and ASP.NET Core 10 Runtime; its build also needs the .NET 10 SDK and PowerShell. It is not the supported Linux preview package, and Windows execution has not been validated by this fork.
 
-> drop iron sword damage to 12 in every mod that touches it, into a patch called IronRebalance
-```
+## Using the saved profile
 
-## Writing
+Responses identify the saved profile and generation and warn that changes since Amethyst's last Refresh may be missing. If the snapshot is stale, use **Refresh Modlist** in Amethyst and retry the read. Deployment does not replace Refresh.
 
-Three lanes, mutually exclusive. `patch=` is the default: a new mod folder `houseCARL - <name>` holding one plugin, with existing files untouched. `into=` extends an existing houseCARL patch, and touches that patch only. `in_place=` overwrites the named plugin, including one houseCARL did not author; it keeps no backup and has no undo, and the first in-place write to a given plugin returns a confirmation instead of writing. An in-place or `into=` write is refused, file untouched, if re-serializing the unedited plugin would drop a subrecord or change its length; the refusal names the record and the subrecords. Four measured losses that carry no information are allowed: an all-zero LTEX `INAM` below form version 43, a deleted REFR's `NAME`, an all-zero REFR `XRMR`, and a RACE `PHWT` written back as its own leading bytes with an all-zero tail cut.
-
-Every op is checked before any file is opened for writing: record type, field path, enum value, verb against cardinality, value range, writability, record identity, the target type of every FormLink. One failing op refuses the whole call. `dry_run=true` runs the full pipeline and stops before disk.
-
-Each write lands as its own MO2 mod folder. Refresh MO2, review the plugin, sort it, enable it. houseCARL does none of those.
+Review staged writes, then Refresh, enable and deploy through Amethyst. A later houseCARL deployment check verifies which file wins in the game. Staging success alone does not establish game visibility.
 
 ## Licence
 
@@ -142,4 +51,4 @@ You can run the program and make private changes without publishing your source.
 - Zzyxzz (SkyPatcher) and powerofthree (SPID, KID). Public documentation the distributor grammars were drawn from.
 - DrHeisen. The `open-animation-replacer` skill, and two earlier skills since retired.
 
-The grammar, the predicate language, coverage, the runtime layers and the internals are in the [repository README](https://github.com/Avick3110/houseCARL#readme).
+The grammar, the predicate language, coverage, the runtime layers and the internals are in the [repository README](https://github.com/ni1by2/houseCARL-Amethyst#readme).
