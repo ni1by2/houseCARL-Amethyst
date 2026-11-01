@@ -1,3 +1,11 @@
+RETAINED WINDOWS / MO2 SETUP NOTES
+The supported houseCARL-Amethyst Linux preview uses install-linux.py.
+See https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md
+Its archive bundles .NET 10; a system runtime or SDK is not required.
+Source builds require the .NET 10 SDK (10.0.400 or newer).
+Windows framework-dependent builds below need both x64 .NET 10 runtimes.
+Windows execution is not validated by this fork.
+
 ========================================================================
  houseCARL  v{{VERSION}}  --  START HERE
 ========================================================================
@@ -79,17 +87,17 @@ COMMAND-LINE FLAGS  (you don't need these to install)
 REQUIREMENTS
 ------------------------------------------------------------------------
   - Windows (x64).
-  - .NET 9 -- BOTH of these runtimes, x64, from the same download page:
-        1)  .NET Runtime 9.0            (x64)
-        2)  ASP.NET Core Runtime 9.0    (x64)
+  - .NET 10 -- BOTH of these runtimes, x64, from the same download page:
+        1)  .NET Runtime 10.0            (x64)
+        2)  ASP.NET Core Runtime 10.0    (x64)
     They are two separate installers, and the ASP.NET Core one does
     NOT include the base .NET Runtime -- install both. (The runtimes,
     not the SDK.)  Take the x64 builds: the page offers arm64 by
     default on an ARM machine, and an arm64 runtime runs neither the
     server nor setup.
-        https://dotnet.microsoft.com/download/dotnet/9.0
-        or:  winget install Microsoft.DotNet.Runtime.9
-             winget install Microsoft.DotNet.AspNetCore.9
+        https://dotnet.microsoft.com/download/dotnet/10.0
+        or:  winget install Microsoft.DotNet.Runtime.10
+             winget install Microsoft.DotNet.AspNetCore.10
     houseCARL-Setup.exe needs the base .NET Runtime itself, so if its
     window opens and closes at once with nothing in it, that runtime
     is what is missing -- install it from the page above and run setup

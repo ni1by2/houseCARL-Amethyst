@@ -98,7 +98,7 @@ If you do not have a manifest, save a separate JSON file using the following str
 }
 ```
 
-Use Amethyst's existing configuration paths. `profileRoot` is the staging root containing `mods` and `profiles`, not an individual profile directory; it must match a nonempty `staging_path` in `paths.json`. Both JSON configuration files must reside directly inside `gameConfigDir`. Do not edit those manager files to fit the example. The server validates the selected saved filegraph and refuses incompatible or incomplete inputs. Automatic connection discovery is also available through the [source-only setup command](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/linux-development.md#create-a-connection-manifest-from-source), which requires the .NET SDK.
+Use Amethyst's existing configuration paths. `profileRoot` is the staging root containing `mods` and `profiles`, not an individual profile directory; it must match a nonempty `staging_path` in `paths.json`. Both JSON configuration files must reside directly inside `gameConfigDir`. Do not edit those manager files to fit the example. The server validates the selected saved filegraph and refuses incompatible or incomplete inputs. Automatic connection discovery is also available through the [source-only setup command](linux-development.md#create-a-connection-manifest-from-source), which requires the .NET 10 SDK (10.0.400 or newer).
 
 Saved-snapshot responses identify the profile and generation used and warn that changes since Amethyst's last Refresh may be missing. Writes stay in staging until you review, Refresh, enable and deploy them through Amethyst. A later deployment check verifies which file wins; a successful staging write alone does not establish game visibility.
 

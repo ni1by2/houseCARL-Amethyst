@@ -3,7 +3,7 @@
 - **`architecture/`**: one short note per subsystem, saying what it is and the contracts that hold it together. Written when a subsystem is touched and something about it is not obvious from the code.
 - **`decisions/`**: short numbered records of architectural decisions, one per file: context, decision, consequences. A PR that changes the architecture adds one. A change of mind is a new record that names the one it replaces.
 
-Start with [README.md](../README.md), then [CLAUDE.md](../CLAUDE.md), then the note for the subsystem you are entering. Linux / Amethyst contributors can follow the [development and build guide](linux-development.md).
+Start with [README.md](../README.md), then [CLAUDE.md](../CLAUDE.md), then the note for the subsystem you are entering. Linux / Amethyst contributors need the .NET 10 SDK (10.0.400 or newer); follow the [development and build guide](linux-development.md). Downloaded Linux packages bundle their runtime.
 
 ## The pieces, and who calls whom
 
@@ -103,7 +103,7 @@ File architecture notes under the subsystem that owns their tools and entry poin
 |---|---|
 | [`architecture/check-family-tests.md`](architecture/check-family-tests.md) | The errors, scripts and dialogue families of `housecarl_check` are asserted from two driving lanes, and which lane a fact uses is a decision, not a convenience. |
 | [`architecture/test-project-fixtures.md`](architecture/test-project-fixtures.md) | Two pieces of test machinery, the Papyrus `.pex` world and the file-lock harness, plus the tests that prove each is what it claims to be. |
-| [Linux / Amethyst test retirement and resolution audit](testing/linux-amethyst-test-audit-2026-10-14/index.html) | Historical catalogue of 266 failures: three documented retirements and all 263 retained cases resolved. Includes the [removal ledger](testing/linux-amethyst-test-audit-2026-10-14/removed-tests.json) with archived methods and the [resolution ledger](testing/linux-amethyst-test-audit-2026-10-14/resolution.json) mapping every retained case to passing coverage. Five former compiler skips also now pass against real Caprica; the current full suite reports 7,136 passed, zero failures and one Windows-only skip. |
+| [Linux / Amethyst test retirement and resolution audit](testing/linux-amethyst-test-audit-2026-10-14/index.html) | Historical catalogue of 266 failures: three documented retirements and all 263 retained cases resolved. Includes the [removal ledger](testing/linux-amethyst-test-audit-2026-10-14/removed-tests.json) with archived methods and the [resolution ledger](testing/linux-amethyst-test-audit-2026-10-14/resolution.json) mapping every retained case to passing coverage. Five former compiler skips also now pass against real Caprica; that audit reported 7,136 passed, zero failures and one Windows-only skip. |
 
 ## Older notes outside `architecture/`
 

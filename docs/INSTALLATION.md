@@ -1,11 +1,11 @@
 # Installation and updates
 
-The current release is [v2.0.5 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.0.5), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
+The current release is [v2.1.1 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.1), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
 
 ## Install a release
 
-1. Install the [runtime prerequisites](linux-install.md#runtime-requirements), including Python 3.12 or newer. The package includes the .NET runtime; running it does not require the SDK or build tools.
-2. Download `housecarl-amethyst-linux-x64.tar.gz`, `housecarl-amethyst-linux-x64.tar.gz.sha256` and `install-linux.py` from the release page into the same directory.
+1. Install the [runtime prerequisites](linux-install.md#runtime-requirements), including Python 3.12 or newer. The package includes its .NET runtime. Source builds require the .NET 10 SDK; running the downloaded archive does not require an SDK.
+2. Quit all MCP hosts running houseCARL. Download `housecarl-amethyst-linux-x64.tar.gz`, `housecarl-amethyst-linux-x64.tar.gz.sha256` and `install-linux.py` from the release page into the same directory.
 3. From that directory, verify the archive:
 
    ```sh
@@ -26,4 +26,4 @@ The installer registers Claude Code and Codex. Restart your host and [select an 
 
 Use the [current installer instructions](linux-install.md#install-update-and-remove) for version activation, updates, rollback and uninstall. Configuration and transaction recovery state live outside the program directory. Pending or incompatible transaction journals block version changes.
 
-The former `housecarl-amethyst-install --codex`, `--claude` and `--connect-amethyst` commands belonged to an older build and do not apply to the downloadable 2.0.5 package. For source builds, use the [Linux development guide](linux-development.md).
+The former `housecarl-amethyst-install --codex`, `--claude` and `--connect-amethyst` commands belonged to an older build and do not apply to the downloadable Linux package. For source builds, use the [Linux development guide](linux-development.md).
