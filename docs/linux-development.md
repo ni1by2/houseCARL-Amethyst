@@ -68,11 +68,12 @@ This validates the payload hashes, extracts it to a temporary directory, and che
 
 ## Upgrade using a locally built 2.1.2 candidate
 
-After building and verifying the archive above, keep a separate terminal open and quit every MCP host running houseCARL. From the repository root, install the built candidate as your normal user:
+After building and verifying the archive above, keep a separate terminal open and quit every MCP host running houseCARL. From the repository root, enter the output directory and install the built candidate as your normal user:
 
 ```sh
-sha256sum -c dist/housecarl-amethyst-linux-x64.tar.gz.sha256 &&
-  python3 dist/install-linux.py install --archive dist/housecarl-amethyst-linux-x64.tar.gz
+cd dist
+sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
+  python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
 The source manifest assigns version 2.1.2, so the installer can preserve an installed 2.1.1 as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.1.2 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
