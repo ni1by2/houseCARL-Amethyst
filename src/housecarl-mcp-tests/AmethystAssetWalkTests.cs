@@ -4,6 +4,8 @@ using HousecarlCore;
 using HousecarlMcp;
 using Mutagen.Bethesda;
 using Mutagen.Bethesda.Skyrim;
+using Mutagen.Bethesda.Strings;
+using Mutagen.Bethesda.Strings.DI;
 using Xunit;
 
 namespace HousecarlMcpTests;
@@ -13,6 +15,11 @@ public sealed class AmethystAssetWalkTests
 {
     const string Mesh = "Meshes/Test/Armor.nif";
     const string Texture = "Textures/Test/Armor.dds";
+
+    sealed class TestEncoding(IMutagenEncoding encoding) : IMutagenEncodingProvider
+    {
+        public IMutagenEncoding GetEncoding(GameRelease release, Language language) => encoding;
+    }
 
     [Theory]
     [InlineData(9)]
@@ -181,6 +188,59 @@ public sealed class AmethystAssetWalkTests
         var (bytes, error) = AssetResolver.ReadPlacementSource(node.Copy);
         Assert.Null(error);
         Assert.NotEmpty(bytes!);
+        snapshot.CheckUnchanged();
+    }
+
+    [Theory]
+    [InlineData(9, true)]
+    [InlineData(10, true)]
+    [InlineData(9, false)]
+    [InlineData(10, false)]
+    public void LocalizedPluginWithOnlyItsUsedTableRemainsReadable(int schema, bool included)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: schema, voiceLine: true);
+        var path = Path.Combine(world.Library, "mods", "Beta", "Fixture.esp");
+        var generated = Path.Combine(world.Root, "localized");
+        Directory.CreateDirectory(generated);
+        var plugin = new SkyrimMod(Mutagen.Bethesda.Plugins.ModKey.FromFileName("Fixture.esp"), SkyrimRelease.SkyrimSE)
+            { UsingLocalization = true };
+        var weapon = plugin.Weapons.AddNew();
+        weapon.Name = new TranslatedString(Language.English, "Saved table weapon");
+        using (var writer = new StringsWriter(GameRelease.SkyrimSE, plugin.ModKey, Path.Combine(generated, "Strings"),
+                   new TestEncoding(new MutagenEncodingWrapper(System.Text.Encoding.UTF8)), new System.IO.Abstractions.FileSystem()))
+            plugin.BeginWrite.ToPath(Path.Combine(generated, "Fixture.esp"))
+                .WithLoadOrder(Array.Empty<ISkyrimModGetter>()).WithStringsWriter(writer).Write();
+        File.Copy(Path.Combine(generated, "Fixture.esp"), path, overwrite: true);
+        var stamp = LinuxFileIdentity.Of(path);
+        using (var db = world.Open())
+        using (var command = db.CreateCommand())
+        {
+            command.CommandText = "UPDATE raw_files SET size=$size,mtime_ns=$time WHERE mod_id=(SELECT mod_id FROM mods WHERE name_key='beta') AND source_display='Fixture.esp'";
+            command.Parameters.AddWithValue("$size", checked((long)stamp.Size));
+            command.Parameters.AddWithValue("$time", stamp.MtimeNs);
+            command.ExecuteNonQuery();
+        }
+        world.AddSavedFile("Beta", "Strings/Fixture_English.STRINGS",
+            File.ReadAllBytes(Path.Combine(generated, "Strings", "Fixture_English.STRINGS")), included: included);
+        using var call = GameLanguage.Begin();
+        using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
+        var snapshot = service.CaptureSavedSnapshot();
+        using var overlay = SkyrimMod.CreateFromBinaryOverlay(path, SkyrimRelease.SkyrimSE, PluginTextEncoding.ReadFor(path));
+        var name = ReadEngine.ReadLeaf(overlay.Weapons.Single(), ["Name"]);
+        if (included)
+        {
+            Assert.True(name.HasValue);
+            Assert.Equal("Saved table weapon", name.Token);
+        }
+        else
+        {
+            Assert.False(name.HasValue);
+            Assert.Equal(ReadEngine.UnresolvedStringNote, name.Note);
+        }
+        var folders = snapshot.StringFolders(path, Language.English);
+        Assert.Equal(included ? 1 : 0, Directory.GetFiles(folders.Strings).Length);
+        Assert.False(File.Exists(Path.Combine(folders.Strings, "Fixture_English.DLSTRINGS")));
+        Assert.False(File.Exists(Path.Combine(folders.Strings, "Fixture_English.ILSTRINGS")));
         snapshot.CheckUnchanged();
     }
 
