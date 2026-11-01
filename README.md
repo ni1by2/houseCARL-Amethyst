@@ -14,7 +14,7 @@ houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders manag
 - The operating-system runtime libraries listed in the [Linux installation guide](docs/linux-install.md). The package includes the .NET runtime, Amethyst's native filegraph component and native Papyrus utilities.
 - Claude Code or OpenAI Codex to host the MCP server.
 
-Version 2.1.1 bundles a separately pinned reader for each supported contract.
+Version 2.1.2 source retains a separately pinned reader for each supported contract.
 It also handles absent archive names in Skyrim's default INI without a blanket
 vanilla BSA coverage warning. Unreadable sources still report failures.
 The adapter continues to read Amethyst's saved snapshot; the headless API refactor is deferred.
@@ -290,4 +290,4 @@ You can run the program and make private changes without publishing your source.
 
 ## Asset dependency walks
 
-The development branch includes upstream 2.1.2 asset traversal adapted to Amethyst. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [Asset Walk guide](docs/asset-walk.md). These additions are unreleased; the downloadable 2.1.1 preview remains the current published package.
+The development branch includes upstream 2.1.2 asset traversal adapted to Amethyst. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [Asset Walk guide](docs/asset-walk.md). The source manifest identifies the new candidate as 2.1.2; it must not replace an installed or published 2.1.1 package under the old version. The downloadable 2.1.1 preview remains the current published package until 2.1.2 is released.

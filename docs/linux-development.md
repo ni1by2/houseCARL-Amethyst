@@ -1,10 +1,10 @@
 # Linux / Amethyst development
 
-The source build and CI target Ubuntu 24.04 x64. Version 2.1.1 supports API 13 with schema 9/rules 13 or schema 10/rules 14, both at engine revision 1. CI builds both native readers from pinned Amethyst sources. Both modules are required to assemble a package.
+The source build and CI target Ubuntu 24.04 x64. Version 2.1.2 source supports API 13 with schema 9/rules 13 or schema 10/rules 14, both at engine revision 1. CI builds both native readers from pinned Amethyst sources. Both modules are required to assemble a package.
 
 For the 2.1.1 Linux preview downloads, use the [installation guide](linux-install.md). The [release verification record](testing/upstream-211-compat-2026-10-25.md) lists the completed compatibility and package checks. The commands below build the same supported contracts from source.
 
-The development branch targets .NET 10 and includes the unreleased Asset Walk integration. Published 2.1.1 binaries still bundle .NET 9. Updating the source SDK does not replace an installed server.
+The 2.1.2 development candidate targets .NET 10 and includes Asset Walk. Published 2.1.1 binaries still bundle .NET 9. Updating the source SDK does not replace an installed server.
 
 ## Requirements
 
@@ -65,3 +65,16 @@ python3 scripts/probes/check_linux_package.py dist/housecarl-amethyst-linux-x64.
 ```
 
 This validates the payload hashes, extracts it to a temporary directory, and checks MCP initialization, package version and the published tool list. It uses temporary server configuration and does not register hosts or connect to Amethyst. Add `--installed-prefix /path/to/install` to check an existing installation's active version against the same archive. Installation itself also changes host registrations in the current user's home; custom `--prefix` and `--state-root` paths alone do not isolate those registrations. Use a disposable user or container for installation tests.
+
+## Upgrade using a locally built 2.1.2 candidate
+
+After building and verifying the archive above, keep a separate terminal open and quit every MCP host running houseCARL. From the repository root, install the built candidate as your normal user:
+
+```sh
+sha256sum -c dist/housecarl-amethyst-linux-x64.tar.gz.sha256 &&
+  python3 dist/install-linux.py install --archive dist/housecarl-amethyst-linux-x64.tar.gz
+```
+
+The source manifest assigns version 2.1.2, so the installer can preserve an installed 2.1.1 as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.1.2 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
+
+Configuration and transaction state remain outside the program directory. Installation does not refresh, enable or deploy mods. Use the [installation guide](linux-install.md#install-update-and-remove) for pending transactions and rollback.

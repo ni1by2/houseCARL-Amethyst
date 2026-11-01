@@ -24,7 +24,7 @@ Asset Walk normalizes Bethesda paths separately from host paths, reports travers
 
 ## Executed checks
 
-- Full Linux suite: **7,841 passed, zero failed, one existing Windows-only skip**; 7,842 total.
+- Full Linux suite after the review correction: **7,845 passed, zero failed, one existing Windows-only skip**; 7,846 total.
 - Python installer/package suite: **21 passed**.
 - Native fixture cases cover both schemas: record → mesh → texture traversal, disabled donors, excluded files, native visibility instead of MO2 suffix rules, provider filtering, root-folder providers, source changes, BSA members and MCP snapshot warnings. Additional cases cover INI encoding, exact string-table copies and a voice template loop.
 - A clean, untrimmed self-contained archive built successfully. A seeded stale server file was removed before publication.
@@ -38,6 +38,6 @@ Validation used disposable containers, synthetic profiles and private state. The
 
 Graphify and Code Review Graph were refreshed locally; the diff base was the published fork commit above. Graphify reported duplicate namespace IDs and a retained source outside its new scan. Important connections were checked against source and executed regressions. Graph edges and test-gap hints do not establish reflection coverage or independent review.
 
-A fresh agent reviewed the implementation against the published fork base, found an eager requirement for unused localization table kinds, and approved the focused correction after inspecting source and regression cases. The regression failed for schemas 9 and 10 before the correction; all four new cases passed afterward, including excluded referenced tables retaining the explicit unresolved-string note. The full suite and final CI are being rerun for that source change. [Remote CI passed](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/41226629939) for `beacd19c`. Merge, release versioning/publication, installation and read-only acceptance of the user's current live profile remain separate work. The Amethyst headless API refactor remains deferred.
+A fresh agent reviewed the implementation against the published fork base, found an eager requirement for unused localization table kinds, and approved the focused correction after inspecting source and regression cases. The regression failed for schemas 9 and 10 before the correction; all four new cases passed afterward, including excluded referenced tables retaining the explicit unresolved-string note. The full suite passed again after that source change; final CI is pending. [Remote CI passed](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/41226629939) for `beacd19c`. Merge, release versioning/publication, installation and read-only acceptance of the user's current live profile remain separate work. The Amethyst headless API refactor remains deferred.
 
-The private validation archive still carries the source manifest's 2.1.1 label. It is an internal candidate, not a replacement download for that published release. Assign the next release version before distribution.
+The earlier private validation archive carried the source manifest's 2.1.1 label and must not be distributed as a replacement for that published release. The source manifest is now 2.1.2; a new package build and MCP version probe are required before local upgrade or publication. Published download links remain on 2.1.1 until the new release exists.
