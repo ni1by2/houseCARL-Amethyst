@@ -1,2 +1,0 @@
-- **Trace asset dependencies from Amethyst’s saved profile.** Asset Walk reports providers, missing files and named donor inventory; source builds now require .NET 10. Check `housecarl_asset_status` and the Linux development guide.
-- **Read localized plugins that use only one string-table kind.** Missing referenced text keeps its explicit unresolved-string diagnostic, and excluded tables remain excluded.

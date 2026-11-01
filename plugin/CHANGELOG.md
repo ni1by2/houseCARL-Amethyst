@@ -2,10 +2,14 @@
 
 ## Unreleased
 
+## 2.1.2 — Linux preview (1 November 2026)
+
 - Integrated upstream houseCARL 2.1.2 engine fixes: partial-form winners, faction ownership ranks, excluded-plugin diagnostics, compaction headers, record agreement, header flags and UTF-8 preservation.
 - Added asset dependency walks, mesh links, filename searches and provider selection against Amethyst’s saved filegraph. File exclusions and routing remain native; explicit disabled donors use recorded inventory. Voice template loops report a refusal.
 - Moved source builds and self-contained Linux packaging to .NET 10. Runtime installation is still unnecessary for downloaded Linux packages.
 - Replaced duplicate owned-patch hashes when updating metadata, preventing malformed `meta.ini` files that can blank Amethyst’s version columns.
+- Retained readable localized plugins that use only one string-table kind; missing referenced text keeps an explicit unresolved-string diagnostic.
+- Updated downloads, runtime requirements and upgrade instructions for the 2.1.2 Linux preview.
 
 ## 2.1.1 — Linux preview (25 October 2026)
 

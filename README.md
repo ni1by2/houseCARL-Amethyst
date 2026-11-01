@@ -11,28 +11,28 @@ houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders manag
 ### Linux / Amethyst preview
 
 - Linux x64, Python 3.12 or newer, and Amethyst. Tested native contracts are API 13/schema 9, engine 1/rules 13 (stable 2.5.4), and API 13/schema 10, engine 1/rules 14 (2.6.0-beta.7). Other contracts require compatibility verification.
-- The operating-system runtime libraries listed in the [Linux installation guide](docs/linux-install.md). The package includes the .NET runtime, Amethyst's native filegraph component and native Papyrus utilities.
+- The operating-system runtime libraries listed in the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-install.md). The package includes the .NET runtime, Amethyst's native filegraph component and native Papyrus utilities.
 - Claude Code or OpenAI Codex to host the MCP server.
 
-Version 2.1.2 source retains a separately pinned reader for each supported contract.
+Version 2.1.2 bundles a separately pinned reader for each supported contract.
 It also handles absent archive names in Skyrim's default INI without a blanket
 vanilla BSA coverage warning. Unreadable sources still report failures.
 The adapter continues to read Amethyst's saved snapshot; the headless API refactor is deferred.
 
-Source builds additionally require the .NET 10 SDK (10.0.400 or newer) and Rust/C/C++ build tools. See the [Linux development and build guide](docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
+Source builds additionally require the .NET 10 SDK (10.0.400 or newer) and Rust/C/C++ build tools. See the [Linux development and build guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
 
 ## Install
 
-Download the archive, checksum and standalone installer from [v2.1.1 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.1). This is a prerelease. Follow the [Linux installation guide](docs/linux-install.md) to verify the download, install or update it, and select your Amethyst saved snapshot. The source now targets .NET 10; self-contained Linux packages bundle their runtime and do not require a system SDK or runtime installation.
+Download the archive, checksum and standalone installer from [v2.1.2 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.2). This is a prerelease. Follow the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-install.md) to verify the download, install or update it, and select your Amethyst saved snapshot. Version 2.1.2 targets .NET 10; self-contained Linux packages bundle their runtime and do not require a system SDK or runtime installation.
 
-Install the [runtime prerequisites](docs/linux-install.md#runtime-requirements) first. Quit Claude Code, Codex and any other host running houseCARL before installing or updating. From the directory containing all three downloads, run:
+Install the [runtime prerequisites](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-install.md#runtime-requirements) first. Quit Claude Code, Codex and any other host running houseCARL before installing or updating. From the directory containing all three downloads, run:
 
 ```sh
 sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
   python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
-Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required; running `python3 install-linux.py` alone exits with a missing-action error. Run the installer as your normal user. Reopen Claude Code or Codex afterward. Existing connection settings are retained; on a first installation, [select your Amethyst connection](docs/linux-install.md#select-an-amethyst-connection). Ask the assistant to verify houseCARL's version and Amethyst connection; the server should report 2.1.1. See the [upgrade steps](docs/linux-install.md#update-from-205-or-210) for shutdown, verification and rollback.
+Continue with installation only if the checksum reports `OK`. The `install` action and `--archive` argument are required; running `python3 install-linux.py` alone exits with a missing-action error. Run the installer as your normal user. Reopen Claude Code or Codex afterward. Existing connection settings are retained; on a first installation, [select your Amethyst connection](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-install.md#select-an-amethyst-connection). Ask the assistant to verify houseCARL's version and Amethyst connection; the server should report 2.1.2. See the [upgrade steps](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-install.md#update-from-an-earlier-linux-preview) for shutdown, verification and rollback.
 
 ## Usage
 
@@ -86,21 +86,21 @@ deployment unchanged. Output stays pending until Amethyst refreshes and deploys 
 verification records whether the expected file won. `update_status` reads cached Nexus metadata;
 explicit update checks use the installed file ID.
 
-The [Linux installation and current limits](docs/linux-install.md) page describes installation,
-upgrades and rollback. The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md)
+The [Linux installation and current limits](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-install.md) page describes installation,
+upgrades and rollback. The [2.1.2 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/testing/upstream-212-integration-2026-10-31.md) covers engine integration, Asset Walk, .NET 10 and package checks. The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md)
 records schema compatibility, archive coverage and read-only profile checks.
 Earlier engine integration is recorded for [2.1.0](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-210-integration-2026-10-20.md),
 and isolated installation and Proton acceptance for [2.0.5](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md).
 
-The source integrates upstream houseCARL 2.1.2 at `1bdd0a8d`, including engine
+Version 2.1.2 integrates upstream houseCARL 2.1.2 at `1bdd0a8d`, including engine
 correctness fixes and asset dependency walks adapted to Amethyst. Source builds
-require .NET 10; the older published 2.1.1 package uses the 2.1.0 engine.
+require .NET 10; the Linux archive bundles its runtime.
 Amethyst's staged transaction workflow remains in place.
 It bundles the schema-9 native reader from stable Amethyst 2.5.4 at `edde06e5` and
 the schema-10 reader from 2.6.0-beta.7 at `abeae84a`. Read-only acceptance passed
 against saved profiles from the tested stable release and beta.7. The Linux package bundles the .NET runtime and
 Amethyst's native component. **Python 3.12+ must be installed.** The native reader opens
-a private catalog copy and does not write manager files. The [snapshot contract](docs/architecture/amethyst-saved-snapshot.md)
+a private catalog copy and does not write manager files. The [snapshot contract](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/architecture/amethyst-saved-snapshot.md)
 covers configuration, checks, and limits. Amethyst must close normally before a managed write
 that needs its library lock. The server refuses that write while Amethyst is open. Papyrus and
 BSA tools use the selected native Steam/Proton environment where supported. An isolated
@@ -210,7 +210,7 @@ Four layers below the plugin plane affect what the game runs. houseCARL reads ea
 
 The SKSE and SkyPatcher tools report what a file declares. They do not observe the running game.
 
-Two precedence orders determine an NPC's face: the file view selects the baked files, and the load order selects the record. `check findings=["facegen"]` compares them. See [docs/facegen.md](docs/facegen.md) for causes and fixes.
+Two precedence orders determine an NPC's face: the file view selects the baked files, and the load order selects the record. `check findings=["facegen"]` compares them. See [docs/facegen.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/facegen.md) for causes and fixes.
 
 ## Writing
 
@@ -232,7 +232,7 @@ The in-place lane does not create a backup or provide an undo. On the first writ
 
 The write tools also create records with fresh FormIDs, including nested dialogue structures, and remove records or list entries. They can forward a named plugin's record as the winning override, restore a vanilla record, copy an NPC's appearance into a standalone record, create an empty plugin, ESL-compact a plugin while carrying its FormID-keyed FaceGen and voice files, and merge plugins while renumbering only collisions. Every write trims unused masters.
 
-Dialogue records have bookkeeping that a byte-valid insert does not satisfy: [docs/dialogue.md](docs/dialogue.md).
+Dialogue records have bookkeeping that a byte-valid insert does not satisfy: [docs/dialogue.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/dialogue.md).
 
 ## Skills
 
@@ -248,7 +248,7 @@ The plugin ships seven skills, invoked as `/housecarl:<name>` in Claude Code or 
 | `open-animation-replacer` | OAR 3.0.0 `config.json` / `user.json` conditions, submod priorities, DAR `_conditions.txt` conversion. |
 | `skse-plugin-authoring` | Native SKSE plugin DLLs on CommonLibSSE-NG: lifecycle, event sinks, trampoline and Address Library hooks, native Papyrus functions, SE + AE + VR from one DLL. |
 
-Dialogue and facegen tools handle their own bookkeeping. Their measured behavior is documented in [docs/dialogue.md](docs/dialogue.md) and [docs/facegen.md](docs/facegen.md), which the tool descriptions link to.
+Dialogue and facegen tools handle their own bookkeeping. Their measured behavior is documented in [docs/dialogue.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/dialogue.md) and [docs/facegen.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/facegen.md), which the tool descriptions link to.
 
 
 
@@ -266,9 +266,9 @@ Dialogue and facegen tools handle their own bookkeeping. Their measured behavior
 | `docs/` | Architecture notes and decision records |
 | `standards/` | Testing and naming |
 
-Use the Linux build and test commands in [docs/linux-development.md](docs/linux-development.md).
+Use the Linux build and test commands in [docs/linux-development.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/linux-development.md).
 
-Before changing the code, read [CLAUDE.md](CLAUDE.md) and the architecture note for the subsystem in `docs/architecture/`. Each decision has its own file in `docs/decisions/`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the contribution process.
+Before changing the code, read [CLAUDE.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/CLAUDE.md) and the architecture note for the subsystem in `docs/architecture/`. Each decision has its own file in `docs/decisions/`. See [CONTRIBUTING.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/CONTRIBUTING.md) for the contribution process.
 
 ## Licence
 
@@ -290,4 +290,4 @@ You can run the program and make private changes without publishing your source.
 
 ## Asset dependency walks
 
-The development branch includes upstream 2.1.2 asset traversal adapted to Amethyst. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [Asset Walk guide](docs/asset-walk.md). The source manifest identifies the new candidate as 2.1.2; it must not replace an installed or published 2.1.1 package under the old version. The downloadable 2.1.1 preview remains the current published package until 2.1.2 is released.
+Version 2.1.2 includes upstream asset traversal adapted to Amethyst. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [Asset Walk guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/asset-walk.md). The Linux preview package includes these additions.
