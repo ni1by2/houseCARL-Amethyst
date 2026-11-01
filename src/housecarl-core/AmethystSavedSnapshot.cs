@@ -799,8 +799,8 @@ public sealed class AmethystSavedSnapshot
                 var relative = "Strings/" + name;
                 var copy = donor is null ? resolver.ResolveForPlacement(relative).Sources.FirstOrDefault()
                     : ResolveNamedAsset(donor, relative).Source;
-                if (copy is null)
-                    throw new GameLanguageRefusedException($"Amethyst's saved view has no {name} for localized plugin {Path.GetFileName(pluginPath)}; refresh the profile or restore its language files");
+                // A localized plugin need not use every table kind; unresolved references retain the read engine's explicit diagnostic.
+                if (copy is null) continue;
                 var (bytes, error) = AssetResolver.ReadPlacementSource(copy);
                 if (bytes is null) throw new GameLanguageRefusedException($"Could not read saved string table {name}: {error}");
                 File.WriteAllBytes(Path.Combine(folder, name), bytes);
