@@ -1,6 +1,6 @@
 # Linux / Amethyst development
 
-The source build and CI target Ubuntu 24.04 x64. Version 2.1.2 supports API 13 with schema 9/rules 13 or schema 10/rules 14, both at engine revision 1. CI builds both native readers from pinned Amethyst sources. Both modules are required to assemble a package.
+The source build and CI target Ubuntu 24.04 x64. Version 2.1.2 supports API 13 with schema 9/rules 13 or schema 10/rules 14, both at engine revision 1. CI builds both native readers from pinned Amethyst sources. Current development additionally supports schema 10/rules 15 through a third pinned reader from Amethyst 2.6.2-beta.3. All three modules are required to assemble a development package. Published 2.1.2 downloads still support rules 13 and 14 only.
 
 For the 2.1.2 Linux preview downloads, use the [installation guide](linux-install.md). The [release verification record](testing/upstream-212-integration-2026-10-31.md) lists the completed integration and package checks. The commands below build the same supported contracts from source.
 
@@ -25,6 +25,9 @@ git -C ../Amethyst-Mod-Manager worktree add --detach ../Amethyst-Schema10 abeae8
 (cd ../Amethyst-Schema10 && native/amethyst_filegraph/build.sh)
 export AMETHYST_FILEGRAPH_EXTENSION="$(realpath ../Amethyst-Mod-Manager/src/amethyst_filegraph.abi3.so)"
 export AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10="$(realpath ../Amethyst-Schema10/src/amethyst_filegraph.abi3.so)"
+git -C ../Amethyst-Mod-Manager worktree add --detach ../Amethyst-Rules15 7de35eaf0c7191defa7aee33d61452ddf73f7da3
+(cd ../Amethyst-Rules15 && native/amethyst_filegraph/build.sh)
+export AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15="$(realpath ../Amethyst-Rules15/src/amethyst_filegraph.abi3.so)"
 ```
 
 ## Create a connection manifest from source
@@ -48,13 +51,13 @@ dotnet test src/housecarl-mcp-tests -c Release --no-build
 python3 -m unittest discover -s scripts/tests -v
 ```
 
-The C# suite uses both native extensions exported above. The schema-10 fixture comes from the real beta.7 producer with preserved casing enabled. Installer and package checks run in isolated temporary homes and leave the current host registration unchanged.
+The C# suite uses all three native extensions exported above. The schema-10 fixture comes from the real beta.7 producer with preserved casing enabled. Installer and package checks run in isolated temporary homes and leave the current host registration unchanged.
 
 The C# test executor sets `XDG_STATE_HOME` to a private temporary directory before running tests. Each default MCP server fixture also gets its own state directory; fixtures can explicitly select a different temporary root. This keeps unfinished synthetic transactions out of the developer's real state directory, where they would block package installation. Cleanup runs when the owning fixture is disposed or the test process exits normally.
 
 ## Assemble a Linux package candidate
 
-The release recipe targets Ubuntu 24.04 x64 and requires Python 3.12+, the native build tools above, and both Amethyst extensions built from the pinned sources. Run `scripts/build-linux-package.sh` from the repository root with both native-module variables exported above. Package installation, upgrade, rollback, uninstall and selected-Proton acceptance are separate release checks; passing the source CI does not claim those checks have run.
+The release recipe targets Ubuntu 24.04 x64 and requires Python 3.12+, the native build tools above, and all three Amethyst extensions built from the pinned sources. Run `scripts/build-linux-package.sh` from the repository root with all three native-module variables exported above. Package installation, upgrade, rollback, uninstall and selected-Proton acceptance are separate release checks; passing the source CI does not claim those checks have run.
 
 The current Arch-derived development build is useful for development and tests, but its glibc 2.44 native binaries cannot be used for the Ubuntu 24.04 package. Build the distributable native tools on Ubuntu 24.04 x64, where the glibc baseline is 2.39.
 

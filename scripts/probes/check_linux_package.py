@@ -35,20 +35,30 @@ def check(archive: Path, installed_prefix: Path | None = None) -> None:
         schemas = manifest.get("native_filegraph_schemas", [manifest["native_filegraph_schema"]])
         if schemas not in ([9], [9, 10]) or any(type(schema) is not int for schema in schemas):
             raise ValueError("unsupported packaged Amethyst native schema list")
-        for schema in schemas:
-            filename = "amethyst_filegraph.abi3.so" if schema == 9 else f"amethyst_filegraph_schema{schema}.abi3.so"
+        contracts = manifest.get("native_filegraph_contracts", [{"schema": s, "rules": 13 if s == 9 else 14} for s in schemas])
+        if contracts not in ([{"schema": 9, "rules": 13}], [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}],
+                             [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}]):
+            raise ValueError("unsupported packaged Amethyst native contracts")
+        for contract in contracts:
+            schema, rules = contract["schema"], contract["rules"]
+            filename = "amethyst_filegraph.abi3.so" if schema == 9 else ("amethyst_filegraph_schema10_rules15.abi3.so" if rules == 15 else "amethyst_filegraph_schema10.abi3.so")
+            native_root = root / f"native-{schema}-{rules}"
+            native_root.mkdir()
             native_check = subprocess.run([
                 sys.executable, "-I", "-c",
-                "import importlib.util, sys; "
+                "import importlib.util, sys, sqlite3; from pathlib import Path; "
                 "spec = importlib.util.spec_from_file_location('amethyst_filegraph', sys.argv[1]); "
                 "native = importlib.util.module_from_spec(spec); spec.loader.exec_module(native); "
                 "assert native.api_version() == int(sys.argv[2]), 'native filegraph API mismatch'; "
-                "assert native.schema_version() == int(sys.argv[3]), 'native filegraph schema mismatch'",
-                str(payload / "server" / filename),
-                str(manifest["native_filegraph_api"]), str(schema),
+                "assert native.schema_version() == int(sys.argv[3]), 'native filegraph schema mismatch'; "
+                "library = native.LibrarySession.open(Path(sys.argv[5])); "
+                "db = sqlite3.connect(str(Path(sys.argv[5]) / 'filegraph.sqlite3')); "
+                "revision = int.from_bytes(db.execute(\"SELECT value FROM meta WHERE key='rules_revision'\").fetchone()[0], 'little'); "
+                "assert revision == int(sys.argv[4]), 'native filegraph rules mismatch'",
+                str(payload / "server" / filename), str(manifest["native_filegraph_api"]), str(schema), str(rules), str(native_root),
             ], capture_output=True, text=True, timeout=30)
             if native_check.returncode:
-                raise RuntimeError(f"packaged Amethyst schema-{schema} module failed to load: {native_check.stderr}")
+                raise RuntimeError(f"packaged Amethyst schema-{schema}/rules-{rules} module failed to load: {native_check.stderr}")
         env = dict(os.environ, HOUSECARL_DATA_DIR=str(root / "user-data"))
         with tempfile.TemporaryFile(mode="w+t", encoding="utf-8") as errors:
             proc = subprocess.Popen(

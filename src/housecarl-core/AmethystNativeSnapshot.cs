@@ -9,6 +9,14 @@ namespace HousecarlCore;
 /// <summary>Ask Amethyst's native reader for winners using a private backup of the pinned SQLite transaction.</summary>
 internal static class AmethystNativeSnapshot
 {
+    internal static (string Variable, string Filename)? ReaderFor(int schema, ulong rules) => (schema, rules) switch
+    {
+        (9, 13) => ("AMETHYST_FILEGRAPH_EXTENSION", "amethyst_filegraph.abi3.so"),
+        (10, 14) => ("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10", "amethyst_filegraph_schema10.abi3.so"),
+        (10, 15) => ("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15", "amethyst_filegraph_schema10_rules15.abi3.so"),
+        _ => null,
+    };
+
     /// <summary>Read all native winner pages; producer initialization and cache writes affect only the disposable copy.</summary>
     /// <param name="database">Existing read-only catalog connection inside the capture transaction.</param>
     /// <param name="profile">Canonical identity stored in the captured profile intent.</param>
@@ -16,14 +24,15 @@ internal static class AmethystNativeSnapshot
     /// <param name="inventory">Expected catalog inventory generation.</param>
     /// <param name="schemaVersion">Select the matching pinned reader before it opens the private catalog.</param>
     /// <param name="accept">Validate and retain one native winner against the captured candidates.</param>
-    internal static bool Read(SqliteConnection database, string profile, long generation, ulong inventory, int schemaVersion, string deployMode,
+    internal static bool Read(SqliteConnection database, string profile, long generation, ulong inventory, int schemaVersion, ulong rulesRevision, string deployMode,
         Action<JsonElement> accept, bool? deploymentOverride = null)
     {
-        if (schemaVersion is not (9 or 10)) throw new InvalidOperationException("unsupported Amethyst native snapshot schema");
-        var extension = Environment.GetEnvironmentVariable(schemaVersion == 9 ? "AMETHYST_FILEGRAPH_EXTENSION" : "AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10")
-            ?? Path.Combine(AppContext.BaseDirectory, schemaVersion == 9 ? "amethyst_filegraph.abi3.so" : "amethyst_filegraph_schema10.abi3.so");
+        var reader = ReaderFor(schemaVersion, rulesRevision)
+            ?? throw new InvalidOperationException("unsupported Amethyst native snapshot schema/rules contract");
+        var extension = Environment.GetEnvironmentVariable(reader.Variable)
+            ?? Path.Combine(AppContext.BaseDirectory, reader.Filename);
         if (!Path.IsPathFullyQualified(extension) || !File.Exists(extension))
-            throw new InvalidOperationException($"Amethyst's schema-{schemaVersion} native filegraph component is missing; install the complete Linux preview package");
+            throw new InvalidOperationException($"Amethyst's schema-{schemaVersion}/rules-{rulesRevision} native filegraph component is missing; install the complete Linux preview package");
         var root = Path.Combine(Path.GetTempPath(), "hc-amethyst-capture-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(root);
         File.SetUnixFileMode(root, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
@@ -44,6 +53,12 @@ internal static class AmethystNativeSnapshot
             using var deadline = new CancellationTokenSource(TimeSpan.FromMinutes(2));
             try
             {
+                using var status = AmethystIntentPayload.Read(Frame(process.StandardOutput.BaseStream, deadline.Token));
+                var contract = status.RootElement;
+                if (contract.GetProperty("api_version").GetInt32() != 13 || contract.GetProperty("schema_version").GetInt32() != schemaVersion ||
+                    contract.GetProperty("engine_revision").GetUInt64() != 1 || contract.GetProperty("rules_revision").GetUInt64() != rulesRevision ||
+                    contract.GetProperty("inventory_generation").GetUInt64() != inventory || !contract.GetProperty("ready").GetBoolean())
+                    throw new InvalidOperationException("Amethyst's native reader disagrees with the captured schema/engine/rules contract");
                 using var header = JsonDocument.Parse(Frame(process.StandardOutput.BaseStream, deadline.Token));
                 var metadata = header.RootElement;
                 if (metadata.GetProperty("api").GetInt32() != 13 || metadata.GetProperty("schema").GetInt32() != schemaVersion ||

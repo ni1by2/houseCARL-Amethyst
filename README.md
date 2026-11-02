@@ -291,3 +291,9 @@ You can run the program and make private changes without publishing your source.
 ## Asset dependency walks
 
 Version 2.1.2 includes upstream asset traversal adapted to Amethyst. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [Asset Walk guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.2/docs/asset-walk.md). The Linux preview package includes these additions.
+
+## Development compatibility update
+
+Current source adds a separately pinned reader for Amethyst 2.6.2-beta.3’s schema-10/rules-15 filegraph, while keeping the existing schema-9/rules-13 and schema-10/rules-14 readers. Published 2.1.2 archives contain the earlier two readers. See the [current source build guide](docs/linux-development.md) before building this update.
+
+The update also imports upstream bulk-read fixes for unreadable groups, donor reuse, overlay warnings and bounded asset/template traversal. It retains Amethyst's saved provider authority, voice-loop refusal and staging protections. The headless API refactor remains deferred.

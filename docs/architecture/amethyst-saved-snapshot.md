@@ -6,8 +6,13 @@ The 2.1.1 Linux preview accepts two exact producer contracts: API 13/schema 9,
 engine 1/rules 13, and API 13/schema 10, engine 1/rules 14. Schema 9 uses the
 existing `edde06e5` native reader. Schema 10 uses Amethyst 2.6.0-beta.7 at
 `abeae84afce940c6819f80c1cd4e6e51db2e935d`, including preserved destination casing.
-The source schema selects the matching reader before it opens the private copy;
-there is no cross-schema fallback or migration of the live catalog. Unknown schema,
+Current development adds API 13/schema 10, engine 1/rules 15, using Amethyst
+2.6.2-beta.3 at `7de35eaf0c7191defa7aee33d61452ddf73f7da3`. This reader is
+separate from the rules-14 reader; published 2.1.2 packages do not contain it.
+The captured schema/rules pair selects the matching reader before it opens the private copy;
+there is no cross-contract fallback or migration of the live catalog. The native
+status handshake verifies API, schema, engine, rules, inventory and ready state
+before accepting the saved generation or winners. Unknown schema,
 engine or rules combinations refuse. Revalidation requires the same captured
 schema/rules pair even if a different supported pair appears during the call.
 

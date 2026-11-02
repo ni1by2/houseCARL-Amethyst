@@ -22,13 +22,15 @@ sealed class NativeFilegraphFactAttribute : FactAttribute
 public sealed class AmethystSavedSnapshotTests
 {
     [Theory]
-    [InlineData(false, 9)]
-    [InlineData(true, 9)]
-    [InlineData(false, 10)]
-    [InlineData(true, 10)]
-    public void AProfileRaceRollsBackTheNewStagedPluginAndMetadata(bool unrelatedFile, int schemaVersion)
+    [InlineData(false, 9, 13)]
+    [InlineData(true, 9, 13)]
+    [InlineData(false, 10, 14)]
+    [InlineData(true, 10, 14)]
+    [InlineData(false, 10, 15)]
+    [InlineData(true, 10, 15)]
+    public void AProfileRaceRollsBackTheNewStagedPluginAndMetadata(bool unrelatedFile, int schemaVersion, int rulesRevision)
     {
-        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion, rulesRevision: rulesRevision);
         var source = Path.Combine(world.Root, "mods", "Beta", "Fixture.esp");
         var original = File.ReadAllBytes(source);
         var formid = SkyrimMod.CreateFromBinary(source, SkyrimRelease.SkyrimSE).Weapons.First().FormKey.ToString();
@@ -40,7 +42,7 @@ public sealed class AmethystSavedSnapshotTests
         var coordinator = new AmethystTransactionCoordinator();
         var journal = Assert.Single(coordinator.Status().Where(s => s.State != "corrupt")
             .Select(s => coordinator.ReadJournal(s.Id)).Where(j => j.ManifestPath == world.Manifest));
-        Assert.Equal($"amethyst-schema{schemaVersion}-engine1-rules{(schemaVersion == 9 ? 13 : 14)}", journal.ProducerContract);
+        Assert.Equal($"amethyst-schema{schemaVersion}-engine1-rules{rulesRevision}", journal.ProducerContract);
         var ops = JsonSerializer.SerializeToElement(new[] { new { formid, field_path = "EditorID", value = "RacedPatch" } });
         var reply = ApplyTools.Apply(service, ops: ops, patch: "RacedPatch", format: "json");
         using var json = JsonDocument.Parse(reply);
@@ -69,11 +71,12 @@ public sealed class AmethystSavedSnapshotTests
     }
 
     [Theory]
-    [InlineData(9)]
-    [InlineData(10)]
-    public void SavedWinnersAndProvidersMatchTheActualProducer(int schemaVersion)
+    [InlineData(9, 13)]
+    [InlineData(10, 14)]
+    [InlineData(10, 15)]
+    public void SavedWinnersAndProvidersMatchTheActualProducer(int schemaVersion, int rulesRevision)
     {
-        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion);
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion, rulesRevision: rulesRevision);
         var before = SHA256.HashData(File.ReadAllBytes(world.Database));
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
         foreach (var expected in world.ExpectedWinners.EnumerateArray())
@@ -182,6 +185,7 @@ public sealed class AmethystSavedSnapshotTests
     [Theory]
     [InlineData("PRAGMA user_version=11")]
     [InlineData("UPDATE meta SET value=X'0D00000000000000' WHERE key='rules_revision'")]
+    [InlineData("UPDATE meta SET value=X'1000000000000000' WHERE key='rules_revision'")]
     [InlineData("UPDATE meta SET value=X'0200000000000000' WHERE key='engine_revision'")]
     public void Schema10RejectsUnknownOrMismatchedProducerContracts(string mutation)
     {
@@ -197,6 +201,49 @@ public sealed class AmethystSavedSnapshotTests
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
         world.Execute("PRAGMA user_version=9; UPDATE meta SET value=X'0D00000000000000' WHERE key='rules_revision'");
         Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Fact]
+    public void Rules15RootTopLevelUsesNativeDestinationsAndRetainsSourceIdentity()
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: 15);
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Equal("amethyst-schema10-engine1-rules15", snapshot.ProducerContract);
+        var source = Assert.Single(snapshot.ResolveAssets("meshes/top.nif"));
+        Assert.Equal("RootTop", source.ProviderName);
+        Assert.EndsWith("/RootTop/Wrapper/Data/Meshes/top.nif", source.LooseFilePath);
+        Assert.Equal("top-level-root", File.ReadAllText(source.LooseFilePath!));
+        snapshot.CheckUnchanged();
+        File.AppendAllText(source.LooseFilePath!, "changed");
+        Assert.Contains("changed", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Fact]
+    public void Rules15SnapshotCannotSwitchToRules14DuringACall()
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: 15);
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        world.Execute("UPDATE meta SET value=X'0E00000000000000' WHERE key='rules_revision'");
+        Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Fact]
+    public void AReaderForAnotherRulesRevisionCannotServeRules15()
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: 15);
+        using var server = new ServerFixture(new Dictionary<string, string>
+        {
+            ["HOUSECARL_DATA_DIR"] = Path.GetDirectoryName(world.Store.FilePath)!,
+            ["HouseCarl__ConnectionManifest"] = world.Manifest,
+            ["HouseCarl__FilegraphMode"] = "saved-snapshot",
+            ["HouseCarl__CorpusPath"] = TestCorpus.Path,
+            ["AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15"] = Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10")
+                ?? Path.Combine(AppContext.BaseDirectory, "amethyst_filegraph_schema10.abi3.so"),
+            ["XDG_STATE_HOME"] = Path.Combine(world.Root, "state"),
+        });
+        var result = server.Call(ToolNames.LoadOrderStatus, "{}");
+        Assert.Contains("rules", result.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("plugins resolved to real files", result.Text);
     }
 
     [Fact]

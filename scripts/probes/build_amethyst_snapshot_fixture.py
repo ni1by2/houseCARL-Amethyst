@@ -18,6 +18,7 @@ import tempfile
 
 PIN = "e98cf70fe63f6b4a64b39e780ee3ffe02e553c6e"
 SCHEMA10_PIN = "abeae84afce940c6819f80c1cd4e6e51db2e935d"
+RULES15_PIN = "7de35eaf0c7191defa7aee33d61452ddf73f7da3"
 
 
 class FixtureGame:
@@ -47,10 +48,12 @@ class FixtureGame:
         return self.root / "game" / "Data"
 
 
-def build(source, extension, output, schema=9):
+def build(source, extension, output, schema=9, rules=None):
     """Generate data and expectations independently of the C# implementation."""
     commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
-    assert commit == (SCHEMA10_PIN if schema == 10 else PIN), commit
+    rules = rules or (14 if schema == 10 else 13)
+    assert (schema, rules) in ((9, 13), (10, 14), (10, 15))
+    assert commit == (RULES15_PIN if rules == 15 else SCHEMA10_PIN if schema == 10 else PIN), commit
     assert not subprocess.check_output(["git", "-C", str(source), "diff", "HEAD", "--", "src", "native"], text=True)
     root = Path(tempfile.mkdtemp(prefix="hc-producer-fixture-"))
     os.environ["XDG_CONFIG_HOME"] = str(root / "config")
@@ -65,6 +68,9 @@ def build(source, extension, output, schema=9):
     (profile / "modlist.txt").write_text("+Beta\n+Alpha\n-Gamma\n")
     (profile / "loadorder.txt").write_text("Fixture.esp\nDormant.esp\n")
     (profile / "plugins.txt").write_text("*Fixture.esp\nDormant.esp\n")
+    if rules == 15:
+        (profile / "modlist.txt").write_text("+RootTop\n+Beta\n+Alpha\n-Gamma\n")
+        (profile / "profile_state.json").write_text(json.dumps({"mod_strip_prefixes": {"RootTop": ["Wrapper"]}}))
     # Minimal TES4 headers; the engine tests replace these with Mutagen-written plugins.
     header_body = b"HEDR" + struct.pack("<HfII", 12, 1.7, 0, 0x800)
     plugin = struct.pack("<4sIIIII", b"TES4", len(header_body), 0, 0, 0, 44) + header_body
@@ -81,6 +87,9 @@ def build(source, extension, output, schema=9):
     if schema == 10:
         files.update({"mods/Alpha/meshes/CaseVariant.nif": b"Alpha",
                       "mods/Beta/MESHES/casevariant.NIF": b"Beta"})
+    if rules == 15:
+        files.update({"mods/RootTop/meta.ini": b"[General]\nrootFolder=true\n",
+                      "mods/RootTop/Wrapper/Data/Meshes/top.nif": b"top-level-root"})
     repo = Path(__file__).resolve().parents[2]
     files["mods/Alpha/Fixture.bsa"] = (repo / "src/housecarl-mcp-tests/fixtures/skypatcher/IniFixture.bsa").read_bytes()
     for relative, data in files.items():
@@ -126,5 +135,6 @@ if __name__ == "__main__":
     parser.add_argument("--extension", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--schema", type=int, choices=(9, 10), default=9)
+    parser.add_argument("--rules", type=int, choices=(13, 14, 15))
     args = parser.parse_args()
-    build(args.source.resolve(), args.extension.resolve(), args.output.resolve(), args.schema)
+    build(args.source.resolve(), args.extension.resolve(), args.output.resolve(), args.schema, args.rules)

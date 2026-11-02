@@ -221,9 +221,8 @@ public sealed class AmethystSavedSnapshot
             SchemaVersion = Convert.ToInt32(Scalar(database, "PRAGMA user_version"));
             ProducerRulesRevision = MetaNumber(database, "rules_revision");
             if (MetaNumber(database, "engine_revision") != 1 ||
-                !((SchemaVersion == 9 && ProducerRulesRevision == RulesRevision) ||
-                  (SchemaVersion == 10 && ProducerRulesRevision == 14)))
-                throw new InvalidOperationException($"unsupported Amethyst filegraph schema or engine/rules revision; found schema {SchemaVersion}, rules {ProducerRulesRevision}; this build supports schema 9/rules 13 or schema 10/rules 14, engine 1");
+                AmethystNativeSnapshot.ReaderFor(SchemaVersion, ProducerRulesRevision) is null)
+                throw new InvalidOperationException($"unsupported Amethyst filegraph schema or engine/rules revision; found schema {SchemaVersion}, rules {ProducerRulesRevision}; this build supports schema 9/rules 13 or schema 10/rules 14 or 15, engine 1");
             if (!Meta(database, "ready").AsSpan().SequenceEqual(new byte[] { 1 }))
                 throw new InvalidOperationException("Amethyst filegraph catalog is not ready; refresh it in Amethyst");
             var inventory = MetaNumber(database, "inventory_generation");
@@ -604,7 +603,7 @@ public sealed class AmethystSavedSnapshot
         // Refuse an unexpected identity contract rather than emulate another game's suppression rules.
         if (_candidates.Values.Any(c => c.Identities.Count > 0))
             throw new InvalidOperationException("unsupported exclusive-identity candidates in a Skyrim saved filegraph");
-        _nativeDeploymentMatches = AmethystNativeSnapshot.Read(database, ProfileDir, Provenance.Generation, Provenance.InventoryGeneration, SchemaVersion, _deployMode, row =>
+        _nativeDeploymentMatches = AmethystNativeSnapshot.Read(database, ProfileDir, Provenance.Generation, Provenance.InventoryGeneration, SchemaVersion, ProducerRulesRevision, _deployMode, row =>
         {
             var ns = row.GetProperty("namespace").GetString() switch
             { "normal" => 0, "root" => 1, "archive" => 2, _ => throw new InvalidOperationException("unsupported Amethyst winner namespace") };
