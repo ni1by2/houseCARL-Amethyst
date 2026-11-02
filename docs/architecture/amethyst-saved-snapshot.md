@@ -75,10 +75,14 @@ It uses the same restoration path as Amethyst itself and streams every winner pa
 houseCARL does not implement the manager's winner algorithm. Native initialization,
 locking and cache writes affect only the copy, which is removed after the helper
 exits. No Python packages are required, and the .NET runtime remains bundled.
-Developer builds set `AMETHYST_FILEGRAPH_EXTENSION` to the schema-9 module and
-`AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10` to the schema-10 module. Packaged builds load
-`amethyst_filegraph.abi3.so` and `amethyst_filegraph_schema10.abi3.so` beside the
-server. The Python helper checks API and schema before opening the copy.
+Developer builds set `AMETHYST_FILEGRAPH_EXTENSION` to the schema-9/rules-13 module,
+`AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10` to the schema-10/rules-14 module, and
+`AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15` to the schema-10/rules-15 module.
+Packaged development builds load `amethyst_filegraph.abi3.so`,
+`amethyst_filegraph_schema10.abi3.so` and
+`amethyst_filegraph_schema10_rules15.abi3.so` beside the server. The Python helper
+checks API and schema before opening the copy; the returned status frame then
+verifies the complete contract before profile or winner frames are accepted.
 `AMETHYST_FILEGRAPH_PYTHON` optionally
 selects the Python interpreter; the default is `python3`.
 
@@ -220,4 +224,4 @@ placement fixture repair is separate from the staging transaction change.
 
 Asset walks, provider selectors and filename globs use native saved Data destinations. MO2 visibility rules never filter a managed Amethyst result. An explicit disabled donor is read through the selected saved variant, including its routed destination and exclusions. Unrecorded folders are refused until Refresh; source identity changes invalidate the call.
 
-The effective `SkyrimCustom.ini` and `Skyrim.ini` are read from the already captured profile/prefix inputs. Localized reads copy only the selected language’s winning tables into a private temporary directory, allowing table kinds to come from different mods or archives without discovering excluded files beside them. Missing or unreadable required tables refuse. Private copies are removed after the MCP request or service disposal. The native readers and headless API integration remain unchanged.
+The effective `SkyrimCustom.ini` and `Skyrim.ini` are read from the already captured profile/prefix inputs. Localized reads copy only the selected language’s winning tables into a private temporary directory, allowing table kinds to come from different mods or archives without discovering excluded files beside them. Missing or unreadable required tables refuse. Private copies are removed after the MCP request or service disposal. This asset and language work does not add headless API integration.
