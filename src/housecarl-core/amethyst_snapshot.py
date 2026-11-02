@@ -37,6 +37,7 @@ def read_snapshot(copy_root, profile_id, extension, deploy_mode, expected_schema
     if expected_schema not in NATIVE_SCHEMAS or native.api_version() != NATIVE_API or native.schema_version() != expected_schema:
         raise RuntimeError(f'unsupported Amethyst native component; this capture requires API 13 and schema {expected_schema}')
     library = native.LibrarySession.open(root)
+    frame(library.status())
     profile = library.open_profile(profile_id)
     snapshot = profile.snapshot()
     frame(json.dumps({'api': native.api_version(), 'schema': native.schema_version(),

@@ -21,6 +21,21 @@ public sealed class AmethystAssetWalkTests
         public IMutagenEncoding GetEncoding(GameRelease release, Language language) => encoding;
     }
 
+    [Fact]
+    public void Rules15WalkUsesNativeRootRoutingAndExcludesUnselectedFiles()
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: 15);
+        world.AddSavedFile("Beta", "Meshes/excluded15.nif", [1], included: false);
+        using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
+        var snapshot = service.CaptureSavedSnapshot();
+        using var context = AmethystSnapshotContext.Use(snapshot);
+        var walk = service.AssetWalk(["meshes/top.nif", "Meshes/excluded15.nif"], [], null, null);
+        Assert.Null(walk.Refusal);
+        Assert.Equal("RootTop", Assert.Single(walk.Nodes.Where(n => n.Standing == WalkStanding.Present)).Copy!.ProviderName);
+        Assert.Single(walk.Nodes.Where(n => n.Standing == WalkStanding.Absent));
+        snapshot.CheckUnchanged();
+    }
+
     [Theory]
     [InlineData(9)]
     [InlineData(10)]
