@@ -48,13 +48,41 @@ public sealed class ComparisonBatchReadTests : IClassFixture<OwnedChildFixture>
         finally { _w.Svc.ReadArea.AfterReadPinForGuard = null; }
     }
 
-    /// <summary>A post-state subject that holds its records still gathers the reference.</summary>
+    /// <summary>The overlay source in its post state reads the winners it replays through the door, each winner
+    /// plugin once for its rows, with no seek per row (#1282).</summary>
+    [Fact]
+    public void ThePostOverlaySourceReadsItsWinnersThroughTheDoor()
+    {
+        var view = _w.Svc.CaptureView();
+        var keys = new[] { _w.Weapon, _w.CellG };
+        int winners = keys.Select(k => view.ResolveWinner(k)!.Value.WinnerPlugin).Distinct().Count();
+        long passes = _w.Svc.Counters.CollectPasses, seeks = _w.Svc.Counters.BodySeeks;
+        var r = RecordsTools.Records(_w.Svc, formids: keys.Select(OwnedChildWorld.Fid).ToArray(), source: Je(Post),
+                                     project: new RecordsTools.RecordsProject { form = "fields", fields = new[] { "EditorID" } });
+        Assert.False(r.StartsWith("error:"), r);
+        Assert.Equal(0, _w.Svc.Counters.BodySeeks - seeks);
+        Assert.Equal(winners, _w.Svc.Counters.CollectPasses - passes);
+    }
+
+    /// <summary>Many post-state rows in a few winner groups walk each group once per pole, not once per row (#1282).</summary>
+    [Fact]
+    public void APostStateSubjectReadsItsWinnersAGroupAtATime()
+    {
+        var view = _w.Svc.CaptureView();
+        var keys = new[] { _w.CellA, _w.CellB, _w.CellC, _w.CellD, _w.CellE, _w.Weapon };
+        int groups = HousecarlCore.OrderedGather.Sort(view, keys, k => view.ResolveWinner(k)!.Value.WinnerPlugin, k => k).Count;
+        Assert.True(keys.Length > groups);
+        Assert.Equal(2 * groups, Walks(keys.Select(OwnedChildWorld.Fid).ToArray(), Post, "\"winner\""));
+    }
+
+    /// <summary>A post-state subject that holds its records reads the winners it replays through its gather, and still
+    /// gathers the reference: each winner plugin is walked once per pole.</summary>
     [Fact]
     public void APostStateSubjectThatHoldsItsRecordsGathersTheReference()
     {
         var view = _w.Svc.CaptureView();
         int winners = new[] { _w.Weapon, _w.CellG }.Select(k => view.ResolveWinner(k)!.Value.WinnerPlugin).Distinct().Count();
-        Assert.Equal(winners, Walks(new[] { OwnedChildWorld.Fid(_w.Weapon), OwnedChildWorld.Fid(_w.CellG) }, Post, "\"winner\"",
+        Assert.Equal(2 * winners, Walks(new[] { OwnedChildWorld.Fid(_w.Weapon), OwnedChildWorld.Fid(_w.CellG) }, Post, "\"winner\"",
                                     r => r.Contains(" 0 error(s)")));
     }
 

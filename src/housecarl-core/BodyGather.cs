@@ -10,7 +10,7 @@ public sealed class BodyGather
     /// <summary>What <see cref="Body"/> answers for a pair this gather does not hold.</summary>
     public enum Absent
     {
-        /// <summary>Fetch it one at a time — the answer and the exception are the one-at-a-time path's.</summary>
+        /// <summary>Answer as the one-at-a-time path: a faulted group's key raises its recorded fault with no seek; any other pair is fetched one at a time.</summary>
         Seek,
         /// <summary>Answer null and let the caller's own read raise whatever it raises.</summary>
         Null,
@@ -87,8 +87,8 @@ public sealed class BodyGather
             if (perGroup is null) return;
             perGroup(asked);
             _held[plugin].Clear();
-        }, faults, _ct);
-        // A faulted plugin keeps what it yielded and stays unwalked, so Body falls back per record as before.
+        }, faults, _ct, faulted: OnFaulted);
+        // A faulted plugin keeps what it yielded and stays unwalked; its faulted groups' keys answer as the per-record seek would.
         // A per-group gather dropped what it held, so its plugins stay unwalked too and a later Body seeks rather than answering null.
         foreach (var plugin in plugins)
             if (faults.TryGetValue(plugin, out var fault)) _faults[plugin] = fault;
@@ -103,7 +103,23 @@ public sealed class BodyGather
         if (_absent == Absent.Null) return null;
         // Gathered and still absent IS the answer: the walk saw the whole plugin, so a second one cannot find it.
         if (_walked.Contains(pluginName) && _declared.TryGetValue(pluginName, out var keys) && keys.Contains(fk)) return null;
+        if (_faultOf.TryGetValue(pluginName, out var faulted) && faulted.TryGetValue(fk, out var raised))
+            System.Runtime.ExceptionServices.ExceptionDispatchInfo.Capture(raised).Throw();
         return _view.GetRecord(_session, pluginName, fk);
+    }
+
+    // Each key a faulted group did not yield, with the fault a per-record seek raises for it, so the group is not walked again per key.
+    readonly Dictionary<string, Dictionary<FormKey, Exception>> _faultOf = new(StringComparer.OrdinalIgnoreCase);
+
+    void OnFaulted(string plugin, IReadOnlyCollection<FormKey> asked, PluginUnreadableException fault)
+    {
+        // A seek walks only its key's seek type, so a group joined from several (cells, worldspaces) leaves its keys to
+        // the seek; a plugin that will not open, or a group of one type, already raised what each seek would.
+        if (fault is PluginUnscannableException && asked.Select(fk => _view.GroupOf(plugin, fk).Seek).Distinct().Skip(1).Any()) return;
+        var raised = fault.InnerException ?? fault;
+        if (!_faultOf.TryGetValue(plugin, out var keys)) _faultOf[plugin] = keys = new Dictionary<FormKey, Exception>();
+        foreach (var fk in asked)
+            if (!_view.LacksCopy(plugin, fk)) keys.TryAdd(fk, raised);
     }
 
     public void CopyInto(IDictionary<FormKey, IMajorRecordGetter> sink)
@@ -125,8 +141,8 @@ public sealed class BodyGather
 
     /// <summary>One plugin's walk, guarded: every declared key into <paramref name="sink"/> in one enumeration,
     /// answering the fault that stopped it or null. Out-of-memory and cancellation are rethrown — neither is this
-    /// plugin's fault. Public for the tree fold alone, which settles its wanted set at walk time.</summary>
-    public static PluginUnreadableException? WalkOnce(
+    /// plugin's fault.</summary>
+    internal static PluginUnreadableException? WalkOnce(
         LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, string plugin,
         IReadOnlyCollection<FormKey> keys, IDictionary<FormKey, IMajorRecordGetter> sink)
     {

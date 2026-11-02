@@ -6,15 +6,16 @@ namespace HousecarlMcp;
 /// <summary>
 /// One comparison pole's bodies for a WINDOW of delta rows or a chunk of tree rows, gathered a group at a time (#765).
 ///
-/// <para>A <c>project.form='delta'</c> row reads one body per pole, and each read went through
-/// <see cref="LoadOrderResolver.IndexView.GetRecord"/> — a walk of that plugin from the top for one record. On a
+/// <para>A <c>project.form='delta'</c> row reads one body per pole, and each read was a single-key seek — a walk of
+/// that plugin from the top for one record. On a
 /// real order the poles of row after row land in the same handful of large masters, so a hundred rows paid two
 /// hundred whole-plugin walks for bodies a few could have answered.</para>
 ///
 /// <para>Which plugin a pole reads a row from is an INDEX fact — the winner, the named arm, the provider below the
 /// subject — so it is known before any body is, and the window's whole declaration can be made up front and
-/// gathered through <see cref="BodyGather"/>. An arm that reads no in-order body (an off-order file, the SkyPatcher
-/// post replay) leaves <see cref="PluginOf"/> null and its rows read exactly as they did.</para>
+/// gathered through <see cref="BodyGather"/>; the SkyPatcher post replay reads the winners it replays this way too.
+/// An arm that reads no in-order body (an off-order file) leaves <see cref="PluginOf"/> null and its rows read exactly
+/// as they did.</para>
 /// </summary>
 internal sealed class PoleGather
 {
@@ -28,6 +29,12 @@ internal sealed class PoleGather
 
     /// <summary>Whether this pole holds a version of the record, for an arm with no in-order plugin (the post replay, an off-order file); null leaves it to <see cref="PluginOf"/>.</summary>
     internal Func<FormKey, bool>? Holds;
+
+    /// <summary>Run on each row's key in row order once <see cref="Each"/> has read the window, for what the arm raises in row order.</summary>
+    internal Action<FormKey>? Settle;
+
+    /// <summary>Whether <see cref="Each"/> is reading, so rows run in door order rather than row order.</summary>
+    internal bool InEach { get; private set; }
 
     BodyGather? _gather;
 
@@ -57,9 +64,15 @@ internal sealed class PoleGather
         var rowsOf = new Dictionary<FormKey, List<int>>();
         var rest = Declare(g, rows, rowsOf);
         _gather = g;
-        try { g.Gather(asked => { foreach (var key in asked) rowsOf[key].ForEach(read); }); }
-        finally { _gather = null; }
-        rest.ForEach(read);
+        InEach = true;
+        try
+        {
+            try { g.Gather(asked => { foreach (var key in asked) rowsOf[key].ForEach(read); }); }
+            finally { _gather = null; }
+            rest.ForEach(read);
+        }
+        finally { InEach = false; }
+        if (Settle is { } settle) foreach (var r in rows) settle(r.Key);
     }
 
     /// <summary>Declare each row's body on <paramref name="g"/>, filing the row under its key in <paramref name="rowsOf"/>;
@@ -81,8 +94,7 @@ internal sealed class PoleGather
     /// call goes on doing other reads calls it, so the chunk's share is not held alongside them.</summary>
     internal void Release() => _gather = null;
 
-    /// <summary>This row's body. Null means the plugin does not hold the record — the same answer
-    /// <see cref="LoadOrderResolver.IndexView.GetRecord"/> gives, and the same one a plugin whose walk faulted
-    /// gives, because <see cref="BodyGather"/> falls back to that seek for it.</summary>
+    /// <summary>This row's body. Null means the plugin does not hold the record — the single-key seek's answer; a key a
+    /// faulted group did not yield raises that seek's fault, which <see cref="BodyGather"/> answers.</summary>
     internal IMajorRecordGetter? Body(string plugin, FormKey fk) => _gather!.Body(plugin, fk);
 }

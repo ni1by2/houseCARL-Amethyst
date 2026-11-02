@@ -222,7 +222,7 @@ internal sealed partial class RecordReads
                     if (w is null)
                         return new PoleReading(null, null, null, UnresolvedFormId(view, fk));
                     var body = gather is { Live: true } ? gather.Body(w.Value.WinnerPlugin, fk)
-                                                        : view.GetRecord(session, w.Value.WinnerPlugin, fk);
+                                                        : BodyGather.Winners(view, session, new[] { fk })(fk);
                     if (body is null)
                         return new PoleReading(null, null, null, $"the winner body of {FormIdToken.Of(fk)} could not be read from '{w.Value.WinnerPlugin}'.");
                     return new PoleReading(ReadEngine.ReadFields(body, fields, ConflictDiffDepth, parentOf: hop),
@@ -259,7 +259,7 @@ internal sealed partial class RecordReads
                         return new PoleReading(null, null, null,
                             $"no previous provider — '{subjectPlugin}' DEFINES {FormIdToken.Of(fk)} (bottom of the touching list); there is nothing beneath it to compare against.");
                     var refPlugin = touchers[idx - 1];
-                    var body = gather is { Live: true } ? gather.Body(refPlugin, fk) : view.GetRecord(session, refPlugin, fk);
+                    var body = gather is { Live: true } ? gather.Body(refPlugin, fk) : BodyGather.Copies(view, session, new[] { fk }, _ => refPlugin)(fk);
                     if (body is null)
                         return new PoleReading(null, null, null, $"the previous provider '{refPlugin}' of {FormIdToken.Of(fk)} could not be read.");
                     // Mid-stack subject: what sits above is surfaced as neutral fact, never advice.
@@ -291,7 +291,7 @@ internal sealed partial class RecordReads
                     return (fk, _) =>
                     {
                         var body = !view.Touches(fk, arm.Plugin) ? null
-                                 : gather is { Live: true } ? gather.Body(arm.Plugin, fk) : view.GetRecord(session, arm.Plugin, fk);
+                                 : gather is { Live: true } ? gather.Body(arm.Plugin, fk) : BodyGather.Copies(view, session, new[] { fk }, _ => arm.Plugin)(fk);
                         if (body is null)
                         {
                             // Name the actual touchers, never a silent absence.
@@ -358,7 +358,7 @@ internal sealed partial class RecordReads
                 var w = view.ResolveWinner(fk);
                 if (w is null) return new PoleReading(null, null, null, UnresolvedFormId(view, fk));
                 var body = gather is { Live: true } ? gather.Body(w.Value.WinnerPlugin, fk)
-                                                     : view.GetRecord(session, w.Value.WinnerPlugin, fk);
+                                                     : BodyGather.Winners(view, session, new[] { fk })(fk);
                 if (body is null) return new PoleReading(null, null, null, $"the winner body of {FormIdToken.Of(fk)} could not be read from '{w.Value.WinnerPlugin}'.");
                 return new PoleReading(ReadEngine.ReadFields(body, fields, ConflictDiffDepth, parentOf: hop),
                                        new DiffPole(w.Value.WinnerPlugin, "skypatcher overlay (pre) = winner", true,
@@ -373,6 +373,7 @@ internal sealed partial class RecordReads
         // Per-key memo: the scratch mod is shared across the reader's lifetime, so a repeated key's second replay
         // would re-apply every INI line onto the already-mutated copy.
         var postMemo = new Dictionary<FormKey, PoleReading>();
+        var pendingWarnings = new Dictionary<FormKey, IReadOnlyList<SkyPatcherFolderOutcome>>();
         string? setupError = null;
         void Setup()
         {
@@ -389,7 +390,14 @@ internal sealed partial class RecordReads
                 setupError = $"the SkyPatcher layer could not be discovered for the overlay pole: {ex.Message}";
             }
         }
-        if (gather is not null) { gather.Prime = Setup; gather.Holds = fk => view.ResolveWinner(fk) is not null && SetupHolds(); }
+        // The winner each row replays is read through the pole's gather, a group at a time.
+        if (gather is not null)
+        {
+            gather.Prime = Setup; gather.Holds = fk => view.ResolveWinner(fk) is not null && SetupHolds();
+            gather.PluginOf = (fk, _) => view.ResolveWinner(fk)?.WinnerPlugin;
+            // A delta replays in door order, so its warnings are raised in row order after the window is read.
+            gather.Settle = fk => { if (pendingWarnings.Remove(fk, out var folders)) CollectOverlayWarnings(folders, overlayWarnings); };
+        }
         bool SetupHolds() { Setup(); return setupError is null; }
         // A draft is folded up front rather than on the first record: whether it can be folded at all is a fact
         // about the whole call, so it refuses by name here.
@@ -406,8 +414,9 @@ internal sealed partial class RecordReads
             if (postMemo.TryGetValue(fk, out var memoized)) return memoized;
             Setup();
             if (setupError is not null) return new PoleReading(null, null, null, setupError);
-            var r = replay!.Replay(fk);
-            CollectOverlayWarnings(r.Folders, overlayWarnings);
+            var r = replay!.Replay(fk, gather is { Live: true } && view.ResolveWinner(fk) is { } w ? gather.Body(w.WinnerPlugin, fk) : null);
+            if (gather is { InEach: true }) pendingWarnings[fk] = r.Folders;
+            else CollectOverlayWarnings(r.Folders, overlayWarnings);
             if (r.Error is not null) return postMemo[fk] = new PoleReading(null, null, null, r.Error);
             // An unpatchable type is an answer, not a failure: the layer cannot touch it, so post IS pre.
             if (r.IsUnpatchable)
@@ -520,12 +529,16 @@ internal sealed partial class RecordReads
         var replayMemo = new Dictionary<FormKey, ReadOutcome>();
         LinkMemo? overlayLinkMemo = null;   // resolve_names cache, one per batch
         var outcomes = new List<ReadOutcome>(formids.Count);
-        foreach (var raw in formids)
+        var keys = formids.Select(raw => { try { return (Key: (FormKey?)view.ParseFormId(raw), Error: (string?)null); }
+                                           catch (Exception ex) { return (Key: null, Error: $"bad FormID '{raw}': {ex.Message}"); } }).ToList();
+        Func<FormKey, IMajorRecordGetter?> winners = _ => null;
+        for (int at = 0; at < keys.Count; at++)
         {
             ct.ThrowIfCancellationRequested();   // a client that aborted stops the replay inside one record
-            FormKey fk;
-            try { fk = view.ParseFormId(raw); }
-            catch (Exception ex) { outcomes.Add(ReadOutcome.Fail(default, $"bad FormID '{raw}': {ex.Message}")); continue; }
+            // Each chunk's winners are read at once through the door, before its rows replay.
+            if (at % BodyPrefetch.ChunkRows == 0)
+                winners = BodyGather.Winners(view, session, keys.Skip(at).Take(BodyPrefetch.ChunkRows).Where(k => k.Key is not null).Select(k => k.Key!.Value).ToList());
+            if (keys[at].Key is not { } fk) { outcomes.Add(ReadOutcome.Fail(default, keys[at].Error!)); continue; }
             if (replayMemo.TryGetValue(fk, out var memoized)) { outcomes.Add(memoized); continue; }
             var winner = view.ResolveWinner(fk);
             if (winner is null)
@@ -534,7 +547,7 @@ internal sealed partial class RecordReads
                 replayMemo[fk] = miss; outcomes.Add(miss);
                 continue;
             }
-            var r = replay.Replay(fk);
+            var r = replay.Replay(fk, winners(fk));
             CollectOverlayWarnings(r.Folders, overlayWarnings);
             if (r.Error is not null)
             {
