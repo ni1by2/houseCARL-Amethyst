@@ -1,1 +1,0 @@
-- **Read Amethyst 2.6.2-beta.3 saved profiles with rules revision 15.** Older supported contracts retain their matching readers; unknown revisions and mismatched native components still refuse.

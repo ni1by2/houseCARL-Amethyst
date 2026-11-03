@@ -1,1 +1,0 @@
-- **Read bulk records and asset template chains through shared batches.** Faulted groups retain their original errors, donor reads are reused, overlay warnings follow row order and traversal caps stop further reads.

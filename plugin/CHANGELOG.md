@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 2.1.3 — Linux preview (3 November 2026)
+
+- **Read bulk records and asset template chains through shared batches.** Faulted groups retain their original errors, donor reads are reused, overlay warnings follow row order and traversal caps stop further reads.
+- **Read Amethyst 2.6.2-beta.3 saved profiles with rules revision 15.** Older supported contracts retain their matching readers; unknown revisions and mismatched native components still refuse.
+- Updated download links and upgrade instructions for 2.1.3, including rollback limits for newer Amethyst snapshots. The Linux package continues to bundle .NET 10.
+
 ## 2.1.2 — Linux preview (1 November 2026)
 
 - Integrated upstream houseCARL 2.1.2 engine fixes: partial-form winners, faction ownership ranks, excluded-plugin diagnostics, compaction headers, record agreement, header flags and UTF-8 preservation.

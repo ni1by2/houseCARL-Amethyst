@@ -1,10 +1,10 @@
 # Linux / Amethyst development
 
-The source build and CI target Ubuntu 24.04 x64. Version 2.1.2 supports API 13 with schema 9/rules 13 or schema 10/rules 14, both at engine revision 1. CI builds both native readers from pinned Amethyst sources. Current development additionally supports schema 10/rules 15 through a third pinned reader from Amethyst 2.6.2-beta.3. All three modules are required to assemble a development package. Published 2.1.2 downloads still support rules 13 and 14 only.
+The source build and CI target Ubuntu 24.04 x64. Version 2.1.3 supports API 13 with schema 9/rules 13, schema 10/rules 14, and schema 10/rules 15, all at engine revision 1. CI builds all three separately pinned native readers. All three modules are required to assemble the package.
 
-For the 2.1.2 Linux preview downloads, use the [installation guide](linux-install.md). The [release verification record](testing/upstream-212-integration-2026-10-31.md) lists the completed integration and package checks. The commands below build the same supported contracts from source.
+For the 2.1.3 Linux preview downloads, use the [installation guide](linux-install.md). The [verification record](testing/upstream-integration-2026-11-02.md) lists the completed integration and package checks. The commands below build the same supported contracts from source.
 
-Version 2.1.2 targets .NET 10 and includes Asset Walk. The Linux archive bundles the runtime; installing a new SDK does not replace an installed server.
+Version 2.1.3 targets .NET 10 and includes Asset Walk. The Linux archive bundles the runtime; installing a new SDK does not replace an installed server.
 
 ## Requirements
 
@@ -15,7 +15,7 @@ Version 2.1.2 targets .NET 10 and includes Asset Walk. The Linux archive bundles
 
 ## Build the Amethyst native component
 
-The schema-9 module uses Amethyst commit `edde06e518c0a3ca5ba47a8bbf065c4ecc4a8f92`; schema 10 uses beta.7 at `abeae84afce940c6819f80c1cd4e6e51db2e935d`. Each upstream build leaves its extension in its own checkout and does not change a Skyrim profile.
+The schema-9 module uses Amethyst commit `edde06e518c0a3ca5ba47a8bbf065c4ecc4a8f92`; schema 10/rules 14 uses beta.7 at `abeae84afce940c6819f80c1cd4e6e51db2e935d`. Schema 10/rules 15 uses 2.6.2-beta.3 at `7de35eaf0c7191defa7aee33d61452ddf73f7da3`. Each upstream build leaves its extension in its own checkout and does not change a Skyrim profile.
 
 ```sh
 git clone https://github.com/ChrisDKN/Amethyst-Mod-Manager.git ../Amethyst-Mod-Manager
@@ -51,7 +51,7 @@ dotnet test src/housecarl-mcp-tests -c Release --no-build
 python3 -m unittest discover -s scripts/tests -v
 ```
 
-The C# suite uses all three native extensions exported above. The schema-10 fixture comes from the real beta.7 producer with preserved casing enabled. Installer and package checks run in isolated temporary homes and leave the current host registration unchanged.
+The C# suite uses all three native extensions exported above. The schema-10/rules-14 fixture comes from the real beta.7 producer with preserved casing enabled; the rules-15 fixture comes from beta.3 and exercises root-mod Top Level routing. Installer and package checks run in isolated temporary homes and leave the current host registration unchanged.
 
 The C# test executor sets `XDG_STATE_HOME` to a private temporary directory before running tests. Each default MCP server fixture also gets its own state directory; fixtures can explicitly select a different temporary root. This keeps unfinished synthetic transactions out of the developer's real state directory, where they would block package installation. Cleanup runs when the owning fixture is disposed or the test process exits normally.
 
@@ -69,7 +69,7 @@ python3 scripts/probes/check_linux_package.py dist/housecarl-amethyst-linux-x64.
 
 This validates the payload hashes, extracts it to a temporary directory, and checks MCP initialization, package version and the published tool list. It uses temporary server configuration and does not register hosts or connect to Amethyst. Add `--installed-prefix /path/to/install` to check an existing installation's active version against the same archive. Installation itself also changes host registrations in the current user's home; custom `--prefix` and `--state-root` paths alone do not isolate those registrations. Use a disposable user or container for installation tests.
 
-## Upgrade using a locally built 2.1.2 package
+## Upgrade using a locally built 2.1.3 package
 
 After building and verifying the archive above, keep a separate terminal open and quit every MCP host running houseCARL. From the repository root, enter the output directory and install the built package as your normal user:
 
@@ -79,6 +79,6 @@ sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
   python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
-The source manifest assigns version 2.1.2, so the installer can preserve an installed 2.1.1 as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.1.2 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
+The source manifest assigns version 2.1.3, so the installer can preserve an installed 2.1.2 as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.1.3 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
 
 Configuration and transaction state remain outside the program directory. Installation does not refresh, enable or deploy mods. Use the [installation guide](linux-install.md#install-update-and-remove) for pending transactions and rollback.
