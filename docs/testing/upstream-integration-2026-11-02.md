@@ -1,6 +1,6 @@
 # Upstream integration, 2 November 2026
 
-This development branch integrates houseCARL's newer bulk-read implementation and adds a matching native reader for Amethyst's schema-10/rules-15 snapshots. The published Linux preview remains 2.1.2. No installed server, host registration, live profile, mod order or deployment was changed.
+The integration validated on 2 November adds houseCARL's newer bulk-read implementation and a matching native reader for Amethyst's schema-10/rules-15 snapshots. The published Linux preview at that time was 2.1.2. The implementation has since merged in [PR #20](https://github.com/ni1by2/houseCARL-Amethyst/pull/20); see the [2.1.3 release verification](linux-213-release-2026-11-03.md) for the versioned package. No installed server, host registration, live profile, mod order or deployment was changed.
 
 ## Reviewed sources
 
@@ -56,6 +56,6 @@ Graphify's refreshed code-only graph has 18,775 nodes and 66,436 edges. Its diag
 
 ## Publication boundary
 
-The private validation archive still reports the source manifest's **2.1.2** label. Its SHA-256 is `ffe43f984ec6bb11644b65486b8e6e28952aa831314cb521a882d69462730af5`. It must not replace the published 2.1.2 archive. Assign a new version and verify the resulting package before release. Published 2.1.2 includes the earlier two native readers and refuses rules-15 snapshots. Installation instructions continue to point to that published release.
+The private archive built on 2 November reported the source manifest's **2.1.2** label. Its SHA-256 was `ffe43f984ec6bb11644b65486b8e6e28952aa831314cb521a882d69462730af5`. It was never published and must not replace the published 2.1.2 archive. The versioned 2.1.3 package has its own checksum and verification record linked above. Published 2.1.2 includes the earlier two native readers and refuses rules-15 snapshots.
 
-Remote CI, merge, release publication and any local upgrade are separate from these completed implementation checks.
+The [integration CI passed](https://github.com/ni1by2/houseCARL-Amethyst/actions/runs/41501409813) at `5dc1d2fa`; the rebased merge at `99f65b9c` has the same tree. Release publication and any local upgrade remain separate from these implementation checks.
