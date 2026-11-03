@@ -2,13 +2,7 @@
 
 ## Contract
 
-The 2.1.1 Linux preview accepts two exact producer contracts: API 13/schema 9,
-engine 1/rules 13, and API 13/schema 10, engine 1/rules 14. Schema 9 uses the
-existing `edde06e5` native reader. Schema 10 uses Amethyst 2.6.0-beta.7 at
-`abeae84afce940c6819f80c1cd4e6e51db2e935d`, including preserved destination casing.
-Current development adds API 13/schema 10, engine 1/rules 15, using Amethyst
-2.6.2-beta.3 at `7de35eaf0c7191defa7aee33d61452ddf73f7da3`. This reader is
-separate from the rules-14 reader; published 2.1.2 packages do not contain it.
+The 2.1.3 Linux preview accepts three exact producer contracts, all at API 13 and engine revision 1: schema 9/rules 13, schema 10/rules 14 and schema 10/rules 15. Schema 9 uses the existing `edde06e5` native reader. Schema 10/rules 14 uses Amethyst 2.6.0-beta.7 at `abeae84afce940c6819f80c1cd4e6e51db2e935d`, including preserved destination casing. Schema 10/rules 15 uses Amethyst 2.6.2-beta.3 at `7de35eaf0c7191defa7aee33d61452ddf73f7da3`, including per-mod Top Level routing for root-installed mods. The rules-15 reader is separate from the rules-14 reader; earlier 2.1.1 and 2.1.2 packages contain only the earlier two contracts.
 The captured schema/rules pair selects the matching reader before it opens the private copy;
 there is no cross-contract fallback or migration of the live catalog. The native
 status handshake verifies API, schema, engine, rules, inventory and ready state
@@ -78,7 +72,7 @@ exits. No Python packages are required, and the .NET runtime remains bundled.
 Developer builds set `AMETHYST_FILEGRAPH_EXTENSION` to the schema-9/rules-13 module,
 `AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10` to the schema-10/rules-14 module, and
 `AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15` to the schema-10/rules-15 module.
-Packaged development builds load `amethyst_filegraph.abi3.so`,
+Packaged builds load `amethyst_filegraph.abi3.so`,
 `amethyst_filegraph_schema10.abi3.so` and
 `amethyst_filegraph_schema10_rules15.abi3.so` beside the server. The Python helper
 checks API and schema before opening the copy; the returned status frame then
