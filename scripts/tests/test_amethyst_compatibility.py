@@ -1,8 +1,10 @@
 import copy
 import importlib.util
 import io
+import json
 from pathlib import Path
 import struct
+import subprocess
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -65,6 +67,50 @@ class CompatibilityHarnessTests(unittest.TestCase):
         with patch.object(worker, 'reader_metadata', return_value={'api': 13, 'schema': 9}):
             result = worker.compare_reader(Path('/unused'), {'contract': {'api': 13, 'schema': 10}}, Path('/reader'), Path('/helper'))
             self.assertEqual('not_applicable', result['status'])
+
+    def test_future_contract_is_unsupported_transport_not_reader_regression(self):
+        with tempfile.TemporaryDirectory() as raw:
+            helper = Path(raw) / 'helper.py'
+            helper.write_text('NATIVE_API = 13\nNATIVE_SCHEMAS = (9, 10)\n')
+            for contract in [{'api': 13, 'schema': 11}, {'api': 14, 'schema': 10}]:
+                with self.subTest(contract=contract), patch.object(worker, 'reader_metadata', return_value=contract):
+                    result = worker.compare_reader(Path('/unused'), {'contract': contract}, Path('/reader'), helper)
+                    self.assertEqual('unsupported_transport', result['status'])
+
+    def test_docker_startup_failure_returns_setup_exit_and_retains_raw_exit(self):
+        with tempfile.TemporaryDirectory() as raw:
+            root = Path(raw)
+            source, extension, server, output = root / 'source', root / 'producer.so', root / 'server', root / 'report'
+            source.mkdir(); server.mkdir(); extension.write_bytes(b'native')
+            for name in ('housecarl-mcp', 'housecarl-mcp.dll', 'amethyst_snapshot.py', 'amethyst_filegraph.so'):
+                (server / name).write_bytes(b'baseline')
+            argv = ['suite', '--source', str(source), '--producer-extension', str(extension),
+                    '--server', str(server), '--output', str(output)]
+            with patch.object(runner.sys, 'argv', argv), patch.object(runner, 'source_identity', return_value='a' * 40), \
+                 patch.object(runner.subprocess, 'check_output', return_value='b' * 40), \
+                 patch.object(runner.subprocess, 'run', return_value=subprocess.CompletedProcess([], 125)), \
+                 patch('builtins.print'):
+                self.assertEqual(2, runner.main())
+            report = json.loads((output / 'report.json').read_text())
+            self.assertEqual('setup_error', report['status'])
+            self.assertEqual(125, report['container_exit_code'])
+
+    def test_server_failure_preserves_unsupported_control_as_setup_error(self):
+        for control, status, exit_code in [('unsupported_transport', 'setup_error', 2), ('pass', 'comparison_failed', 1)]:
+            with self.subTest(control=control), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                (root / 'request.json').write_text('{"readers": []}')
+                oracle = dict(contract={}, status={}, generation=1, inventory_generation=1)
+                (root / 'producer-oracle.json').write_text(json.dumps(oracle))
+                def path(value):
+                    return root if value == '/output' else Path(value)
+                with patch.object(worker, 'Path', side_effect=path), \
+                     patch.dict(worker.os.environ, {key: raw for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME')}), \
+                     patch.object(worker.subprocess, 'run'), patch.object(worker, 'transport_contract', return_value={}), \
+                     patch.object(worker, 'producer_invariants'), patch.object(worker, 'compare_reader', return_value={'status': control}), \
+                     patch.object(worker, 'server_probe', side_effect=ValueError('server unavailable')):
+                    self.assertEqual(exit_code, worker.main())
+                self.assertEqual(status, json.loads((root / 'report.json').read_text())['status'])
 
 
 if __name__ == '__main__':

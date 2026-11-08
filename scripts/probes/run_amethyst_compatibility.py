@@ -74,8 +74,14 @@ def main():
             report_path.write_text(json.dumps(report, indent=2) + '\n')
         else:
             report = json.loads(report_path.read_text())
+        exit_code = {'comparison_complete': 0, 'comparison_failed': 1, 'setup_error': 2}.get(report['status'], 2)
+        if result.returncode != exit_code and report['status'] != 'setup_error':
+            report.update(status='setup_error', error='container exit disagrees with report; inspect container.log')
+            exit_code = 2
+        report['container_exit_code'] = result.returncode
+        report_path.write_text(json.dumps(report, indent=2) + '\n')
         print(json.dumps({'status': report['status'], 'approved': False, 'report': str(report_path)}))
-        return result.returncode or (2 if report['status'] == 'setup_error' else 0)
+        return exit_code
     except (ValueError, OSError, subprocess.SubprocessError) as exc:
         parser.exit(2, f'amethyst-compatibility: {exc}\n')
 

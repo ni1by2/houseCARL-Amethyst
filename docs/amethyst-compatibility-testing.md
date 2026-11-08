@@ -43,14 +43,15 @@ The packaged MCP server is tested separately. For an admitted contract, checks c
 |---|---|
 | Reader `pass` | Compared native winner identities, provider chains and the bounded deployment check match the producer. |
 | Reader `not_applicable` | API/schema differs; that pair has not passed parity. |
+| Reader `unsupported_transport` | The baseline helper cannot exercise that API/schema; native parity was not tested. |
 | Reader `fail` | A reader failed or returned different results. Inspect its diagnostic. |
 | Server `accepted` | The baseline server admitted the producer and passed the listed read/refusal checks. |
 | Server `blocked_by_contract` | Its production revision check refused the catalog; native parity is reported independently. |
-| Overall `setup_error` | The environment or producer fixture could not be established. This is not proof of an adapter regression. |
+| Overall `setup_error` | The environment, producer fixture or producer control could not validate the experiment, including an API/schema outside the baseline helper's coverage. This is not proof of an adapter regression. |
 | Overall `comparison_failed` | A reader or server check failed, or producer inputs changed. |
 | Overall `comparison_complete` | The experiment completed without failed comparisons. It does not grant compatibility approval. |
 
-Exit codes are 0 for a completed experiment, 1 for a failed comparison and 2 for setup failure. Every report sets `approved:false`, including successful runs with blocked production admission. A green workflow must not be used as automatic permission to relax runtime checks.
+Exit codes are 0 for a completed experiment, 1 for a failed comparison and 2 for setup failure. The report retains Docker's raw exit separately as `container_exit_code`. Every report sets `approved:false`, including successful runs with blocked production admission. A green workflow must not be used as automatic permission to relax runtime checks.
 
 ## Limits and the next compatibility decision
 
