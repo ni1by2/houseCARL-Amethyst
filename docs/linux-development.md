@@ -55,6 +55,8 @@ The C# suite uses all three native extensions exported above. The schema-10/rule
 
 The C# test executor sets `XDG_STATE_HOME` to a private temporary directory before running tests. Each default MCP server fixture also gets its own state directory; fixtures can explicitly select a different temporary root. This keeps unfinished synthetic transactions out of the developer's real state directory, where they would block package installation. Cleanup runs when the owning fixture is disposed or the test process exits normally.
 
+For a new upstream Amethyst tag or commit, run the [compatibility experiment](amethyst-compatibility-testing.md). It compares producer data with released readers and reports the server's admission decision separately, without changing the supported contract list.
+
 ## Assemble a Linux package candidate
 
 The release recipe targets Ubuntu 24.04 x64 and requires Python 3.12+, the native build tools above, and all three Amethyst extensions built from the pinned sources. Run `scripts/build-linux-package.sh` from the repository root with all three native-module variables exported above. Package installation, upgrade, rollback, uninstall and selected-Proton acceptance are separate release checks; passing the source CI does not claim those checks have run.
