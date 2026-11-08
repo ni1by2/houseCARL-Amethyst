@@ -47,13 +47,16 @@ jobs:
           persist-credentials: false
       - name: Download and verify the fixed reader baseline
         run: |
+          mkdir -p _compat/baseline
+          curl --fail --location --retry 4 --retry-all-errors --retry-delay 5 \
+            --connect-timeout 20 --max-time 180 \
+            --output _compat/baseline/package.tar.gz \
+            https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.3/housecarl-amethyst-linux-x64.tar.gz
           python3 - <<'PY'
           from pathlib import Path
-          import hashlib, tarfile, urllib.request
+          import hashlib, tarfile
           root = Path('_compat/baseline')
-          root.mkdir()
           archive = root / 'package.tar.gz'
-          urllib.request.urlretrieve('https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.3/housecarl-amethyst-linux-x64.tar.gz', archive)
           assert hashlib.sha256(archive.read_bytes()).hexdigest() == 'dd8a71f39f8b6e5f14c7e742f8f90a043ec09bd69dcdeae39ecd7d5c787ec7b9'
           with tarfile.open(archive) as package:
               package.extractall(root, filter='data')
