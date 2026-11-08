@@ -17,7 +17,11 @@ All four runs used the documented minimal compatibility image. Each compared ten
 
 The current producer fixture verified that conflict-only filename/folder rules retain winning, deployable assets while suppressing their conflict status. Its genuine exclusion and disabled-mod cases remained absent. Archive, root and overwrite cases were included. The older readers' matching answers are evidence for investigating a shared-reader policy; they do not establish general forward compatibility or authorize a runtime policy change.
 
-The Python suite passed **26 tests**, including five new harness tests. The new tests reject changed winner/source identities, truncated or unbounded frames and dirty upstream sources, distinguish schema mismatches from parity passes, and ensure nonempty WAL/catalog changes remain detectable. SQLite read-created empty WAL and shared-memory lock files are distinguished from catalog data.
+The initial Python suite passed **26 tests**, including five new harness tests. The new tests reject changed winner/source identities, truncated or unbounded frames and dirty upstream sources, distinguish schema mismatches from parity passes, and ensure nonempty WAL/catalog changes remain detectable. SQLite read-created empty WAL and shared-memory lock files are distinguished from catalog data.
+
+Independent review identified two reporting cases: Docker startup failures must use the documented setup exit code, and a future API/schema beyond the baseline helper's transport coverage must not be classified as a native parity regression. Both were corrected with negative tests, including an unsupported control followed by a server failure. Producer-control failures now leave the experiment as a setup failure; reports retain the raw Docker exit separately.
+
+After those corrections, all eight focused harness tests passed. The unchanged installer/package tests had also passed in the preceding full Python run; PR CI checks the final combined suite.
 
 Initial harness runs exposed an incorrect paging assumption, missing Data prefixes in fixture assertions and an uncreated disposable HOME for .NET mutex initialization. Those harness issues were corrected before the complete matrix above. A zero-byte read-created SQLite WAL was recorded explicitly before normalizing that non-data sidecar; nonempty WAL changes remain a failing check.
 

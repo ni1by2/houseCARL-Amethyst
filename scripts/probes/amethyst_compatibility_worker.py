@@ -1,4 +1,5 @@
 """Container-only compatibility experiment; this module does not approve runtime contracts."""
+import ast
 import hashlib
 import json
 import os
@@ -52,13 +53,30 @@ def reader_metadata(extension):
     return json.loads(subprocess.check_output([sys.executable, '-I', '-c', code, str(extension)], text=True, timeout=30))
 
 
+def transport_contract(helper):
+    """Read the baseline helper's declared coverage without extending its transport."""
+    constants = {}
+    for node in ast.parse(helper.read_text()).body:
+        if isinstance(node, ast.Assign):
+            for target in node.targets:
+                if isinstance(target, ast.Name) and target.id in ('NATIVE_API', 'NATIVE_SCHEMAS'):
+                    constants[target.id] = ast.literal_eval(node.value)
+    if not isinstance(constants.get('NATIVE_API'), int) or not isinstance(constants.get('NATIVE_SCHEMAS'), (list, tuple)):
+        raise ValueError('baseline helper does not declare recognizable API/schema transport coverage')
+    return {'api': constants['NATIVE_API'], 'schemas': list(constants['NATIVE_SCHEMAS'])}
+
+
 def compare_reader(root, expected, extension, helper):
     """Run the shipped Python transport unchanged against a backup, without its C# admission guard."""
-    import msgpack
     metadata = reader_metadata(extension)
     contract = expected['contract']
     if metadata != {key: contract[key] for key in ('api', 'schema')}:
         return {'status': 'not_applicable', 'reader': metadata, 'reason': 'reader API/schema differs from producer'}
+    transport = transport_contract(helper)
+    if contract['api'] != transport['api'] or contract['schema'] not in transport['schemas']:
+        return {'status': 'unsupported_transport', 'reader': metadata, 'transport': transport,
+                'reason': 'baseline helper cannot exercise this API/schema; native parity was not tested'}
+    import msgpack
     with tempfile.TemporaryDirectory(prefix='hc-amethyst-capture-') as raw:
         backup = Path(raw)
         with sqlite3.connect(f'file:{root / "filegraph.sqlite3"}?mode=ro', uri=True) as original:
@@ -257,6 +275,7 @@ def main():
                             str(root), '/producer.so', '/amethyst', str(oracle)], check=True, timeout=180)
             expected = json.loads(oracle.read_text())
             report['producer'] = {key: expected[key] for key in ('contract', 'status', 'generation', 'inventory_generation')}
+            report['transport'] = transport_contract(Path('/server/amethyst_snapshot.py'))
             producer_invariants(expected)
             report['producer_invariants'] = 'pass'
             before = fingerprint(root)
@@ -267,7 +286,7 @@ def main():
                 except Exception as exc:
                     entry.update(status='fail', error=str(exc))
                 report['readers'].append(entry)
-            report['status'] = 'comparison_failed'
+            report['status'] = 'setup_error' if report['readers'][0]['status'] != 'pass' else 'comparison_failed'
             report['production_server'] = server_probe(root, Path('/server'))
             after = fingerprint(root)
             report['producer_inputs_unchanged'] = before == after
@@ -275,7 +294,12 @@ def main():
                                        for name in before.keys() | after.keys() if before.get(name) != after.get(name)}
             if not report['producer_inputs_unchanged']:
                 raise ValueError('comparison changed producer files/catalog')
-            report['status'] = 'comparison_failed' if any(row['status'] == 'fail' for row in report['readers']) else 'comparison_complete'
+            if report['readers'][0]['status'] != 'pass':
+                report.update(status='setup_error', error='producer control could not validate the experiment; inspect reader and transport coverage')
+            elif any(row['status'] == 'fail' for row in report['readers']):
+                report['status'] = 'comparison_failed'
+            else:
+                report['status'] = 'comparison_complete'
     except Exception as exc:
         report['error'] = str(exc)
     (output / 'report.json').write_text(json.dumps(report, indent=2) + '\n')
