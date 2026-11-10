@@ -85,6 +85,20 @@ jobs:
           test -s src/amethyst_filegraph.abi3.so
           echo "AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15=$GITHUB_WORKSPACE/_ci/amethyst-filegraph-rules15-source/src/amethyst_filegraph.abi3.so" >> "$GITHUB_ENV"
 
+      - name: Check out the schema-10/rules-19 Amethyst filegraph source
+        uses: actions/checkout@v7
+        with:
+          repository: ChrisDKN/Amethyst-Mod-Manager
+          ref: 8ac86bdb9bc6f32b5c49eae69890ae96e4f16943
+          path: _ci/amethyst-filegraph-rules19-source
+
+      - name: Build Amethyst's pinned rules-19 filegraph
+        working-directory: _ci/amethyst-filegraph-rules19-source
+        run: |
+          native/amethyst_filegraph/build.sh
+          test -s src/amethyst_filegraph.abi3.so
+          echo "AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19=$GITHUB_WORKSPACE/_ci/amethyst-filegraph-rules19-source/src/amethyst_filegraph.abi3.so" >> "$GITHUB_ENV"
+
       - name: Build the whole solution (Release)
         run: dotnet build housecarl.sln --configuration Release
 

@@ -19,6 +19,8 @@ It also handles absent archive names in Skyrim's default INI without a blanket
 vanilla BSA coverage warning. Unreadable sources still report failures.
 The adapter continues to read Amethyst's saved snapshot; the headless API refactor is deferred.
 
+Unreleased source adds Amethyst 2.6.3's rules-18 snapshots through the existing rules-15 reader, and 2.6.4-beta.1's rules-19 snapshots through a matching new reader (API 13/schema 10/engine 1). The [compatibility update](docs/architecture/amethyst-shared-reader-compatibility.md) explains the verified mappings and preserves case-distinct archive and named-source identities. Published 2.1.3 still refuses those contracts; this source change does not upgrade an installed server.
+
 Source builds additionally require the .NET 10 SDK (10.0.400 or newer) and Rust/C/C++ build tools. See the [Linux development and build guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.3/docs/linux-development.md) for the pinned dependencies and build steps. Linux support is in preview.
 
 ## Install

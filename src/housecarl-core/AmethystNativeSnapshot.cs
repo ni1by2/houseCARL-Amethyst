@@ -9,11 +9,12 @@ namespace HousecarlCore;
 /// <summary>Ask Amethyst's native reader for winners using a private backup of the pinned SQLite transaction.</summary>
 internal static class AmethystNativeSnapshot
 {
-    internal static (string Variable, string Filename)? ReaderFor(int schema, ulong rules) => (schema, rules) switch
+    internal static (string Variable, string Filename, ulong Rules)? ReaderFor(int schema, ulong rules) => (schema, rules) switch
     {
-        (9, 13) => ("AMETHYST_FILEGRAPH_EXTENSION", "amethyst_filegraph.abi3.so"),
-        (10, 14) => ("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10", "amethyst_filegraph_schema10.abi3.so"),
-        (10, 15) => ("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15", "amethyst_filegraph_schema10_rules15.abi3.so"),
+        (9, 13) => ("AMETHYST_FILEGRAPH_EXTENSION", "amethyst_filegraph.abi3.so", 13),
+        (10, 14) => ("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10", "amethyst_filegraph_schema10.abi3.so", 14),
+        (10, 15 or 18) => ("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15", "amethyst_filegraph_schema10_rules15.abi3.so", 15),
+        (10, 19) => ("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19", "amethyst_filegraph_schema10_rules19.abi3.so", 19),
         _ => null,
     };
 
@@ -56,9 +57,9 @@ internal static class AmethystNativeSnapshot
                 using var status = AmethystIntentPayload.Read(Frame(process.StandardOutput.BaseStream, deadline.Token));
                 var contract = status.RootElement;
                 if (contract.GetProperty("api_version").GetInt32() != 13 || contract.GetProperty("schema_version").GetInt32() != schemaVersion ||
-                    contract.GetProperty("engine_revision").GetUInt64() != 1 || contract.GetProperty("rules_revision").GetUInt64() != rulesRevision ||
+                    contract.GetProperty("engine_revision").GetUInt64() != 1 || contract.GetProperty("rules_revision").GetUInt64() != reader.Rules ||
                     contract.GetProperty("inventory_generation").GetUInt64() != inventory || !contract.GetProperty("ready").GetBoolean())
-                    throw new InvalidOperationException("Amethyst's native reader disagrees with the captured schema/engine/rules contract");
+                    throw new InvalidOperationException("Amethyst's native reader disagrees with the approved schema/engine/rules contract or captured inventory");
                 using var header = JsonDocument.Parse(Frame(process.StandardOutput.BaseStream, deadline.Token));
                 var metadata = header.RootElement;
                 if (metadata.GetProperty("api").GetInt32() != 13 || metadata.GetProperty("schema").GetInt32() != schemaVersion ||

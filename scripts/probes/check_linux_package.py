@@ -37,11 +37,12 @@ def check(archive: Path, installed_prefix: Path | None = None) -> None:
             raise ValueError("unsupported packaged Amethyst native schema list")
         contracts = manifest.get("native_filegraph_contracts", [{"schema": s, "rules": 13 if s == 9 else 14} for s in schemas])
         if contracts not in ([{"schema": 9, "rules": 13}], [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}],
-                             [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}]):
+                             [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}],
+                             [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}, {"schema": 10, "rules": 19}]):
             raise ValueError("unsupported packaged Amethyst native contracts")
         for contract in contracts:
             schema, rules = contract["schema"], contract["rules"]
-            filename = "amethyst_filegraph.abi3.so" if schema == 9 else ("amethyst_filegraph_schema10_rules15.abi3.so" if rules == 15 else "amethyst_filegraph_schema10.abi3.so")
+            filename = "amethyst_filegraph.abi3.so" if schema == 9 else (f"amethyst_filegraph_schema10_rules{rules}.abi3.so" if rules in (15, 19) else "amethyst_filegraph_schema10.abi3.so")
             native_root = root / f"native-{schema}-{rules}"
             native_root.mkdir()
             native_check = subprocess.run([

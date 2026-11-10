@@ -28,7 +28,7 @@ sealed class AmethystSnapshotWorld : IDisposable
         _profileName = profileName; _profileSpecific = profileSpecific;
         _ = TestCorpus.Path;
         using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(HarnessPaths.RepoRoot,
-            "src", "housecarl-mcp-tests", "fixtures", "amethyst", $"schema{schemaVersion}{(rulesRevision == 15 ? "-rules15" : "")}-snapshot.json")));
+            "src", "housecarl-mcp-tests", "fixtures", "amethyst", $"schema{schemaVersion}{(rulesRevision >= 15 ? $"-rules{rulesRevision}" : "")}-snapshot.json")));
         var data = fixture.RootElement;
         ExpectedWinners = data.GetProperty("winners").Clone();
         foreach (var file in data.GetProperty("files").EnumerateObject())

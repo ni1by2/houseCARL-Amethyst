@@ -72,15 +72,32 @@ public static class AssetSourceSelection
     public static string Describe(string providerName, string kindLabel) => $"\"{providerName}\" ({kindLabel})";
 
     /// <summary>Does <paramref name="name"/> address this source — its provider name, or for a BSA the MO2 layer the archive lives in?</summary>
-    public static bool NameMatches(PlacementSource s, string name) => NameMatches(s.ProviderName, s.OwningMod, name);
+    public static bool NameMatches(PlacementSource s, string name, IReadOnlyCollection<string>? names = null) => NameMatches(s.ProviderName, s.OwningMod, name, names);
 
     /// <summary>The same test over a resolved provider.</summary>
-    public static bool NameMatches(AssetProvider p, string name) => NameMatches(p.Source, p.OwningMod, name);
+    public static bool NameMatches(AssetProvider p, string name, IReadOnlyCollection<string>? names = null) => NameMatches(p.Source, p.OwningMod, name, names);
 
     /// <summary>The same test over a provider's name and the MO2 layer it lives in, for a caller holding no placement source.</summary>
-    public static bool NameMatches(string providerName, string? owningMod, string name)
-        => string.Equals(providerName, name, StringComparison.OrdinalIgnoreCase)
-        || (owningMod is { } owner && string.Equals(owner, name, StringComparison.OrdinalIgnoreCase));
+    public static bool NameMatches(string providerName, string? owningMod, string name, IReadOnlyCollection<string>? names = null)
+    {
+        var comparison = names is null ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal;
+        name = CanonicalName(name, names);
+        return string.Equals(providerName, name, comparison)
+            || (owningMod is { } owner && string.Equals(owner, name, comparison));
+    }
+
+    /// <summary>Resolve a case-preserved provider against the whole saved inventory, refusing ambiguous aliases.</summary>
+    public static string CanonicalName(string name, IReadOnlyCollection<string>? names)
+    {
+        if (names is null || names.Contains(name, StringComparer.Ordinal)) return name;
+        var aliases = names.Where(n => n.Equals(name, StringComparison.OrdinalIgnoreCase)).Distinct(StringComparer.Ordinal).ToArray();
+        return aliases.Length switch
+        {
+            0 => name,
+            1 => aliases[0],
+            _ => throw new InvalidOperationException($"Provider '{name}' matches multiple case-distinct names; use exact spelling: {string.Join(", ", aliases)}"),
+        };
+    }
 
     /// <summary>Pick the provider to read from under <paramref name="choice"/>'s pole. <paramref name="offOrderLookup"/>
     /// is the off-order lane, consulted ONLY under the Named pole; this type renders nothing.</summary>
@@ -95,7 +112,7 @@ public static class AssetSourceSelection
         {
             // Winner-first order decides among a mod's own copies: its loose file before its own archive.
             foreach (var s in res.Sources)
-                if (NameMatches(s, choice.Spelling ?? ""))
+                if (NameMatches(s, choice.Spelling ?? "", res.ProviderNames))
                     return new AssetSourcePick(AssetSourceVerdict.Selected, s, names);
             var off = offOrderLookup?.Invoke(choice.Spelling) ?? OffOrderLookup.NotConsulted;
             if (off.Source is { } offOrder)

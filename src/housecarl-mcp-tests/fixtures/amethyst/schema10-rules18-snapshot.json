@@ -1,0 +1,234 @@
+{
+  "producer": "788a71262ca479b6cbccc53ff3a0083250e3833c",
+  "extension_sha256": "a501ed3ef4c7b4676ada4be42967e0daabcccde31bf11f058c445fd66061db60",
+  "root": "/tmp/hc-producer-fixture-cvdq9_ll",
+  "catalog_sql": "BEGIN TRANSACTION;\nCREATE TABLE archive_members (\n    member_id INTEGER PRIMARY KEY,\n    archive_id INTEGER NOT NULL REFERENCES archives(archive_id) ON DELETE CASCADE,\n    destination_id INTEGER,\n    member_key BLOB NOT NULL,\n    member_display TEXT NOT NULL,\n    UNIQUE(archive_id, member_key)\n);\nINSERT INTO \"archive_members\" VALUES(1,1,8,X'736b73652f706c7567696e732f736b79706174636865722f776561706f6e2f6273616f6e6c792e696e69','skse/plugins/skypatcher/weapon/bsaonly.ini');\nCREATE TABLE archives (\n    archive_id INTEGER PRIMARY KEY,\n    file_id INTEGER REFERENCES raw_files(file_id) ON DELETE CASCADE,\n    archive_key TEXT NOT NULL,\n    plugin_key TEXT,\n    format TEXT,\n    UNIQUE(file_id, archive_key)\n);\nINSERT INTO \"archives\" VALUES(1,1,CAST(X'616c70686100666978747572652e627361' AS TEXT),'fixture','bsa');\nCREATE TABLE candidate_identities (\n    candidate_id INTEGER NOT NULL REFERENCES candidates(candidate_id) ON DELETE CASCADE,\n    identity_kind TEXT NOT NULL,\n    identity_key BLOB NOT NULL,\n    PRIMARY KEY(candidate_id, identity_kind, identity_key)\n);\nCREATE TABLE candidates (\n    candidate_id INTEGER PRIMARY KEY,\n    variant_id INTEGER NOT NULL REFERENCES route_variants(variant_id) ON DELETE CASCADE,\n    file_id INTEGER NOT NULL REFERENCES raw_files(file_id) ON DELETE CASCADE,\n    destination_id INTEGER NOT NULL REFERENCES destinations(destination_id),\n    provider_kind INTEGER NOT NULL,\n    archive_key TEXT,\n    plugin_key TEXT,\n    deployable INTEGER NOT NULL DEFAULT 1,\n    legacy_root INTEGER NOT NULL DEFAULT 0,\n    legacy_rel TEXT NOT NULL,\n    flags INTEGER NOT NULL DEFAULT 0,\n    destination_display TEXT NOT NULL DEFAULT ''\n);\nINSERT INTO \"candidates\" VALUES(1,1,1,1,0,NULL,NULL,1,0,'Fixture.bsa',8,'Data/Fixture.bsa');\nINSERT INTO \"candidates\" VALUES(2,1,2,2,0,NULL,'fixture.esp',1,0,'Fixture.esp',4,'Data/Fixture.esp');\nINSERT INTO \"candidates\" VALUES(3,1,3,3,0,NULL,NULL,1,0,'meshes/CaseVariant.nif',0,'Data/meshes/CaseVariant.nif');\nINSERT INTO \"candidates\" VALUES(4,1,4,4,0,NULL,NULL,1,0,'Meshes/example.nif',0,'Data/Meshes/example.nif');\nINSERT INTO \"candidates\" VALUES(5,1,5,5,0,NULL,NULL,1,0,'Meshes/ignored.nif',1024,'Data/Meshes/ignored.nif');\nINSERT INTO \"candidates\" VALUES(6,1,6,6,0,NULL,NULL,1,0,'Meshes/ignored/folder.nif',1024,'Data/Meshes/ignored/folder.nif');\nINSERT INTO \"candidates\" VALUES(7,1,7,7,0,NULL,NULL,1,0,'Meshes/overwrite.nif',0,'Data/Meshes/overwrite.nif');\nINSERT INTO \"candidates\" VALUES(8,1,1,8,3,CAST(X'616c70686100666978747572652e627361' AS TEXT),'fixture',0,0,'skse/plugins/skypatcher/weapon/bsaonly.ini',8,'Data/skse/plugins/skypatcher/weapon/bsaonly.ini');\nINSERT INTO \"candidates\" VALUES(9,2,8,2,0,NULL,'fixture.esp',1,0,'Fixture.esp',4,'Data/Fixture.esp');\nINSERT INTO \"candidates\" VALUES(10,2,9,3,0,NULL,NULL,1,0,'MESHES/casevariant.NIF',0,'Data/MESHES/casevariant.NIF');\nINSERT INTO \"candidates\" VALUES(11,2,10,4,0,NULL,NULL,1,0,'Meshes/example.nif',0,'Data/Meshes/example.nif');\nINSERT INTO \"candidates\" VALUES(12,2,11,5,0,NULL,NULL,1,0,'Meshes/ignored.nif',1024,'Data/Meshes/ignored.nif');\nINSERT INTO \"candidates\" VALUES(13,2,12,6,0,NULL,NULL,1,0,'Meshes/ignored/folder.nif',1024,'Data/Meshes/ignored/folder.nif');\nINSERT INTO \"candidates\" VALUES(14,3,13,9,0,NULL,'dormant.esp',1,0,'Dormant.esp',4,'Data/Dormant.esp');\nINSERT INTO \"candidates\" VALUES(15,3,14,10,0,NULL,NULL,1,0,'Meshes/dormant.nif',0,'Data/Meshes/dormant.nif');\nINSERT INTO \"candidates\" VALUES(16,4,15,11,1,NULL,NULL,1,1,'Data/Meshes/top.nif',0,'Data/Meshes/top.nif');\nINSERT INTO \"candidates\" VALUES(17,5,16,7,2,NULL,NULL,1,0,'Meshes/overwrite.nif',0,'Data/Meshes/overwrite.nif');\nINSERT INTO \"candidates\" VALUES(18,6,17,12,1,NULL,NULL,1,1,'Data/Meshes/root.nif',0,'Data/Meshes/root.nif');\nCREATE TABLE conflict_edges (\n    profile_id TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,\n    conflict_kind TEXT NOT NULL,\n    loser_mod_id INTEGER NOT NULL REFERENCES mods(mod_id),\n    winner_mod_id INTEGER NOT NULL REFERENCES mods(mod_id),\n    refcount INTEGER NOT NULL,\n    generation INTEGER NOT NULL,\n    PRIMARY KEY(profile_id, conflict_kind, loser_mod_id, winner_mod_id)\n);\nINSERT INTO \"conflict_edges\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default','loose',1,5,1,1);\nINSERT INTO \"conflict_edges\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default','loose',1,2,3,1);\nCREATE TABLE deployed_entries (\n    profile_id TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,\n    target_key TEXT NOT NULL,\n    destination_key BLOB NOT NULL,\n    destination_display TEXT NOT NULL,\n    candidate_id INTEGER NOT NULL,\n    mod_name TEXT NOT NULL,\n    mod_key TEXT NOT NULL,\n    provider_kind INTEGER NOT NULL,\n    source_rel BLOB NOT NULL,\n    source_display TEXT NOT NULL,\n    source_fingerprint BLOB NOT NULL DEFAULT X'',\n    link_mode TEXT NOT NULL,\n    deployed_generation INTEGER NOT NULL,\n    PRIMARY KEY(profile_id, target_key, destination_key)\n);\nCREATE TABLE destinations (\n    destination_id INTEGER PRIMARY KEY,\n    target_id INTEGER NOT NULL REFERENCES targets(target_id) ON DELETE CASCADE,\n    path_key BLOB NOT NULL,\n    path_display TEXT NOT NULL,\n    UNIQUE(target_id, path_key)\n);\nINSERT INTO \"destinations\" VALUES(1,1,X'646174612f666978747572652e627361','Data/Fixture.bsa');\nINSERT INTO \"destinations\" VALUES(2,1,X'646174612f666978747572652e657370','Data/Fixture.esp');\nINSERT INTO \"destinations\" VALUES(3,1,X'646174612f6d65736865732f6361736576617269616e742e6e6966','Data/MESHES/casevariant.NIF');\nINSERT INTO \"destinations\" VALUES(4,1,X'646174612f6d65736865732f6578616d706c652e6e6966','Data/Meshes/example.nif');\nINSERT INTO \"destinations\" VALUES(5,1,X'646174612f6d65736865732f69676e6f7265642e6e6966','Data/Meshes/ignored.nif');\nINSERT INTO \"destinations\" VALUES(6,1,X'646174612f6d65736865732f69676e6f7265642f666f6c6465722e6e6966','Data/Meshes/ignored/folder.nif');\nINSERT INTO \"destinations\" VALUES(7,1,X'646174612f6d65736865732f6f76657277726974652e6e6966','Data/Meshes/overwrite.nif');\nINSERT INTO \"destinations\" VALUES(8,1,X'646174612f736b73652f706c7567696e732f736b79706174636865722f776561706f6e2f6273616f6e6c792e696e69','Data/skse/plugins/skypatcher/weapon/bsaonly.ini');\nINSERT INTO \"destinations\" VALUES(9,1,X'646174612f646f726d616e742e657370','Data/Dormant.esp');\nINSERT INTO \"destinations\" VALUES(10,1,X'646174612f6d65736865732f646f726d616e742e6e6966','Data/Meshes/dormant.nif');\nINSERT INTO \"destinations\" VALUES(11,1,X'646174612f6d65736865732f746f702e6e6966','Data/Meshes/top.nif');\nINSERT INTO \"destinations\" VALUES(12,1,X'646174612f6d65736865732f726f6f742e6e6966','Data/Meshes/root.nif');\nCREATE TABLE meta (\n    key TEXT PRIMARY KEY,\n    value BLOB NOT NULL\n);\nINSERT INTO \"meta\" VALUES('inventory_generation',X'0600000000000000');\nINSERT INTO \"meta\" VALUES('engine_revision',X'0100000000000000');\nINSERT INTO \"meta\" VALUES('rules_revision',X'1200000000000000');\nINSERT INTO \"meta\" VALUES('ready',X'01');\nCREATE TABLE mod_summaries (\n    profile_id TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,\n    mod_id INTEGER NOT NULL REFERENCES mods(mod_id),\n    payload BLOB NOT NULL,\n    generation INTEGER NOT NULL,\n    PRIMARY KEY(profile_id, mod_id)\n);\nINSERT INTO \"mod_summaries\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',1,X'8caa6c6f6f73655f636f6465ffac617263686976655f636f646500ad6964656e746974795f636f646500aa6c6f6f73655f77696e7300ac6c6f6f73655f6c6f7373657304af6c6f6f73655f737572766976696e6701ac617263686976655f77696e7300ae617263686976655f6c6f7373657300b1617263686976655f737572766976696e6701ad6964656e746974795f77696e7300af6964656e746974795f6c6f7373657300a5666c616773cd040c',1);\nINSERT INTO \"mod_summaries\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',2,X'8caa6c6f6f73655f636f646501ac617263686976655f636f646500ad6964656e746974795f636f646500aa6c6f6f73655f77696e7303ac6c6f6f73655f6c6f7373657300af6c6f6f73655f737572766976696e6705ac617263686976655f77696e7300ae617263686976655f6c6f7373657300b1617263686976655f737572766976696e6700ad6964656e746974795f77696e7300af6964656e746974795f6c6f7373657300a5666c616773cd0404',1);\nINSERT INTO \"mod_summaries\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',3,X'8caa6c6f6f73655f636f646500ac617263686976655f636f646500ad6964656e746974795f636f646500aa6c6f6f73655f77696e7300ac6c6f6f73655f6c6f7373657300af6c6f6f73655f737572766976696e6700ac617263686976655f77696e7300ae617263686976655f6c6f7373657300b1617263686976655f737572766976696e6700ad6964656e746974795f77696e7300af6964656e746974795f6c6f7373657300a5666c61677300',1);\nINSERT INTO \"mod_summaries\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',4,X'8caa6c6f6f73655f636f646500ac617263686976655f636f646500ad6964656e746974795f636f646500aa6c6f6f73655f77696e7300ac6c6f6f73655f6c6f7373657300af6c6f6f73655f737572766976696e6701ac617263686976655f77696e7300ae617263686976655f6c6f7373657300b1617263686976655f737572766976696e6700ad6964656e746974795f77696e7300af6964656e746974795f6c6f7373657300a5666c61677300',1);\nINSERT INTO \"mod_summaries\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',5,X'8caa6c6f6f73655f636f646501ac617263686976655f636f646500ad6964656e746974795f636f646500aa6c6f6f73655f77696e7301ac6c6f6f73655f6c6f7373657300af6c6f6f73655f737572766976696e6701ac617263686976655f77696e7300ae617263686976655f6c6f7373657300b1617263686976655f737572766976696e6700ad6964656e746974795f77696e7300af6964656e746974795f6c6f7373657300a5666c61677300',1);\nCREATE TABLE mods (\n    mod_id INTEGER PRIMARY KEY,\n    name_key TEXT NOT NULL UNIQUE,\n    name_display TEXT NOT NULL,\n    manifest_fingerprint BLOB NOT NULL DEFAULT X'',\n    manifest_generation INTEGER NOT NULL DEFAULT 0\n);\nINSERT INTO \"mods\" VALUES(1,'alpha','Alpha',X'e9120ddf445375afabad377b1c7b760af948af715402aa85',1);\nINSERT INTO \"mods\" VALUES(2,'beta','Beta',X'ea7d4916f0ae5aa4d5a27c8f5c7094acf7dcce006c334a94',2);\nINSERT INTO \"mods\" VALUES(3,'gamma','Gamma',X'dfb99ae988de803b5dc8409e7883c677b50a90adceff6824',3);\nINSERT INTO \"mods\" VALUES(4,'roottop','RootTop',X'938f56071a349a376c57fc5aa72492bf1dc4ac02c554e45d',4);\nINSERT INTO \"mods\" VALUES(5,'[overwrite]','[Overwrite]',X'e0c5c0cfa19d5a91f1266726c68c39967b210bc061db24e6',5);\nINSERT INTO \"mods\" VALUES(6,'[root_folder]','[Root_Folder]',X'cb0a6523054d11d2520ab87308d00bb33d4f44dfd8f17d03',6);\nCREATE TABLE operations (\n    operation_id TEXT PRIMARY KEY,\n    profile_id TEXT,\n    kind TEXT NOT NULL,\n    state TEXT NOT NULL,\n    phase TEXT NOT NULL DEFAULT 'planned',\n    payload BLOB NOT NULL DEFAULT X'',\n    created_ns INTEGER NOT NULL,\n    updated_ns INTEGER NOT NULL\n);\nCREATE TABLE profile_mods (\n    profile_id TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,\n    mod_id INTEGER NOT NULL REFERENCES mods(mod_id) ON DELETE CASCADE,\n    enabled INTEGER NOT NULL,\n    order_label INTEGER NOT NULL,\n    variant_id INTEGER REFERENCES route_variants(variant_id),\n    PRIMARY KEY(profile_id, mod_id)\n);\nINSERT INTO \"profile_mods\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',4,1,2767011611056432743,4);\nINSERT INTO \"profile_mods\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',2,1,922337203685477582,2);\nINSERT INTO \"profile_mods\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',1,1,-922337203685477579,1);\nINSERT INTO \"profile_mods\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',3,0,-2767011611056432740,3);\nCREATE TABLE profiles (\n    profile_id TEXT PRIMARY KEY,\n    intent_hash BLOB NOT NULL DEFAULT X'',\n    intent_payload BLOB NOT NULL DEFAULT X'',\n    rules_hash BLOB NOT NULL DEFAULT X'',\n    generation INTEGER NOT NULL DEFAULT 0,\n    inventory_generation INTEGER NOT NULL DEFAULT 0,\n    ready INTEGER NOT NULL DEFAULT 0\n);\nINSERT INTO \"profiles\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',X'b6d0a69e4de2a37b8f2d593494b44fbed9226515c0080b67',X'8faa70726f66696c655f6964d9322f746d702f68632d70726f64756365722d666978747572652d63766471395f6c6c2f70726f66696c65732f64656661756c74ab696e74656e745f68617368dc0018ccb6ccd0cca6cc9e4dcce2cca37bcc8f2d5934cc94ccb44fccbeccd9226515ccc0080b67aa72756c65735f68617368dc0014cc9b6eccae6144ccbc306cccf1cc99cc92ccbfccd87dcc944e245c29ccdbb370726576696f75735f72756c65735f6861736890a46d6f64739484a46e616d65a7526f6f74546f70a36b6579a7726f6f74746f70a7656e61626c6564c3ab76617269616e745f6b6579d9283833396232333965333838353336303132383363613166393563346136646166653236653765386484a46e616d65a442657461a36b6579a462657461a7656e61626c6564c3ab76617269616e745f6b6579d9283630376562373138393836383563306135353038656463353137336631363061343937383834323884a46e616d65a5416c706861a36b6579a5616c706861a7656e61626c6564c3ab76617269616e745f6b6579d9283630376562373138393836383563306135353038656463353137336631363061343937383834323884a46e616d65a547616d6d61a36b6579a567616d6d61a7656e61626c6564c2ab76617269616e745f6b6579d92836303765623731383938363835633061353530386564633531373366313630613439373838343238b07370656369616c5f76617269616e747382ab5b6f76657277726974655dd92836303765623731383938363835633061353530386564633531373366313630613439373838343238ad5b726f6f745f666f6c6465725dd92836303765623731383938363835633061353530386564633531373366313630613439373838343238ad617263686976655f6f7264657291b1616c70686100666978747572652e627361ac706c7567696e5f6f7264657292a766697874757265a7646f726d616e74b1706c7567696e5f657874656e73696f6e7393a42e657370a42e65736da42e65736cb564697361626c65645f706c7567696e5f706174687380b36c6f6f73655f62656174735f61726368697665c3b56e6f726d616c697a655f666f6c6465725f63617365c3af636173696e675f7374726174656779a87072657365727665ab636173696e675f70696e7380a468696e7482a46b696e64a466756c6ca46d6f647390',X'9b6eae6144bc306cf19992bfd87d944e245c29db',1,6,1);\nCREATE TABLE raw_files (\n    file_id INTEGER PRIMARY KEY,\n    mod_id INTEGER NOT NULL REFERENCES mods(mod_id) ON DELETE CASCADE,\n    source_rel BLOB NOT NULL,\n    source_display TEXT NOT NULL,\n    index_display TEXT NOT NULL DEFAULT '',\n    size INTEGER NOT NULL DEFAULT 0,\n    mtime_ns INTEGER NOT NULL DEFAULT 0,\n    ordinal INTEGER NOT NULL DEFAULT 0,\n    flags INTEGER NOT NULL DEFAULT 0,\n    UNIQUE(mod_id, source_rel)\n);\nINSERT INTO \"raw_files\" VALUES(1,1,X'466978747572652e627361','Fixture.bsa','Fixture.bsa',137,1794335589146725946,0,72);\nINSERT INTO \"raw_files\" VALUES(2,1,X'466978747572652e657370','Fixture.esp','Fixture.esp',42,1794335589146516707,1,196);\nINSERT INTO \"raw_files\" VALUES(3,1,X'6d65736865732f4361736556617269616e742e6e6966','meshes/CaseVariant.nif','meshes/CaseVariant.nif',5,1794335589146612676,2,64);\nINSERT INTO \"raw_files\" VALUES(4,1,X'4d65736865732f6578616d706c652e6e6966','Meshes/example.nif','Meshes/example.nif',5,1794335589146547536,3,64);\nINSERT INTO \"raw_files\" VALUES(5,1,X'4d65736865732f69676e6f7265642e6e6966','Meshes/ignored.nif','Meshes/ignored.nif',5,1794335589146690606,4,1088);\nINSERT INTO \"raw_files\" VALUES(6,1,X'4d65736865732f69676e6f7265642f666f6c6465722e6e6966','Meshes/ignored/folder.nif','Meshes/ignored/folder.nif',5,1794335589146699676,5,1088);\nINSERT INTO \"raw_files\" VALUES(7,1,X'4d65736865732f6f76657277726974652e6e6966','Meshes/overwrite.nif','Meshes/overwrite.nif',5,1794335589146568316,6,64);\nINSERT INTO \"raw_files\" VALUES(8,2,X'466978747572652e657370','Fixture.esp','Fixture.esp',42,1794335589146528236,0,196);\nINSERT INTO \"raw_files\" VALUES(9,2,X'4d45534845532f6361736576617269616e742e4e4946','MESHES/casevariant.NIF','MESHES/casevariant.NIF',4,1794335589146621456,1,64);\nINSERT INTO \"raw_files\" VALUES(10,2,X'4d65736865732f6578616d706c652e6e6966','Meshes/example.nif','Meshes/example.nif',4,1794335589146557466,2,64);\nINSERT INTO \"raw_files\" VALUES(11,2,X'4d65736865732f69676e6f7265642e6e6966','Meshes/ignored.nif','Meshes/ignored.nif',4,1794335589146708626,3,1088);\nINSERT INTO \"raw_files\" VALUES(12,2,X'4d65736865732f69676e6f7265642f666f6c6465722e6e6966','Meshes/ignored/folder.nif','Meshes/ignored/folder.nif',4,1794335589146716836,4,1088);\nINSERT INTO \"raw_files\" VALUES(13,3,X'446f726d616e742e657370','Dormant.esp','Dormant.esp',42,1794335589146537716,0,196);\nINSERT INTO \"raw_files\" VALUES(14,3,X'4d65736865732f646f726d616e742e6e6966','Meshes/dormant.nif','Meshes/dormant.nif',8,1794335589146675906,1,64);\nINSERT INTO \"raw_files\" VALUES(15,4,X'577261707065722f446174612f4d65736865732f746f702e6e6966','Wrapper/Data/Meshes/top.nif','Data/Meshes/top.nif',14,1794335589146654636,0,320);\nINSERT INTO \"raw_files\" VALUES(16,5,X'4d65736865732f6f76657277726974652e6e6966','Meshes/overwrite.nif','Meshes/overwrite.nif',9,1794335589146583386,0,64);\nINSERT INTO \"raw_files\" VALUES(17,6,X'446174612f4d65736865732f726f6f742e6e6966','Data/Meshes/root.nif','Data/Meshes/root.nif',4,1794335589146603966,0,320);\nCREATE TABLE raw_variant_files (\n    variant_id INTEGER NOT NULL REFERENCES route_variants(variant_id) ON DELETE CASCADE,\n    file_id INTEGER NOT NULL REFERENCES raw_files(file_id) ON DELETE CASCADE,\n    index_display TEXT NOT NULL DEFAULT '',\n    flags INTEGER NOT NULL DEFAULT 0,\n    PRIMARY KEY(variant_id, file_id)\n) WITHOUT ROWID;\nINSERT INTO \"raw_variant_files\" VALUES(1,1,'Fixture.bsa',72);\nINSERT INTO \"raw_variant_files\" VALUES(1,2,'Fixture.esp',196);\nINSERT INTO \"raw_variant_files\" VALUES(1,3,'meshes/CaseVariant.nif',64);\nINSERT INTO \"raw_variant_files\" VALUES(1,4,'Meshes/example.nif',64);\nINSERT INTO \"raw_variant_files\" VALUES(1,5,'Meshes/ignored.nif',1088);\nINSERT INTO \"raw_variant_files\" VALUES(1,6,'Meshes/ignored/folder.nif',1088);\nINSERT INTO \"raw_variant_files\" VALUES(1,7,'Meshes/overwrite.nif',64);\nINSERT INTO \"raw_variant_files\" VALUES(2,8,'Fixture.esp',196);\nINSERT INTO \"raw_variant_files\" VALUES(2,9,'MESHES/casevariant.NIF',64);\nINSERT INTO \"raw_variant_files\" VALUES(2,10,'Meshes/example.nif',64);\nINSERT INTO \"raw_variant_files\" VALUES(2,11,'Meshes/ignored.nif',1088);\nINSERT INTO \"raw_variant_files\" VALUES(2,12,'Meshes/ignored/folder.nif',1088);\nINSERT INTO \"raw_variant_files\" VALUES(3,13,'Dormant.esp',196);\nINSERT INTO \"raw_variant_files\" VALUES(3,14,'Meshes/dormant.nif',64);\nINSERT INTO \"raw_variant_files\" VALUES(4,15,'Data/Meshes/top.nif',320);\nINSERT INTO \"raw_variant_files\" VALUES(5,16,'Meshes/overwrite.nif',64);\nINSERT INTO \"raw_variant_files\" VALUES(6,17,'Data/Meshes/root.nif',320);\nCREATE TABLE route_variants (\n    variant_id INTEGER PRIMARY KEY,\n    mod_id INTEGER NOT NULL REFERENCES mods(mod_id) ON DELETE CASCADE,\n    variant_key TEXT NOT NULL,\n    rules_hash BLOB NOT NULL DEFAULT X'',\n    UNIQUE(mod_id, variant_key)\n);\nINSERT INTO \"route_variants\" VALUES(1,1,'607eb71898685c0a5508edc5173f160a49788428',X'1f079940fb7a413474aeaf3c9c3712575d3e4c7b');\nINSERT INTO \"route_variants\" VALUES(2,2,'607eb71898685c0a5508edc5173f160a49788428',X'1f079940fb7a413474aeaf3c9c3712575d3e4c7b');\nINSERT INTO \"route_variants\" VALUES(3,3,'607eb71898685c0a5508edc5173f160a49788428',X'1f079940fb7a413474aeaf3c9c3712575d3e4c7b');\nINSERT INTO \"route_variants\" VALUES(4,4,'839b239e38853601283ca1f95c4a6dafe26e7e8d',X'1f079940fb7a413474aeaf3c9c3712575d3e4c7b');\nINSERT INTO \"route_variants\" VALUES(5,5,'607eb71898685c0a5508edc5173f160a49788428',X'1f079940fb7a413474aeaf3c9c3712575d3e4c7b');\nINSERT INTO \"route_variants\" VALUES(6,6,'607eb71898685c0a5508edc5173f160a49788428',X'1f079940fb7a413474aeaf3c9c3712575d3e4c7b');\nCREATE TABLE targets (\n    target_id INTEGER PRIMARY KEY,\n    target_key TEXT NOT NULL UNIQUE\n);\nINSERT INTO \"targets\" VALUES(1,'game');\nCREATE TABLE winners (\n    profile_id TEXT NOT NULL REFERENCES profiles(profile_id) ON DELETE CASCADE,\n    namespace INTEGER NOT NULL,\n    destination_id INTEGER NOT NULL REFERENCES destinations(destination_id),\n    candidate_id INTEGER NOT NULL REFERENCES candidates(candidate_id),\n    generation INTEGER NOT NULL,\n    PRIMARY KEY(profile_id, namespace, destination_id)\n) WITHOUT ROWID;\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',0,1,1,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',0,2,9,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',0,3,10,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',0,4,11,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',0,5,12,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',0,6,13,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',0,7,17,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',1,11,16,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',1,12,18,1);\nINSERT INTO \"winners\" VALUES('/tmp/hc-producer-fixture-cvdq9_ll/profiles/default',2,8,8,1);\nCREATE INDEX idx_raw_files_mod ON raw_files(mod_id);\nCREATE INDEX idx_raw_files_mod_ordinal ON raw_files(mod_id, ordinal);\nCREATE INDEX idx_variants_mod ON route_variants(mod_id, variant_key);\nCREATE INDEX idx_raw_variant_file ON raw_variant_files(file_id);\nCREATE INDEX idx_candidates_variant ON candidates(variant_id);\nCREATE INDEX idx_candidates_file ON candidates(file_id);\nCREATE INDEX idx_candidates_destination ON candidates(destination_id);\nCREATE INDEX idx_identities_key ON candidate_identities(identity_kind, identity_key);\nCREATE INDEX idx_archive_members_destination ON archive_members(destination_id);\nCREATE INDEX idx_profile_mods_mod ON profile_mods(mod_id);\nCREATE INDEX idx_profile_mods_variant ON profile_mods(variant_id);\nCREATE INDEX idx_winners_candidate ON winners(candidate_id);\nCREATE INDEX idx_conflict_edges_loser ON conflict_edges(loser_mod_id);\nCREATE INDEX idx_conflict_edges_winner ON conflict_edges(winner_mod_id);\nCREATE INDEX idx_mod_summaries_mod ON mod_summaries(mod_id);\nCREATE INDEX idx_operations_profile_state ON operations(profile_id, state);\nCOMMIT;\nPRAGMA user_version=10;",
+  "files": {
+    "mods/Alpha/Fixture.esp": "VEVTNBIAAAAAAAAAAAAAAAAAAAAsAAAASEVEUgwAmpnZPwAAAAAACAAA",
+    "mods/Beta/Fixture.esp": "VEVTNBIAAAAAAAAAAAAAAAAAAAAsAAAASEVEUgwAmpnZPwAAAAAACAAA",
+    "mods/Gamma/Dormant.esp": "VEVTNBIAAAAAAAAAAAAAAAAAAAAsAAAASEVEUgwAmpnZPwAAAAAACAAA",
+    "mods/Alpha/Meshes/example.nif": "QWxwaGE=",
+    "mods/Beta/Meshes/example.nif": "QmV0YQ==",
+    "mods/Alpha/Meshes/overwrite.nif": "QWxwaGE=",
+    "overwrite/Meshes/overwrite.nif": "b3ZlcndyaXRl",
+    "Root_Folder/Data/Meshes/root.nif": "cm9vdA==",
+    "mods/Alpha/meshes/CaseVariant.nif": "QWxwaGE=",
+    "mods/Beta/MESHES/casevariant.NIF": "QmV0YQ==",
+    "mods/RootTop/meta.ini": "W0dlbmVyYWxdCnJvb3RGb2xkZXI9dHJ1ZQo=",
+    "mods/RootTop/Wrapper/Data/Meshes/top.nif": "dG9wLWxldmVsLXJvb3Q=",
+    "mods/Alpha/Excluded/hidden.nif": "ZXhjbHVkZWQ=",
+    "mods/Gamma/Meshes/dormant.nif": "ZGlzYWJsZWQ=",
+    "mods/Alpha/Meshes/ignored.nif": "QWxwaGE=",
+    "mods/Alpha/Meshes/ignored/folder.nif": "QWxwaGE=",
+    "mods/Beta/Meshes/ignored.nif": "QmV0YQ==",
+    "mods/Beta/Meshes/ignored/folder.nif": "QmV0YQ==",
+    "mods/Alpha/Fixture.bsa": "QlNBAGkAAAAkAAAAAwAAAAEAAAABAAAAHwAAAAwAAAAAAAAAbm8ec6rQkBgBAAAAAAAAAEgAAAAAAAAAH3Nrc2VccGx1Z2luc1xza3lwYXRjaGVyXHdlYXBvbgB5bAdiI7sepxEAAAB4AAAAYnNhb25seS5pbmkAYXR0YWNrRGFtYWdlPTQyDQo="
+  },
+  "profile_files": {
+    "profile_state.json": "{\"mod_strip_prefixes\": {\"RootTop\": [\"Wrapper\"]}}",
+    "plugins.txt": "*Fixture.esp\nDormant.esp\n",
+    "loadorder.txt": "Fixture.esp\nDormant.esp\n",
+    "modlist.txt": "+RootTop\n+Beta\n+Alpha\n-Gamma\n"
+  },
+  "winners": [
+    {
+      "destination": "data/fixture.bsa",
+      "namespace": "normal",
+      "mod": "Alpha",
+      "source": "Fixture.bsa",
+      "providers": [
+        "Alpha"
+      ]
+    },
+    {
+      "destination": "data/fixture.esp",
+      "namespace": "normal",
+      "mod": "Beta",
+      "source": "Fixture.esp",
+      "providers": [
+        "Alpha",
+        "Beta"
+      ]
+    },
+    {
+      "destination": "data/meshes/casevariant.nif",
+      "namespace": "normal",
+      "mod": "Beta",
+      "source": "MESHES/casevariant.NIF",
+      "providers": [
+        "Alpha",
+        "Beta"
+      ]
+    },
+    {
+      "destination": "data/meshes/example.nif",
+      "namespace": "normal",
+      "mod": "Beta",
+      "source": "Meshes/example.nif",
+      "providers": [
+        "Alpha",
+        "Beta"
+      ]
+    },
+    {
+      "destination": "data/meshes/ignored.nif",
+      "namespace": "normal",
+      "mod": "Beta",
+      "source": "Meshes/ignored.nif",
+      "providers": [
+        "Alpha",
+        "Beta"
+      ]
+    },
+    {
+      "destination": "data/meshes/ignored/folder.nif",
+      "namespace": "normal",
+      "mod": "Beta",
+      "source": "Meshes/ignored/folder.nif",
+      "providers": [
+        "Alpha",
+        "Beta"
+      ]
+    },
+    {
+      "destination": "data/meshes/overwrite.nif",
+      "namespace": "normal",
+      "mod": "[Overwrite]",
+      "source": "Meshes/overwrite.nif",
+      "providers": [
+        "Alpha",
+        "[Overwrite]"
+      ]
+    },
+    {
+      "destination": "data/meshes/root.nif",
+      "namespace": "root",
+      "mod": "[Root_Folder]",
+      "source": "Data/Meshes/root.nif",
+      "providers": [
+        "[Root_Folder]"
+      ]
+    },
+    {
+      "destination": "data/meshes/top.nif",
+      "namespace": "root",
+      "mod": "RootTop",
+      "source": "Wrapper/Data/Meshes/top.nif",
+      "providers": [
+        "RootTop"
+      ]
+    },
+    {
+      "destination": "data/skse/plugins/skypatcher/weapon/bsaonly.ini",
+      "namespace": "archive",
+      "mod": "Alpha",
+      "source": "Fixture.bsa",
+      "providers": [
+        "Alpha"
+      ]
+    }
+  ],
+  "intent": {
+    "profile_id": "/tmp/hc-producer-fixture-cvdq9_ll/profiles/default",
+    "intent_hash": [
+      182,
+      208,
+      166,
+      158,
+      77,
+      226,
+      163,
+      123,
+      143,
+      45,
+      89,
+      52,
+      148,
+      180,
+      79,
+      190,
+      217,
+      34,
+      101,
+      21,
+      192,
+      8,
+      11,
+      103
+    ],
+    "rules_hash": [
+      155,
+      110,
+      174,
+      97,
+      68,
+      188,
+      48,
+      108,
+      241,
+      153,
+      146,
+      191,
+      216,
+      125,
+      148,
+      78,
+      36,
+      92,
+      41,
+      219
+    ],
+    "previous_rules_hash": [],
+    "mods": [
+      {
+        "name": "RootTop",
+        "key": "roottop",
+        "enabled": true,
+        "variant_key": "839b239e38853601283ca1f95c4a6dafe26e7e8d"
+      },
+      {
+        "name": "Beta",
+        "key": "beta",
+        "enabled": true,
+        "variant_key": "607eb71898685c0a5508edc5173f160a49788428"
+      },
+      {
+        "name": "Alpha",
+        "key": "alpha",
+        "enabled": true,
+        "variant_key": "607eb71898685c0a5508edc5173f160a49788428"
+      },
+      {
+        "name": "Gamma",
+        "key": "gamma",
+        "enabled": false,
+        "variant_key": "607eb71898685c0a5508edc5173f160a49788428"
+      }
+    ],
+    "special_variants": {
+      "[overwrite]": "607eb71898685c0a5508edc5173f160a49788428",
+      "[root_folder]": "607eb71898685c0a5508edc5173f160a49788428"
+    },
+    "archive_order": [
+      "alpha\u0000fixture.bsa"
+    ],
+    "plugin_order": [
+      "fixture",
+      "dormant"
+    ],
+    "plugin_extensions": [
+      ".esp",
+      ".esm",
+      ".esl"
+    ],
+    "disabled_plugin_paths": {},
+    "loose_beats_archive": true,
+    "normalize_folder_case": true,
+    "casing_strategy": "preserve",
+    "casing_pins": {},
+    "hint": {
+      "kind": "full",
+      "mods": []
+    }
+  }
+}

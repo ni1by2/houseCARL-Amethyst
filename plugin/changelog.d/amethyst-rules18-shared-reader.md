@@ -1,0 +1,1 @@
+Amethyst 2.6.3 snapshots reuse the verified rules-15 reader; 2.6.4-beta.1 uses its matching rules-19 reader. Exact archive and provider identities keep case-distinct mod folders separate. Original producer identity remains pinned for freshness and transaction checks; unverified contracts still refuse. This is an unreleased source change, not an update to the 2.1.3 download.

@@ -76,7 +76,7 @@ Packaged builds load `amethyst_filegraph.abi3.so`,
 `amethyst_filegraph_schema10.abi3.so` and
 `amethyst_filegraph_schema10_rules15.abi3.so` beside the server. The Python helper
 checks API and schema before opening the copy; the returned status frame then
-verifies the complete contract before profile or winner frames are accepted.
+verifies the selected reader's API/schema/engine/rules and captured inventory before profile or winner frames are accepted. Unreleased source maps the separately verified schema-10/rules-18 producer to the rules-15 reader and rules 19 to its matching reader, while retaining the original producer identity for freshness and transactions. The fourth module is `amethyst_filegraph_schema10_rules19.abi3.so`; developer builds set `AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19`. See the [compatibility policy](amethyst-shared-reader-compatibility.md).
 `AMETHYST_FILEGRAPH_PYTHON` optionally
 selects the Python interpreter; the default is `python3`.
 

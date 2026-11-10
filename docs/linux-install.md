@@ -2,6 +2,8 @@
 
 Version [2.1.3 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.3), targeting Ubuntu 24.04 x64. Python 3.12 or newer is required. It supports API 13 with schema 9/rules 13, schema 10/rules 14, and schema 10/rules 15, all at engine revision 1. The readers are separately pinned to Amethyst 2.5.4, 2.6.0-beta.7 and 2.6.2-beta.3. Stable 2.6.1 was reviewed with the unchanged rules-14 contract. Other contracts refuse until verified.
 
+The unreleased [compatibility source update](architecture/amethyst-shared-reader-compatibility.md) adds Amethyst 2.6.3 support using the existing rules-15 reader and 2.6.4-beta.1 support using its matching rules-19 reader. The 2.1.3 download below does not include it. There is no new upgrade download for that change yet.
+
 The [2.1.3 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.3/docs/testing/upstream-integration-2026-11-02.md) covers bulk-read integration, rules-15 compatibility, independent review and package checks. The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md) covers the compatibility fix, vanilla archive handling, package checks and read-only profile acceptance. Installation, isolated host registration and a disposable Proton CachyOS round trip were checked for [2.0.5](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md); those system workflows were not repeated for 2.1.3. The installer and pinned Papyrus utilities are unchanged.
 
 Download these three assets from **the same release** into a new directory:
