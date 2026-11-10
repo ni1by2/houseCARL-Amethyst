@@ -28,7 +28,7 @@ class CompatibilityHarnessTests(unittest.TestCase):
         original = dict(candidate_id=1, namespace='normal', target='game', mod_key='alpha',
                         destination_key=[100, 97, 116, 97], source_rel=[97])
         worker.check_winners([original], [copy.deepcopy(original)])
-        for field, value in [('candidate_id', 2), ('mod_key', 'beta'), ('source_rel', [98]),
+        for field, value in [('candidate_id', 2), ('mod_key', 'beta'), ('mod_key', 'Alpha'), ('source_rel', [98]),
                              ('namespace', 'root'), ('target', 'other'), ('destination_key', [98])]:
             with self.subTest(field=field):
                 changed = dict(original, **{field: value})
@@ -67,6 +67,20 @@ class CompatibilityHarnessTests(unittest.TestCase):
         with patch.object(worker, 'reader_metadata', return_value={'api': 13, 'schema': 9}):
             result = worker.compare_reader(Path('/unused'), {'contract': {'api': 13, 'schema': 10}}, Path('/reader'), Path('/helper'))
             self.assertEqual('not_applicable', result['status'])
+
+    def test_producer_invariants_allow_case_preserved_keys_without_normalizing_parity(self):
+        rows = [("meshes/example.nif", "Beta"), ("meshes/overwrite.nif", "[Overwrite]"),
+                ("meshes/ignored.nif", "Beta"), ("meshes/ignored/folder.nif", "Beta"), ("meshes/top.nif", "RootTop")]
+        for preserve in (False, True):
+            winners = [{'destination_key': list(('data/' + path).encode()), 'namespace': 'normal',
+                        'mod_name': mod, 'mod_key': mod if preserve else mod.lower()} for path, mod in rows]
+            winners.append({'destination_key': list(b'data/archive-member'), 'namespace': 'archive', 'mod_name': 'Alpha'})
+            expected = dict(winners=winners, export_matches_paging=True, contract={'rules': 19},
+                            conflict_only=[dict(conflict_status=0, winning=True, deployable=True)] * 2)
+            worker.producer_invariants(expected)
+            winners.append({'destination_key': list(b'data/hidden'), 'namespace': 'normal', 'mod_name': 'Gamma'})
+            with self.assertRaisesRegex(ValueError, 'disabled or excluded'):
+                worker.producer_invariants(expected)
 
     def test_future_contract_is_unsupported_transport_not_reader_regression(self):
         with tempfile.TemporaryDirectory() as raw:

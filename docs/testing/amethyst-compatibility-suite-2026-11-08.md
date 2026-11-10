@@ -30,3 +30,11 @@ Initial harness runs exposed an incorrect paging assumption, missing Data prefix
 The [usage guide](../amethyst-compatibility-testing.md) describes local runs, the input-ref workflow, report fields and exit codes. JSON reports retain exact source/binary/probe hashes and server admission independently of native parity. Setup failures and failed comparisons remain distinct.
 
 This does not certify managed writes, transaction races, every archive/handler case, real deployment, Proton or gameplay. Existing adapter and transaction suites remain required when changing production compatibility policy. No local C# rebuild or duplicate full C# run was needed for these Python/test-documentation changes; the repository's PR CI remains the required build/test check before merge. No release or automatic compatibility approval is included.
+
+## Follow-up checks, 10 November
+
+The blocked GitHub downloads recovered. All four original producer comparisons passed remotely. Full CI passed 7,880 C# tests with one existing Windows-only skip, and all 29 Python tests. Packaging then detected the current CI runtime patch, .NET 10.0.15, against notices recorded for 10.0.14. Both notice copies were regenerated from a real self-contained publish using the checksum-verified Microsoft SDK 10.0.404.
+
+Amethyst's newer published build is `v2.6.4-beta.1`, commit `8ac86bdb9bc6f32b5c49eae69890ae96e4f16943`, API 13/schema 10/engine 1/rules 19. The same bounded experiment passed with its own native control, the bundled rules-14/rules-15 readers and an additional rules-18 reader. The baseline MCP server correctly remained blocked by its production contract check. Producer inputs retained their data hashes.
+
+Rules 19 preserves ordinary mod-key casing. Fixture invariants now check physical display names instead of assuming lowercased keys; exact key bytes remain part of the reader comparison. A negative test covers that distinction. These results do not certify case-distinct mod folders or archive-order behavior, which require additional runtime fixtures before admission.

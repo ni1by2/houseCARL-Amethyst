@@ -242,15 +242,15 @@ def producer_invariants(expected):
     find = lambda path: [row for row in winners if bytes(row['destination_key']).decode().lower() == path]
     if not expected['export_matches_paging']:
         raise ValueError('producer export differs from paged winners')
-    for path, mod in [('data/meshes/example.nif', 'beta'), ('data/meshes/overwrite.nif', '[overwrite]'),
-                      ('data/meshes/ignored.nif', 'beta'), ('data/meshes/ignored/folder.nif', 'beta')]:
-        if not any(row['mod_key'] == mod for row in find(path)):
+    for path, mod in [('data/meshes/example.nif', 'Beta'), ('data/meshes/overwrite.nif', '[Overwrite]'),
+                      ('data/meshes/ignored.nif', 'Beta'), ('data/meshes/ignored/folder.nif', 'Beta')]:
+        if not any(row['mod_name'] == mod for row in find(path)):
             raise ValueError('producer violated fixture winner invariant: ' + path)
-    if any(row['mod_key'] == 'gamma' or b'excluded' in bytes(row['destination_key']).lower() for row in winners):
+    if any(row['mod_name'] == 'Gamma' or b'excluded' in bytes(row['destination_key']).lower() for row in winners):
         raise ValueError('producer exposed disabled or excluded files')
     if not any(row['namespace'] == 'archive' for row in winners):
         raise ValueError('producer fixture failed to exercise archive winners')
-    if expected['contract']['rules'] >= 15 and not any(row['mod_key'] == 'roottop' for row in find('data/meshes/top.nif')):
+    if expected['contract']['rules'] >= 15 and not any(row['mod_name'] == 'RootTop' for row in find('data/meshes/top.nif')):
         raise ValueError('producer root strip-prefix invariant failed')
     if expected['contract']['rules'] >= 18:
         ignored = expected.get('conflict_only', [])
