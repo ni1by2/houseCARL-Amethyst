@@ -72,6 +72,7 @@ class LinuxPackageTests(unittest.TestCase):
                 "dist/linux-base/server/amethyst_filegraph.abi3.so": b"native",
                 "dist/linux-base/server/amethyst_filegraph_schema10.abi3.so": b"native-schema10",
                 "dist/linux-base/server/amethyst_filegraph_schema10_rules15.abi3.so": b"native-schema10-rules15",
+                "dist/linux-base/server/amethyst_filegraph_schema10_rules19.abi3.so": b"native-schema10-rules19",
                 "dist/linux-base/server/amethyst_snapshot.py": b"helper",
                 "dist/linux-base/server/corpus.json": b"{}",
                 "plugin/codex/housecarl/SKILL.md": b"umbrella",
@@ -107,6 +108,7 @@ class LinuxPackageTests(unittest.TestCase):
                 self.assertIn("server/libhostpolicy.so", names)
                 self.assertIn("server/amethyst_filegraph_schema10.abi3.so", names)
                 self.assertIn("server/amethyst_filegraph_schema10_rules15.abi3.so", names)
+                self.assertIn("server/amethyst_filegraph_schema10_rules19.abi3.so", names)
                 self.assertIn("claude/skills/example/references/data.jsonl", names)
                 self.assertIn("codex/skills/housecarl/SKILL.md", names)
                 self.assertNotIn("claude/skills/example/evals/evals.json", names)
@@ -118,13 +120,18 @@ class LinuxPackageTests(unittest.TestCase):
             manifest, _ = installer.inspect_archive(archive)
             self.assertEqual("1.2.3", manifest["version"])
             self.assertEqual([9, 10], manifest["native_filegraph_schemas"])
-            self.assertEqual([{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}],
+            self.assertEqual([{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}, {"schema": 10, "rules": 19}],
                              manifest["native_filegraph_contracts"])
             extra_reader = root / "dist/linux-base/server/amethyst_filegraph_schema10_rules15.abi3.so"
             extra_reader.unlink()
             with self.assertRaisesRegex(ValueError, "amethyst_filegraph_schema10_rules15"):
                 package_linux.build(root, root / "out/missing-reader.tar.gz", native_tools)
             extra_reader.write_bytes(b"native-schema10-rules15")
+            extra_reader = root / "dist/linux-base/server/amethyst_filegraph_schema10_rules19.abi3.so"
+            extra_reader.unlink()
+            with self.assertRaisesRegex(ValueError, "amethyst_filegraph_schema10_rules19"):
+                package_linux.build(root, root / "out/missing-rules19-reader.tar.gz", native_tools)
+            extra_reader.write_bytes(b"native-schema10-rules19")
 
             (root / "dist/linux-base/server/housecarl-mcp.dll").unlink()
             with self.assertRaisesRegex(ValueError, "self-contained server publish output is incomplete"):

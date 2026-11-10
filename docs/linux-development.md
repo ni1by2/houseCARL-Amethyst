@@ -2,7 +2,9 @@
 
 The source build and CI target Ubuntu 24.04 x64. Version 2.1.3 supports API 13 with schema 9/rules 13, schema 10/rules 14, and schema 10/rules 15, all at engine revision 1. CI builds all three separately pinned native readers. All three modules are required to assemble the package.
 
-For the 2.1.3 Linux preview downloads, use the [installation guide](linux-install.md). The [verification record](testing/upstream-integration-2026-11-02.md) lists the completed integration and package checks. The commands below build the same supported contracts from source.
+Unreleased source additionally admits schema 10/rules 18 from Amethyst 2.6.3 using the existing rules-15 reader. Rules 19 from 2.6.4-beta.1 requires its own reader because native archive ranking changed. Build that fourth module from `8ac86bdb9bc6f32b5c49eae69890ae96e4f16943` with the same upstream `native/amethyst_filegraph/build.sh` procedure and export `AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19` to its absolute `src/amethyst_filegraph.abi3.so` path before testing or packaging. The [compatibility policy](architecture/amethyst-shared-reader-compatibility.md) explains the verified mappings. The .NET 10 requirement is unchanged.
+
+For the 2.1.3 Linux preview downloads, use the [installation guide](linux-install.md). The [verification record](testing/upstream-integration-2026-11-02.md) lists the completed integration and package checks. The commands below build the source candidate, including its unreleased compatibility updates.
 
 Version 2.1.3 targets .NET 10 and includes Asset Walk. The Linux archive bundles the runtime; installing a new SDK does not replace an installed server.
 
@@ -28,6 +30,9 @@ export AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10="$(realpath ../Amethyst-Schema10/sr
 git -C ../Amethyst-Mod-Manager worktree add --detach ../Amethyst-Rules15 7de35eaf0c7191defa7aee33d61452ddf73f7da3
 (cd ../Amethyst-Rules15 && native/amethyst_filegraph/build.sh)
 export AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15="$(realpath ../Amethyst-Rules15/src/amethyst_filegraph.abi3.so)"
+git -C ../Amethyst-Mod-Manager worktree add --detach ../Amethyst-Rules19 8ac86bdb9bc6f32b5c49eae69890ae96e4f16943
+(cd ../Amethyst-Rules19 && native/amethyst_filegraph/build.sh)
+export AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19="$(realpath ../Amethyst-Rules19/src/amethyst_filegraph.abi3.so)"
 ```
 
 ## Create a connection manifest from source
@@ -51,7 +56,7 @@ dotnet test src/housecarl-mcp-tests -c Release --no-build
 python3 -m unittest discover -s scripts/tests -v
 ```
 
-The C# suite uses all three native extensions exported above. The schema-10/rules-14 fixture comes from the real beta.7 producer with preserved casing enabled; the rules-15 fixture comes from beta.3 and exercises root-mod Top Level routing. Installer and package checks run in isolated temporary homes and leave the current host registration unchanged.
+The C# suite uses all four native extensions. The schema-10/rules-14 fixture comes from the real beta.7 producer with preserved casing enabled; the rules-15 fixture comes from beta.3 and exercises root-mod Top Level routing. The rules-18 fixture comes from the real 2.6.3 producer and uses the rules-15 reader. The rules-19 fixture comes from 2.6.4-beta.1 and covers case-distinct mod folders, plugin-bound archive provider order and exact named-source selection using the matching rules-19 reader. Catalog serialization round-trips every table, preserving embedded NULs in archive keys. Installer and package checks run in isolated temporary homes and leave the current host registration unchanged.
 
 The C# test executor sets `XDG_STATE_HOME` to a private temporary directory before running tests. Each default MCP server fixture also gets its own state directory; fixtures can explicitly select a different temporary root. This keeps unfinished synthetic transactions out of the developer's real state directory, where they would block package installation. Cleanup runs when the owning fixture is disposed or the test process exits normally.
 
@@ -59,7 +64,7 @@ For a new upstream Amethyst tag or commit, run the [compatibility experiment](am
 
 ## Assemble a Linux package candidate
 
-The release recipe targets Ubuntu 24.04 x64 and requires Python 3.12+, the native build tools above, and all three Amethyst extensions built from the pinned sources. Run `scripts/build-linux-package.sh` from the repository root with all three native-module variables exported above. Package installation, upgrade, rollback, uninstall and selected-Proton acceptance are separate release checks; passing the source CI does not claim those checks have run.
+The release recipe targets Ubuntu 24.04 x64 and requires Python 3.12+, the native build tools above, and all four Amethyst extensions built from the pinned sources. Run `scripts/build-linux-package.sh` from the repository root with all four native-module variables exported above. Package installation, upgrade, rollback, uninstall and selected-Proton acceptance are separate release checks; passing the source CI does not claim those checks have run.
 
 The current Arch-derived development build is useful for development and tests, but its glibc 2.44 native binaries cannot be used for the Ubuntu 24.04 package. Build the distributable native tools on Ubuntu 24.04 x64, where the glibc baseline is 2.39.
 

@@ -18,6 +18,7 @@ public sealed class AmethystSavedSnapshot
     internal ulong ProducerRulesRevision { get; private set; }
     /// <summary>Exact captured contract retained by durable staging and recovery journals.</summary>
     public string ProducerContract => $"amethyst-schema{SchemaVersion}-engine1-rules{ProducerRulesRevision}";
+    public IReadOnlyCollection<string>? ProviderNames { get; private set; }
     /// <summary>The selected profile and catalog generation, with an unverified-freshness warning.</summary>
     public AmethystSnapshotProvenance Provenance { get; private set; } = null!;
     /// <summary>Canonical profile folder selected by deploy_state.json.</summary>
@@ -222,7 +223,7 @@ public sealed class AmethystSavedSnapshot
             ProducerRulesRevision = MetaNumber(database, "rules_revision");
             if (MetaNumber(database, "engine_revision") != 1 ||
                 AmethystNativeSnapshot.ReaderFor(SchemaVersion, ProducerRulesRevision) is null)
-                throw new InvalidOperationException($"unsupported Amethyst filegraph schema or engine/rules revision; found schema {SchemaVersion}, rules {ProducerRulesRevision}; this build supports schema 9/rules 13 or schema 10/rules 14 or 15, engine 1");
+                throw new InvalidOperationException($"unsupported Amethyst filegraph schema or engine/rules revision; found schema {SchemaVersion}, rules {ProducerRulesRevision}; this build supports schema 9/rules 13 or schema 10/rules 14, 15, 18 or 19, engine 1");
             if (!Meta(database, "ready").AsSpan().SequenceEqual(new byte[] { 1 }))
                 throw new InvalidOperationException("Amethyst filegraph catalog is not ready; refresh it in Amethyst");
             var inventory = MetaNumber(database, "inventory_generation");
@@ -240,6 +241,8 @@ public sealed class AmethystSavedSnapshot
         Composition = ReadComposition();
         ReadEffectiveInputs(paths.RootElement);
         ReadVanillaArchives();
+        if (ProviderNames is not null)
+            ProviderNames = ProviderNames.Concat(VanillaArchives.Select(a => Path.GetFileName(a.Path))).Distinct(StringComparer.Ordinal).ToArray();
         OrderedPluginPaths = ResolvePlugins();
         Provenance = Provenance with { VanillaArchivesOmitted = _vanillaArchiveCoverageIncomplete };
         DeploymentTargetVerified = !_deploymentExpected || _nativeDeploymentMatches;
@@ -544,7 +547,11 @@ public sealed class AmethystSavedSnapshot
         {
             var ranks = name == "archive_order" ? _archiveRanks : _pluginRanks;
             long index = 1;
-            foreach (var value in _intent.RootElement.GetProperty(name).EnumerateArray()) ranks[value.GetString()!.ToLowerInvariant()] = index++;
+            foreach (var value in _intent.RootElement.GetProperty(name).EnumerateArray())
+            {
+                var key = value.GetString()!;
+                ranks[name == "archive_order" ? key : key.ToLowerInvariant()] = index++;
+            }
         }
         var mods = _intent.RootElement.GetProperty("mods").EnumerateArray().ToDictionary(
             m => m.GetProperty("key").GetString()!, m => (Variant: m.GetProperty("variant_key").GetString()!, Enabled: m.GetProperty("enabled").GetBoolean()), StringComparer.Ordinal);
@@ -594,6 +601,11 @@ public sealed class AmethystSavedSnapshot
         while (identitiesReader.Read())
             if (_candidates.TryGetValue(identitiesReader.GetInt64(0), out var candidate))
                 candidate.Identities.Add(Convert.ToHexString(identitiesReader.GetFieldValue<byte[]>(1)));
+        if (ProducerRulesRevision >= 19)
+            ProviderNames = _candidates.Values
+                .SelectMany(c => c.Kind == 3 ? new[] { c.Mod, Path.GetFileName(c.Source) } : new[] { c.ModKey == "[overwrite]" ? "overwrite" : c.Mod })
+                .Concat(_intent.RootElement.GetProperty("mods").EnumerateArray().Select(m => m.GetProperty("name").GetString()!))
+                .Append("Data").Distinct(StringComparer.Ordinal).ToArray();
     }
 
     /// <summary>Use the same native snapshot restoration as Amethyst; its SQL winner projection can omit valid entries.</summary>
@@ -637,7 +649,7 @@ public sealed class AmethystSavedSnapshot
     {
         var normal = candidate.Kind == 2 ? long.MaxValue / 4 : _modRanks.GetValueOrDefault(candidate.ModKey);
         if (candidate.Kind != 3) return (normal, normal, candidate.Ordinal, candidate.Id);
-        var archive = candidate.ArchiveKey is { } key ? _archiveRanks.GetValueOrDefault(key.ToLowerInvariant(), normal) : normal;
+        var archive = candidate.ArchiveKey is { } key ? _archiveRanks.GetValueOrDefault(key, normal) : normal;
         return candidate.PluginKey is { } plugin
             ? (long.MaxValue / 8 + _pluginRanks.GetValueOrDefault(plugin.ToLowerInvariant(), normal), archive, candidate.Ordinal, candidate.Id)
             : (archive, normal, candidate.Ordinal, candidate.Id);
@@ -720,9 +732,9 @@ public sealed class AmethystSavedSnapshot
 
     public bool HasActiveProvider(string name) => _providers.Values.Any(copies => copies.Any(c => Named(c, name)));
 
-    static bool Named(Candidate c, string name) => AssetSourceSelection.NameMatches(
+    bool Named(Candidate c, string name) => AssetSourceSelection.NameMatches(
         c.Kind == 3 ? Path.GetFileName(c.Source) : c.ModKey == "[overwrite]" ? "overwrite" : c.Mod,
-        c.Kind == 3 ? c.Mod : null, name);
+        c.Kind == 3 ? c.Mod : null, name, ProviderNames);
 
     /// <summary>An explicit donor read from the selected saved variant, respecting routing and file exclusions.</summary>
     public OffOrderLookup ResolveNamedAsset(string? provider, string relative)
@@ -818,7 +830,7 @@ public sealed class AmethystSavedSnapshot
 
     /// <summary>Top-level Data files supplied by an enabled saved loose provider; never discovers new staging files.</summary>
     public IReadOnlyCollection<string> LooseRootFiles(string provider) => _providers.Values.SelectMany(p => p)
-        .Where(c => c.Kind != 3 && (c.ModKey == "[overwrite]" ? "overwrite" : c.Mod).Equals(provider, StringComparison.OrdinalIgnoreCase)
+        .Where(c => c.Kind != 3 && Named(c, provider)
             && c.Destination.StartsWith("data/", StringComparison.OrdinalIgnoreCase) && !c.Destination[5..].Contains('/'))
         .Select(c => c.Destination[5..]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
@@ -849,7 +861,7 @@ public sealed class AmethystSavedSnapshot
     {
         SafePart(filename, "plugin filename");
         var candidates = _candidates.Values.Where(c => c.Kind != 3 && Path.GetFileName(c.Destination).Equals(filename, StringComparison.OrdinalIgnoreCase)
-            && (mod is null || c.Mod.Equals(mod, StringComparison.OrdinalIgnoreCase))).GroupBy(c => (c.Mod, c.Source)).Select(g => g.First()).ToList();
+            && (mod is null || AssetSourceSelection.NameMatches(c.Mod, null, mod, ProviderNames))).GroupBy(c => (c.Mod, c.Source)).Select(g => g.First()).ToList();
         if (candidates.Count > 1) throw new InvalidOperationException($"'{filename}' has several saved sources; specify source.mod to choose one");
         return candidates.Count == 1 ? SourcePath(candidates[0]) : mod is null ? VanillaFile(filename) : null;
     }

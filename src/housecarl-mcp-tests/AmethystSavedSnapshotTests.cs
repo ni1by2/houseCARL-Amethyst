@@ -28,6 +28,10 @@ public sealed class AmethystSavedSnapshotTests
     [InlineData(true, 10, 14)]
     [InlineData(false, 10, 15)]
     [InlineData(true, 10, 15)]
+    [InlineData(false, 10, 18)]
+    [InlineData(true, 10, 18)]
+    [InlineData(false, 10, 19)]
+    [InlineData(true, 10, 19)]
     public void AProfileRaceRollsBackTheNewStagedPluginAndMetadata(bool unrelatedFile, int schemaVersion, int rulesRevision)
     {
         using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion, rulesRevision: rulesRevision);
@@ -74,6 +78,8 @@ public sealed class AmethystSavedSnapshotTests
     [InlineData(9, 13)]
     [InlineData(10, 14)]
     [InlineData(10, 15)]
+    [InlineData(10, 18)]
+    [InlineData(10, 19)]
     public void SavedWinnersAndProvidersMatchTheActualProducer(int schemaVersion, int rulesRevision)
     {
         using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion, rulesRevision: rulesRevision);
@@ -186,6 +192,7 @@ public sealed class AmethystSavedSnapshotTests
     [InlineData("PRAGMA user_version=11")]
     [InlineData("UPDATE meta SET value=X'0D00000000000000' WHERE key='rules_revision'")]
     [InlineData("UPDATE meta SET value=X'1000000000000000' WHERE key='rules_revision'")]
+    [InlineData("UPDATE meta SET value=X'1400000000000000' WHERE key='rules_revision'")]
     [InlineData("UPDATE meta SET value=X'0200000000000000' WHERE key='engine_revision'")]
     public void Schema10RejectsUnknownOrMismatchedProducerContracts(string mutation)
     {
@@ -203,12 +210,15 @@ public sealed class AmethystSavedSnapshotTests
         Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
     }
 
-    [Fact]
-    public void Rules15RootTopLevelUsesNativeDestinationsAndRetainsSourceIdentity()
+    [Theory]
+    [InlineData(15)]
+    [InlineData(18)]
+    [InlineData(19)]
+    public void RootTopLevelUsesNativeDestinationsAndRetainsSourceIdentity(int rulesRevision)
     {
-        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: 15);
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: rulesRevision);
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
-        Assert.Equal("amethyst-schema10-engine1-rules15", snapshot.ProducerContract);
+        Assert.Equal($"amethyst-schema10-engine1-rules{rulesRevision}", snapshot.ProducerContract);
         var source = Assert.Single(snapshot.ResolveAssets("meshes/top.nif"));
         Assert.Equal("RootTop", source.ProviderName);
         Assert.EndsWith("/RootTop/Wrapper/Data/Meshes/top.nif", source.LooseFilePath);
@@ -244,6 +254,73 @@ public sealed class AmethystSavedSnapshotTests
         var result = server.Call(ToolNames.LoadOrderStatus, "{}");
         Assert.Contains("rules", result.Text, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("plugins resolved to real files", result.Text);
+    }
+
+    [Theory]
+    [InlineData(18)]
+    [InlineData(19)]
+    public void ConflictOnlyFilesRemainVisibleAndProducerIdentityCannotChange(int rulesRevision)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: rulesRevision);
+        using (var database = world.Open())
+        using (var command = database.CreateCommand())
+        {
+            command.CommandText = "SELECT COUNT(*) FROM raw_files WHERE (flags & 1024) != 0";
+            Assert.True(Convert.ToInt64(command.ExecuteScalar()) >= 4, "fixture must contain real producer conflict-only flags");
+        }
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Equal($"amethyst-schema10-engine1-rules{rulesRevision}", snapshot.ProducerContract);
+        foreach (var path in new[] { "Meshes/ignored.nif", "Meshes/ignored/folder.nif" })
+            Assert.Equal(new[] { "Beta", "Alpha" }, snapshot.ResolveAssets(path).Select(s => s.ProviderName));
+        Assert.Empty(snapshot.ResolveAssets("Excluded/hidden.nif"));
+        Assert.Empty(snapshot.ResolveAssets("Meshes/dormant.nif"));
+        snapshot.CheckUnchanged();
+        world.Execute("UPDATE meta SET value=X'0F00000000000000' WHERE key='rules_revision'");
+        Assert.Contains("changed during", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
+    }
+
+    [Theory]
+    [InlineData(18)]
+    [InlineData(19)]
+    public void NewerProducersStillRequireTheirApprovedReader(int rulesRevision)
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: rulesRevision);
+        using var server = new ServerFixture(new Dictionary<string, string>
+        {
+            ["HOUSECARL_DATA_DIR"] = Path.GetDirectoryName(world.Store.FilePath)!,
+            ["HouseCarl__ConnectionManifest"] = world.Manifest,
+            ["HouseCarl__FilegraphMode"] = "saved-snapshot",
+            ["HouseCarl__CorpusPath"] = TestCorpus.Path,
+            [rulesRevision == 19 ? "AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19" : "AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15"] = Environment.GetEnvironmentVariable("AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10")
+                ?? Path.Combine(AppContext.BaseDirectory, "amethyst_filegraph_schema10.abi3.so"),
+            ["XDG_STATE_HOME"] = Path.Combine(world.Root, "state"),
+        });
+        var result = server.Call(ToolNames.LoadOrderStatus, "{}");
+        Assert.Contains("rules", result.Text, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain("plugins resolved to real files", result.Text);
+    }
+
+    [Fact]
+    public void Rules19PreservesCaseDistinctModKeysAndArchiveProviderOrder()
+    {
+        using var world = new AmethystSnapshotWorld(schemaVersion: 10, rulesRevision: 19);
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Equal(new[] { "Beta", "Alpha", "beta" }, snapshot.ResolveAssets("Meshes/example.nif").Select(s => s.ProviderName));
+        var member = snapshot.ResolveAssets("skse/plugins/skypatcher/weapon/bsaonly.ini");
+        Assert.Equal(new[] { "Beta", "Alpha", "beta" }, member.Select(s => s.OwningMod));
+        Assert.Contains("/Beta/", member[0].ArchivePath);
+        Assert.Contains("/beta/", member[2].ArchivePath);
+        Assert.Equal("case-distinct owner", File.ReadAllText(snapshot.ResolveNamedAsset("beta", "Meshes/example.nif").Source!.LooseFilePath!));
+        using var resolver = AssetResolver.BuildSavedSnapshot(snapshot);
+        var resolution = resolver.ResolveForPlacement("Meshes/example.nif");
+        var choice = AssetSourceChoice.Parse("beta");
+        var selected = AssetSourceSelection.Select(resolution, choice);
+        Assert.Equal("beta", selected.Source!.ProviderName);
+        Assert.Equal(AssetSourceVerdict.NamedAbsent, AssetSourceSelection.Select(resolver.ResolveForPlacement("Meshes/lower-only.nif"), AssetSourceChoice.Named("Beta")).Verdict);
+        Assert.DoesNotContain(@"Meshes\lower-only.nif", resolver.Capture().EnumerateUnder("Meshes", null, 0, out _, "Beta"), StringComparer.OrdinalIgnoreCase);
+        Assert.Contains("exact spelling", Assert.Throws<InvalidOperationException>(() =>
+            AssetSourceSelection.Select(resolution, AssetSourceChoice.Parse("BETA"))).Message);
+        snapshot.CheckUnchanged();
     }
 
     [Fact]
@@ -414,10 +491,12 @@ public sealed class AmethystSavedSnapshotTests
         Assert.Contains("changed during the call", Assert.Throws<InvalidOperationException>(snapshot.CheckUnchanged).Message);
     }
 
-    [Fact]
-    public void EffectiveProfileIniAndCccDriveVanillaArchiveAndImplicitPluginCoverage()
+    [Theory]
+    [InlineData(9, 13)]
+    [InlineData(10, 19)]
+    public void EffectiveProfileIniAndCccDriveVanillaArchiveAndImplicitPluginCoverage(int schemaVersion, int rulesRevision)
     {
-        using var world = new AmethystSnapshotWorld();
+        using var world = new AmethystSnapshotWorld(schemaVersion: schemaVersion, rulesRevision: rulesRevision);
         var iniDir = Path.Combine(world.Profile, "ini files");
         Directory.CreateDirectory(iniDir);
         File.WriteAllText(Path.Combine(iniDir, "Skyrim.ini"), "[Archive]\nsResourceArchiveList=Vanilla.bsa\n");
@@ -439,6 +518,10 @@ public sealed class AmethystSavedSnapshotTests
         var hit = assets.Resolve("skse/plugins/skypatcher/weapon/bsaonly.ini");
         Assert.True(hit.Exists);
         Assert.Contains(hit.Providers, p => p.Source == "Vanilla.bsa");
+        var selection = AssetSourceSelection.Select(assets.ResolveForPlacement("skse/plugins/skypatcher/weapon/bsaonly.ini"), AssetSourceChoice.Named("vanilla.bsa"));
+        Assert.Equal(AssetSourceVerdict.Selected, selection.Verdict);
+        Assert.Equal("Vanilla.bsa", selection.Source!.ProviderName);
+        Assert.True(assets.HasProvider("vanilla.bsa"));
         Assert.False(assets.ReadIncomplete);
         snapshot.CheckUnchanged();
         File.WriteAllText(Path.Combine(iniDir, "new.ini"), "changed directory listing");

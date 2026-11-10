@@ -123,6 +123,7 @@ def build(repo: Path, output: Path, native_tools: Path) -> None:
         "amethyst_filegraph.abi3.so",
         "amethyst_filegraph_schema10.abi3.so",
         "amethyst_filegraph_schema10_rules15.abi3.so",
+        "amethyst_filegraph_schema10_rules19.abi3.so",
         "amethyst_snapshot.py",
         "corpus.json",
     )
@@ -164,7 +165,7 @@ def build(repo: Path, output: Path, native_tools: Path) -> None:
                     "transaction_journal_schema": 1, "runtime": "linux-x64-self-contained-net10-untrimmed",
                     "python_minimum": "3.12", "native_filegraph_api": 13, "native_filegraph_schema": 9,
                     "native_filegraph_schemas": [9, 10], "native_filegraph_rules": {"9": 13, "10": 14},
-                    "native_filegraph_contracts": [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}],
+                    "native_filegraph_contracts": [{"schema": 9, "rules": 13}, {"schema": 10, "rules": 14}, {"schema": 10, "rules": 15}, {"schema": 10, "rules": 19}],
                     "files": files}
         (stage / "manifest.json").write_text(json.dumps(manifest, sort_keys=True, indent=2) + "\n", encoding="utf-8")
         temp_archive = output.with_suffix(output.suffix + ".tmp")

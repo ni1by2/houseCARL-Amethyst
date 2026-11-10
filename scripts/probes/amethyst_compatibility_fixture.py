@@ -52,6 +52,11 @@ def produce(root, extension, source):
         files[f'mods/{mod}/Meshes/ignored.nif'] = mod.encode()
         files[f'mods/{mod}/Meshes/ignored/folder.nif'] = mod.encode()
         files[f'mods/{mod}/Fixture.bsa'] = (Path(__file__).resolve().parents[2] / 'src/housecarl-mcp-tests/fixtures/skypatcher/IniFixture.bsa').read_bytes()
+    if RULES_REVISION >= 19:
+        (profile / 'modlist.txt').write_text('+RootTop\n+Beta\n+Alpha\n+beta\n-Gamma\n')
+        files['mods/beta/Fixture.esp'] = plugin
+        files['mods/beta/Fixture.bsa'] = files['mods/Beta/Fixture.bsa']
+        files['mods/beta/Meshes/example.nif'] = b'case-distinct owner'
     for relative, data in files.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)

@@ -65,8 +65,8 @@ internal static class ProviderStandings
     {
         if (provider is null) return null;
         foreach (var p in hit.Providers)
-            if (AssetSourceSelection.NameMatches(p, provider))
-                return AssetSourceSelection.NameMatches(hit.Winner!, provider) ? ProviderStanding.Wins : ProviderStanding.Shadowed;
+            if (AssetSourceSelection.NameMatches(p, provider, hit.ProviderNames))
+                return AssetSourceSelection.NameMatches(hit.Winner!, provider, hit.ProviderNames) ? ProviderStanding.Wins : ProviderStanding.Shadowed;
         return ProviderStanding.NotProvided;
     }
 

@@ -16,7 +16,11 @@ public sealed record AssetProvider(string Source, AssetKind Kind, string? Owning
 
 /// <summary>One asset path's resolution: the winner (null iff not <see cref="Exists"/>), every provider winner-first,
 /// and <see cref="Ambiguous"/> — contention to verify, never a confirmed problem (docs/architecture/assets.md).</summary>
-public sealed record AssetHit(string RelPath, bool Exists, AssetProvider? Winner, IReadOnlyList<AssetProvider> Providers, bool Ambiguous);
+public sealed record AssetHit(string RelPath, bool Exists, AssetProvider? Winner, IReadOnlyList<AssetProvider> Providers, bool Ambiguous)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyCollection<string>? ProviderNames { get; init; }
+}
 
 /// <summary>A concrete on-disk source one provider supplies an asset from: a loose file path, or a .bsa path plus the
 /// entry inside it. <see cref="OffOrder"/> marks a copy the game is not loading and <see cref="OwnerEnabled"/> says
@@ -25,7 +29,11 @@ public sealed record PlacementSource(string ProviderName, AssetKind Kind, string
                                      string EntryPath, bool OffOrder = false, string? OwningMod = null,
                                      bool OwnerEnabled = false);
 
-public sealed record PlacementResolution(string RelPath, IReadOnlyList<PlacementSource> Sources, bool Ambiguous, bool ReadIncomplete);
+public sealed record PlacementResolution(string RelPath, IReadOnlyList<PlacementSource> Sources, bool Ambiguous, bool ReadIncomplete)
+{
+    [System.Text.Json.Serialization.JsonIgnore]
+    public IReadOnlyCollection<string>? ProviderNames { get; init; }
+}
 
 /// <summary>An active BSA to consider: its path, the plugin it loads with, that plugin's rank (higher wins among
 /// BSAs), and the MO2 layer the archive file lives in. The service derives these.</summary>
@@ -302,10 +310,10 @@ public sealed class AssetResolver : IDisposable
         var rel = NormalizeQueryPath(relPath);
         var sources = ResolveProviders(rel, snap, pass);           // ONE precedence path, winner first (shared with placement)
         if (sources.Count == 0)
-            return new AssetHit(rel, false, null, Array.Empty<AssetProvider>(), false);
+            return new AssetHit(rel, false, null, Array.Empty<AssetProvider>(), false) { ProviderNames = _savedSnapshot?.ProviderNames };
         // Project the concrete sources down to the display providers — the on-disk paths are placement-only.
         var providers = sources.Select(s => new AssetProvider(s.ProviderName, s.Kind, s.OwningMod)).ToList();
-        return new AssetHit(rel, true, providers[0], providers, providers.Count > 1);
+        return new AssetHit(rel, true, providers[0], providers, providers.Count > 1) { ProviderNames = _savedSnapshot?.ProviderNames };
     }
 
     /// <summary>The ONE precedence resolution both <see cref="Resolve"/> and <see cref="ResolveForPlacement"/> ride,
@@ -358,7 +366,7 @@ public sealed class AssetResolver : IDisposable
     {
         var rel = NormalizeQueryPath(relPath);
         var sources = ResolveProviders(rel, snap, pass);
-        return new PlacementResolution(rel, sources, sources.Count > 1, snap.Failures.Count > 0 || !snap.RootFailures.IsEmpty || _savedSnapshot?.Provenance.VanillaArchivesOmitted == true);
+        return new PlacementResolution(rel, sources, sources.Count > 1, snap.Failures.Count > 0 || !snap.RootFailures.IsEmpty || _savedSnapshot?.Provenance.VanillaArchivesOmitted == true) { ProviderNames = _savedSnapshot?.ProviderNames };
     }
 
     public const string OverwriteLayerName = "overwrite";
@@ -441,7 +449,7 @@ public sealed class AssetResolver : IDisposable
         if (_savedSnapshot?.HasActiveProvider(name) == true) return true;
         if (RootIndex(name) >= 0) return true;
         foreach (var a in _archives)
-            if (AssetSourceSelection.NameMatches(Path.GetFileName(a.Path), a.OwningMod, name)) return true;
+            if (AssetSourceSelection.NameMatches(Path.GetFileName(a.Path), a.OwningMod, name, _savedSnapshot?.ProviderNames)) return true;
         return false;
     }
 
@@ -464,7 +472,7 @@ public sealed class AssetResolver : IDisposable
         if (_savedSnapshot is { } saved)
             foreach (var entry in saved.AssetPaths)
                 if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase)
-                    && (provider is null || saved.ResolveAssets(entry).Any(s => AssetSourceSelection.NameMatches(s, provider))))
+                    && (provider is null || saved.ResolveAssets(entry).Any(s => AssetSourceSelection.NameMatches(s, provider, saved.ProviderNames))))
                 {
                     Take(entry);
                     if (Full()) { stopped = true; return found; }
@@ -511,7 +519,7 @@ public sealed class AssetResolver : IDisposable
         {
             // Managed archive membership and visibility come only from the native saved graph.
             if (_savedSnapshot is not null && a.OwningMod != "Data") continue;
-            if (provider is not null && !AssetSourceSelection.NameMatches(Path.GetFileName(a.Path), a.OwningMod, provider)) continue;
+            if (provider is not null && !AssetSourceSelection.NameMatches(Path.GetFileName(a.Path), a.OwningMod, provider, _savedSnapshot?.ProviderNames)) continue;
             if (!snap.Tables.TryGetValue(a.Path, out var t)) continue;
             foreach (var entry in t)
                 if (entry.StartsWith(withSep, StringComparison.OrdinalIgnoreCase))

@@ -11,6 +11,8 @@ extension_schema10="${AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10:?Set AMETHYST_FILEGR
 test -f "$extension_schema10"
 extension_rules15="${AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15:?Set AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES15 to the pinned schema-10/rules-15 module}"
 test -f "$extension_rules15"
+extension_rules19="${AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19:?Set AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19 to the pinned schema-10/rules-19 module}"
+test -f "$extension_rules19"
 version="$(python3 - "$repo/plugin/.claude-plugin/plugin.json" <<'PY'
 import json
 import sys
@@ -18,11 +20,12 @@ with open(sys.argv[1], encoding="utf-8") as stream:
     print(json.load(stream)["version"])
 PY
 )"
-for native_contract in 9 10 15; do
+for native_contract in 9 10 15 19; do
   native_input="$extension"
   native_schema="$native_contract"
   if [[ "$native_contract" == 10 ]]; then native_input="$extension_schema10"; fi
   if [[ "$native_contract" == 15 ]]; then native_input="$extension_rules15"; native_schema=10; fi
+  if [[ "$native_contract" == 19 ]]; then native_input="$extension_rules19"; native_schema=10; fi
   python3 -I - "$native_input" "$native_schema" <<'PY'
 import importlib.util
 import sys
@@ -51,6 +54,7 @@ cp -- "$out/generated/corpus.json" "$out/server/corpus.json"
 cp -- "$extension" "$out/server/amethyst_filegraph.abi3.so"
 cp -- "$extension_schema10" "$out/server/amethyst_filegraph_schema10.abi3.so"
 cp -- "$extension_rules15" "$out/server/amethyst_filegraph_schema10_rules15.abi3.so"
+cp -- "$extension_rules19" "$out/server/amethyst_filegraph_schema10_rules19.abi3.so"
 cp -- "$repo/src/housecarl-core/amethyst_snapshot.py" "$out/server/amethyst_snapshot.py"
 
 # Keep the native filegraph contract and the Python adapter pinned together. The

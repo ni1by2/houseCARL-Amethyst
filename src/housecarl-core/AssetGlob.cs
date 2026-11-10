@@ -69,7 +69,7 @@ public static class AssetGlob
             // Nothing beneath it, but the string may BE a file the load order provides — a path pasted into under=.
             // One resolve, only on the empty branch, so the ordinary folder sweep pays nothing for it.
             var hit = view.Resolve(norm);
-            if (hit.Exists && (provider is null || hit.Providers.Any(p => AssetSourceSelection.NameMatches(p, provider))))
+            if (hit.Exists && (provider is null || hit.Providers.Any(p => AssetSourceSelection.NameMatches(p, provider, hit.ProviderNames))))
             { namedOneFile = true; return new[] { norm }; }
             return beneath;
         }
