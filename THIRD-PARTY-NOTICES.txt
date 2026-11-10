@@ -163,8 +163,8 @@ MIT License
   Microsoft.Extensions.AI.Abstractions                     10.11.0
   Microsoft.NET.StringTools                                17.11.4
   OneOf                                                    3.0.271
-  runtimepack.Microsoft.AspNetCore.App.Runtime.linux-x64   10.0.14
-  runtimepack.Microsoft.NETCore.App.Runtime.linux-x64      10.0.14
+  runtimepack.Microsoft.AspNetCore.App.Runtime.linux-x64   10.0.15
+  runtimepack.Microsoft.NETCore.App.Runtime.linux-x64      10.0.15
   SharpZipLib                                              1.4.2
   StrongInject                                             1.4.4
   System.IO.Abstractions                                   22.1.1
