@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 2.1.4 — Linux preview (11 November 2026)
+
+- Read Amethyst 2.6.3/rules-18 and 2.6.4-beta.1/rules-19 saved snapshots. Rules 18 reuses a verified reader; rules 19 bundles its matching reader. Unverified contracts still refuse.
+- Preserve case-distinct mod/archive identities and select named providers by exact spelling when needed. Ambiguous case aliases refuse instead of selecting another source.
+- Add repeatable compatibility comparisons for new Amethyst revisions, genuine producer fixtures and regression coverage for provider order, source changes and transaction races.
+- Update downloads and upgrade instructions to 2.1.4, and document how to run and interpret the compatibility suite through GitHub Actions or locally. The Linux archive continues to bundle .NET 10.
+
 ## 2.1.3 — Linux preview (3 November 2026)
 
 - **Read bulk records and asset template chains through shared batches.** Faulted groups retain their original errors, donor reads are reused, overlay warnings follow row order and traversal caps stop further reads.

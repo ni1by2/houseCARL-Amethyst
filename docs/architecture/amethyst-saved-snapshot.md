@@ -2,7 +2,7 @@
 
 ## Contract
 
-The 2.1.3 Linux preview accepts three exact producer contracts, all at API 13 and engine revision 1: schema 9/rules 13, schema 10/rules 14 and schema 10/rules 15. Schema 9 uses the existing `edde06e5` native reader. Schema 10/rules 14 uses Amethyst 2.6.0-beta.7 at `abeae84afce940c6819f80c1cd4e6e51db2e935d`, including preserved destination casing. Schema 10/rules 15 uses Amethyst 2.6.2-beta.3 at `7de35eaf0c7191defa7aee33d61452ddf73f7da3`, including per-mod Top Level routing for root-installed mods. The rules-15 reader is separate from the rules-14 reader; earlier 2.1.1 and 2.1.2 packages contain only the earlier two contracts.
+The 2.1.4 Linux preview accepts five verified producer contracts, all at API 13 and engine revision 1: schema 9/rules 13 and schema 10/rules 14, 15, 18 and 19. Rules 18 uses the verified rules-15 reader; rules 19 uses its matching fourth reader, as described in the [mapping policy](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/architecture/amethyst-shared-reader-compatibility.md). Schema 9 uses the existing `edde06e5` native reader. Schema 10/rules 14 uses Amethyst 2.6.0-beta.7 at `abeae84afce940c6819f80c1cd4e6e51db2e935d`, including preserved destination casing. Schema 10/rules 15 uses Amethyst 2.6.2-beta.3 at `7de35eaf0c7191defa7aee33d61452ddf73f7da3`, including per-mod Top Level routing for root-installed mods. The rules-15 reader is separate from the rules-14 reader; earlier 2.1.1 and 2.1.2 packages contain only the earlier two contracts.
 The captured schema/rules pair selects the matching reader before it opens the private copy;
 there is no cross-contract fallback or migration of the live catalog. The native
 status handshake verifies API, schema, engine, rules, inventory and ready state
@@ -76,7 +76,7 @@ Packaged builds load `amethyst_filegraph.abi3.so`,
 `amethyst_filegraph_schema10.abi3.so` and
 `amethyst_filegraph_schema10_rules15.abi3.so` beside the server. The Python helper
 checks API and schema before opening the copy; the returned status frame then
-verifies the selected reader's API/schema/engine/rules and captured inventory before profile or winner frames are accepted. Unreleased source maps the separately verified schema-10/rules-18 producer to the rules-15 reader and rules 19 to its matching reader, while retaining the original producer identity for freshness and transactions. The fourth module is `amethyst_filegraph_schema10_rules19.abi3.so`; developer builds set `AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19`. See the [compatibility policy](amethyst-shared-reader-compatibility.md).
+verifies the selected reader's API/schema/engine/rules and captured inventory before profile or winner frames are accepted. Version 2.1.4 maps the separately verified schema-10/rules-18 producer to the rules-15 reader and rules 19 to its matching reader, while retaining the original producer identity for freshness and transactions. The fourth module is `amethyst_filegraph_schema10_rules19.abi3.so`; developer builds set `AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19`. See the [compatibility policy](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/architecture/amethyst-shared-reader-compatibility.md).
 `AMETHYST_FILEGRAPH_PYTHON` optionally
 selects the Python interpreter; the default is `python3`.
 

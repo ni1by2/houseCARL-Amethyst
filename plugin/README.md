@@ -6,7 +6,7 @@ The server uses .NET 10 and exposes 34 MCP tools over stdio. Record coverage is 
 
 ## Install or upgrade on Linux
 
-Use the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md). Download the archive, checksum and standalone installer from [2.1.3 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.3). Linux x64 and Python 3.12 or newer are required; the guide lists the operating-system libraries.
+Use the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md). Download the archive, checksum and standalone installer from [2.1.4 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.4). Linux x64 and Python 3.12 or newer are required; the guide lists the operating-system libraries.
 
 The Linux archive includes the .NET 10 and ASP.NET Core runtimes. You do not need to install a system .NET runtime or SDK to run it.
 
@@ -23,7 +23,7 @@ The installer retains the previous owned package for `python3 install-linux.py r
 
 ## Build from source
 
-Source builds require the **.NET 10 SDK, 10.0.400 or newer**, Python 3.12+, and the Rust/C/C++ tools listed in the [Linux development guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-development.md). `global.json` controls SDK selection. Build all three pinned Amethyst native readers before packaging. The package supports schema 9/rules 13, schema 10/rules 14 and schema 10/rules 15; other producer contracts refuse.
+Source builds require the **.NET 10 SDK, 10.0.400 or newer**, Python 3.12+, and the Rust/C/C++ tools listed in the [Linux development guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-development.md). `global.json` controls SDK selection. Build all four pinned Amethyst native readers before packaging. The package supports schema 9/rules 13, schema 10/rules 14, 15, 18 and 19; other producer contracts refuse. Rules 18 reuses the rules-15 reader; rules 19 requires its matching reader.
 
 The retained Windows framework-dependent build requires the x64 .NET 10 Runtime and ASP.NET Core 10 Runtime; its build also needs the .NET 10 SDK and PowerShell. It is not the supported Linux preview package, and Windows execution has not been validated by this fork.
 
@@ -32,6 +32,10 @@ The retained Windows framework-dependent build requires the x64 .NET 10 Runtime 
 Responses identify the saved profile and generation and warn that changes since Amethyst's last Refresh may be missing. If the snapshot is stale, use **Refresh Modlist** in Amethyst and retry the read. Deployment does not replace Refresh.
 
 Review staged writes, then Refresh, enable and deploy through Amethyst. A later houseCARL deployment check verifies which file wins in the game. Staging success alone does not establish game visibility.
+
+## Test a newer Amethyst version
+
+Use the [compatibility test guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/amethyst-compatibility-testing.md) for GitHub Actions or local synthetic-profile comparisons. This evaluates new upstream revisions without opening your live modlist. Reports separate native-reader results from runtime admission and never automatically approve a new contract.
 
 ## Licence
 

@@ -1,6 +1,6 @@
 # Verified producer and native reader mappings
 
-Unreleased source accepts API 13, schema 10, engine 1, rules 18 from Amethyst 2.6.3 at `788a71262ca479b6cbccc53ff3a0083250e3833c` using the existing rules-15 native reader pinned to `7de35eaf0c7191defa7aee33d61452ddf73f7da3`. Rules 19 from 2.6.4-beta.1 uses a fourth reader pinned to its producer at `8ac86bdb9bc6f32b5c49eae69890ae96e4f16943`. Published houseCARL-Amethyst 2.1.3 does not contain these updates.
+Version 2.1.4 accepts API 13, schema 10, engine 1, rules 18 from Amethyst 2.6.3 at `788a71262ca479b6cbccc53ff3a0083250e3833c` using the existing rules-15 native reader pinned to `7de35eaf0c7191defa7aee33d61452ddf73f7da3`. Rules 19 from 2.6.4-beta.1 uses a fourth reader pinned to its producer at `8ac86bdb9bc6f32b5c49eae69890ae96e4f16943`. Earlier houseCARL-Amethyst 2.1.3 packages do not contain these updates.
 
 The producer contract identifies the saved catalog. The native reader's revision identifies the code opening a private backup. Those stamps need not be equal when a particular pairing has been verified. The runtime keeps an explicit mapping between them and checks the actual reader against that mapping. It still requires API 13, the captured schema, engine 1, readiness, inventory generation and profile generation.
 

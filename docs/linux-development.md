@@ -1,12 +1,8 @@
 # Linux / Amethyst development
 
-The source build and CI target Ubuntu 24.04 x64. Version 2.1.3 supports API 13 with schema 9/rules 13, schema 10/rules 14, and schema 10/rules 15, all at engine revision 1. CI builds all three separately pinned native readers. All three modules are required to assemble the package.
+The source build and CI target Ubuntu 24.04 x64. Version 2.1.4 supports API 13, engine 1, schema 9/rules 13 and schema 10/rules 14, 15, 18 and 19. CI builds four separately pinned readers. All four modules are required to assemble the package. Amethyst 2.6.3/rules 18 reuses the rules-15 reader; 2.6.4-beta.1/rules 19 requires its matching reader. The [compatibility policy](architecture/amethyst-shared-reader-compatibility.md) explains the mappings.
 
-Unreleased source additionally admits schema 10/rules 18 from Amethyst 2.6.3 using the existing rules-15 reader. Rules 19 from 2.6.4-beta.1 requires its own reader because native archive ranking changed. Build that fourth module from `8ac86bdb9bc6f32b5c49eae69890ae96e4f16943` with the same upstream `native/amethyst_filegraph/build.sh` procedure and export `AMETHYST_FILEGRAPH_EXTENSION_SCHEMA10_RULES19` to its absolute `src/amethyst_filegraph.abi3.so` path before testing or packaging. The [compatibility policy](architecture/amethyst-shared-reader-compatibility.md) explains the verified mappings. The .NET 10 requirement is unchanged.
-
-For the 2.1.3 Linux preview downloads, use the [installation guide](linux-install.md). The [verification record](testing/upstream-integration-2026-11-02.md) lists the completed integration and package checks. The commands below build the source candidate, including its unreleased compatibility updates.
-
-Version 2.1.3 targets .NET 10 and includes Asset Walk. The Linux archive bundles the runtime; installing a new SDK does not replace an installed server.
+For the 2.1.4 Linux preview downloads, use the [installation guide](linux-install.md). The [release record](testing/release-214-2026-11-11.md) and [runtime verification](testing/amethyst-runtime-compatibility-2026-11-10.md) list the completed checks. Source builds require the .NET 10 SDK; the Linux archive bundles its runtime. Asset Walk remains included.
 
 ## Requirements
 
@@ -76,7 +72,7 @@ python3 scripts/probes/check_linux_package.py dist/housecarl-amethyst-linux-x64.
 
 This validates the payload hashes, extracts it to a temporary directory, and checks MCP initialization, package version and the published tool list. It uses temporary server configuration and does not register hosts or connect to Amethyst. Add `--installed-prefix /path/to/install` to check an existing installation's active version against the same archive. Installation itself also changes host registrations in the current user's home; custom `--prefix` and `--state-root` paths alone do not isolate those registrations. Use a disposable user or container for installation tests.
 
-## Upgrade using a locally built 2.1.3 package
+## Upgrade using a locally built 2.1.4 package
 
 After building and verifying the archive above, keep a separate terminal open and quit every MCP host running houseCARL. From the repository root, enter the output directory and install the built package as your normal user:
 
@@ -86,6 +82,6 @@ sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
   python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
-The source manifest assigns version 2.1.3, so the installer can preserve an installed 2.1.2 as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.1.3 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
+The source manifest assigns version 2.1.4, so the installer can preserve an installed 2.1.3 as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.1.4 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
 
 Configuration and transaction state remain outside the program directory. Installation does not refresh, enable or deploy mods. Use the [installation guide](linux-install.md#install-update-and-remove) for pending transactions and rollback.
