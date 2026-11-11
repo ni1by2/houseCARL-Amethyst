@@ -1,1 +1,0 @@
-- Added a repeatable Amethyst compatibility experiment that compares supplied upstream revisions with released native readers and reports production admission separately. Run it locally or through the manual compatibility workflow; passing reports do not automatically approve a new revision.

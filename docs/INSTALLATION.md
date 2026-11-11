@@ -1,6 +1,6 @@
 # Installation and updates
 
-The current release is [v2.1.3 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.3), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
+The current release is [v2.1.4 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.4), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
 
 ## Install a release
 

@@ -5,6 +5,8 @@
 
 Start with [README.md](../README.md), then [CLAUDE.md](../CLAUDE.md), then the note for the subsystem you are entering. Linux / Amethyst contributors need the .NET 10 SDK (10.0.400 or newer); follow the [development and build guide](linux-development.md). Downloaded Linux packages bundle their runtime.
 
+For compatibility checks against newer Amethyst releases, use the [test guide](amethyst-compatibility-testing.md). It covers GitHub Actions, local synthetic-profile comparisons and reading the results; no live modlist access is required.
+
 ## The pieces, and who calls whom
 
 ```mermaid

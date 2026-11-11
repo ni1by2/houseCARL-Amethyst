@@ -1,16 +1,14 @@
-# Install the Linux 2.1.3 preview
+# Install the Linux 2.1.4 preview
 
-Version [2.1.3 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.3), targeting Ubuntu 24.04 x64. Python 3.12 or newer is required. It supports API 13 with schema 9/rules 13, schema 10/rules 14, and schema 10/rules 15, all at engine revision 1. The readers are separately pinned to Amethyst 2.5.4, 2.6.0-beta.7 and 2.6.2-beta.3. Stable 2.6.1 was reviewed with the unchanged rules-14 contract. Other contracts refuse until verified.
+Version [2.1.4 is a prerelease (Linux preview)](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.4), targeting Ubuntu 24.04 x64. Python 3.12 or newer is required. It supports API 13 at engine revision 1 with schema 9/rules 13 and schema 10/rules 14, 15, 18 and 19. Four native readers cover Amethyst 2.5.4, 2.6.0-beta.7/2.6.1, 2.6.2-beta.3, 2.6.3 and 2.6.4-beta.1. The [compatibility policy](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/architecture/amethyst-shared-reader-compatibility.md) explains why 2.6.3 reuses a reader and the beta needs its own. Other contracts refuse until verified.
 
-The unreleased [compatibility source update](architecture/amethyst-shared-reader-compatibility.md) adds Amethyst 2.6.3 support using the existing rules-15 reader and 2.6.4-beta.1 support using its matching rules-19 reader. The 2.1.3 download below does not include it. There is no new upgrade download for that change yet.
-
-The [2.1.3 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.3/docs/testing/upstream-integration-2026-11-02.md) covers bulk-read integration, rules-15 compatibility, independent review and package checks. The [2.1.1 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-211-compat-2026-10-25.md) covers the compatibility fix, vanilla archive handling, package checks and read-only profile acceptance. Installation, isolated host registration and a disposable Proton CachyOS round trip were checked for [2.0.5](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md); those system workflows were not repeated for 2.1.3. The installer and pinned Papyrus utilities are unchanged.
+The [2.1.4 release record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/testing/release-214-2026-11-11.md) records this package's checks; the [runtime verification](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/testing/amethyst-runtime-compatibility-2026-11-10.md) covers genuine producer fixtures, regression tests and review. The installer and pinned Papyrus utilities are unchanged. Earlier isolated install/rollback and Proton CachyOS checks remain recorded for [2.0.5](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md); those system workflows were not repeated for this release.
 
 Download these three assets from **the same release** into a new directory:
 
-- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.3/housecarl-amethyst-linux-x64.tar.gz)
-- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.3/housecarl-amethyst-linux-x64.tar.gz.sha256)
-- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.3/install-linux.py)
+- [housecarl-amethyst-linux-x64.tar.gz](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.4/housecarl-amethyst-linux-x64.tar.gz)
+- [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.4/housecarl-amethyst-linux-x64.tar.gz.sha256)
+- [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.4/install-linux.py)
 
 ## Quick start
 
@@ -53,17 +51,17 @@ To update from an earlier package, run the new release's installer with its arch
 
 ### Update from an earlier Linux preview
 
-1. Download all three 2.1.3 assets listed above into a new directory. Open that directory in a separate terminal.
+1. Download all three 2.1.4 assets listed above into a new directory. Open that directory in a separate terminal.
 2. Quit every Claude Code, Codex or other MCP host using houseCARL. The installer refuses to switch versions while an installed server is running. If it names PIDs, close the owning host normally and retry.
-3. Run the Quick start checksum and `install` commands above. Continue only after the checksum reports `OK`. Successful installation reports `Installed 2.1.3`.
+3. Run the Quick start checksum and `install` commands above. Continue only after the checksum reports `OK`. Successful installation reports `Installed 2.1.4`.
 4. Confirm the active package:
 
    ```sh
    readlink -f ~/.local/opt/housecarl-amethyst/current
    ```
 
-   The result should end in `/versions/2.1.3`.
-5. Reopen your MCP host and ask the assistant to verify houseCARL's version and Amethyst connection. `housecarl_load_order_status` should report server 2.1.3 and your selected saved profile. The installer-managed registration is named `housecarl`; use that entry if an older development registration also exists.
+   The result should end in `/versions/2.1.4`.
+5. Reopen your MCP host and ask the assistant to verify houseCARL's version and Amethyst connection. `housecarl_load_order_status` should report server 2.1.4 and your selected saved profile. The installer-managed registration is named `housecarl`; use that entry if an older development registration also exists.
 
 Your selected connection and transaction state are retained outside the program directory. Updating the server does not refresh, enable, reorder or deploy Amethyst mods. If a read reports that the saved profile is stale, use Amethyst's **Refresh Modlist**, let it finish, and retry the read. Deployment is not a substitute for Refresh.
 
@@ -75,12 +73,12 @@ To roll back, quit the MCP hosts again and run:
 python3 install-linux.py rollback
 ```
 
-Then reopen the host. This restores the previous server package, not Amethyst's database or game state. A previous 2.1.0 server cannot read a schema-10 filegraph, and 2.1.1/2.1.2 cannot read rules-15 snapshots. Rolling back houseCARL does not downgrade Amethyst's filegraph.
+Then reopen the host. This restores the previous server package, not Amethyst's database or game state. A previous 2.1.0 server cannot read a schema-10 filegraph, and 2.1.1/2.1.2 cannot read rules-15 snapshots. A 2.1.3 server cannot read rules-18 or rules-19 snapshots. Rolling back houseCARL does not downgrade Amethyst's filegraph.
 
 
 If installation reports an unfinished transaction, preserve its journal and inspect that exact ID with `housecarl_staging_status` in the current compatible server. Use the supported recovery action for its recorded state before retrying installation. If no compatible server is available, stop and request recovery help. Do not delete journals or select a different state root to bypass the check. Older development test runs could leave journals referencing deleted temporary fixtures; establish their origin and preserve a backup before quarantining any such records.
 
-Version 2.1.3 includes Asset Walk and bundles .NET 10. Upgrading the Linux archive does not require installing a system .NET runtime or SDK.
+Version 2.1.4 includes Asset Walk and bundles .NET 10. Upgrading the Linux archive does not require installing a system .NET runtime or SDK.
 
 ## Select an Amethyst connection
 
@@ -100,7 +98,7 @@ If you do not have a manifest, save a separate JSON file using the following str
 }
 ```
 
-Use Amethyst's existing configuration paths. `profileRoot` is the staging root containing `mods` and `profiles`, not an individual profile directory; it must match a nonempty `staging_path` in `paths.json`. Both JSON configuration files must reside directly inside `gameConfigDir`. Do not edit those manager files to fit the example. The server validates the selected saved filegraph and refuses incompatible or incomplete inputs. Automatic connection discovery is also available through the [source-only setup command](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.3/docs/linux-development.md#create-a-connection-manifest-from-source), which requires the .NET 10 SDK (10.0.400 or newer).
+Use Amethyst's existing configuration paths. `profileRoot` is the staging root containing `mods` and `profiles`, not an individual profile directory; it must match a nonempty `staging_path` in `paths.json`. Both JSON configuration files must reside directly inside `gameConfigDir`. Do not edit those manager files to fit the example. The server validates the selected saved filegraph and refuses incompatible or incomplete inputs. Automatic connection discovery is also available through the [source-only setup command](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/linux-development.md#create-a-connection-manifest-from-source), which requires the .NET 10 SDK (10.0.400 or newer).
 
 Saved-snapshot responses identify the profile and generation used and warn that changes since Amethyst's last Refresh may be missing. Writes stay in staging until you review, Refresh, enable and deploy them through Amethyst. A later deployment check verifies which file wins; a successful staging write alone does not establish game visibility.
 
@@ -111,3 +109,7 @@ Windows utilities such as the Creation Kit compiler and BSArch require Skyrim SE
 The package build fetches the pinned Caprica and Champollion source commits, builds them with the pinned vcpkg dependency baseline, smoke-tests a synthetic compile/decompile round trip, and stages source archives and license notices. The [2.0.5 verification record](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.1/docs/testing/upstream-205-integration-2026-10-15.md) separates earlier clean Ubuntu install/upgrade/rollback checks from final-source CI, package verification and isolated Arch-derived installation/Proton acceptance.
 
 The selected-Proton check used real BSArch with Proton CachyOS, a copied prefix and synthetic inputs. It verified pack/list/extract and byte equality without touching the live profile. It does not establish Creation Kit compiler compatibility with that runner. Flatpak/custom Steam runner layouts are unsupported. Windows execution, the actual manager GUI workflow, live-profile deployment and gameplay were not tested. Package verification does not prove which outputs the game currently loads.
+
+## Test a newer Amethyst version
+
+Use the [compatibility suite guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/amethyst-compatibility-testing.md) to run the GitHub Actions experiment or compare a clean upstream checkout with an extracted houseCARL release. This is a maintainer test using disposable synthetic profiles. It does not refresh your real modlist, alter compatibility policy or certify gameplay. Read the per-reader and production-server results separately; the guide explains why a comparison against an older reader can fail even when the selected runtime works.
