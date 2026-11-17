@@ -21,7 +21,7 @@ A normal user upgrading to a version already listed in the [installation guide](
 
 The workflow deliberately uses the checksum-pinned **houseCARL 2.1.3 baseline**, even after 2.1.4 was released. It measures against that fixed historical server/readers and does not test your installed server. For 2.6.3 its baseline server reports `blocked_by_contract`, although 2.1.4 supports it. For 2.6.4-beta.1 the older readers return wrong winner identities in the case-distinct archive fixture, so a failed candidate comparison is expected. The matching rules-19 reader and 2.1.4 runtime were verified separately in the [runtime record](testing/amethyst-runtime-compatibility-2026-11-10.md).
 
-To compare a newer Amethyst revision with the actual **2.1.4** package, use the local procedure and supply its extracted `server` directory. That tests its runtime admission as well as all its bundled readers. Older bundled readers can still fail while the runtime's mapped reader passes; read those sections separately. Updating the workflow's fixed baseline is a separate, explicit release decision.
+To compare a newer Amethyst revision with the actual **2.1.5** package, use the local procedure and supply its extracted `server` directory. That tests its runtime admission as well as all its bundled readers. Older bundled readers can still fail while the runtime's mapped reader passes; read those sections separately. Updating the workflow's fixed baseline is a separate, explicit release decision.
 
 ## Run locally
 
@@ -32,7 +32,7 @@ docker build -t housecarl-amethyst-compatibility \
   -f scripts/probes/amethyst-compatibility.Dockerfile scripts/probes
 ```
 
-Check out the desired Amethyst tag or commit in a separate clean source tree. Build its native component using that revision's documented build procedure in an Ubuntu 24.04 builder with Rust/Cargo and its build dependencies. The resulting extension must load on the suite's Ubuntu 24.04 runtime; a module built against a newer host glibc can fail before any comparison. Such a setup failure does not establish an adapter bug. Supply the resulting `libamethyst_filegraph.so` or `amethyst_filegraph.abi3.so`, plus the complete `server` directory extracted from a checksum-verified [2.1.4 Linux release](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.4). Extraction for this test does not install or register the package:
+Check out the desired Amethyst tag or commit in a separate clean source tree. Build its native component using that revision's documented build procedure in an Ubuntu 24.04 builder with Rust/Cargo and its build dependencies. The resulting extension must load on the suite's Ubuntu 24.04 runtime; a module built against a newer host glibc can fail before any comparison. Such a setup failure does not establish an adapter bug. Supply the resulting `libamethyst_filegraph.so` or `amethyst_filegraph.abi3.so`, plus the complete `server` directory extracted from a checksum-verified [2.1.5 Linux release](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.5). Extraction for this test does not install or register the package:
 
 ```sh
 python3 scripts/probes/run_amethyst_compatibility.py \
@@ -77,7 +77,7 @@ Producers exposing neither marker function report `refresh_lifecycle.status: not
 | Producer control `pass` | The producer can read its own synthetic catalog. A failed control invalidates the experiment rather than certifying incompatibility. |
 | Overall `comparison_complete` | The experiment completed without failed comparisons. It does not grant compatibility approval. |
 
-For a rules-19 producer compared with the 2.1.4 package, expect the matching native rules-19 reader to pass and `production_server.status` to be `accepted`. Rules-14/rules-15 reader failures keep overall `comparison_failed`; that outcome demonstrates why those readers are not selected for rules 19. Inspect `producer_inputs_unchanged` and any diagnostics too. A failure in the matching reader, the candidate server's read/refusal checks, or input integrity needs investigation. A future unverified contract can remain `blocked_by_contract` even when native comparisons pass.
+For a rules-19 producer compared with the 2.1.5 package, expect the matching native rules-19 reader to pass and `production_server.status` to be `accepted`. Rules-14/rules-15 reader failures keep overall `comparison_failed`; that outcome demonstrates why those readers are not selected for rules 19. Inspect `producer_inputs_unchanged` and any diagnostics too. A failure in the matching reader, the candidate server's read/refusal checks, or input integrity needs investigation. A future unverified contract can remain `blocked_by_contract` even when native comparisons pass.
 
 Amethyst **2.6.4-beta.4** at `0b4e2899e702320f3e9c7ed5fa81f973c4d16330` was tested with published houseCARL **2.1.4** on 17 November 2026. The selected rules-19 reader, runtime reads/refusals, input integrity and automatic-refresh checks passed; older reader failures remained as described above. No runtime mapping change was needed. See the [suite update verification record](testing/amethyst-refresh-lifecycle-2026-11-17.md).
 

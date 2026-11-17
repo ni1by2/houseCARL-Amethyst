@@ -1,1 +1,0 @@
-- **Disabled plugins retained only in Amethyst's load order no longer block connection or become active.** Forced masters and installed Creation Club entries remain loaded; inactive plugin-bound archives are excluded, and missing explicitly active plugins still refuse.
