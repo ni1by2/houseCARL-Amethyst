@@ -1,6 +1,6 @@
 # Installation and updates
 
-The current release is [v2.1.4 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.4), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
+The current release is [v2.1.5 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.5), a Linux x64 prerelease. Use the [Linux installation guide](linux-install.md) for runtime requirements, connection setup and release limits.
 
 ## Install a release
 
@@ -21,6 +21,8 @@ The current release is [v2.1.4 — Linux preview](https://github.com/ni1by2/hous
 The `install` action and `--archive` argument are required. Running `python3 install-linux.py` alone exits with a missing-action error and does not install anything. Use the downloaded script and archive directly; extraction is handled by the installer.
 
 The installer registers Claude Code and Codex. Restart your host and [select an Amethyst saved-snapshot connection](linux-install.md#select-an-amethyst-connection). Installation does not select, enable or deploy a Skyrim profile.
+
+Version 2.1.5 corrects activation of disabled plugins retained in Amethyst's load order. Upgrade the server using the same command; do not delete historical order entries or enable disabled mods to work around the old connection error.
 
 ## Update, rollback and uninstall
 

@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 2.1.5 — Linux preview (17 November 2026)
+
+- **The maintainer compatibility suite now checks automatic filegraph-version refreshes in a disposable profile.** Reports distinguish refresh failures, older producers without the feature, and post-refresh runtime acceptance; the compatibility guide records the beta.4 results.
+- **Disabled plugins retained only in Amethyst's load order no longer block connection or become active.** Forced masters and installed Creation Club entries remain loaded; inactive plugin-bound archives are excluded, and missing explicitly active plugins still refuse.
+- Update download links, installation and upgrade instructions for 2.1.5. The archive continues to bundle .NET 10; source builds require the .NET 10 SDK.
+
 ## 2.1.4 — Linux preview (11 November 2026)
 
 - Read Amethyst 2.6.3/rules-18 and 2.6.4-beta.1/rules-19 saved snapshots. Rules 18 reuses a verified reader; rules 19 bundles its matching reader. Unverified contracts still refuse.
