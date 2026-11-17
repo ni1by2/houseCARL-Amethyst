@@ -1,0 +1,1 @@
+- **The maintainer compatibility suite now checks automatic filegraph-version refreshes in a disposable profile.** Reports distinguish refresh failures, older producers without the feature, and post-refresh runtime acceptance; the compatibility guide records the beta.4 results.

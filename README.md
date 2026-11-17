@@ -303,3 +303,5 @@ Asset traversal, introduced in 2.1.2, uses Amethyst's saved providers. `housecar
 Version 2.1.4 adds Amethyst 2.6.3/rules-18 and 2.6.4-beta.1/rules-19 support while retaining the earlier contracts. The beta requires its own native reader and exact archive/source identities. The headless API refactor remains deferred because the API still lacks a complete generation-bound snapshot for this reader.
 
 To evaluate a later Amethyst release, use the [compatibility test guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.4/docs/amethyst-compatibility-testing.md). It explains the GitHub Actions workflow, local runs with an extracted release, and how to interpret native-reader comparisons separately from runtime acceptance. These tests use synthetic profiles and do not touch your installed modlist. They do not automatically enable an unsupported revision or prove live deployment/gameplay compatibility.
+
+Maintainers should use the [current branch's test guide](docs/amethyst-compatibility-testing.md) for the latest suite, including automatic filegraph-refresh checks and the Amethyst 2.6.4-beta.4 verification record.

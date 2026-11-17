@@ -258,6 +258,23 @@ def producer_invariants(expected):
             raise ValueError('producer conflict-only files were hidden or marked conflicting')
 
 
+def refresh_lifecycle_probe(output):
+    result_path = output / 'refresh-lifecycle.json'
+    command = [sys.executable, str(Path(__file__).with_name('amethyst_compatibility_refresh.py')),
+               '/producer.so', '/amethyst', '/server', str(result_path)]
+    try:
+        process = subprocess.run(command, timeout=180)
+        result = json.loads(result_path.read_text())
+        if not isinstance(result, dict) or not isinstance(result.get('status'), str):
+            raise ValueError('refresh lifecycle report has no recognized status')
+        expected_exit = {'pass': 0, 'not_applicable': 0, 'fail': 1, 'setup_error': 2}.get(result.get('status'))
+        if expected_exit is None or process.returncode != expected_exit:
+            raise ValueError('refresh lifecycle exit disagrees with its report')
+        return result
+    except (OSError, ValueError, subprocess.SubprocessError) as exc:
+        return {'status': 'setup_error', 'error': 'refresh lifecycle probe could not complete: ' + str(exc)}
+
+
 def main():
     output = Path('/output')
     report = {'report_schema': 1, 'approved': False, 'status': 'setup_error', 'readers': [],
@@ -294,9 +311,12 @@ def main():
                                        for name in before.keys() | after.keys() if before.get(name) != after.get(name)}
             if not report['producer_inputs_unchanged']:
                 raise ValueError('comparison changed producer files/catalog')
+            report['refresh_lifecycle'] = refresh_lifecycle_probe(output)
             if report['readers'][0]['status'] != 'pass':
                 report.update(status='setup_error', error='producer control could not validate the experiment; inspect reader and transport coverage')
-            elif any(row['status'] == 'fail' for row in report['readers']):
+            elif report['refresh_lifecycle']['status'] == 'setup_error':
+                report.update(status='setup_error', error='refresh lifecycle probe could not validate the experiment; inspect refresh_lifecycle')
+            elif any(row['status'] == 'fail' for row in report['readers']) or report['refresh_lifecycle']['status'] == 'fail':
                 report['status'] = 'comparison_failed'
             else:
                 report['status'] = 'comparison_complete'
