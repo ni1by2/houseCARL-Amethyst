@@ -153,7 +153,7 @@ public sealed class AmethystPluginActivationTests
             $"[Archive]\n{customKey}=Fixture.bsa\n");
         var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
         Assert.Empty(snapshot.OrderedPluginPaths);
-        Assert.Equal(ArchiveDiscovery.IniArchiveOwner, Assert.Single(snapshot.SavedArchives().Where(a => Path.GetFileName(a.Path) == "Fixture.bsa")).OwningPlugin);
+        Assert.Equal(ArchiveDiscovery.IniArchiveOwner, Assert.Single(snapshot.SavedArchives(), a => Path.GetFileName(a.Path) == "Fixture.bsa").OwningPlugin);
         Assert.Contains(snapshot.SavedArchives(), a => Path.GetFileName(a.Path) == "Other.bsa");
         Assert.True(snapshot.HasActiveProvider("Fixture.bsa"));
         Assert.Contains(snapshot.ResolveAssets("skse/plugins/skypatcher/weapon/bsaonly.ini"), source => source.ProviderName == "Fixture.bsa");
@@ -173,6 +173,20 @@ public sealed class AmethystPluginActivationTests
         Assert.DoesNotContain(snapshot.SavedArchives(), a => Path.GetFileName(a.Path) == "Fixture.bsa");
         Assert.Empty(snapshot.ResolveAssets("skse/plugins/skypatcher/weapon/bsaonly.ini"));
         Assert.False(snapshot.HasActiveProvider("Fixture.bsa"));
+        snapshot.CheckUnchanged();
+    }
+
+    [Fact]
+    public void CustomIniAloneLoadsItsArchiveButRetainsTheMissingBaseIniWarning()
+    {
+        using var world = new AmethystSnapshotWorld(pluginsText: "Fixture.esp\n");
+        foreach (var name in new[] { "Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm" })
+            File.WriteAllText(Path.Combine(world.Root, "game", "Data", name), "synthetic source");
+        WriteArchiveInputs(world, "", "[Archive]\nsResourceArchiveList=Fixture.bsa\n");
+        File.Delete(Path.Combine(world.Root, "prefix", "drive_c", "users", "steamuser", "Documents", "My Games", "Skyrim Special Edition", "Skyrim.ini"));
+        var snapshot = AmethystSavedSnapshot.Capture(world.Manifest);
+        Assert.Single(snapshot.ResolveAssets("skse/plugins/skypatcher/weapon/bsaonly.ini"));
+        Assert.True(snapshot.Provenance.VanillaArchivesOmitted);
         snapshot.CheckUnchanged();
     }
 

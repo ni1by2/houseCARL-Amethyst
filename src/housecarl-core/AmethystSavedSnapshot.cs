@@ -423,7 +423,7 @@ public sealed class AmethystSavedSnapshot
     /// <summary>Build only the vanilla archive sources whose activation is established by effective INIs and engine-loaded plugins.</summary>
     void ReadVanillaArchives()
     {
-        if (!_effectiveIniPaths.ContainsKey("Skyrim.ini") && !_effectiveIniPaths.ContainsKey("SkyrimCustom.ini"))
+        if (!_effectiveIniPaths.ContainsKey("Skyrim.ini"))
             _vanillaArchiveCoverageIncomplete = true;
         var baseArchives = new[] { "sResourceArchiveList", "sResourceArchiveList2" }
             .SelectMany(key => (ReadIniValue("Archive", key, allowEmpty: true).Value ?? "")
