@@ -94,13 +94,16 @@ public sealed class AmethystSavedSnapshot
     bool _nativeDeploymentMatches;
     string _deployMode = "hardlink";
     static readonly string[] SkyrimImplicitMasters = ["Skyrim.esm", "Update.esm", "Dawnguard.esm", "HearthFires.esm", "Dragonborn.esm"];
+    string[] _enginePluginNames = [];
+    HashSet<string> _enginePluginStems = new(StringComparer.OrdinalIgnoreCase);
+    HashSet<string> _iniArchiveNames = new(StringComparer.OrdinalIgnoreCase);
     /// <summary>All candidate rows of the profile's selected variants, including disabled-mod source lookup.</summary>
     readonly Dictionary<long, Candidate> _candidates = [];
     /// <summary>Producer-restored winners, indexed by their saved namespace and destination key.</summary>
     readonly Dictionary<(int Namespace, string Destination), long> _winners = [];
-    /// <summary>Active providers per destination; only the saved winner determines which provider wins.</summary>
+    /// <summary>Saved contenders per destination; engine activation filters plugin-bound archives at read time.</summary>
     readonly Dictionary<string, List<Candidate>> _providers = new(StringComparer.OrdinalIgnoreCase);
-    /// <summary>Saved rank inputs order diagnostic copies only; winner IDs always come from the producer's native snapshot.</summary>
+    /// <summary>Saved ranks order contenders when engine activation excludes the producer's recorded winner.</summary>
     readonly Dictionary<string, long> _modRanks = [], _archiveRanks = [], _pluginRanks = [];
     /// <summary>The database path identity at capture, independent of WAL or main-file content stamps.</summary>
     LinuxFileIdentity _databaseIdentity;
@@ -238,8 +241,10 @@ public sealed class AmethystSavedSnapshot
             ReadWinners(database, deploymentOverride);
             Execute(database, "ROLLBACK");
         }
-        Composition = ReadComposition();
         ReadEffectiveInputs(paths.RootElement);
+        Composition = ReadComposition();
+        _enginePluginNames = EngineOrderedPluginNames();
+        _enginePluginStems = _enginePluginNames.Select(name => Path.GetFileNameWithoutExtension(name)).ToHashSet(StringComparer.OrdinalIgnoreCase);
         ReadVanillaArchives();
         if (ProviderNames is not null)
             ProviderNames = ProviderNames.Concat(VanillaArchives.Select(a => Path.GetFileName(a.Path))).Distinct(StringComparer.Ordinal).ToArray();
@@ -415,15 +420,17 @@ public sealed class AmethystSavedSnapshot
         return result;
     }
 
-    /// <summary>Build only the vanilla archive sources whose activation is established by effective Skyrim.ini and engine-loaded plugins.</summary>
+    /// <summary>Build only the vanilla archive sources whose activation is established by effective INIs and engine-loaded plugins.</summary>
     void ReadVanillaArchives()
     {
-        var ini = _effectiveIniPaths.GetValueOrDefault("Skyrim.ini");
-        IReadOnlyList<string> baseArchives = [];
-        if (ini is null) _vanillaArchiveCoverageIncomplete = true;
-        else baseArchives = ParseBaseArchiveNames(_inputs[ini].Bytes!);
+        if (!_effectiveIniPaths.ContainsKey("Skyrim.ini") && !_effectiveIniPaths.ContainsKey("SkyrimCustom.ini"))
+            _vanillaArchiveCoverageIncomplete = true;
+        var baseArchives = new[] { "sResourceArchiveList", "sResourceArchiveList2" }
+            .SelectMany(key => (ReadIniValue("Archive", key, allowEmpty: true).Value ?? "")
+                .Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)).ToArray();
 
-        var activePlugins = EngineOrderedPluginNames();
+        _iniArchiveNames = baseArchives.ToHashSet(StringComparer.OrdinalIgnoreCase);
+        var activePlugins = _enginePluginNames;
         var archives = new List<ActiveArchive>();
         var rank = 0;
         foreach (var archive in baseArchives)
@@ -450,42 +457,30 @@ public sealed class AmethystSavedSnapshot
         VanillaArchives = archives;
     }
 
-    /// <summary>INI archive list parser matching the pinned producer's [Archive] list semantics.</summary>
-    static IReadOnlyList<string> ParseBaseArchiveNames(byte[] bytes)
-    {
-        var result = new List<string>();
-        var inArchive = false;
-        foreach (var raw in Encoding.UTF8.GetString(bytes).TrimStart('\uFEFF').Split('\n'))
-        {
-            var line = raw.Trim();
-            if (line.Length == 0 || line[0] == ';') continue;
-            if (line[0] == '[') { inArchive = line.Equals("[Archive]", StringComparison.OrdinalIgnoreCase); continue; }
-            if (!inArchive) continue;
-            var equals = line.IndexOf('=');
-            if (equals < 0) continue;
-            var key = line[..equals].Trim();
-            if (key.Equals("sResourceArchiveList", StringComparison.OrdinalIgnoreCase) || key.Equals("sResourceArchiveList2", StringComparison.OrdinalIgnoreCase))
-                result.AddRange(line[(equals + 1)..].Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries));
-        }
-        return result;
-    }
-
     string[] EngineOrderedPluginNames()
     {
         var result = new List<string>();
         void Add(string name) { if (!result.Contains(name, StringComparer.OrdinalIgnoreCase)) result.Add(name); }
         foreach (var name in SkyrimImplicitMasters) Add(name);
         foreach (var name in Composition.OrderedPluginNames)
-            if (!Composition.InactivePluginNames.Contains(name, StringComparer.OrdinalIgnoreCase)) Add(name);
+            if (Composition.ActivePluginNames.Contains(name) || Composition.ImplicitPluginNames.Contains(name, StringComparer.OrdinalIgnoreCase)) Add(name);
+        foreach (var name in Composition.ActivePluginNames) Add(name);
+        foreach (var name in Composition.ImplicitPluginNames) Add(name);
+        return result.ToArray();
+    }
+
+    /// <summary>Only engine-forced master names and installed manifest entries can be implicitly active.</summary>
+    IEnumerable<string> EngineImplicitPluginNames()
+    {
+        foreach (var name in SkyrimImplicitMasters) yield return name;
         if (_cccBytes is not null)
             foreach (var raw in Encoding.UTF8.GetString(_cccBytes).TrimStart('\uFEFF').Split('\n'))
             {
                 var name = raw.Trim();
                 if (name.Length == 0 || name.StartsWith('#')) continue;
                 SafePart(name, "Skyrim.ccc plugin filename");
-                if (ResolveAssets(name).Count > 0) Add(name);
+                yield return name;
             }
-        return result.ToArray();
     }
 
     bool HasManagedArchive(string filename)
@@ -644,7 +639,7 @@ public sealed class AmethystSavedSnapshot
                 throw new InvalidOperationException("Amethyst saved winner is excluded by its own profile intent");
     }
 
-    /// <summary>Order copies by the pinned producer's saved rank inputs; this never selects or repairs a winner.</summary>
+    /// <summary>Order contenders by the pinned producer's saved ranks while preserving the native winner IDs.</summary>
     (long Primary, long Secondary, uint Ordinal, long Id) SavedCopyRank(Candidate candidate)
     {
         var normal = candidate.Kind == 2 ? long.MaxValue / 4 : _modRanks.GetValueOrDefault(candidate.ModKey);
@@ -666,7 +661,13 @@ public sealed class AmethystSavedSnapshot
         var inactive = new List<string>();
         foreach (var name in Lines("plugins.txt"))
             if (name.StartsWith('*')) active.Add(name[1..]); else inactive.Add(name);
-        var implicitNames = ordered.Where(p => !active.Contains(p) && !inactive.Contains(p, StringComparer.OrdinalIgnoreCase)).ToList();
+        var forced = EngineImplicitPluginNames().Where(name => ResolveAssets(name).FirstOrDefault()?.Kind == AssetKind.Loose)
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        var implicitNames = ordered.Concat(forced).Where(name => !active.Contains(name) && forced.Contains(name, StringComparer.OrdinalIgnoreCase))
+            .Distinct(StringComparer.OrdinalIgnoreCase).ToList();
+        inactive.RemoveAll(name => active.Contains(name) || implicitNames.Contains(name, StringComparer.OrdinalIgnoreCase));
+        inactive.AddRange(ordered.Where(name => !active.Contains(name) && !implicitNames.Contains(name, StringComparer.OrdinalIgnoreCase)
+            && !inactive.Contains(name, StringComparer.OrdinalIgnoreCase)).Distinct(StringComparer.OrdinalIgnoreCase));
         return new(enabled, disabled, ordered, active, inactive, implicitNames);
     }
 
@@ -674,8 +675,8 @@ public sealed class AmethystSavedSnapshot
     IReadOnlyList<string> ResolvePlugins()
     {
         var paths = new List<string>();
-        var explicitActive = Composition.OrderedPluginNames.Where(p => !Composition.InactivePluginNames.Contains(p, StringComparer.OrdinalIgnoreCase)).ToHashSet(StringComparer.OrdinalIgnoreCase);
-        foreach (var plugin in EngineOrderedPluginNames())
+        var explicitActive = Composition.ActivePluginNames;
+        foreach (var plugin in _enginePluginNames)
         {
             SafePart(plugin, "plugin filename");
             var sources = ResolveAssets(plugin);
@@ -704,7 +705,7 @@ public sealed class AmethystSavedSnapshot
                 if (!_winners.TryGetValue((ns, destination.ToLowerInvariant()), out var winner))
                     winner = _winners.FirstOrDefault(p => p.Key.Namespace == ns && p.Key.Destination.Equals(destination, StringComparison.OrdinalIgnoreCase)).Value;
                 if (winner == 0) continue;
-                foreach (var candidate in candidates.Where(c => c.Namespace == ns).OrderByDescending(c => c.Id == winner))
+                foreach (var candidate in candidates.Where(c => c.Namespace == ns && EngineArchiveActive(c)).OrderByDescending(c => c.Id == winner))
                 {
                     var path = SourcePath(candidate);
                     result.Add(candidate.Kind == 3
@@ -724,13 +725,19 @@ public sealed class AmethystSavedSnapshot
     }
 
     /// <summary>Saved Data-relative asset keys; this does not discover out-of-band staging additions.</summary>
-    public IEnumerable<string> AssetPaths => _winners.Keys.Select(k => k.Destination).Where(d => d.StartsWith("data/", StringComparison.OrdinalIgnoreCase))
+    public IEnumerable<string> AssetPaths => _winners.Keys.Where(k => k.Namespace != 2 ||
+            _providers.GetValueOrDefault(k.Destination, []).Any(c => c.Kind == 3 && EngineArchiveActive(c)))
+        .Select(k => k.Destination).Where(d => d.StartsWith("data/", StringComparison.OrdinalIgnoreCase))
         .Select(d => d[5..].Replace('/', '\\')).Distinct(StringComparer.OrdinalIgnoreCase);
 
     /// <summary>Names in this capture's selected variants, including disabled donors; never probes staging folders.</summary>
     public bool HasSavedProvider(string name) => _candidates.Values.Any(c => Named(c, name));
 
-    public bool HasActiveProvider(string name) => _providers.Values.Any(copies => copies.Any(c => Named(c, name)));
+    public bool HasActiveProvider(string name) => _providers.Values.Any(copies => copies.Any(c => EngineArchiveActive(c) && Named(c, name)));
+
+    /// <summary>Native archive contender order is preserved; plugin activation and INI loading determine engine eligibility.</summary>
+    bool EngineArchiveActive(Candidate candidate) => candidate.Kind != 3 || candidate.PluginKey is null ||
+        _enginePluginStems.Contains(candidate.PluginKey) || _iniArchiveNames.Contains(Path.GetFileName(candidate.Source));
 
     bool Named(Candidate c, string name) => AssetSourceSelection.NameMatches(
         c.Kind == 3 ? Path.GetFileName(c.Source) : c.ModKey == "[overwrite]" ? "overwrite" : c.Mod,
@@ -758,6 +765,10 @@ public sealed class AmethystSavedSnapshot
 
     /// <summary>A value from the already-captured effective INIs, with SkyrimCustom overriding Skyrim key by key.</summary>
     public (string? Value, string Ini) IniValue(string section, string key)
+        => ReadIniValue(section, key, allowEmpty: false);
+
+    /// <summary>Archive lists also accept an explicit empty override, which clears the inherited list.</summary>
+    (string? Value, string Ini) ReadIniValue(string section, string key, bool allowEmpty)
     {
         foreach (var name in new[] { "SkyrimCustom.ini", "Skyrim.ini" })
         {
@@ -771,7 +782,8 @@ public sealed class AmethystSavedSnapshot
                 if (line.StartsWith('[')) { inside = line.Equals("[" + section + "]", StringComparison.OrdinalIgnoreCase); continue; }
                 if (!inside || line.StartsWith(';') || line.StartsWith('#')) continue;
                 var eq = line.IndexOf('=');
-                if (eq >= 0 && line[..eq].Trim().Equals(key, StringComparison.OrdinalIgnoreCase) && line[(eq + 1)..].Trim() is { Length: > 0 } value)
+                if (eq >= 0 && line[..eq].Trim().Equals(key, StringComparison.OrdinalIgnoreCase)
+                    && line[(eq + 1)..].Trim() is { } value && (allowEmpty || value.Length > 0))
                     return (value, path);
             }
         }
@@ -835,12 +847,12 @@ public sealed class AmethystSavedSnapshot
         .Select(c => c.Destination[5..]).Distinct(StringComparer.OrdinalIgnoreCase).ToList();
 
     /// <summary>Archive provenance from selected saved members, for consumers that need the owning mod/plugin.</summary>
-    public IReadOnlyList<ActiveArchive> SavedArchives() => _providers.Values.SelectMany(p => p).Where(c => c.Kind == 3)
+    public IReadOnlyList<ActiveArchive> SavedArchives() => _providers.Values.SelectMany(p => p).Where(c => c.Kind == 3 && EngineArchiveActive(c))
         .GroupBy(c => (c.Mod, c.Source)).Select(g =>
         {
             var candidate = g.First();
-            var plugin = Composition.OrderedPluginNames.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(candidate.PluginKey, StringComparison.OrdinalIgnoreCase));
-            var rank = plugin is null ? -1 : Composition.OrderedPluginNames.ToList().IndexOf(plugin);
+            var plugin = _enginePluginNames.FirstOrDefault(p => Path.GetFileNameWithoutExtension(p).Equals(candidate.PluginKey, StringComparison.OrdinalIgnoreCase));
+            var rank = plugin is null ? -1 : Array.IndexOf(_enginePluginNames, plugin);
             return new ActiveArchive(SourcePath(candidate), plugin ?? ArchiveDiscovery.IniArchiveOwner, rank, candidate.Mod);
         }).Concat(VanillaArchives).ToList();
 

@@ -323,8 +323,8 @@ public sealed class AssetResolver : IDisposable
         if (_savedSnapshot is { } saved)
         {
             var recorded = saved.ResolveAssets(rel).ToList();
-            // The native snapshot remains authoritative for every managed provider. Vanilla archives are the
-            // only entries added here, in the engine order captured from effective Skyrim.ini and plugin state.
+            // The snapshot preserves managed contender precedence while filtering inactive plugin bindings.
+            // Add vanilla archives in the engine order captured from effective Skyrim.ini and plugin state.
             foreach (var archive in _archives.Where(a => string.Equals(a.OwningMod, "Data", StringComparison.Ordinal)))
                 if (snap.Tables.TryGetValue(archive.Path, out var table) && table.Contains(rel))
                     recorded.Add(new PlacementSource(Path.GetFileName(archive.Path), AssetKind.Bsa,

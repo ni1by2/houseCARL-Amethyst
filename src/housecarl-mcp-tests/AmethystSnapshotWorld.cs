@@ -23,12 +23,12 @@ sealed class AmethystSnapshotWorld : IDisposable
     public JsonElement ExpectedWinners { get; }
 
     /// <summary>Restore producer data without rebuilding its routing or winners; only fixture locations, plugin bytes and stamps change.</summary>
-    public AmethystSnapshotWorld(bool profileSpecific = false, string profileName = "default", bool gameOverride = false, bool linkedKeyword = false, bool voiceLine = false, int schemaVersion = 9, int? rulesRevision = null)
+    public AmethystSnapshotWorld(bool profileSpecific = false, string profileName = "default", bool gameOverride = false, bool linkedKeyword = false, bool voiceLine = false, int schemaVersion = 9, int? rulesRevision = null, string? pluginsText = null, string? loadorderText = null, string? fixtureName = null)
     {
         _profileName = profileName; _profileSpecific = profileSpecific;
         _ = TestCorpus.Path;
         using var fixture = JsonDocument.Parse(File.ReadAllText(Path.Combine(HarnessPaths.RepoRoot,
-            "src", "housecarl-mcp-tests", "fixtures", "amethyst", $"schema{schemaVersion}{(rulesRevision >= 15 ? $"-rules{rulesRevision}" : "")}-snapshot.json")));
+            "src", "housecarl-mcp-tests", "fixtures", "amethyst", fixtureName ?? $"schema{schemaVersion}{(rulesRevision >= 15 ? $"-rules{rulesRevision}" : "")}-snapshot.json")));
         var data = fixture.RootElement;
         ExpectedWinners = data.GetProperty("winners").Clone();
         foreach (var file in data.GetProperty("files").EnumerateObject())
@@ -57,6 +57,8 @@ sealed class AmethystSnapshotWorld : IDisposable
         }
         Directory.CreateDirectory(Profile);
         foreach (var file in data.GetProperty("profile_files").EnumerateObject()) File.WriteAllText(Path.Combine(Profile, file.Name), file.Value.GetString());
+        if (pluginsText is not null) File.WriteAllText(Path.Combine(Profile, "plugins.txt"), pluginsText);
+        if (loadorderText is not null) File.WriteAllText(Path.Combine(Profile, "loadorder.txt"), loadorderText);
         var gameData = Path.Combine(Root, "game", "Data");
         Directory.CreateDirectory(gameData);
         if (voiceLine)
@@ -114,6 +116,9 @@ sealed class AmethystSnapshotWorld : IDisposable
             query.Parameters.Clear();
             var intent = JsonNode.Parse(data.GetProperty("intent").GetRawText())!;
             intent["profile_id"] = Profile;
+            if (loadorderText is not null)
+                intent["plugin_order"] = new JsonArray(loadorderText.Split('\n', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)
+                    .Select(name => (JsonNode?)JsonValue.Create(Path.GetFileNameWithoutExtension(name).ToLowerInvariant())).ToArray());
             var digest = new Blake2bDigest(192);
             foreach (var name in new[] { "modlist.txt", "profile_state.json", "plugins.txt", "loadorder.txt" })
             {
