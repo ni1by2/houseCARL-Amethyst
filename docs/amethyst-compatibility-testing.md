@@ -54,9 +54,13 @@ Each reader receives a separate SQLite backup. The suite runs the release's unch
 
 The packaged MCP server is tested separately. For an admitted contract, checks cover explicit connection selection, status, an asset winner with snapshot provenance, refusal after a source file changes, and refusal after profile intent changes. An unsupported contract is recorded as `blocked_by_contract`. Other MCP failures fail the comparison. The original producer files and catalog must retain their hashes; SQLite shared-memory locks and empty read-created WAL sidecars are not treated as catalog data. Nonempty WAL data remains protected.
 
+The suite also checks Amethyst's automatic filegraph-version refresh, introduced in 2.6.4-beta.2. This uses another disposable profile: its deliberate manager writes are separate from the unchanged-input checks above. The expected schema/engine/rules marker comes from the supplied producer, rather than a hard-coded app version. The probe checks that refresh records the marker, a matching marker avoids refresh, and missing or old markers each trigger exactly one refresh and then settle. It reconciles the profile afterward, verifies that no uncommitted deployment has become verified, and reruns the packaged server's read/refusal checks. A server that blocks the producer contract remains explicitly `blocked_by_contract`; that is not a post-refresh runtime pass.
+
+Producers exposing neither marker function report `refresh_lifecycle.status: not_applicable`, as the older controls do. A partially available or incompatible driver reports `setup_error`. A failed marker transition or post-refresh runtime check fails the comparison. The separate process restores its method instrumentation before continuing and deletes its temporary profile when it exits.
+
 ## Read the report
 
-`report.json` contains source and binary hashes, producer contract, per-reader results, production admission, input-integrity checks and limits. `producer-oracle.json` retains the synthetic expected data; `container.log` retains failures. The request records the suite commit and hashes of the actual probe files, including uncommitted development edits.
+`report.json` contains source and binary hashes, producer contract, per-reader results, production admission, input-integrity checks, `refresh_lifecycle` and limits. `refresh-lifecycle.json` retains the separate refresh result, including post-refresh runtime admission or its explicit contract block. `producer-oracle.json` retains the original synthetic expected data; `container.log` retains failures. The request records the suite commit and hashes of the actual probe files, including uncommitted development edits.
 
 | Result | Meaning |
 |---|---|
@@ -66,12 +70,16 @@ The packaged MCP server is tested separately. For an admitted contract, checks c
 | Reader `fail` | A reader failed or returned different results. Inspect its diagnostic. |
 | Server `accepted` | The baseline server admitted the producer and passed the listed read/refusal checks. |
 | Server `blocked_by_contract` | Its production revision check refused the catalog; native parity is reported independently. |
+| Refresh lifecycle `pass` | Marker transitions and uncommitted-deployment checks passed; inspect its separate `production_server` result for post-refresh runtime acceptance. |
+| Refresh lifecycle `not_applicable` | The supplied producer predates the marker API; no refresh-transition coverage is claimed. |
 | Overall `setup_error` | The environment, producer fixture or producer control could not validate the experiment, including an API/schema outside the baseline helper's coverage. This is not proof of an adapter regression. |
 | Overall `comparison_failed` | A reader or server check failed, or producer inputs changed. |
 | Producer control `pass` | The producer can read its own synthetic catalog. A failed control invalidates the experiment rather than certifying incompatibility. |
 | Overall `comparison_complete` | The experiment completed without failed comparisons. It does not grant compatibility approval. |
 
 For a rules-19 producer compared with the 2.1.4 package, expect the matching native rules-19 reader to pass and `production_server.status` to be `accepted`. Rules-14/rules-15 reader failures keep overall `comparison_failed`; that outcome demonstrates why those readers are not selected for rules 19. Inspect `producer_inputs_unchanged` and any diagnostics too. A failure in the matching reader, the candidate server's read/refusal checks, or input integrity needs investigation. A future unverified contract can remain `blocked_by_contract` even when native comparisons pass.
+
+Amethyst **2.6.4-beta.4** at `0b4e2899e702320f3e9c7ed5fa81f973c4d16330` was tested with published houseCARL **2.1.4** on 17 November 2026. The selected rules-19 reader, runtime reads/refusals, input integrity and automatic-refresh checks passed; older reader failures remained as described above. No runtime mapping change was needed. See the [suite update verification record](testing/amethyst-refresh-lifecycle-2026-11-17.md).
 
 Exit codes are 0 for a completed experiment, 1 for a failed comparison and 2 for setup failure. The report retains Docker's raw exit separately as `container_exit_code`. Every report sets `approved:false`, including successful runs with blocked production admission. A green workflow must not be used as automatic permission to relax runtime checks.
 

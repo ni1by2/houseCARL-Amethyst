@@ -126,6 +126,46 @@ class CompatibilityHarnessTests(unittest.TestCase):
                     self.assertEqual(exit_code, worker.main())
                 self.assertEqual(status, json.loads((root / 'report.json').read_text())['status'])
 
+    def test_refresh_failures_cannot_be_reported_as_completed_comparisons(self):
+        for refresh, status, exit_code in [('pass', 'comparison_complete', 0), ('not_applicable', 'comparison_complete', 0),
+                                           ('fail', 'comparison_failed', 1), ('setup_error', 'setup_error', 2)]:
+            with self.subTest(refresh=refresh), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                (root / 'request.json').write_text('{"readers": []}')
+                oracle = dict(contract={}, status={}, generation=1, inventory_generation=1)
+                (root / 'producer-oracle.json').write_text(json.dumps(oracle))
+                def path(value):
+                    return root if value == '/output' else Path(value)
+                with patch.object(worker, 'Path', side_effect=path), \
+                     patch.dict(worker.os.environ, {key: raw for key in ('HOME', 'XDG_CONFIG_HOME', 'XDG_STATE_HOME', 'XDG_DATA_HOME', 'XDG_CACHE_HOME')}), \
+                     patch.object(worker.subprocess, 'run'), patch.object(worker, 'transport_contract', return_value={}), \
+                     patch.object(worker, 'producer_invariants'), patch.object(worker, 'compare_reader', return_value={'status': 'pass'}), \
+                     patch.object(worker, 'server_probe', return_value={'status': 'accepted'}), \
+                     patch.object(worker, 'refresh_lifecycle_probe', return_value={'status': refresh}):
+                    self.assertEqual(exit_code, worker.main())
+                report = json.loads((root / 'report.json').read_text())
+                self.assertEqual(status, report['status'])
+                self.assertEqual(refresh, report['refresh_lifecycle']['status'])
+                self.assertFalse(report['approved'])
+
+    def test_refresh_subprocess_must_supply_a_valid_report_and_matching_exit(self):
+        for report, exit_code, expected in [({'status': 'pass'}, 0, 'pass'), ({'status': 'fail'}, 1, 'fail'),
+                                            ({'status': 'not_applicable'}, 0, 'not_applicable'),
+                                            ({'status': 'pass'}, 1, 'setup_error'), ({'status': 'unexpected'}, 0, 'setup_error'),
+                                            ([], 0, 'setup_error'), ({'status': {}}, 0, 'setup_error'),
+                                            (None, 0, 'setup_error')]:
+            with self.subTest(report=report, exit_code=exit_code), tempfile.TemporaryDirectory() as raw:
+                root = Path(raw)
+                if report is not None:
+                    (root / 'refresh-lifecycle.json').write_text(json.dumps(report))
+                with patch.object(worker.subprocess, 'run', return_value=subprocess.CompletedProcess([], exit_code)):
+                    self.assertEqual(expected, worker.refresh_lifecycle_probe(root)['status'])
+
+    def test_refresh_timeout_is_a_setup_error(self):
+        with tempfile.TemporaryDirectory() as raw, \
+             patch.object(worker.subprocess, 'run', side_effect=subprocess.TimeoutExpired('refresh', 180)):
+            self.assertEqual('setup_error', worker.refresh_lifecycle_probe(Path(raw))['status'])
+
 
 if __name__ == '__main__':
     unittest.main()
