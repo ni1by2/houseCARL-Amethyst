@@ -88,7 +88,7 @@ def dump_catalog(database):
     return result
 
 
-def build(source, extension, output, schema=9, rules=None):
+def build(source, extension, output, schema=9, rules=None, scenario='default'):
     """Generate data and expectations independently of the C# implementation."""
     commit = subprocess.check_output(["git", "-C", str(source), "rev-parse", "HEAD"], text=True).strip()
     rules = rules or (14 if schema == 10 else 13)
@@ -153,6 +153,11 @@ def build(source, extension, output, schema=9, rules=None):
         files["mods/beta/Fixture.esp"] = plugin
         files["mods/beta/Fixture.bsa"] = files["mods/Alpha/Fixture.bsa"]
         files["mods/Beta/Fixture.bsa"] = files["mods/Alpha/Fixture.bsa"]
+    if scenario == 'activation':
+        for extension_name in ('esp', 'bsa'):
+            files[f'mods/Alpha/Active.{extension_name}'] = files.pop(f'mods/Alpha/Fixture.{extension_name}')
+        (profile / 'loadorder.txt').write_text('Active.esp\nFixture.esp\nDormant.esp\n')
+        (profile / 'plugins.txt').write_text('*Active.esp\n*Fixture.esp\nDormant.esp\n')
     for relative, data in files.items():
         path = root / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -201,5 +206,6 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--schema", type=int, choices=(9, 10), default=9)
     parser.add_argument("--rules", type=int, choices=(13, 14, 15, 18, 19))
+    parser.add_argument("--scenario", choices=('default', 'activation'), default='default')
     args = parser.parse_args()
-    build(args.source.resolve(), args.extension.resolve(), args.output.resolve(), args.schema, args.rules)
+    build(args.source.resolve(), args.extension.resolve(), args.output.resolve(), args.schema, args.rules, args.scenario)

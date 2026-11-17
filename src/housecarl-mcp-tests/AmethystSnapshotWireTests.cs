@@ -25,7 +25,8 @@ public sealed class AmethystSnapshotWireTests
     [Fact]
     public void ExplicitSelectionPersistsAndWorksAfterRestart()
     {
-        using var world = new AmethystSnapshotWorld();
+        using var world = new AmethystSnapshotWorld(pluginsText: "*Fixture.esp\n",
+            loadorderText: "Fixture.esp\nDormant.esp\nRemoved.esp\n");
         var environment = EnvironmentFor(world, false);
         using (var server = new ServerFixture(environment))
         {
