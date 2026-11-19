@@ -24,6 +24,15 @@ runner = load('run_amethyst_compatibility')
 
 
 class CompatibilityHarnessTests(unittest.TestCase):
+    def test_runtime_selector_uses_the_published_schema(self):
+        def schema(*names):
+            return [{'name': 'housecarl_asset_status', 'inputSchema': {'properties': {n: {} for n in names}}}]
+        self.assertEqual('paths', worker.asset_selector(schema('paths', 'asset_paths')))
+        self.assertEqual('asset_paths', worker.asset_selector(schema('asset_paths')))
+        for tools in [[], schema('unknown')]:
+            with self.assertRaises(ValueError):
+                worker.asset_selector(tools)
+
     def test_changed_winner_or_source_is_a_failure(self):
         original = dict(candidate_id=1, namespace='normal', target='game', mod_key='alpha',
                         destination_key=[100, 97, 116, 97], source_rel=[97])
