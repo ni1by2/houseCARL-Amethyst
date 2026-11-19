@@ -1,3 +1,5 @@
+using System.Reflection;
+using System.Runtime.CompilerServices;
 using System.Security.Cryptography;
 using System.Text.Json;
 using HousecarlMcp;
@@ -42,6 +44,175 @@ public sealed class ServingCopyTests
         Assert.True(rerun.Success, rerun.Error);
         Assert.NotEqual(high, Md5(w.HighPath));
         Assert.Equal(low, Md5(w.LowPath));
+    }
+
+    /// <summary>Inside a call the in-place remove still refuses with both files untouched, but the write takes no rebuild
+    /// after its in-gate pin: the order is re-read at the next call, whose rerun writes the higher copy.</summary>
+    [Fact]
+    public void AWriteInACallRefusesWithNoRebuildAndTheNextCallReReads()
+    {
+        using var w = new ServingCopyWorld(highFirst: false);
+        w.Svc.Stats();                                          // the index is built off the low copy
+        w.AddHighCopy();
+        string low = Md5(w.LowPath), high = Md5(w.HighPath);
+        WritePatchBuilder.RemovalOutcome? refused = null, rerun = null;
+
+        Assert.Equal("ok", Guard.Tool("housecarl_probe", _ => { refused = RemoveInPlace(w); return ToolAnswer.Served("ok"); }));
+
+        Assert.False(refused!.Success);
+        Assert.Contains("HighMod", refused.Error);
+        Assert.Contains("nothing was written and the index was not refreshed: it is re-read at the start of the next call", refused.Error);
+        Assert.Equal(0, w.Svc.ServingCopyReResolves);
+        Assert.Equal(low, Md5(w.LowPath));
+        Assert.Equal(high, Md5(w.HighPath));
+
+        Assert.Equal("ok", Guard.Tool("housecarl_probe", _ => { rerun = RemoveInPlace(w); return ToolAnswer.Served("ok"); }));
+
+        Assert.True(rerun!.Success, rerun.Error);
+        Assert.NotEqual(high, Md5(w.HighPath));
+        Assert.Equal(low, Md5(w.LowPath));
+    }
+
+    static void InCall(Action body) => Assert.Equal("ok", Guard.Tool("housecarl_probe", _ => { body(); return ToolAnswer.Served("ok"); }));
+
+    /// <summary>The composition of the service's kept profile read, by reference; a re-read replaces it.</summary>
+    static object? ProfileRead(LoadOrderService s) =>
+        (typeof(LoadOrderService).GetField("_profileRead", BindingFlags.NonPublic | BindingFlags.Instance)!.GetValue(s) as ITuple)?[0];
+
+    /// <summary>The re-read a write put off runs at the next call only: the call after that re-reads nothing.</summary>
+    [Fact]
+    public void ThePutOffReReadRunsOnceAndTheCallAfterItReReadsNothing()
+    {
+        using var w = new ServingCopyWorld(highFirst: false);
+        w.Svc.Stats();
+        w.AddHighCopy();
+        var host = (ILoadOrderHost)w.Svc;
+        InCall(() => Assert.False(RemoveInPlace(w).Success));   // the write puts the re-read off
+        object? read = null;
+        InCall(() => { GC.KeepAlive(host.Resolver); read = ProfileRead(w.Svc); });   // the put-off re-read
+        InCall(() => GC.KeepAlive(host.Resolver));
+
+        Assert.Same(read, ProfileRead(w.Svc));
+    }
+
+    /// <summary>An instance switch drops the re-read the old instance put off: the new instance's cold build clears it, so
+    /// after a records-first call the next call re-reads nothing.</summary>
+    [Fact]
+    public void AnInstanceSwitchDropsTheReReadTheOldInstancePutOff()
+    {
+        using var w = new ServingCopyWorld(highFirst: false);
+        w.Svc.Stats();
+        w.AddHighCopy();
+        var host = (ILoadOrderHost)w.Svc;
+        InCall(() => Assert.False(RemoveInPlace(w).Success));   // the write puts the re-read off
+        w.Svc.SetInstanceForGuard(Path.Combine(w.Root, "instance"));
+        object? read = null;
+        InCall(() => { GC.KeepAlive(host.Resolver); read = ProfileRead(w.Svc); });   // records first: the new instance's first build
+        InCall(() => GC.KeepAlive(host.Resolver));
+
+        Assert.Same(read, ProfileRead(w.Svc));
+    }
+
+    /// <summary>Q1: the target's mod switched off after the write's in-gate pin; the write finishes on the pin's copy with no refusal.</summary>
+    [Theory]
+    [InlineData("apply")]
+    [InlineData("compact")]
+    public void AnInPlaceWriteFinishesOnItsPinsCopyWhenTheTargetsModGoesOffAfterThePin(string lane)
+    {
+        using var w = new ServingCopyWorld(highFirst: true);
+        w.Svc.Stats();                                          // the index is built off the high copy
+        string low = Md5(w.LowPath), high = Md5(w.HighPath);
+        (bool Success, string? Error) r = default;
+        w.Svc.WriteArea.AfterInGatePinForGuard = w.SwitchHighModOff;
+
+        Assert.Equal("ok", Guard.Tool("housecarl_probe", _ =>
+        {
+            r = lane == "apply"
+                ? Out(w.Svc.ApplyEdits(new[] { new BulkOp { Formid = ServingCopyWorld.Fid(w.Weapon), FieldPath = "EditorID", Value = "HcServeEdited" } },
+                                       null, null, target: ServingCopyWorld.Target, inPlace: true, acknowledge: true))
+                : Out(w.Svc.CompactPlugin(ServingCopyWorld.Target, inPlace: true, acknowledge: true));
+            return ToolAnswer.Served("ok");
+        }));
+        w.Svc.WriteArea.AfterInGatePinForGuard = null;
+
+        Assert.DoesNotContain("index still had", r.Error ?? "");
+        Assert.True(r.Success, r.Error);
+        Assert.NotEqual(high, Md5(w.HighPath));                 // the pin's copy was written
+        Assert.Equal(low, Md5(w.LowPath));
+
+        static (bool, string?) Out(dynamic o) => (o.Success, o.Error);
+    }
+
+    /// <summary>HighMod switched on after the call's pin, then a read naming it: the read is judged on the live profile,
+    /// so it refuses saying the index is now refreshed, after one rebuild.</summary>
+    [Fact]
+    public void ANamedCopyReadAfterItsModIsSwitchedOnPostPinSaysTheIndexIsRefreshed()
+    {
+        using var w = new ServingCopyWorld(highFirst: true);
+        w.SwitchHighModOff();
+        w.Svc.Stats();                                          // the index is built off the low copy
+        string read = "";
+
+        InCall(() =>
+        {
+            w.Svc.CapturePin();
+            w.SwitchHighModOn();
+            read = Read(w, Je($"{{\"file\": \"{ServingCopyWorld.Target}\", \"mod\": \"HighMod\"}}"));
+        });
+
+        Assert.Contains("HighMod", read);
+        Assert.Contains("the index is now refreshed and nothing was read", read);
+        Assert.DoesNotContain(ServingCopyWorld.LowEdid, read);
+        Assert.Equal(1, w.Svc.ServingCopyReResolves);
+    }
+
+    /// <summary>Pins unchanged behaviour, a Known limit as on main: a read naming HighMod, in a call after another call
+    /// followed a switch to a profile with HighMod off, is judged on the live roots, where the indexed low copy still
+    /// serves, so it refuses saying the served copy changed again and rebuilds nothing.</summary>
+    [Fact]
+    public void ANamedCopyReadAfterAnotherCallsSwitchIsJudgedOnTheLiveRoots()
+    {
+        using var w = new ServingCopyWorld(highFirst: false);
+        w.Svc.Stats();                                          // the index is built off the low copy
+        string read = "";
+
+        InCall(() =>
+        {
+            w.Svc.CapturePin();
+            w.AddHighCopy();
+            w.SelectOtherWithHighModOff();
+            var other = new Thread(() => GC.KeepAlive(((ILoadOrderHost)w.Svc).Resolver));   // another call follows the switch
+            other.UnsafeStart();
+            other.Join();
+            read = Read(w, Je($"{{\"file\": \"{ServingCopyWorld.Target}\", \"mod\": \"HighMod\"}}"));
+        });
+
+        Assert.Contains("the served copy changed again during this call", read);
+        Assert.Contains("nothing was read", read);
+        Assert.DoesNotContain(ServingCopyWorld.LowEdid, read);
+        Assert.Equal(0, w.Svc.ServingCopyReResolves);
+    }
+
+    /// <summary>The door in a call, after another call followed a move of MO2's base folder, judges on the call's roots,
+    /// where the indexed low copy still serves; on the moved roots the low copy is another path.</summary>
+    [Fact]
+    public void TheDoorInACallAfterAnotherCallMovedTheRootsJudgesOnTheCallsRoots()
+    {
+        using var w = new ServingCopyWorld(highFirst: false);
+        w.Svc.Stats();                                          // the index is built off the low copy
+        ServingCopyMove? moved = null;
+
+        InCall(() =>
+        {
+            w.Svc.CapturePin();
+            w.MoveBaseFolder();
+            var other = new Thread(() => GC.KeepAlive(((ILoadOrderHost)w.Svc).Resolver));   // another call follows the move
+            other.UnsafeStart();
+            other.Join();
+            moved = ((ILoadOrderHost)w.Svc).ServingCopyMoved([(ServingCopyWorld.Target, w.LowPath)]);
+        });
+
+        Assert.Null(moved);
     }
 
     /// <summary>source={file, mod: HighMod} never answers from the low copy, and the rerun reads the high copy's bytes.</summary>
@@ -281,6 +452,40 @@ public sealed class ServingCopyWorld : IDisposable
 
     /// <summary>Drop the high copy into HighMod; no profile file changes.</summary>
     public void AddHighCopy() => Write(HighPath, HighEdid);
+
+    /// <summary>Switch HighMod off in the Default profile's mod list, as a toggle in MO2 does.</summary>
+    public void SwitchHighModOff() => File.WriteAllText(Path.Combine(Root, "instance", "profiles", "Default", "modlist.txt"), "# header\r\n-HighMod\r\n+LowMod\r\n");
+
+    /// <summary>Switch HighMod back on in the Default profile's mod list.</summary>
+    public void SwitchHighModOn() => File.WriteAllText(Path.Combine(Root, "instance", "profiles", "Default", "modlist.txt"), "# header\r\n+HighMod\r\n+LowMod\r\n");
+
+    /// <summary>Select a profile "Other" with the same plugins and HighMod off, as a profile switch in MO2 does.</summary>
+    public void SelectOtherWithHighModOff()
+    {
+        var instance = Path.Combine(Root, "instance");
+        var other = Path.Combine(instance, "profiles", "Other");
+        Directory.CreateDirectory(other);
+        foreach (var f in new[] { "loadorder.txt", "plugins.txt" }) File.Copy(Path.Combine(instance, "profiles", "Default", f), Path.Combine(other, f));
+        File.WriteAllText(Path.Combine(other, "modlist.txt"), "# header\r\n-HighMod\r\n+LowMod\r\n");
+        File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
+            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Other)\r\ngamePath=@ByteArray("
+            + Path.Combine(Root, "game").Replace(@"\", @"\\") + ")\r\n");
+    }
+
+    /// <summary>Point MO2's base_directory at a copy of the profile and LowMod's plugin, as moving the base folder does.</summary>
+    public void MoveBaseFolder()
+    {
+        var instance = Path.Combine(Root, "instance");
+        var moved = Path.Combine(Root, "moved");
+        var profile = Path.Combine(moved, "profiles", "Default");
+        Directory.CreateDirectory(profile);
+        foreach (var f in new[] { "loadorder.txt", "plugins.txt", "modlist.txt" }) File.Copy(Path.Combine(instance, "profiles", "Default", f), Path.Combine(profile, f));
+        Directory.CreateDirectory(Path.Combine(moved, "mods", "LowMod"));
+        File.Copy(LowPath, Path.Combine(moved, "mods", "LowMod", Target));
+        File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
+            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
+            + Path.Combine(Root, "game").Replace(@"\", @"\\") + ")\r\n[Settings]\r\nbase_directory=" + moved.Replace(@"\", @"\\") + "\r\n");
+    }
 
     void Write(string path, string edid)
     {

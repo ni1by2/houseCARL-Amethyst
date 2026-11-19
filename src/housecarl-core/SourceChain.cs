@@ -9,6 +9,9 @@ public static class SourcePoles
 {
     public const string Winner = "winner";
 
+    /// <summary>Whether a source element is the winner pole, as the chain reads it (trimmed, any case).</summary>
+    public static bool IsWinner(string? spelling) => string.Equals(spelling?.Trim(), Winner, StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Subject-relative, and therefore refused as a walk's source element; named here so a refusal can quote the token the caller typed.</summary>
     public const string PreviousProvider = "previous_provider";
 }
@@ -117,4 +120,13 @@ public sealed class SourceChain
     }
 
     public SourceMiss Miss(FormKey key, string pulledBy) => new(key, pulledBy, Arms);
+
+    /// <summary>The plugins the arms name, by their spelling's file name, in arm order. A spelling with no plugin
+    /// extension (the <c>winner</c> pole) gives none; one that is only an extension (<c>.esp</c>) gives <c>ModKey.Null</c>.
+    /// No filter: a base master or a file off the order is returned, for the caller to keep or drop.</summary>
+    public IEnumerable<ModKey> NamedPlugins()
+    {
+        foreach (var arm in Arms)
+            if (ModKey.TryFromNameAndExtension(Path.GetFileName(arm.Spelling.Replace('\\', '/')), out var mk)) yield return mk;
+    }
 }

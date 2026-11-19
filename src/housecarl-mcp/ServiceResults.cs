@@ -18,6 +18,10 @@ internal enum FreshPatchRemedy
     NamedByPatchParam,
 }
 
+/// <summary>A lane's own record sources for the face door: the source list it reads in order (as from_source= spells
+/// it), the parameter that named them, and the sentence for a key none of them nor the order defines.</summary>
+public sealed record FaceSources(IReadOnlyList<string> Poles, string Param, string Unset);
+
 /// <summary>The outcome of a read_record resolve+read. <see cref="Error"/> non-null ⇒ the read failed; otherwise <see cref="Record"/> carries the fields read off <see cref="SourcePlugin"/>.</summary>
 public sealed record ReadOutcome(
     FormKey FormKey,
@@ -75,6 +79,9 @@ public sealed record CrossQueryOutcome(
     /// <summary>That build's fingerprint, read through the stamp so an outcome cannot carry an epoch without the build's health.</summary>
     public string? Epoch => Stamp?.Epoch;
 
+    /// <summary>The where= reach terms' answer: each line's counts by bucket and what the rows are. Null without one.</summary>
+    public string? ReachNote { get; init; }
+
     /// <summary>The reverse-reference index's accounting for this call: a triggered build's cost, its per-plugin freshness key, and the universe declaration. Null when unused.</summary>
     public string? ReverseIndexNote { get; init; }
 
@@ -102,7 +109,7 @@ public sealed record CrossQueryOutcome(
     public IReadOnlyList<string> FieldNotes { get; init; } = Array.Empty<string>();
 
     IReadOnlyList<string> Owed(string? unmatched) =>
-        new[] { PredicateNote, unmatched, ScanNote, WhereSourceNote, ReverseIndexNote }.OfType<string>().Concat(FieldNotes).ToList();
+        new[] { ReachNote, PredicateNote, unmatched, ScanNote, WhereSourceNote, ReverseIndexNote }.OfType<string>().Concat(FieldNotes).ToList();
 
 
     /// <summary>The scan's pinned resolver and view, so the render's per-match fills read off the same build the scan matched. Never serialized.</summary>
@@ -177,7 +184,8 @@ public sealed record LoadOrderStatusData(
     string? InstanceDir,        // the resolved MO2 instance folder houseCARL is pointed at; null ⇒ explicit-paths / unconfigured mode
     IReadOnlyDictionary<string, string> ExcludedPlugins,
     string? Epoch = null,       // the resolver's current build fingerprint (SPEC §2.1.1) — the status line names it so a caller can match responses/artifacts to the build; nullable like every other carrier
-    int ContainedRecordCount = 0);  // children this build recorded a containing record for — the '*parent' map's size, declared in band per SPEC §2.1 rather than left for a user to discover as memory
+    int ContainedRecordCount = 0,   // children this build recorded a containing record for — the '*parent' map's size, declared in band per SPEC §2.1 rather than left for a user to discover as memory
+    string? ModsFolderUnreadable = null);  // set when the mods folder would not list: no index was built and every other order read refuses
 
 /// <summary>The data behind housecarl_update_status: MO2's own local Nexus update cache read from meta.ini with no network — one <see cref="Entries"/> row per linked mod, the skipped <see cref="UntrackedCount"/>, and any read <see cref="Problems"/>.</summary>
 public sealed record UpdateCacheData(
@@ -245,6 +253,9 @@ public sealed record ClassParents(
 internal sealed record PluginFacts(IReadOnlyList<PluginCopy> Copies, PluginCopy? HeaderFrom, HousecarlCore.PluginHeaderFacts? Header,
                                    ServingCopyMove? Moved = null)
 {
+    /// <summary>Mod folders that would not open, read only when no copy was found: the file may be in one of them.</summary>
+    public IReadOnlyList<string> Unopened { get; init; } = [];
+
     public HousecarlCore.LocalizedFlagRead Localized => HousecarlCore.WriteEngine.LocalizedFlag(Header);
 }
 

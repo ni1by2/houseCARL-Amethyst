@@ -56,3 +56,5 @@ You can run the program and make private changes without publishing your source.
 - DrHeisen. The `open-animation-replacer` skill, and two earlier skills since retired.
 
 The grammar, the predicate language, coverage, the runtime layers and the internals are in the [repository README](https://github.com/ni1by2/houseCARL-Amethyst#readme).
+
+The development branch targets upstream 2.2.0. Its `layer` tool and shared file selectors differ from published 2.1.5; read the [migration guide](../docs/upstream-220-linux-integration.md) before using development builds. Linux support remains maintained by this fork.

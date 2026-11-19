@@ -1,6 +1,6 @@
 ---
-updated: 2026-10-30
-covers: [src/housecarl-core/NifService.cs, src/housecarl-core/NifLinks.cs, src/housecarl-mcp/NifTools.cs]
+updated: 2026-11-11
+covers: [src/housecarl-core/NifService.cs, src/housecarl-core/NifLinks.cs, src/housecarl-mcp/NifTools.cs, src/housecarl-mcp/NifBatch.cs, src/housecarl-mcp/MeshSelection.cs]
 ---
 # The NIF layer: reading mesh values, and the two write gates
 
@@ -32,6 +32,42 @@ model. The fork's `InvalidDataException` renders as "the mesh is malformed and w
 field and the number from its message. A file that loaded but threw while its structure was read is a real defect
 and fails loud with the type and message. Unknown blocks are preserved byte-for-byte and reported by their REAL on-disk type from the header's
 block-type table — `GetType().Name` would flatten every one of them to `NiUnknown`.
+
+### Selecting the meshes
+
+`nif_inspect` takes `asset_status`'s selection (`FileSelection.Select`, through `AssetLayers.SelectMeshes`):
+`paths=`, `under=`, `provider=`, `formids=` and `@file`. The rows come in this order: `paths=` as given, then each
+`formids=` NPC's head mesh, then the `under=` or whole-provider matches, sorted. A match that is not a `.nif` is left out
+and counted in a note. An explicit path is never filtered. `formids=` names both halves of each FaceGen pair. Only the
+head mesh is read, and a note counts the tints. A malformed FormID is one error row, as on `asset_status`. A
+`source_provider=` mod folder's own plugins are read after the active order for the face door, as before. Past the
+path bound, the call is refused in this tool's words, and nothing is read.
+
+A `paths=` entry that is a full path (`Path.IsPathFullyQualified`) is a file on disk, read as that file, as
+`decompile_script` reads one. Its row has no winner and no providers, and says "read from: the file on disk". One inside
+the mods tree is read the same way, and its row names the Data path and mod folder (`paths=[…] source_provider=…`) that
+read the same copy through the load order: a note in the text block, `disk_note` on a json or `to_file=` row. Before #1081 such a path was refused with that address. Every other entry is
+a Data path. Each Data path is read from its winner, or from the copy `source_provider=` names. `provider=` picks which
+meshes; it does not pick whose copy is read. Beside any `paths=` entry (a Data path or a file on disk) or `formids=`,
+with no `under=`, it selects nothing. `decompile_script` (no `formids=`), with no `under=`, selects nothing beside a Data
+path, but beside only files on disk walks everything the provider ships. With `under=`, `provider=` narrows the `under=`
+walk in both tools. A note counts the meshes the `provider=` walk matched that
+another provider wins, and names `source_provider=` as the knob. A call that reads only files on disk, without `sections=paths`, needs no MO2
+instance, and its inline answer captures no view; a spill or `to_file=` stamps the epoch (`AssetTools.TryStamp`),
+which captures one on a configured instance. With `sections=paths`, a file on disk's links resolve against the load order.
+
+Transport is SPEC §2.1's. `limit=` and `offset=` choose which meshes this call reads. `counts_only=` reads the whole
+selection and returns the census: read and not read (absent among them), loose, BSA and file on disk, SE stream or not,
+and unknown blocks. `format=json` gives one row per mesh: the summary as fields, and the requested sections as the text
+the text answer prints. `to_file=` writes every mesh, one parsed mesh held at a time, and renders the manifest. The text
+answer is the per-mesh blocks, unchanged, then the notes, then the `[accounting]` line. When the capped render differs
+from the uncapped one (a mesh or a section cut), the window is written whole to the results directory, and the answer
+names the file (§2.1.1). It is no longer only cut. The json lane spills when its rows do not all fit. One view is
+captured per call, so each archive's table is read once.
+
+`nif_set` takes its mesh as `paths=`, a one-entry list. A second entry is refused in one sentence, and the retired
+`mesh_path=` is refused naming `paths=`. Its `target=` is unchanged (SPEC §5.2), and it does not take a selection
+(concern 10).
 
 ### Coverage comes from the library, never a hand list
 
@@ -86,18 +122,30 @@ so `SlotName` is a small explicit interpreter, each arm keyed to the flag or typ
 rather than a best guess. The index is always printed beside the name, because the index is what `nif_set`'s
 `texture_slot=` takes.
 
-A slot string is printed as the NIF spells it, and in the `paths` section a `data path:` line under it gives the Data
-path that string names and its winner in the load order, even when `source_provider=` reads the mesh from a named
-mod. The mapping is the asset layer's one door from a link to a Data path ([assets.md](assets.md), From a link to a
-Data path), so a FaceGen head's three forms (`Actors\…`, `textures\…`, `data\textures\…`) name the winner a direct
-`asset_status` call on the mapped path names. A miss is a bare `ABSENT`: none of `asset_status`'s per-path hedges rides
-it, so an unread archive or an unlisted root is named only in the header's notes. A string the door refuses is its own
-`data path: none` line naming the slot string. The `shapes` section keeps the raw string only, and `nif_set` writes the string it is given (Pinned by: `AssetLinkDataPathTests`).
+The `paths` section is the mesh's links as `NifLinks` reads them, the one reader `asset_status links=` and the walk
+use (slots, effect-shader textures, the root's SMP and `BODYTRI` strings; [assets.md](assets.md), A mesh's links).
+Each is resolved by the same resolve (`AssetLayers.ResolveLinks`), off the parse `Inspect` already made, and printed by the same line `links=` prints
+(`AssetWire.AppendLink`): the kind, where in the mesh, the string as stored, then a `data path:` line with the load
+order's winner, `ABSENT` (with the hidden copy's sentence when MO2 hides it), or `none — <why>` when the door
+([assets.md](assets.md), From a link to a Data path) makes no Data path of it. So a FaceGen head's three forms
+(`Actors\…`, `textures\…`, `data\textures\…`) name the winner a direct `asset_status` call on the mapped path names.
+Two differences from `links=`, both deliberate: `paths` lists every site, so a file at two slots (or an effect texture
+and a slot) is two lines, because `texture_slot=` names a slot; `links=` and the walk keep each file once at its first
+site (`NifLinks.FirstSites`). And `paths` adds the slot's name where the shader determines it. A null, empty or
+whitespace-only string is no link on either surface. The section first says whose copy the links came from (the
+`read from:` copy, a `source_provider=` copy included) and that each standing is the load order's: each Data path
+resolves against the load order, never against the named copy's own mod. None of `asset_status`'s per-path ABSENT hedges rides a link line,
+so an unread archive or an unlisted root is named only in the header's notes. The `shapes` section keeps the raw slot
+strings, and `nif_set` writes the string it is given (Pinned by: `NifOneReaderTests`, `AssetLinkDataPathTests`).
 
-`NifService.Load` is the parse the two reads share, `Inspect` and `NifLinks.Read`; `nif_set`'s write, its byte
-normalizer and its read-back each still load their own `NifFile`. `NifLinks` is the file
-layer's reader of a mesh's links (slots, effect-shader textures, the root's SMP and `BODYTRI` strings); its contract
-is in [assets.md](assets.md), A mesh's links. `nif_inspect` does not render it.
+`NifService.Load` is the parse every mesh opens through: `Inspect`, `NifLinks.Read` and `nif_set`'s `Set`. `Inspect`
+and `Set` also share one structure read (`ReadStructure`), so a mesh that will not open gets the same sentence from
+both tools; `Set` adds " Nothing was written." after one full stop (Pinned by: `NifSetRefusalTests`). That is how
+`Set` opens the mesh, not every parse in it: after the edit, the two gates parse again with their own `new NifFile()`,
+each over bytes this call already opened or nifly itself saved. `VerifyBlockContent` loads the original to normalize
+it and has its own refusal sentences; its block slicer, `SliceBlocks`, loads both buffers again and returns no
+sentence, only no layout, which `VerifyBlockContent` refuses by name; `VerifyReadBack` reloads the written mesh and
+reads its structure with its own `Build`, not `ReadStructure`, under its own sentences.
 
 An `INiShader` widening is narrowed back on read: emissive is a Color3 on disk and the interface widens it to Color4,
 so the fourth component is a synthetic 0 that would render as a fully transparent emissive. RGB only, on read, on
@@ -202,6 +250,12 @@ worse.
 
 ## Pinned by
 
+- *Selecting the meshes*: `NifSelectionTests` — a provider's loose and archived meshes in one call with the
+  won-elsewhere and not-a-mesh notes, `source_provider=` reading the shadowed copy, a file on disk beside the
+  selection and alone with no instance, the window, the census, json, `to_file=` and its re-entry, the spill past the
+  ceiling (text and json), one table read per archive, the retired names, and `nif_set`'s one-entry `paths=`;
+  `NifSourceLaneNpcTests` — `formids=` reads the head and counts the tint, and a malformed FormID is one row;
+  `RawModsPathRefusalTests.NifInspectReadsARawModsPathAsThatFileAndNamesItsLoadOrderAddress`.
 - *Contracts*, the parse-failure paragraph: `NifInspectDecodeTests` — empty bytes and non-NIF garbage each return a
   named error, never a throw or a half-model (`EmptyBytesReturnANamedError`, `NonNifGarbageReturnsANamedErrorNotAThrow`);
   `NifInspectMalformedTests` — through the built server under a 2 GB heap cap and a 30 s call timeout, meshes that ran
@@ -229,5 +283,7 @@ worse.
 `src/housecarl-core/NifService.cs` is the format layer: `Inspect`, `Set`, `ReallyReads`, `ReallyWrites`,
 `DecodeFlagWord`, `SlotName`, and the two gates `VerifyBlockContent` and `VerifyReadBack`.
 `src/housecarl-mcp/NifTools.cs` is the tool front. Tools: `housecarl_nif_inspect`, `housecarl_nif_set`.
+`src/housecarl-mcp/NifBatch.cs` is `nif_inspect`'s transport: the window, census, json rows, spill and `to_file=`.
+`src/housecarl-mcp/MeshSelection.cs` is its selection (`SelectMeshes`) and its one-mesh read (`InspectMesh`).
 The result records are in `src/housecarl-mcp/AssetResults.cs` ([`assets.md`](assets.md)).
 The service code, which resolves the winning bytes and writes the result into the VFS, is in `src/housecarl-mcp/AssetLayers.cs` ([`assets.md`](assets.md)).

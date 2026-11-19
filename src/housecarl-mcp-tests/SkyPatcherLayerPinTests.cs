@@ -7,7 +7,7 @@ using Xunit;
 
 namespace HousecarlMcpTests;
 
-/// <summary>housecarl_skypatcher_layer takes its index view, asset view and overlay session from one build (#879).</summary>
+/// <summary>housecarl_layer takes its index view, asset view and overlay session from one build (#879).</summary>
 [Trait("tier", "integration")]
 public sealed class SkyPatcherLayerPinTests : IDisposable
 {
@@ -29,6 +29,7 @@ public sealed class SkyPatcherLayerPinTests : IDisposable
         var mods = Path.Combine(instance, "mods");
         var data = Path.Combine(_root, "game", "Data");
         var iniDir = Path.Combine(mods, IniMod, "SKSE", "Plugins", "SkyPatcher", "weapon");
+        SkyPatcherSwitchesFile.Write(Path.Combine(mods, IniMod));
         foreach (var d in new[] { _profileDir, data, Path.Combine(mods, PluginMod), iniDir })
             Directory.CreateDirectory(d);
 

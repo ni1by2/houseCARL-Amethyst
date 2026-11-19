@@ -67,6 +67,8 @@ public sealed class WinnerScanCoverageTests
             // sweep the order's weapon winners to resolve it. The INI lives in the OTHER mod, so holding the plugin
             // affects the lookup and nothing else.
             var iniDir = Path.Combine(mods, "BaseMod", "SKSE", "Plugins", "SkyPatcher", "weapon");
+            SkyPatcherSwitchesFile.Write(Path.Combine(mods, "BaseMod"));
+            SkyPatcherSwitchesFile.WriteTweaks(Path.Combine(mods, "BaseMod"));
             Directory.CreateDirectory(iniDir);
             File.WriteAllText(Path.Combine(iniDir, "hcws.ini"), "filterByWeapons=HcWsHeldWeapon:attackDamage=20\r\n");
 
@@ -129,21 +131,21 @@ public sealed class WinnerScanCoverageTests
         Assert.Contains(ScanWorld.HeldName, locked.ScanNote!, StringComparison.OrdinalIgnoreCase);
     }
 
-    /// <summary>The layer's no-op scan resolves a line's EditorID target by sweeping the order's winners, so a
-    /// plugin it cannot open leaves that target unresolved. Counting it with the ordinary unresolved targets would
-    /// blame the INI for a file lock.</summary>
+    /// <summary>The layer's EditorID-lookup note, read from the call's resolver after the replays, names a plugin
+    /// an EditorID sweep could not open; here the no-op scan's resolve is the sweep that meets the held plugin.
+    /// Counting it with the ordinary unresolved targets would blame the INI for a file lock.</summary>
     [Fact]
-    public void TheSkyPatcherNoOpScanNamesAPluginItCouldNotRead()
+    public void TheSkyPatcherEditorIdLookupNoteNamesAPluginItCouldNotRead()
     {
         using var world = new ScanWorld();
 
         var open = world.Svc.SkyPatcherLayer();
-        Assert.DoesNotContain(open.NoOpNotes, n => n.Contains(ScanWorld.HeldName, StringComparison.OrdinalIgnoreCase));
+        Assert.DoesNotContain(open.UnreadableNotes, n => n.Contains(ScanWorld.HeldName, StringComparison.OrdinalIgnoreCase));
 
         using var hold = HeldOpen.Hold(world.HeldPath);
         var locked = world.Svc.SkyPatcherLayer();
 
-        Assert.Contains(locked.NoOpNotes, n => n.Contains(ScanWorld.HeldName, StringComparison.OrdinalIgnoreCase));
+        Assert.Contains(locked.UnreadableNotes, n => n.Contains(ScanWorld.HeldName, StringComparison.OrdinalIgnoreCase));
     }
 
     /// <summary>A quest input fans out over the winning topics, so a plugin the sweep cannot open takes its topics

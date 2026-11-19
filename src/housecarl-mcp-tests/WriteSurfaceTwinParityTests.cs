@@ -219,6 +219,9 @@ public sealed class TwinRenderSweep : IDisposable
         Directory.CreateDirectory(Path.Combine(mods, "W2Offline"));
         Directory.CreateDirectory(Path.Combine(mods, "W2Broken"));
         File.WriteAllBytes(Path.Combine(mods, "W2Broken", "Broken.bsa"), new byte[] { 0xDE, 0xAD, 0xBE, 0xEF });
+        // A folder whose only copy MO2 hides, so the hidden refusal reaches a render.
+        Directory.CreateDirectory(Path.Combine(mods, "W2Hidden", "meshes", "hcw2"));
+        File.WriteAllBytes(Path.Combine(mods, "W2Hidden", "meshes", "hcw2", "twin.nif.mohidden"), new byte[] { 1 });
         File.WriteAllText(Path.Combine(prof, "loadorder.txt"), "# header\r\nDummy.esp\r\n");
         File.WriteAllText(Path.Combine(prof, "plugins.txt"), "*Dummy.esp\r\n");
         File.WriteAllText(Path.Combine(prof, "modlist.txt"),
@@ -242,6 +245,7 @@ public sealed class TwinRenderSweep : IDisposable
             Render(new PlaceRequest(rel, rel, @"..\nope")),
             Render(new PlaceRequest(rel, rel, "W2Offline")),
             Render(new PlaceRequest(rel, rel, "W2Broken")),
+            Render(new PlaceRequest(rel, rel, "W2Hidden")),
         };
     }
 
@@ -369,6 +373,10 @@ public sealed class TwinRenderSweep : IDisposable
                 sources: sources)),
             CopyTools.Render(ClosureCopyOutcome.Fail(
                 walk: new WalkRefusal(WalkRefusalKind.NoSeeds, new FormKey(src, 0x827), "", Array.Empty<FormKey>(), ""),
+                sources: sources)),
+            CopyTools.Render(ClosureCopyOutcome.Fail(
+                walk: new WalkRefusal(WalkRefusalKind.UnreadLinks, new FormKey(src, 0x828), "FormList 000800:CopySrc.esp",
+                    new[] { new FormKey(src, 0x828) }, "effect(s) 0 were refused by Mutagen", TypeName: "Perk", EditorId: "LenientPerk"),
                 sources: sources)),
         };
     }

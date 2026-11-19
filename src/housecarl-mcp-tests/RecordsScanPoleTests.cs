@@ -25,11 +25,12 @@ public sealed class RecordsScanPoleTests : RecordsTestBase
         RecordsTools.Records(Svc, types: Armo, plugins: Scope(W.OverrideName),
                              source: poled ? Plugin(W.MasterName) : null, format: format, project: project, counts_only: counts);
 
-    /// <summary>A draft INI that raises HcRecW0's damage to 123, folded into the layer as the post-state pole.</summary>
-    JsonElement DraftPost(string dir)
+    /// <summary>A draft INI that raises HcRecW0's damage to 123 (or another weapon's, by index), folded into the layer
+    /// as the post-state pole.</summary>
+    JsonElement DraftPost(string dir, int weapon = 0, int damage = 123)
     {
         var path = W.Scratch(dir, "weapon", "ScanDraft.ini");
-        File.WriteAllText(path, "filterByWeapons=HcRecW0:attackDamage=123\r\n");
+        File.WriteAllText(path, $"filterByWeapons={RecordsWorld.Sp(W.Weapons[weapon])}:attackDamage={damage}\r\n");
         return Je("{\"overlay\": \"skypatcher\", \"state\": \"post\", \"ini\": " + JsonSerializer.Serialize(path) + "}");
     }
 
@@ -305,6 +306,194 @@ public sealed class RecordsScanPoleTests : RecordsTestBase
     public void OverlayScanToFile_StaysRefused() =>
         Refused(RecordsTools.Records(Svc, types: Weap, source: Overlay("post"), to_file: W.Scratch("results", "overlay-scan.jsonl")),
                 "to_file=", "formids=");
+
+    // ---- the route each overlay-on-a-scan refusal names, run as served ----------------------------------
+
+    /// <summary>The route's first call: the refused call's scan terms alone, written to a file.</summary>
+    string PlainScanFile(string dir, string[]? where = null, JsonElement? source = null)
+    {
+        var path = W.Scratch(dir, "matches.jsonl");
+        Served(RecordsTools.Records(Svc, types: Weap, where: where, source: source, to_file: path), "complete result");
+        return path;
+    }
+
+    /// <summary>A delta over a scan, the overlay on either pole: refused, naming the plain scan into to_file= and
+    /// the file as formids=; that call compares the draft's damage.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OverlayScanDelta_NamesTheFileRouteAndItRuns(bool overlayIsSource)
+    {
+        var dir = overlayIsSource ? "route-delta-src" : "route-delta-vs";
+        var draft = DraftPost(dir);
+        JsonElement? src = overlayIsSource ? draft : null, vs = overlayIsSource ? Je("\"winner\"") : draft;
+        Refused(RecordsTools.Records(Svc, types: Weap, source: src, versus: vs, project: Form("delta")),
+                "plain scan of types= with to_file=", "re-run this call with formids=[\"@<file>\"] in place of types=");
+        Served(RecordsTools.Records(Svc, formids: new[] { "@" + PlainScanFile(dir) }, source: src, versus: vs, project: Form("delta")),
+               "HcRecW0", overlayIsSource ? "BasicStats.Damage=123 (HcRecOverride.esp 99)" : "BasicStats.Damage=99 (HcRecOverride.esp 123)");
+    }
+
+    /// <summary>A tree over a scan, the overlay on either pole: the route carries the overlay on versus= with no
+    /// source=, since the list lane refuses source= on a tree; that call diffs the providers against the draft.</summary>
+    [Theory]
+    [InlineData(true)]
+    [InlineData(false)]
+    public void OverlayScanTree_NamesTheVersusRouteAndItRuns(bool overlayIsSource)
+    {
+        var dir = overlayIsSource ? "route-tree-src" : "route-tree-vs";
+        var draft = DraftPost(dir);
+        Refused(RecordsTools.Records(Svc, types: Weap, source: overlayIsSource ? draft : null, versus: overlayIsSource ? null : draft,
+                                     project: Form("tree")),
+                "formids=[\"@<file>\"] in place of types=", "the overlay on versus= and no source=");
+        Served(RecordsTools.Records(Svc, formids: new[] { "@" + PlainScanFile(dir) }, versus: draft, project: Form("tree")),
+               "HcRecW0", "HcRecMid.esp: BasicStats.Damage=50 (HcRecOverride.esp 123)");
+    }
+
+    /// <summary>formids= beside the scan terms intersects them: the route's plain scan carries formids= with the terms,
+    /// so a listed id that fails a term (an armor under types=WEAP; a weapon where= drops) stays out of the re-run.</summary>
+    [Fact]
+    public void OverlayScanBesideFormids_NamesTheFileRouteAndItAnswersTheIntersection()
+    {
+        var draft = DraftPost("route-formids");
+        var winner = Je("\"winner\"");
+        var w0Armor = new[] { Fid(W.Weapons[0]), Fid(W.Armor) };
+        Refused(RecordsTools.Records(Svc, types: Weap, formids: w0Armor, source: draft, versus: winner, project: Form("delta")),
+                "plain scan of formids= and types= with to_file=", "in place of formids= and types=");
+        var path = W.Scratch("route-formids", "delta.jsonl");
+        Served(RecordsTools.Records(Svc, types: Weap, formids: w0Armor, to_file: path), "complete result");
+        var delta = RecordsTools.Records(Svc, formids: new[] { "@" + path }, source: draft, versus: winner, project: Form("delta"));
+        Served(delta, "1 record(s)", "HcRecW0", "BasicStats.Damage=123 (HcRecOverride.esp 99)");
+        Assert.DoesNotContain(Fid(W.Armor), delta);
+
+        var where = new[] { "editorid = HcRecW0" };
+        var w0w1 = new[] { Fid(W.Weapons[0]), Fid(W.Weapons[1]) };
+        Refused(RecordsTools.Records(Svc, types: Weap, where: where, formids: w0w1, versus: draft, project: Form("tree")),
+                "plain scan of formids=, types= and where= with to_file=", "in place of formids=, types= and where=, with the overlay on versus= and no source=");
+        path = W.Scratch("route-formids", "tree.jsonl");
+        Served(RecordsTools.Records(Svc, types: Weap, where: where, formids: w0w1, to_file: path), "complete result");
+        var tree = RecordsTools.Records(Svc, formids: new[] { "@" + path }, versus: draft, project: Form("tree"));
+        Served(tree, "HcRecW0", "HcRecMid.esp: BasicStats.Damage=50 (HcRecOverride.esp 123)");
+        Assert.DoesNotContain("HcRecW1", tree);
+    }
+
+    /// <summary>to_file= with the post overlay on a scan: the route writes the plain scan, then re-runs the call,
+    /// to_file= and all, on the file; the second artifact carries the draft's damage.</summary>
+    [Fact]
+    public void OverlayScanToFile_NamesTheFileRouteAndItRuns()
+    {
+        var draft = DraftPost("route-tofile");
+        var where = new[] { "editorid = HcRecW0" };
+        Refused(RecordsTools.Records(Svc, types: Weap, where: where, source: draft, to_file: W.Scratch("route-tofile", "never.jsonl")),
+                "to_file= holds every match", "plain scan of types= and where= with to_file=", "in place of types= and where=");
+        var path = PlainScanFile("route-tofile", where);
+        var post = W.Scratch("route-tofile", "post.jsonl");
+        Served(RecordsTools.Records(Svc, formids: new[] { "@" + path }, source: draft, to_file: post, project: Fields("BasicStats.Damage")));
+        Assert.Contains("{\"path\":\"BasicStats.Damage\",\"value\":\"123\"}", File.ReadAllText(post));
+    }
+
+    /// <summary>where_source= rides with where=: the plain scan keeps it, so it matches what the refused call matched,
+    /// and the re-run drops it, which where= gone would refuse.</summary>
+    [Fact]
+    public void OverlayScanDeltaWithWhereSource_NamesARouteThatKeepsItOnTheScanAndRuns()
+    {
+        var draft = DraftPost("route-wheresrc");
+        var where = new[] { "editorid = HcRecW0" };
+        Refused(RecordsTools.Records(Svc, types: Weap, where: where, where_source: "winner", source: draft, versus: Je("\"winner\""),
+                                     project: Form("delta")),
+                "plain scan of types=, where= and where_source= with to_file=", "in place of types=, where= and where_source=");
+        Refused(RecordsTools.Records(Svc, types: Weap, where: where, where_source: "winner", formids: new[] { Fid(W.Weapons[0]) },
+                                     source: draft, versus: Je("\"winner\""), project: Form("delta")),
+                "plain scan of formids=, types=, where= and where_source= with to_file=", "in place of formids=, types=, where= and where_source=");
+        var path = W.Scratch("route-wheresrc", "matches.jsonl");
+        Served(RecordsTools.Records(Svc, types: Weap, where: where, where_source: "winner", to_file: path), "complete result");
+        var r = RecordsTools.Records(Svc, formids: new[] { "@" + path }, source: draft, versus: Je("\"winner\""), project: Form("delta"));
+        Served(r, "HcRecW0", "BasicStats.Damage=123 (HcRecOverride.esp 99)");
+        Assert.DoesNotContain("HcRecW1", r);
+
+        // Under the master's scope only the winner carries the new name, so the plain scan without where_source= matches nothing.
+        var renamed = new[] { $"editorid = {RecordsWorld.RenamedArmorNewEid}" };
+        Refused(RecordsTools.Records(Svc, types: Armo, plugins: Scope(W.MasterName), where: renamed, where_source: "winner",
+                                     source: draft, versus: Je("\"winner\""), project: Form("delta")),
+                "plain scan of types=, plugins=, where= and where_source= with to_file=");
+        path = W.Scratch("route-wheresrc", "scoped.jsonl");
+        Served(RecordsTools.Records(Svc, types: Armo, plugins: Scope(W.MasterName), where: renamed, where_source: "winner", to_file: path),
+               "complete result");
+        Served(RecordsTools.Records(Svc, formids: new[] { "@" + path }, source: draft, versus: Je("\"winner\""), project: Form("delta")),
+               "1 record(s)", RecordsWorld.RenamedArmorNewEid);
+    }
+
+    /// <summary>fields_source='winner' beside the post overlay is the call's own fault: to_file= names the two display
+    /// poles, not a formids= route fields_source= refuses, and the sentence's keep-winner call runs. A walk never
+    /// reaches the scan lane with fields_source= (its own sentence, unchanged, names source=).</summary>
+    [Fact]
+    public void OverlayScanWinnerFieldsToFile_NamesTheTwoDisplayPolesAndTheWinnerCallRuns()
+    {
+        var draft = DraftPost("route-winnerfields");
+        var tofile = RecordsTools.Records(Svc, types: Weap, source: draft, fields_source: "winner", to_file: W.Scratch("route-winnerfields", "never.jsonl"));
+        Refused(tofile, "TWO display poles", "drop source= and keep fields_source='winner'");
+        Assert.DoesNotContain("formids=", tofile);
+        Refused(RecordsTools.Records(Svc, types: Weap, source: draft, fields_source: "winner", walk: new RecordsTools.RecordsWalk()),
+                "a walk's reading forms display the source= pole's version of the reached set");
+        var path = W.Scratch("route-winnerfields", "winner.jsonl");
+        Served(RecordsTools.Records(Svc, types: Weap, fields_source: "winner", to_file: path, project: Fields("BasicStats.Damage")), "complete result");
+        Assert.Contains("HcRecW0", File.ReadAllText(path));
+    }
+
+    /// <summary>where= alone is unbounded: the bound sentence answers ahead of the overlay route, whose plain scan of
+    /// where= alone it would refuse.</summary>
+    [Fact]
+    public void OverlayScanDeltaOverWhereAlone_IsTheBoundRefusalNotARoute()
+    {
+        var r = RecordsTools.Records(Svc, where: new[] { "editorid = HcRecW0" }, source: DraftPost("route-unbounded"),
+                                     versus: Je("\"winner\""), project: Form("delta"));
+        Refused(r, "where= is a body scan and must be combined with types=, plugins=, or a formids= set");
+        Assert.DoesNotContain("The list lane serves it", r);
+    }
+
+    /// <summary>conflicts_only= or where_source= on an off-order source= is that file's own fault, said ahead of the overlay route
+    /// whose plain scan on the same source= would refuse it; an in-order source= still gets the route.</summary>
+    [Fact]
+    public void OffOrderConflictsOnlyVersusOverlay_IsTheOffOrderRefusalNotARoute()
+    {
+        var draft = DraftPost("route-offorder-conflicts");
+        var r = RecordsTools.Records(Svc, types: Weap, conflicts_only: true, source: Plugin(W.OldName), versus: draft, project: Form("delta"));
+        Refused(r, "conflicts_only= has no meaning on an out-of-load-order file");
+        Assert.DoesNotContain("The list lane serves it", r);
+        Refused(RecordsTools.Records(Svc, types: Weap, conflicts_only: true, source: Plugin(W.OverrideName), versus: draft, project: Form("delta")),
+                "plain scan of types= and conflicts_only=true on the same source= with to_file=");
+        var ws = RecordsTools.Records(Svc, types: Weap, where: new[] { "editorid = HcRecW0" }, where_source: "winner",
+                                      source: Plugin(W.OldName), versus: draft, project: Form("delta"));
+        Refused(ws, "where_source=winner matches on the live load-order winner");
+        Assert.DoesNotContain("The list lane serves it", ws);
+    }
+
+    /// <summary>A scan-seeded walk under the post overlay: the route walks the file's records under the same pole.</summary>
+    [Fact]
+    public void OverlayScanWalk_NamesTheFileRouteAndItRuns()
+    {
+        var draft = DraftPost("route-walk");
+        Refused(RecordsTools.Records(Svc, types: Weap, source: draft, walk: new RecordsTools.RecordsWalk()),
+                "a walk reads every record it reaches", "formids=[\"@<file>\"] in place of types=");
+        var path = PlainScanFile("route-walk");
+        Served(RecordsTools.Records(Svc, formids: new[] { "@" + path }, source: draft, walk: new RecordsTools.RecordsWalk(),
+                                    project: Fields("BasicStats.Damage")),
+               "skypatcher overlay (post)", "editorid=HcRecW0", "BasicStats.Damage = 123");
+    }
+
+    /// <summary>An off-order file scanned against the overlay: the plain scan keeps the file as its source=, and
+    /// the file-of-matches delta against the overlay runs; the draft moves the file's one weapon, so the reference
+    /// value is the overlay's, not the winner's 20.</summary>
+    [Fact]
+    public void OffOrderScanDeltaVersusOverlay_NamesTheFileRouteOnTheSameSource()
+    {
+        var draft = DraftPost("route-offorder", 1, 77);
+        var old = Plugin(W.OldName);
+        Refused(RecordsTools.Records(Svc, types: Weap, source: old, versus: draft, project: Form("delta")),
+                "plain scan of types= on the same source= with to_file=", "in place of types=");
+        var path = PlainScanFile("route-offorder", source: old);
+        Served(RecordsTools.Records(Svc, formids: new[] { "@" + path }, source: old, versus: draft, project: Form("delta")),
+               Fid(W.Weapons[1]), "BasicStats.Damage=55 (HcRecMaster.esm 77)");
+    }
 }
 
 /// <summary>A multi-target references= summary on the body lane keeps the scan's per-row matches= un-merge and its

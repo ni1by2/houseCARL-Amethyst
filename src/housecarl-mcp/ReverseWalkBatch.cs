@@ -30,11 +30,14 @@ public static class ReverseWalkBatch
         /// <summary>How many reached records a stop exclusion kept as boundaries.</summary>
         public int Boundaries { get; init; }
 
+        /// <summary>How many tokens in the selection are not FormIDs: each is its own error row, not a record.</summary>
+        public int BadSeeds { get; init; }
+
         /// <summary>The build's fingerprint alone, for the places that compare epochs rather than render them.</summary>
         public string? Epoch => Stamp?.Epoch;
     }
 
-    /// <summary>Run the walk from these seeds; a bad FormID is a refusal naming it.</summary>
+    /// <summary>Run the walk from these seeds; a token that is not a FormID stays in the selection, raw, as its own row.</summary>
     public static Result Run(LoadOrderService svc, IReadOnlyList<string> seeds, int depth, int maxNodes,
                              ArtifactDemand? demand, CancellationToken ct = default,
                              IReadOnlyList<(string Match, bool Refuse)>? exclusions = null,
@@ -47,20 +50,21 @@ public static class ReverseWalkBatch
             return new Result(Array.Empty<ReverseSelection.Hop>(), Array.Empty<string>(), 0, false, DropCensus.Empty, null, stamp,
                               RecordReads.ArtifactEpochMismatch(demand, stamp.Epoch));
 
-        // Seeds are deduplicated: two spellings of one key parse to the same FormKey.
+        // Seeds are deduplicated: two spellings of one key parse to the same FormKey. A token that is not a FormID
+        // keeps its place among the seeds, raw, so the list lane answers it as its own error row.
         var seedKeys = new List<FormKey>(seeds.Count);
         var seedSeen = new HashSet<FormKey>();
+        var seedTokens = new List<string>(seeds.Count);
+        var badSeen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         foreach (var raw in seeds)
         {
-            FormKey fk;
-            try { fk = view.ParseFormId(raw); }
-            catch (Exception ex)
-            {
-                return new Result(Array.Empty<ReverseSelection.Hop>(), Array.Empty<string>(), 0, false, DropCensus.Empty, null, stamp,
-                                  $"bad FormID '{raw}': {ex.Message} — every seed of a reverse walk must parse before the walk starts.");
-            }
-            if (seedSeen.Add(fk)) seedKeys.Add(fk);
+            var seed = WalkGrammar.ParseSeed(raw, view.ParseFormId);
+            if (seed.Key is not { } fk) { if (badSeen.Add(raw.Trim())) seedTokens.Add(raw.Trim()); continue; }
+            if (seedSeen.Add(fk)) { seedKeys.Add(fk); seedTokens.Add(FormIdToken.Of(fk)); }
         }
+        // No seed parsed: nothing to walk, so the index is not built for it.
+        if (seedKeys.Count == 0)
+            return new Result(Array.Empty<ReverseSelection.Hop>(), seedTokens, 0, false, DropCensus.Empty, null, stamp, null) { BadSeeds = seedTokens.Count };
 
         var built = view.EnsureReverseIndex();
         var index = view.ReverseIndex!;
@@ -201,7 +205,7 @@ public static class ReverseWalkBatch
             if (!shaped || !typeOf.TryGetValue(candidate, out var type)) return true;
             if (exclusions is not null && WalkExclusionMatch.Match(exclusions, type) is { } x)
             {
-                if (x.Refuse) throw new WalkRefused(WalkExclusionMatch.RefuseSentence(type, candidate));
+                if (x.Refuse) throw new WalkGrammar.WalkRefused(WalkExclusionMatch.RefuseSentence(type, candidate));
                 boundaries.Add(candidate);
                 return true;
             }
@@ -218,14 +222,13 @@ public static class ReverseWalkBatch
                                                shaped ? k => !boundaries.Contains(k) : null,
                                                frontier => index.ReferencersOf(frontier, WinnerOf, fromWinner, gen));
         }
-        catch (WalkRefused r)
+        catch (WalkGrammar.WalkRefused r)
         {
             return new Result(Array.Empty<ReverseSelection.Hop>(), Array.Empty<string>(), 0, false, DropCensus.Empty, built.Note, stamp, r.Message);
         }
 
         // Seeds first, then each hop in order: the selection reads in walk order.
-        var selection = new List<string>(seedKeys.Count);
-        foreach (var k in seedKeys) selection.Add(FormIdToken.Of(k));
+        var selection = new List<string>(seedTokens);
         foreach (var hop in hops)
             foreach (var k in hop.Reached) selection.Add(FormIdToken.Of(k));
 
@@ -235,6 +238,7 @@ public static class ReverseWalkBatch
         {
             LeftOut = through is null ? null : leftOut.Values.ToList(),
             Boundaries = boundaries.Count,
+            BadSeeds = seedTokens.Count - seedKeys.Count,
         };
     }
 
@@ -243,7 +247,4 @@ public static class ReverseWalkBatch
 
     /// <summary>One candidate's verdict for the check: its links, its type for the shaped walk, and its lenient note.</summary>
     readonly record struct PreJudged(PreKind Kind, IReadOnlySet<FormKey>? Links = null, string? Type = null, string? Note = null);
-
-    /// <summary>A refuse exclusion reached: the walk ends and the call returns nothing.</summary>
-    sealed class WalkRefused(string message) : Exception(message);
 }

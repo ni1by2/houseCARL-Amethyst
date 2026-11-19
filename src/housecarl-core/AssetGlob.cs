@@ -28,7 +28,7 @@ public static class AssetGlob
     public static Func<string, bool> Matcher(string selector)
     {
         var norm = AssetResolver.ValidateRelPath(selector ?? "").TrimEnd('\\');
-        if (norm.Length == 0) throw new ArgumentException($"an empty selector names nothing: '{selector}'");
+        if (norm.Length == 0 && selector.Trim() != ".") throw new ArgumentException($"an empty selector names nothing: '{selector}'");
         if (HasWildcard(norm))
         {
             var rx = ToRegex(norm);
@@ -53,29 +53,34 @@ public static class AssetGlob
     /// <summary>As above, with the enumeration BOUNDED: the walk stops at <paramref name="max"/> MATCHES and says so
     /// through <paramref name="stopped"/>, so a narrow glob under a wide prefix is never refused for the prefix. A
     /// selector with no literal directory ('**/*goldbrand*') walks from the Data root under the same bound.
-    /// <paramref name="provider"/> narrows the walk to the files that one provider ships.</summary>
+    /// <paramref name="provider"/> narrows the walk to the files that one provider ships. <paramref name="hidden"/>
+    /// counts the matches MO2 hides, which the answer leaves out.</summary>
     public static IReadOnlyList<string> Select(AssetResolver.AssetView view, string selector, out bool namedOneFile,
-                                               int max, out bool stopped, string? provider = null)
+                                               int max, out bool stopped, string? provider = null, HiddenTally? hidden = null)
     {
         namedOneFile = false;
         stopped = false;
         var norm = AssetResolver.ValidateRelPath(selector).TrimEnd('\\');
-        if (norm.Length == 0) throw new ArgumentException($"expected a Data-relative selector: '{selector}'; use '**' to select the Data root");
+        if (norm.Length == 0 && selector.Trim() != ".") throw new ArgumentException($"expected a Data-relative selector: '{selector}'; use '**' to select the Data root");
 
         if (!HasWildcard(norm))
         {
-            var beneath = Sorted(view.EnumerateUnder(norm, null, max, out stopped, provider));
+            var beneath = Sorted(view.EnumerateUnder(norm, null, max, out stopped, provider, hidden));
             if (beneath.Count > 0) return beneath;
             // Nothing beneath it, but the string may BE a file the load order provides — a path pasted into under=.
             // One resolve, only on the empty branch, so the ordinary folder sweep pays nothing for it.
             var hit = view.Resolve(norm);
             if (hit.Exists && (provider is null || hit.Providers.Any(p => AssetSourceSelection.NameMatches(p, provider, hit.ProviderNames))))
             { namedOneFile = true; return new[] { norm }; }
+            // A file MO2 hides under that very name: say so rather than nothing.
+            if (hidden is not null && hit.Hidden is { } h
+                && (provider is null || h.HeldBy(provider)))
+                hidden.Add(h.Rule, h.HiddenPath);
             return beneath;
         }
 
         var rx = ToRegex(norm);                                  // compiled ONCE, not per candidate path
-        return Sorted(view.EnumerateUnder(LiteralPrefix(norm), p => rx.IsMatch(p), max, out stopped, provider));
+        return Sorted(view.EnumerateUnder(LiteralPrefix(norm), p => rx.IsMatch(p), max, out stopped, provider, hidden));
     }
 
     /// <summary>What to say when a selector with no separator matched nothing: a bare name glob ('*goldbrand*', no '**')

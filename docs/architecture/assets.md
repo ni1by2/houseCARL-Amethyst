@@ -1,8 +1,8 @@
 > Amethyst fork: saved-snapshot reads use the native filegraph’s selected variants, routing, exclusions and winners. MO2 skip lists and direct mod-directory walks below apply only to the retained legacy instance lane. Provider enumeration and explicit disabled-donor lookup use recorded Amethyst inventory and revalidate source identities. See [the Amethyst contract](amethyst-saved-snapshot.md) and [Asset Walk](../asset-walk.md).
 
 ---
-updated: 2026-10-31
-covers: [src/housecarl-core/AssetResolver.cs, src/housecarl-core/NifLinks.cs, src/housecarl-core/AssetWalkEdges.cs, src/housecarl-mcp/AssetWalk.cs, src/housecarl-mcp/AssetWalkWire.cs, src/housecarl-core/AssetSourceSelection.cs, src/housecarl-core/OffOrderAssetSource.cs, src/housecarl-core/AssetGlob.cs, src/housecarl-core/AssetLinkHarvest.cs, src/housecarl-core/AssetPathHint.cs, src/housecarl-core/AssetDataPath.cs, src/housecarl-core/Mo2SkipRules.cs, src/housecarl-core/AssetRenameService.cs, src/housecarl-core/ArchiveDiscovery.cs, src/housecarl-core/BsaArchive.cs, src/housecarl-core/VoicePath.cs, src/housecarl-core/VoiceCheck.cs, src/housecarl-mcp/AssetLayers.cs, src/housecarl-mcp/AssetResults.cs, src/housecarl-mcp/AssetTools.cs, src/housecarl-mcp/AssetArtifact.cs, src/housecarl-mcp/BsaTools.cs, src/housecarl-mcp/PlaceTools.cs, src/housecarl-mcp/ModsPathAddress.cs]
+updated: 2026-11-13
+covers: [src/housecarl-core/WalkParts.cs, src/housecarl-core/walk-parts.json, src/housecarl-core/OwnedChildUnion.cs, src/housecarl-core/AssetResolver.cs, src/housecarl-core/LooseListings.cs, src/housecarl-core/ArchiveReader.cs, src/housecarl-core/NifLinks.cs, src/housecarl-core/AssetWalkEdges.cs, src/housecarl-mcp/AssetWalk.cs, src/housecarl-mcp/AssetWalkWire.cs, src/housecarl-core/AssetSourceSelection.cs, src/housecarl-core/OffOrderAssetSource.cs, src/housecarl-core/AssetGlob.cs, src/housecarl-core/AssetLinkHarvest.cs, src/housecarl-core/AssetPathHint.cs, src/housecarl-core/AssetDataPath.cs, src/housecarl-core/Mo2SkipRules.cs, src/housecarl-core/AssetRenameService.cs, src/housecarl-core/ArchiveDiscovery.cs, src/housecarl-core/BsaArchive.cs, src/housecarl-core/VoicePath.cs, src/housecarl-core/VoiceCheck.cs, src/housecarl-mcp/AssetLayers.cs, src/housecarl-mcp/FileSelection.cs, src/housecarl-mcp/AssetResults.cs, src/housecarl-mcp/AssetTools.cs, src/housecarl-mcp/AssetArtifact.cs, src/housecarl-mcp/BsaTools.cs, src/housecarl-mcp/PlaceTools.cs, src/housecarl-mcp/ModsPathAddress.cs]
 ---
 # The asset layer: which copy of a file the game uses
 
@@ -24,7 +24,9 @@ For FaceGen's FormID-to-path mapping, finding classes, and dark-face causes, see
 INI the game reads (`GameIni`, see [`load-order-resolver.md`](load-order-resolver.md): the profile's own INIs or My
 Games, SkyrimCustom.ini over Skyrim.ini per key) takes the low block, each active plugin's `X.bsa` and
 `X - Textures.bsa` rank above it in load order, and each archive *filename* resolves through the same overwrite > mods
-> Data map. An archive list that cannot be found is a surfaced warning, never a silent omission. The order build's
+> Data map. An archive list that cannot be found is a surfaced warning, never a silent omission; so is an enabled mod
+folder that exists but will not list, whose BSAs are left out of the scan under one warning naming it (the plugin
+side of that fault is [`mo2-instance.md`](mo2-instance.md), *A folder that will not open*). The order build's
 string-table winners (`GameLanguage.Read`) take the same archive list and ranks, so a change to the winner rule here
 moves where plugin names are read from too.
 
@@ -35,10 +37,27 @@ folder, and USVFS skips two things: a file whose name ends with a skip suffix, a
 skip directory. MO2 also leaves three root names out of its own Data view (its Data and Conflicts tabs), though USVFS
 still maps them: a root `meta.ini`, a root `readme.txt` and anything in a root `fomod\` folder. houseCARL follows MO2's
 view, so these answer absent; a launched process can still open `Data\meta.ini`. The same names below the root are
-normal files. `Mo2SkipRules.Shows` is that one predicate, applied to the loose layer where a path is resolved
-(`ResolveProviders`), where a folder is walked (`EnumerateUnder`) and where a root's top-level files are listed
-(`LooseRootFiles`), so every consumer of any of them sees the same Data view. It is applied on the Data-relative path and not inside a directory listing, because one listing cannot see a
-`.git` segment above it.
+normal files. `Mo2SkipRules.Hides` is that one predicate, and it says WHICH rule hid a path (`HiddenRule`: root name,
+then skip folder, then skip suffix). It is asked where a path is resolved (`ResolveProviders`), where a folder is
+walked (`EnumerateUnder`), where a root's top-level files are listed (`LooseRootFiles`) and before the named-folder
+lane's loose probe (`OffOrderAssetSource`), so every consumer sees the same Data view. It is applied on the
+Data-relative path and not inside a directory listing, because one listing cannot see a `.git` segment above it.
+
+- **The skip lists apply to linked roots only**: a mod folder and overwrite. USVFS never links the game's own Data
+  folder, so a real `Data\x.mohidden` is visible to the game and resolves like any Data file; the root names apply to
+  Data too, as MO2's merged view drops them there.
+- **Hidden is carried, not re-derived.** `ResolveProviders` keeps the roots whose listing holds the hidden name, and,
+  for a shown name `x`, those holding only `x` + a skip suffix (MO2's Hide renames `x` to `x.mohidden`), off the same
+  warm listing. `AssetHit.Hidden` and `PlacementResolution.Hidden` carry the rule and those holders (`HiddenCopies`);
+  `Exists`, `Winner`, `Providers` and `Ambiguous` are unchanged, so a hidden copy counts nowhere. `EnumerateUnder`
+  and `AssetGlob.Select` fill a `HiddenTally` with what the rule dropped in scope, counting a twin `x.mohidden` when
+  the selector matches the `x` it hides. Every render reads that carried value, never probing a name: the
+  `asset_status` ABSENT line, the walk, the NIF lanes and the json members through `AbsentWords` ("hidden by MO2
+  (rule) in 'Mod'" where a root holds it, "no active mod or BSA provides" where none does); the rest call
+  `HiddenCopies.Sentence()` directly (the archive-wins note, `links=`, the place refusal, the voice, script-binding,
+  script-property and FaceGen checks), or `Unnamed()` where the line already names the holder (the `provider=`
+  standing, a walk's or a named folder's own hidden copy). The json `hidden` object lists at most ten holders and
+  counts them all in `holders_total`.
 
 - **The lists are MO2's own**, read off `ModOrganizer.ini` (`skip_file_suffixes`, `skip_directories`) at each asset
   build: unset keeps MO2's defaults, `.mohidden` and `.git`; `@Invalid()` or a blank value is the empty list, which
@@ -100,20 +119,48 @@ absent. Ambiguous case-equivalent paths continue to refuse rather than choosing 
   new build**, which `RefreshIfStale` makes when an archive or a warmed subtree changes and the service makes when
   the mod set or profile changes. Granting permission moves no mtime, so it clears nothing on its own: the modder
   toggles something in MO2, or restarts the server, and the next call reads the folder again.
-- **A folder is warmed across roots top-down**, each root answered off listings of its mod folder and of each folder
-  below it that its parent lists as a directory. Each view (one `Capture()` or one single-shot read) carries its own
-  **read pass**, and a listing serves every pass begun before it was taken, so a call warming many folders lists each
-  directory on the way once, not once per folder per root, and a concurrent call neither invalidates nor re-lists for
-  it. A listing taken before a call began never answers it, so the next call lists again for any subtree it has not
-  yet warmed. A subtree an earlier call warmed answers from `LooseCache` until `RefreshIfStale` runs, which the service
-  skips while a write is in flight (#1128). A folder only passed through keeps its names, not its files. A listing
-  that will not read is tried once per pass, then falls back to the stat-and-prove path.
+- **One listing per loose folder per file view** (`LooseListings`, #1310). Every loose read a view makes — a resolve's
+  warm, the `EnumerateUnder` walk, `LooseRootFiles`, the freshness check at the call's first file read, and an ENABLED
+  folder's off-order probe — reads a folder off the view's one listing of it, taken at first touch and dropped with
+  the view, so a file the view lists is never absent later in it, and one it resolves is never missing from its
+  listing. Each enters a folder the one way, `LooseListings.Descend`: from the root's own folder (as the build keys
+  it, never re-spelt) down through the listing of each folder on the way, so a folder the view listed as absent stays
+  absent below it, and one it listed stays listed after it goes. A call holds one file view (`Frozen(listings)`), so
+  one set of listings. A write takes a second set inside the write gate only when its first read there moves past the
+  held view (load-order-service.md): an asset-only write's first in-gate file read, or a record write's in-gate pin
+  once the asset build has moved; otherwise its reads before the gate and inside it share one listing. Outside a call, each
+  `Capture()` or single-shot read is its own. A listing taken before a view began never answers it, and a folder that
+  will not list keeps its failure for the view, then falls back to the stat-and-prove path.
+- **A folder is warmed across roots top-down**, each root answered off the call's listings of its mod folder and of
+  each folder below it that its parent lists as a directory, so a call warming many folders lists each directory on the
+  way once, not once per folder per root. A warm watches, per root, the folder the subtree resolves from (its whole
+  listing), or the folder whose listing lacks the next name (watched for it appearing) or holds it as a file (watched
+  for it becoming a folder or going); a folder it only passed through on the way is not watched. The freshness check,
+  which lists every watched folder into the call, decides which `LooseCache` subtrees a call may take as they are:
+  a check that finds the build fresh marks the call's listings checked for every subtree warmed before it began (a
+  warm counts once its watches are in place), as long as the whole listings the subtree resolves from are still the
+  watch's baselines. Any other subtree — warmed after the check by another call, or met by a call with no check (one
+  outside a call, or a read under another call's write, #1128) — is warmed again off the call's listings and replaces
+  the build's. That keeps a listing and a resolve agreeing by construction, not by a refresh rule, and costs a checked
+  call nothing more; a per-root record per subtree would cost about a gigabyte on a dev-size `meshes` census.
+- **The walk is top down over the call's listings**: a folder's files in listing order, its folders queued after it,
+  the order a recursive enumeration yields, so a capped walk keeps the same matches. A subfolder that is not found
+  (gone since its parent listed it, or a junction to nowhere) is skipped, as the enumeration skipped it; the prefix
+  folder, or any subfolder that refuses, ends that root's walk with "could not walk", keeping what it took before,
+  as the enumeration did.
+- **One folder's top level is the same walk with no descent** (`EnumerateTopLevel`). It takes the same roots, the same
+  listings, the same hidden rules and the same failure naming as the walk; it queues no subfolder, and an archive entry
+  below the folder is not in it. So its answer is the walk's answer restricted to that level, and its cost is one
+  directory listing per loose root rather than a subtree each. A runtime-layer format that reads one folder and does not
+  descend goes through this door rather than a glob over the whole tree (R40); on dev that is 44 ms and 1,886 paths
+  against 1,150 ms and 326,776 for `EnumerateUnder("")`, each read with the run's listings already warm.
 - **A freshness baseline is read at the warm, never off an older memo.** Every directory a warmed subtree puts under
-  watch is baselined by what that warm reads — a listing taken in the warm's own read pass, which is also what
+  watch is baselined by what that warm reads — the call's listing the warm read, which is also what
   the answer came from; on the fallback path, the whole listing for a root's own copy, or for a root that has nothing
   there, two stats on the missing name (no directory, no file), taken only once the absence is proved; where it is
   not (a name listed that will not stat, or an ancestor that stats but will not list, both of which look absent to
-  the two stats) the root is a named failure and nothing is watched. A memo from an earlier pass answers the
+  the two stats) the root is a named failure and nothing is watched. A memo from an earlier call (outside a call, an
+  earlier `Capture()`) answers the
   absence VERDICT and nothing else, because it can predate the warm by any number of calls, and a baseline older
   than the warm makes a file that goes and comes back invisible for the life of the build.
 - **A bad path fails loud.** `NormalizeQueryPath` refuses a drive-rooted or `..`-escaping path naming the input, and
@@ -121,7 +168,21 @@ absent. Ambiguous case-equivalent paths continue to refuse rather than choosing 
   segment of only dots or spaces, which Windows opens as no name, is refused. The loose lookup spells each segment as
   Windows opens it (the last loses trailing dots and spaces, any other one trailing dot), so it finds the file a file
   open would; the archive match and the reported path use the path as asked.
-  `ValidateRelPath` exposes that one validator to the place lane, whose destination is `Path.Combine(modRoot, rel)`.
+  `ValidateRelPath` exposes that one validator to the place lane, whose destination is `LooseListings.OnDisk(modRoot, rel)`.
+- **One join of a Data path onto a disk folder.** `LooseListings.OnDisk` is the join a Data-relative path (or a
+  folder name) takes onto a disk folder in: the resolver's loose roots, paths and walks; the off-order lane and
+  `source_provider`'s folder gate; the write lanes (`place`, `nif_set`, the carries, `.seq`, `bsa_extract`); output-folder
+  discovery and `into=`, with their `Scripts`, `Source\Scripts`, `SEQ` and `meta.ini`; plugin locate, `mod=` included;
+  archive discovery; the `Strings` tables; owner meta; `update_status`'s `meta.ini`; the SKSE `meta.ini`, loader and
+  dependency probes; the Papyrus source roots and compile output. It needs no file view, so none of these builds one.
+  Four joins inside those lanes still use `Path.Combine`: a DISABLED mod's folder among plugin locate's candidates
+  (`Mo2LoadOrder.CandidateFolders`), the `<stem>.esp` inside a houseCARL folder on `into=`'s fast path
+  (`ResolveOwnedPatchFolder`), the `Scripts` or `SEQ` subfolder of an `out_path=` folder
+  (`SubfolderOutputContract`), and the Data `Strings` folder a plugin falls back to (`GameLanguage.FoldersFor`).
+  Joins outside these lanes still use `Path.Combine` too, among them the instance layout, game INIs and profiles, and the
+  folders and plugin paths the merge, compact, reshape and BSA writes make (`RecordWrites.cs`, `RecordReshape.cs`,
+  `BsaTools.cs`). On Windows the join is the plain one,
+  today's string; a case-folding match per segment is where a case-sensitive file system would need one, not built here.
 
 ### One build per call
 
@@ -146,7 +207,28 @@ absent. Ambiguous case-equivalent paths continue to refuse rather than choosing 
   stat is a root failure named on the build, and giving the permission back moves no name, so only a rebuild clears
   it. A loose file's BYTES are never cached, so a rewrite needs no invalidation at all.
 - `Capture()` pins one build as an `AssetView`, so a batch's hits and its `BsaFailures` cannot describe two builds.
-  The view is immutable and handle-free, which is what lets the service enumerate, read and parse outside `_gate`.
+  The view holds no handle, which is what lets the service enumerate, read and parse outside `_gate`.
+- **Existence is the pinned build; bytes are read when used.** Which copy exists and wins, `BsaFailures` and
+  `ReadIncomplete` come from the build. Bytes come from the view's archive reader (`ArchiveReader`), which every lane
+  that reads archive bytes or probes an archive goes through: a provider's bytes (`ReadSource`), one entry of a
+  named archive (`ReadEntry`, the raw `place` path included), and the off-order lane's root-archive probe. The reader
+  is the view's own, empty at `Capture()`: it opens an archive at the view's first read of it, keyed by full path,
+  keeps the Mutagen reader (which holds no handle) and looks entries up by folder, or through one whole-archive table
+  when the archive has no such folder, no folder names, or no folder index (first spelling of a name wins), and never
+  stats that archive again for the view's life; each read takes the entry's bytes off the file as it is then. An archive that will not open
+  is tried once and answers every read with the same sentence. Loose bytes are read off disk at the read.
+- **The asset door's memory rule:** each archive's table is read at most once per asset view, besides the build's
+  own read, and no reader, table or handle is kept between calls. Each `Capture()` makes one reader, and every lane
+  that reads bytes captures its view once per call, so a warm call reads each archive once; a lane that captured
+  twice would read an archive twice, which costs time and changes no answer. The build parses each archive's table
+  itself (`ReadArchiveTable`), so a call that builds or rebuilds the view reads an archive it also takes bytes from
+  twice. `bsa_list`, `bsa_extract`, `bsa_repack` and the record side's string-table reads keep their own
+  readers.
+- `Frozen()` is a member-wise copy holding the current build's snapshot: its views keep that build's roots and mod
+  set whatever the resolver it was copied from refreshes to later. Loose contents are not frozen: it shares that
+  snapshot's `LooseCache`, and reads every folder off the one set of call listings it holds, so a folder is listed at
+  the call's first touch of it, not when the copy was made. A call's file view
+  holds one.
 
 ### Naming a source
 
@@ -157,7 +239,17 @@ refusal — the caller chooses), the VFS winner, or a named provider.
   a path nothing enabled supplies.
 - **Naming is the consent, and the only door.** `OffOrderAssetSource` reads a named mod folder's disk directly (loose file first, then its root archives) and is consulted only under that pole, so a mod nobody named can never
   contend silently or be reported as the winner. `PlacementSource.OffOrder`/`OwnerEnabled` carry that the copy is
-  one the game is not loading, and which of the two reasons it is.
+  one the game is not loading, and which reason it is: an unticked folder, or an enabled one whose archive no plugin
+  binds or whose folder did not list this build. `OwnerEnabled` is set for every find in an enabled mod, so an
+  enabled mod is never called unticked. An ENABLED folder's loose copy and root archives are read off the call's
+  listings, so the probe finds only what the call's listing holds; where the copy's folder will not list, the file is
+  stat'd directly, the only evidence there is. An unticked folder itself is listed directly at each probe, never
+  memoised. Either way the root archives are probed through the view's archive reader, which holds their tables
+  for the view.
+- **Hiding applies to a named folder whatever its tick.** The lane asks `Mo2SkipRules.Hides` before its loose probe; a
+  loose file it hides (or the folder's `x.mohidden` when `x` is asked) is never read, and the lookup ends
+  `OffOrderReason.Hidden` with the rule, unless one of the folder's root archives has the path, which answers as
+  before.
 - **Reserved names mean the layer, never a folder.** `overwrite`, `Data` and an active archive's filename are
   answered by the built universe and never reach disk, so a mod folder called `Data` cannot shadow the layer. An
   *enabled* mod folder name is deliberately not reserved: falling through reaches that folder's own root archives,
@@ -192,15 +284,64 @@ table over 326,491 paths, so the bound, not the prefix, is what keeps a sweep af
 filename it is or whose MO2 layer it names (`AssetSourceSelection.NameMatches`, the rule `source_provider=` uses), so
 a mod name covers the archives it ships, and `Data` covers the Data folder's loose files and the base-game archives
 (their owning layer is `Data`). Alone it walks the provider's whole tree; with `under=` it walks only
-beneath those selectors; beside `asset_paths=` or `formids=` alone it walks nothing and only reads those rows. A name that is not in the active load order (a disabled mod, an inactive archive, a typo) is refused by name, since
+beneath those selectors; beside `paths=` or `formids=` alone it walks nothing and only reads those rows. A name that is not in the active load order (a disabled mod, an inactive archive, a typo) is refused by name, since
 it would walk nothing. Each row is
 still resolved against every root, so the provider's standing is a reading of `AssetHit.Providers`, no new
 resolution, matched by name as the walk is: **wins** when the winning copy's name matches the provider, **shadowed**
 when the provider ships a copy and the winning copy's does not (the row names that winner; an archive's copy is
-shadowed by its own mod's loose copy), **not provided** for an explicit path it does not ship. The standing rides the
-text row as one line, the json row as `provider_standing`, and the artifact as a `provider_standing` column (null with
-no provider and on an error row; the json member is absent in both cases). A mod's `.bsa` files are themselves loose files in its folder, and MO2 maps them into Data, so they are
+shadowed by its own mod's loose copy), **hidden** when it ships no copy but holds one MO2 hides (`AssetHit.Hidden`
+names it among the holders; the text line names the provider and the rule, "holds it, hidden by MO2 (…), so provides
+nothing"), **not provided** for an explicit path it does not ship. The standing rides the text row as one line, the
+json row as `provider_standing` (`wins`, `shadowed`, `hidden`, `not_provided`), and the artifact as a
+`provider_standing` column (null with no provider and on an error row; the json member is absent in both cases). A mod's `.bsa` files are themselves loose files in its folder, and MO2 maps them into Data, so they are
 part of what the mod provides.
+
+The selectors together (explicit paths, `under=`, `formids=` pairs, `provider=`) are one component,
+`FileSelection.Select` (#1318): given the capture `AssetLayers.CaptureForSelection` took (the call's view, the
+`formids=` seeds it was taken for, and their face answers read over the pin taken with it), it returns the ordered
+entries, the selector notes and the provider refusal. Given a path bound, its `under=` or whole-provider enumeration
+stops once its matches fill what the rows before them leave of the bound, plus one, and it returns `StoppedAt`: one
+past the bound, or the selected count when that is more. Those matches count paths already selected (an overlapping
+`under=` selector, or an explicit path inside an `under=` folder), so after dedup the selection can hold fewer than
+`StoppedAt`, even no more than the bound. Explicit paths and `formids=` rows are never cut; they only leave that
+enumeration less room. The refusal that words
+the stop is the caller's: `asset_status`'s advice names its own parameters (`under=`, `paths=`, `formids=`,
+`to_file=`, `counts_only=`, `limit=`, `offset=`). It captures nothing and reads only through the view it is handed,
+so a tool that calls it selects the same files with the same notes and the same refusal as `asset_status`.
+`decompile_script` is the second caller (`AssetLayers.SelectScripts`; papyrus-decompile.md, "Selecting the
+scripts"), and words its own stop. `nif_inspect` is the third (`AssetLayers.SelectMeshes`; nif.md, "Selecting the
+meshes"), with `formids=` too, and words its own stop. `paths=` is the one name for this list on all three (#1287,
+#1081); the retired `asset_paths=`, `mesh_paths=` and `nif_inspect npc=` are refused in one sentence.
+`asset_status` keeps the capture, the window, the declared-cost refusal and the resolve; the walk takes its seeds from
+`asset_status`'s rows, so it selects through the same component.
+
+`exclude=` is the selection's one minus term (`FileExclusion`, #1319), SPEC §2.2's exclusion under the name `check`
+uses, on all three callers. Its entries are Data paths (a file, or a folder and everything beneath it, as an `under=`
+plain path is) and globs (`AssetGlob.Matcher`), or one `@file`, matched ignoring case and slash direction; it removes
+every row it names after the selectors ran, an explicit `paths=` row included (`SelectedFile.Given` keeps an explicit
+row's place in the list given, so `nif_inspect` and `decompile_script` drop exactly that row). A row with an error is
+never removed. It does not narrow the path bound: the enumeration it subtracts from is bounded first. "What a mod ships
+that a walk does not reach" is two calls: the walk writes its nodes with `to_file=`, then `provider=X
+exclude=["@<that file>"]`. It departs from `check`'s refusals, by Aaron's ruling (DECISIONS 2026-11-11 (20)): an entry
+the selection does not hold is counted in a note ("exclude= removed N of the M selected path(s); K of its E entries
+matched no selected path"), because most of a reached set is other mods' files, and an exclusion that empties the
+selection answers zero rows. A blank or non-Data-path entry is refused, and the list door's own refusals hold (an
+`@file` beside inline entries). A `path` artifact with no rows, a walk that reached no file, is the empty set here
+(`ListKind.Exclusion`), not the door's no-rows refusal. What the file's paths cannot say leads the selection's notes,
+read off its manifest: a walk note that says its rows are short of what it reaches (`WalkCut`: `walk.max_nodes`,
+`walk.depth`, the path bound, a `walk.through` left-out line counting edge-kind rows, a mesh whose links or a script
+whose parent was not read) makes the file a lower bound, while a left-out line counting record types only, NPC
+boundaries and unfollowed form links are the walk's own definition of reached and say nothing. Two known limits
+(DECISIONS 2026-11-12 (6), calls C and D): a record the walk could not read, or whose links, children or voice it
+could not read, writes no note `WalkCut.Says` matches, so its file is read as whole; and a file with many cut notes
+leads with one lower-bound note per cut note. The epoch is compared into a note, never refused: a file with no epoch
+says it carries none, so whether it was written on this build is unknown, an order this call cannot read says it
+could not compare, an epoch an older houseCARL wrote says it cannot be compared, and another build's says the file may
+not hold what its call answers now; either way the rows still come (DECISIONS 2026-11-11 (20), Q3 (a)). With no load-order
+selector at all (a file on disk, a walk seeded by `records=` alone) the note still says it removed nothing. An empty
+`exclude=[]` is unset, as the other selectors read an empty list. The `to_file=` and spilled files of `asset_status`
+(rows and walk) and `nif_inspect` record it in their query echo as `exclude`, the `@file` or the inline count; a
+call without it writes no such key.
 
 The `counts_only=` census has two layer tables: the layers that **win** paths and the layers that ship a copy another
 layer wins over (**shadowed**), each layer counted once per path, so a mod's loose copy beside its own archive's copy
@@ -213,7 +354,9 @@ matches that file or everything beneath that folder. As in `asset_status`, each 
 and a blank or bad selector beside a usable one is noted while the rest answer; only a call with no usable selector refuses.
 
 `AssetLinkHarvest` is the other selector: every asset path a set of records declares, from a generic
-`IAssetLinkGetter` walk over each record's property graph. Generated coverage, not a per-record-type field list.
+`IAssetLinkGetter` walk over each record's property graph. Generated coverage, not a per-record-type field list. A lazy
+list that throws a parse fault as it is stepped ends there: the harvest's `unread` names the first such list, and the
+paths before it, and in every other part, are still answered.
 
 ### Voice paths
 
@@ -313,8 +456,12 @@ env map, normal, env mask), and the root node's `HDT Skinned Mesh Physics Object
 Only the roots are read for the two strings, because FSMP reads only the root's own extra data. Each string goes
 through the door above by kind: a texture as a texture, `BODYTRI` as a model (meshes-relative), an SMP XML as
 Data-relative through `ValidateRelPath`, never typed (a typed texture door would put it under `Textures\`). A string
-the door refuses is a link with its reason, never a dropped one. `asset_status links=true` reads the winning copy of
-every present `.nif` row and lists them, each Data path with its winner; a plain row is unchanged. A `to_file=` or
+the door refuses is a link with its reason, never a dropped one; a null, empty or whitespace-only string is no link.
+It returns one link per site; `NifLinks.FirstSites` keeps each file once, at its first site, for `links=` and the walk.
+`nif_inspect`'s paths section lists every site through the same reader, resolve and line ([nif.md](nif.md)).
+`asset_status links=true` reads the winning copy of every present `.nif` row and lists them, each Data path with its
+winner; with `provider=` the heading says the links are the winning copy's, whatever `provider=` names (the named
+mod's copy is not read). A plain row is unchanged. A `to_file=` or
 ceiling-spill artifact row carries the same `links` member (and the manifest's row schema names it only then);
 `counts_only=` has no rows and refuses `links=`.
 
@@ -323,55 +470,196 @@ ceiling-spill artifact row carries the same `links` member (and the manifest's r
 `asset_status walk=true` is SPEC §3's construct with a second edge kind, record or file → file
 (`AssetLayers.AssetWalk`, `AssetWalkEdges`). It seeds from the selection (every row the selectors chose) and from
 `records=`, read through the `from_source=` pole list the copy uses (`BuildSourceChain`; default `winner`, a plugin
-in a disabled mod by name). From a record it enters form links only into records a named `from_source=` plugin
-defines (the plugins copy binds, so an override donor's own head parts are entered) or, for a seed read through
-`winner`, the seed's own plugin defines, to 3 hops, so a base master's records reached from a donor's override are
-boundaries; links into other plugins are counted as boundaries in a note, and records past the depth are counted too, so
-nothing is cut silently. Each record contributes:
+in a disabled mod by name). From a record it follows a link only when the link sits in one of the record's **part
+fields**, plus the record's **child records**, into any plugin, to `walk.depth` hops (default 16, a safety cap; past it
+records are counted in a note), with no seed-plugin rule (DECISIONS 2026-11-08 (20), part fields). The part fields
+are data, not code: `walk-parts.json` in housecarl-core, embedded and read by `WalkParts`, maps a record type (the name
+a read reports) to the field paths whose links hold a part of it, plus `*` paths read on every type: an NPC's head
+parts, hair colour, face texture, skin (`WornArmor`), outfits and far-away model; a head part's extra parts, texture
+set and colour; an armour's addons, template and world model; an addon's skin texture, swap list, models and art
+object; an outfit's, form list's and leveled list's items; a weapon's 1st-person model and template; a placed
+reference's base; a line's shared response data; any model's alternate textures. `WalkPartsTests` checks each entry's
+key is a type name a read reports and each path's fields exist on it. No generated data says whether a field holds a part or a mention (an NPC's `WornArmor` and a race's
+`Skin` both target an armour), which is why the list is hand-kept; every type is still read and listed when seeded or
+reached, so this is not record coverage. A path is read through `ReadEngine.CollectLinksAt`, the records walk's field
+door; a field the type lacks, an absent value or a non-link field gives no links, and a path that cannot be read is a
+note. A path's first field is matched by name with its index dropped, so `HeadParts[0]` reads the first head part. The child records are the generated child-bearing fields (`OwnedChildContent`, a cell's references, a topic's
+lines, a worldspace's cells): the read body's own, then the union over every plugin that touches the record
+(`OwnedChildUnion.ComputeMany`, each touching plugin's copies read in one pass per depth); a plugin whose copy cannot
+be read is a note. Every other form link an entered record holds (a race, a quest alias, a script property, a sound,
+a keyword) is not walked, and one note counts them per holding type, naming `walk.follow`. A child-bearing record's
+count is its own links: the links its own child records hold, which Mutagen hands over as the parent's, are taken off
+by occurrence, since the walk enters those children and counts them on their own types. `walk.follow` replaces the
+default: one path or a list, read on every record from the seed on (the asset walk has no `seed_paths`), with no child
+records; a named path no entered record reads, a field none has at any segment (a typo, or the wrong case: field
+names are case-sensitive) or one holding no links, is a note naming it with the read engine's no-field or no-links
+note, near-name included, from the first record that refused it; a path no live record refused (one with no field, such as `.`, or one
+where the walk entered no record that is not deleted: every record entered deleted, or none entered) is a note saying
+it names no field or met no live record, since a deleted record links to nothing and marks no path read
+(`WalkParts.Links`). The default's part fields are skipped silently
+where a type lacks them or they hold no links. `*` is every form link through the one link door below, which is the old reach
+without the plugin rule, plus the child records, so it is a superset of the default except at a record whose links cannot be
+read whole: `*` does not go past it, so it follows none of its part fields and enters none of a cell's, topic's or
+worldspace's child records, where the default reads its part fields one by one and enters its children (a known limit); `*` beside named paths, and a
+`*parent` climb at any segment, are refused. A
+record reached past a seed that no `from_source=` arm holds is read off the load order's winner, a round per depth,
+and its label, and so every row it pulls, ends "(read from the load order: no from_source plugin has it)"; a seed no
+arm holds is still a note naming every arm, and a `from_source=` list holding `winner` already reads the order.
+A quest's topics and scenes name the quest, not the quest them, so its dialogue and voice are a selector and a walk,
+two calls the tool text names; the walk follows no link backwards.
+`walk.through`'s record types and `walk.exclusions` are judged as a
+record is entered, and a malformed seed is an error node; both are walk-and-reverse.md's "One walk grammar". A record
+past a seed whose read body is an NPC (a placed NPC's base; under `walk.follow`, a quest alias's
+actor, a location's unique actor, a race's chargen preset, a script property, a template) is a boundary: not entered, so it lists no files, follows no links and spends no
+`walk.max_nodes`, and one note counts those NPCs and says to seed them, or to name `Npc` in `walk.through` beside
+every other record type to keep: a set `walk.through` enters only the types it names, so `Npc` alone enters the NPCs
+and leaves every other reached record out (#1371; DECISIONS 2026-11-08 (11)). The rule sits at the one entry door after `walk.exclusions` and
+`walk.through` are judged, so a stop or refuse on `Npc` is unchanged, a `walk.through` without `Npc` still leaves them
+out on the left-out line (one count, one place), and an edge-kind-only `walk.through` enters none. A seed's FaceGen
+still reads its template chain through the face door, which needs no NPC entered. It reads a record's form links only through the one link door (`RecordLinks`,
+docs/architecture/read-engine.md) under `walk.follow` `*`, and counts the default's and a named `walk.follow`'s
+unfollowed links through it: a deleted record is entered and follows none of them, with no note, except a
+deleted NPC past a seed, a boundary as any reached NPC since the rule tests only the read body's type; a perk whose
+links read only leniently is followed under `*` on what the lenient read recovered, and counted on it otherwise, with
+a note either way; a record whose links cannot be read is a note: under `*` the walk does not go past it, and
+otherwise it follows only the fields it reads one by one and counts none of the rest (#1316). Each record
+contributes:
 
-- the paths it lists (`AssetLinkHarvest`);
+- the paths it lists (`AssetLinkHarvest`); a list it cannot read is a note naming the record, and the paths it did
+  read are listed;
 - Mutagen's inferred links: `Scripts\<name>.pex` (the `.psc` is dropped, a `:` maps to a folder as the script checks
   do), a start-game-enabled quest's `Seq\<plugin>.seq`, and any other inferred file;
 - each fragment `FileName` in its script adapter, found by reflection over the adapter, with a note that Mutagen
   infers none;
-- on an NPC, the FaceGen pair its face is drawn from: its own when the Traits template flag is off (or on with no
-  Template, said in a note, since Mutagen's link is gated on the flag), else the first NPC
-  down the Template chain with it off, every member of a leveled-list template (nested lists included) marked one
-  of N; a loop or an unresolved link is a note naming the chain, and the other members keep their pairs. The pair is Mutagen's resolved link over a cache holding only the
-  root's race, so a race without `FaceGenHead` gives none, which `FaceGenPath.For` alone cannot tell. The race and the
-  template members are read through the record sources, then the active order; a race neither holds is a note;
-- on a dialogue line, the `.fuz` paths Mutagen resolves over the whole order (built once, when a line is reached), or
+- on a seed NPC, the FaceGen pair the face door (`NpcFace`, below) names: its own when the Traits template flag is
+  off, else the first NPC down the Template chain with it off, every member of a leveled-list template (nested
+  lists included) marked one of N; a loop or an unresolved link is a note naming the chain, and the other members
+  keep their pairs. A root Mutagen names no pair for is a note with the door's reason. The race and the template
+  members are read through the record sources, then the active order. Only a seed NPC's face is listed (#1278;
+  DECISIONS 2026-11-07 (26), F2): a reached NPC is a boundary (below), and one `walk.through` enters gets no FaceGen;
+- on a dialogue line the walk enters (a seed, a seeded topic's line, which is its child record, or one a form link
+  reaches, such as shared response data), the `.fuz` paths Mutagen resolves over the whole order (built once, when a line is reached), or
   the same-stem `.xwm` / `.wav` and `.lip` the line ships as when no `.fuz` does (shipped by the order or by
   `source_provider=`, so a disabled donor's format counts); both listed, with no claim on which
   plays, when both ship. A line Mutagen finds no voice for is a note naming why (no Speaker, a speaker that is not an
-  NPC or has no voice type), and one that throws is a note. The fork checks the winning NPC Traits template chains before creating the voice cache. A loop reports a refusal for voice resolution; the other walk results remain available;
-- on an NPC, the voice of each dialogue line it speaks: the active order's referencers from the reverse-reference
-  index whose winning copy names it as Speaker, or in a `GetIsID` run on the Subject that passes for it and fails for
-  any other (`AssetWalkEdges.Speaks`), and the lines an off-order `from_source=` plugin defines, which no index
-  holds, read off that plugin by the same test; each line through the edge above. A line that only mentions it (a script
-  property, a `GetIsID` on the Target) is not walked, nor is one tied to it through a quest alias or reached only by
-  voice type.
+  NPC or has no voice type), and one that throws is a note. Mutagen's resolution overflows the stack, ending the
+  server, on a template loop in the mods it reads; the walk does not guard it (none is on the dev order or ARR).
+  No line is found off an NPC: the walk has no NPC-to-voice step and builds no reverse-reference index, so a line is
+  judged by `walk.through` and `walk.exclusions`, counted by `walk.max_nodes` and bound by `walk.depth` like any record
+  (#1278; DECISIONS 2026-11-07 (26), V4). To list an NPC's voice, seed its lines.
 
 The walk reads its records in bulk (#1277). It walks breadth-first by depth, so it enters records in the order a
 queue would, and reads each depth's records at once through the record sources (`SourceChain.FetchMany`; its
 answers are walk-and-reverse.md's, the read door's and its faults read-engine.md's). A face's template members and race
-answer from the walk's own read when the walk reached them, else from rounds read before a depth is entered: the
-Traits template chains of the NPCs that depth enters (none past the record cap), one round per hop up to the chain
+answer from the walk's own read when the walk reached them, else from rounds read before the seeds are entered: the
+seed NPCs' Traits template chains (none past the record cap), one round per hop up to the chain
 cap, each round with its NPCs' races (`MemberReads.Templates`). A voice's speaker answers from the walk's read, else
-is read as a set of one. Every member read is kept by key for the whole walk. The reverse step reads, all walked NPCs' at once through the door, the
-referencers whose winning copy the index types as a line; one it types as anything else (a placed reference, a cell, a
-quest), or one with no winner, is never read.
+is read as a set of one. Every member read is kept by key for the whole walk.
+
+Each link the walk follows out of an entered record (a record's link to itself too, and a link out of a record at
+`walk.depth`, which is not entered) is recorded, and after the walk `GraphCycles.Find` reports the loops over the records entered, capped at
+`RecordReads.WalkCycleCap` (200), the records walk's per-seed cap, here once for the shared budget (#1278; DECISIONS
+2026-11-08 (3), C2). A link to a record never entered closes no loop. The count is a lower bound on the loops: one per
+back edge the search finds, and an edge into a record it already finished is skipped, so a loop met again through one
+is not counted; a loop through a record not entered (past `walk.depth`, past `walk.max_nodes`, a reached NPC kept as a
+boundary, or past a link the walk does not follow) is not seen. The text answer counts
+them in one note ("recorded, not an error") and, at the cap, says so in a second; the json walk answer (not
+`counts_only=`) lists each loop under `cycles` (`cycles_capped` at the cap) and a spilled or `to_file=` file carries
+each as a `walk cycle:` manifest note. A walk with no loop has neither member. At `max_chars` the json `cycles` take
+the room the rest of the document leaves, the nodes first: each loop whole, in order, then one entry counting the
+loops held back, and a walk whose loops do not all fit spills, as one whose nodes do not. File edges are not searched: a script's parent
+cannot loop and compile, and no mesh names a mesh.
 
 Each file node then resolves: from-source when `source_provider=` ships it (`AssetSourceSelection`, so a disabled mod
 answers off its own disk), elsewhere when another provider wins it (named), present with no source named, or absent;
-a string that names no Data path is an error node. A present `.nif` walks on through its links, read off the copy
-that answers it, and a `.pex` through its parent class. FaceGen, `.seq` and voice nodes are **keyed**: they sit at a
+a string that names no Data path is an error node. Every node, an error node too, enters through one door (`Admit`,
+which `AddFile` and `AddError` both call): one row per path, counted against the file bound. A present `.nif` walks on through its links, read off the copy
+that answers it, and a `.pex` through its parent class; a mesh whose links or a script whose parent cannot be read is
+a walk note on that file, not a second row at its path. FaceGen, `.seq` and voice nodes are **keyed**: they sit at a
 path named by the defining plugin and id, so a copy that keeps the FormKey places them as walked, and a renumbering
 one carries them through the carry above. With a source, the response ends with the from-source set as the
-`assets=` array `place` takes in one call. The walk is bounded by the `asset_status` path bound and 2,000 records,
-each said when reached. A walk past `max_chars`, text or json, is written whole to a results-directory file (one row
+`assets=` array `place` takes in one call. The walk is bounded by the `asset_status` path bound and `walk.max_nodes`
+records entered (default 2,000, seeds included, one budget for every seed), each said when reached. A walk past `max_chars`, text or json, is written whole to a results-directory file (one row
 per node, SPEC §2.1.1) that the response names; when the `assets=` array itself would not fit, the response points at
 the file's `from_source` rows instead. Out, and said: reverse file edges, SKSE configs and behaviour files.
+
+Each node's `edge` is a `WalkEdgeKind` (core): `seed` and the twelve file edge kinds (`listed`, `script`, `seq`,
+`inferred`, `fragment`, `facegen`, `voice`, `lip`, `texture`, `smp`, `bodytri`, `parent`). Every emit site and the
+`FileSink` take the kind, not a string, and `WalkGrammar.Parse` reads the same tokens, so no edge is emitted that
+`walk.through` cannot name; a mesh link's `NifLinkKind` maps onto its kind, and `links=` writes the same token. An edge
+kind in `walk.through` never prunes the walk: `Admit`, `seen`, the file loop, the file bound and `walk.max_nodes` are
+as they are without it, and the record types beside it still narrow the record half. After the walk, one pass over the
+nodes keeps a row when it is a seed or its edge is named, and nothing else (#1278; DECISIONS 2026-11-08 (2), (4), plain
+E2): every lane (text, json, `to_file=`, `counts_only=`, paging, the place set) reads that one list, so they agree by
+construction. A texture row shown without its mesh still names the mesh in `pulled_by`; adding `listed` shows the meshes
+too. The rows not shown are counted per edge on the one "left out, not in walk.through:" line, after the record types
+the record half left out (in that note's place, or last on a path-only walk). An edge kind works on a path-only walk
+too, so it is not among the values `ReadSentences.WalkValuesWithoutRecordSeed` says unused. An edge kind that names
+nothing the walk meets leaves the seed rows alone, every other row counted; not a refusal, as a type that matches none.
+
+The walk goes through the tool's one front door: the row lane's transport checks (a negative `limit=`/`offset=`, a
+bad `to_file=` path, `to_file=` with `offset=` or `counts_only=`, `counts_only=` with `links=` or `offset=`) run before
+either lane, in the same words, and `links=` with `walk=true` is refused by name (the walk already follows a mesh's
+links as nodes). Then:
+
+- **`limit=`/`offset=`** window the node list only (`RowWindow.Apply` over the nodes, in `AssetWalkWire`). The walk
+  runs whole; the header, notes, standing counts, place set and any spill read every node. The `max_chars` cut is
+  counted against the window, so a window that fits spills nothing. A paged answer ends with the row lane's
+  `[accounting]` line (json `accounting`, `next_limit`/`next_offset`, `offset_note` past the end); an unpaged one has
+  none, so a default walk is the answer it always was (DECISIONS 2026-11-06 (25)).
+- **`to_file=`** writes every node to the named file, the spill's own rows (the answer's spill reason `to_file`), and renders
+  no nodes: the header, notes, standing counts, place set and the file it wrote still print. `limit=` is ignored under it.
+- **`counts_only=`** runs the walk whole and returns the header, alarms, notes, the standing line and two group-by
+  tables, nodes by edge and nodes by standing (`limit=` caps their rows); the place set as its count; no nodes, no spill.
+  A json one past `max_chars=` is bounded as the row census is: each list and axis says what it cut, and `truncated`,
+  written after the axes, is true when the walk met its own bound (its file cap or its record cap), a list was cut,
+  or an axis was stopped by `max_chars=`; an axis cut by `limit=` (`cut_by` `"limit"`) does not set it.
+- **Notes, not silence.** `from_source=` or `source_provider=` without a walk (`walk=true` or a walk object),
+  `from_source=` on a walk with no `records=` or `formids=` seed that is a FormID, and a walk object whose depth,
+  max_nodes, through's record types or exclusions differ from `walk=true`'s with no `records=` seed that is a FormID
+  (`ReadSentences.WalkValuesWithoutRecordSeed`), are each one note: on the row lane under `[!] notes`, counted in
+  `notes=`; on the walk first among its walk notes.
+
+### One FaceGen answer per NPC
+
+`NpcFace` (core) is the one door every lane asks for an NPC's FaceGen: `asset_status formids=`, the walk,
+`nif_inspect formids=`, `place formid=` and `check findings=["facegen"]`. Its answer is a list of roots, each a pair or a
+reason, plus the chain's errors:
+
+- **Mutagen derives the pair.** Each root's mesh and tint are the `\facegendata\` links of Mutagen's
+  `EnumerateAssetLinks(Resolved)` over a race cache the door holds, so no lane spells a FaceGen path of its own.
+  `FaceGenPath.For` stays only to spell a path for a key already chosen (the carry, the file scan).
+- **houseCARL adds the Traits walk** (`FaceRoots`, capped at `TemplateChainCap` hops), which Mutagen lacks, and,
+  where Mutagen yields no link, **one reason**: the first unmet input of Mutagen's gate, in the order no race / race
+  not read / not a race, no `FaceGenHead`, `Traits` with no `Template`, `ACBS` 0x100. Mutagen's gate is named as it
+  is, not coded around: a 0x100 NPC the CK baked still gets the reason, not a pair.
+- **Reads are batched where a lane prefetches.** On `formids=` (`asset_status` and `nif_inspect`) and `place` (`AssetLayers.Faces`) and on
+  the walk (`MemberReads.Templates`), `NpcFace.Prefetch` reads each hop's templates and the roots' races in rounds,
+  and the memo (`RoundReads`, `MemberReads`) keeps each key's record or its exception, so the door reads nothing
+  after the prefetch. The check does not prefetch: it reads each race the first time the door asks, a round of one
+  through `RoundReads.Get`. On `formids=` (`asset_status`, `nif_inspect` and the walk's seeds, read through `Faces`) and `place` only, an
+  NPC key whose plugin is in the view's excluded set says that plugin was not read rather than "no plugin defines
+  it"; a template or race there, one a walk's `records=` seed reaches, and every key on the check gets the door's
+  not-found sentence.
+
+Each lane shows the answer in its own shape: a row per root path with `face_note` ("the face of template root X",
+", one of N"), an error row per reason (`no FaceGen pair — …`), a walk note, a `place` refusal (several roots, or no
+pair), and the check's exclusion counts by `FaceGap`.
+
+The door reads each NPC, template and race through the lane's own record sources (`AssetLayers.Faces`, one fetch
+per lane): the active order's winners, and where the lane reads plugins off the order, those too. The walk reads
+`from_source=` in its order for `records=` and `formids=` seeds alike (`MemberReads.Through`); `place formid=` reads
+the `into=` patch's plugins after the winners, so a clone a copy wrote there places by formid before it is enabled;
+`nif_inspect formids=` reads the plugins a `source_provider=` mod folder ships, after the winners. A folder's plugins are
+read by filename, first hit. Where the winners come first (`place`, `nif_inspect`, and a walk whose `from_source=`
+starts with `winner`), the door opens the off-order plugins only when a read round's winners miss a key: any such
+key, an NPC's template or race included, opens them, and a plugin there that will not open fails only the missed
+keys, "its record sources were not opened", naming it. A walk with `records=` seeds builds its whole `from_source=`
+chain before reading, whatever its first element, and a chain that will not build refuses the call.
+`asset_status formids=` and the check read the winners alone. A key none of them defines gets the lane's own
+sentence (`FaceSources.Unset`): "no plugin in this order defines it", or that order and the sources it also read; a
+walk whose `from_source=` is all `winner` says the order's alone for both seed kinds (`AssetLayers.UnsetFor`). Any
+other not-yet-enabled NPC's file is placed by `path=`.
 
 ### Suggesting a root prefix
 
@@ -385,6 +673,9 @@ provided either; the generic lane does not, because it legitimately answers for 
 
 ## Pinned by
 
+- *The top-level door*: `AssetTopLevelListingTests` — one directory per loose root and nothing below it, the union
+  across roots, an archive entry below the folder (and below the Data root) left out, the walk's hidden rules kept and
+  a root that will not list named.
 - *Precedence*: `AssetResolverTests` — overwrite, then mods highest-priority-first, then Data, first sighting wins
   (`OverwriteWinsAndEveryLooseProviderIsListedInPrecedenceOrder`, `WithoutOverwriteTheHigherPriorityModWins`); loose
   beats BSA-packed (`ALooseCopyBeatsTheArchiveCopyWhichStaysListed`); the higher plugin rank wins among BSAs
@@ -409,13 +700,13 @@ provided either; the generic lane does not, because it legitimately answers for 
 - *What an answer may claim*: Pinned by `AssetLooseFreshnessTests` — a freshness baseline is read at the warm, never
   off an older memo (`AFileDeletedAndPutBackBetweenCallsIsSeen`, `ASubtreeDeletedAfterASweepMemoizedItsParentIsSeenComingBack`,
   `AFileAddedToASecondRootAfterAnotherFolderWarmedIsSeen`), and never off a listing an earlier call took, checked or
-  not (`AFileDeletedWithNoCheckBetweenCallsReadsAbsent`); a read pass lists each directory once, the next call lists
+  not (`AFileDeletedWithNoCheckBetweenCallsReadsAbsent`); a call (outside one, a `Capture()`) lists each directory once, the next lists
   again, and the absence stays watched (`APassListsEachDirectoryOnceAndALaterCallListsItAgain`); a segment resolves as
   a file open does (`ATrailingDotOrSpaceResolvesAsAFileOpenDoes`), an archive entry as asked
   (`AssetResolverTests.ATrailingDotReachesTheLooseFileButNotTheArchiveEntry`), and one that opens as no name is refused
   (`ASegmentWindowsOpensAsNoNameIsRefused`, `PlaceOffOrderLaneTests.ADestinationEndingInADotsOnlySegmentIsRefused`);
-  two interleaved passes do not list for each other (`TwoInterleavedPassesDoNotListForEachOther`); a folder that will
-  not list is tried once per pass (`AFolderThatWillNotListIsTriedOncePerPass`); a file holding a name under a folder
+  two interleaved captures do not list for each other (`TwoInterleavedPassesDoNotListForEachOther`); a folder that will
+  not list is tried once per capture (`AFolderThatWillNotListIsTriedOncePerPass`); a file holding a name under a folder
   only passed through is still watched (`AFileHoldingANameUnderAPassedThroughFolderIsStillWatched`); on the fallback path an absence is watched only
   once it is proved (`AModFolderThatWillNotListDoesNotMakeEveryCallStale`,
   `AMemoThatWronglyProvesAnAbsenceCostsOneRebuildNotOnePerCall`); a memo never makes a failure
@@ -423,9 +714,39 @@ provided either; the generic lane does not, because it legitimately answers for 
 - *One build per call*: **Zero archive handles at rest:** pinned by `AssetResolverTests.TheResolverHoldsNoArchiveHandleAtRest`
   (rename *and* delete while the resolver lives) and, for single-entry extraction,
   `PlaceCoreTests.TheArchiveIsNotHeldOpenAfterTheRead`.
+- *One build per call*: the memory rule, by `ArchiveReadOnceTests`: a walk (meshes and scripts, and with
+  `source_provider=` its off-order probes), an off-order hit and its byte read, `links=`, a `nif_inspect` batch,
+  `nif_set`, native pairing (packed DLLs and scripts), the config audit, a `place` batch (resolved, named and raw-path
+  entries), a voice carry, and a compaction's and a merge's FaceGen and voice carries each read an archive's table once
+  for two or more of its entries; where a test drives two lanes (the walk, the probe, native pairing), each lane reads
+  its own archive, so the count is one per lane. An archive without folder names
+  (`AnArchiveWithoutFolderNamesReadsThroughTheWholeArchiveTable`) and one with two folder records equal ignoring case
+  (`AnArchiveWithTwoSpellingsOfOneFolderReadsBoth`) or slash (`AnArchiveWithTwoSlashSpellingsOfOneFolderReadsBoth`)
+  read through the whole-archive table. An archive that will not open is tried once; a view does not stat its archive
+  again, and the next view after a refresh reads the new file (R18). The read sentences are pinned whole on their
+  triggers: native pairing's unreadable archive and vanished script, the scripts sweep's vanished script, the walk's
+  unreadable mesh and script archive and its unparsable script (the `…AsBefore` tests), and the batch-of-one
+  sentences; the off-order lane's unreadable root archive by `PlaceOffOrderLaneTests`. `ScriptsReadOnceTests` keeps
+  the scripts sweep at one table per archive, read off the view. `ArchiveReadOnceTests` also holds these two lines in this note.
 - *One build per call*: `AssetResolverTests.ResolveManyAndACapturedViewAnswerFromOneBuild` reads a batch and a captured
   view off one build; `ACapturedViewKeepsItsBuildAcrossARebuild` in the same class pins the `Capture()` sentence
-  against a rebuild (a file added and refreshed after the capture stays absent in the view).
+  against a rebuild (a file added and refreshed after the view listed its folder stays absent in the view), and
+  `ALooseFileAddedToAWarmedFolderIsSeenByTheNextRead` the same for the next read, which lists for itself.
+- *One listing per loose folder per call*: `LooseListingsTests` — a file added or removed after an earlier call warmed
+  its folder is listed and resolved alike (`AFileAddedAfterAnEarlierCallWarmedItsFolderIsListedAndResolvedPresent`,
+  `AFileRemovedAfterAnEarlierCallWarmedItsFolderIsNeitherListedNorResolved`), and one added after this call listed its
+  folder is neither (`AFileAddedAfterThisCallResolvedItsFolderIsNotListedEither`); root files
+  (`ARootFileListedForAModIsTheOneItsResolveSees`), SkyPatcher discovery
+  (`AListedSkyPatcherIniIsNeverCalledPresentOnlyInsideABsa`), the voice carry (`AListedVoiceFileIsCarriedNotSkipped`),
+  an enabled folder's off-order probe (`AnEnabledFoldersOffOrderProbeAnswersOffTheCallsListing`,
+  `AnEnabledFoldersRootArchiveAddedAfterTheCallListedItIsNotFound`), a call with no freshness check
+  (`ACallThatSkippedTheFreshnessCheckStillListsAndResolvesAlike`); four Data-root globs in one call take one walk
+  (`FourDataRootGlobsInOneCallTakeOneWalk`); the check lists into the call
+  (`TheFreshnessCheckListsIntoTheCallSoAWarmedFolderIsNotListedTwice`); a listing alone watches nothing
+  (`AListingAloneWatchesNothingAndTheNextCallSeesAChangeUnderIt`). `LooseListingsServiceTests` — the SKSE inventory
+  never calls a listed DLL provided by no mod (`AListedSkseDllNeverReadsAsProvidedByNoMod`), a call's freshness check
+  is its listing (`ACallsFreshnessCheckIsItsListing`), and `update_status` builds no file view
+  (`UpdateStatusBuildsNoFileView`).
 - *One build per call*: `AssetLooseFreshnessTests` — the watch is made of names
   (`AppearAndVanishAreSeenEvenInsideOneTimestampTick`), an unrelated file beside a root's answering ancestor does not
   discard the build (`AnUnrelatedFileAppearingInAModFolderDoesNotDiscardTheBuild`), and a loose file's bytes are never
@@ -450,6 +771,27 @@ provided either; the generic lane does not, because it legitimately answers for 
   each select exactly their own files; an unknown name is refused; `under=` narrows a provider; each row's standing
   (wins, shadowed by the named winner, not provided) on the text, json and artifact lanes; the census's
   `provides / wins / shadowed` line and the shadowed-layers table, with a layer's own archive copy not shadowing it.
+- *Selecting a set of paths*, `exclude=`: `FileExclusionTests` — a walk's file re-enters `paths=`
+  (`AWalkFileReEntersAsAPathsList`); a provider minus its walk's file is what it ships that the walk does not reach
+  (`AProviderMinusItsWalkFileIsWhatItShipsThatTheWalkDoesNotReach`); case, slash, folder and glob matching; an entry
+  the selection does not hold counted in a note; an emptied selection answering zero rows; `nif_inspect` and
+  `decompile_script` taking it, an explicit path it removes having no row; the note with no load-order selector; the
+  cut-walk notes for `walk.max_nodes` and the path bound, and `FileExclusionDepthTests` for `walk.depth` (whose file
+  has no rows, so the empty set); the other-epoch note; the mixed and blank refusals.
+- *Selecting a set of paths*: `FileSelectionTests` — a second caller of `FileSelection.Select` gets `asset_status`'s
+  entries, each with its error and face line, and notes for one input with every selector kind, a template root's pair
+  among them (`ASecondCallerSelectsWhatAssetStatusSelects`); a capture
+  and a selection take exactly the listings an `asset_status` call whose window resolves no row takes, and the selection
+  takes none on a rerun over the same view
+  (`TheSelectionListsNoMoreThanAssetStatusDoes`); an unticked mod on disk, its archive and a separator are refused with
+  the one unknown-provider sentence, word for word (`AProviderTheOrderDoesNotLoadIsRefusedWithTheOneSentence`); without
+  `provider=`, the unticked mod's folder is only a miss note (`TheUntickedModsFilesAreNotSelectedWithoutAProvider`); an
+  explicit path given twice is two entries, and its folder adds only its other files
+  (`AnExplicitPathGivenTwiceIsTwoEntries`); a bound stop that dedup leaves at the bound has `StoppedAt` one past it
+  (`ABoundStopLeftAtTheBoundByDedupSaysOnePastIt`).
+- *Selecting a set of paths*: `DecompileSelectionTests.AssetStatusTakesPaths` — `asset_status` takes `paths=`;
+  `DecompileSelectionTests.TheRetiredAssetPathsParameterIsRefusedInOneSentence` — `asset_paths=` is refused in one
+  sentence naming `paths=`.
 - *Selecting a set of paths*: `BsaFilterTests` — `bsa_list` and `bsa_extract` `under=` keep an exact path, a `**` glob,
   a plain folder and everything beneath it but not a sibling prefix, and the union of several selectors; each selector
   that matches nothing is named, and a blank or bad one beside a usable one is noted; an extract writes only the matches
@@ -470,7 +812,10 @@ provided either; the generic lane does not, because it legitimately answers for 
   census does not count them; a hidden file asked by name is absent; custom suffix and directory lists replace the
   defaults; `@Invalid()` skips nothing; an empty item hides nothing; an unreadable list keeps the default with a warning
   naming the key; hiding and unhiding between calls is seen; a hidden folder and `root\` stay listed;
-  `LooseRootFilesTests.AModRootListsItsOwnTopLevelFilesWithoutCountingAWarmListing` — a hidden root file is not listed.
+  `LooseRootFilesTests.AModRootListsItsOwnTopLevelFilesWithoutCountingAWarmListing` — a hidden root file is not listed;
+  `HiddenReasonTests` — each rule and its holders on the hit, the unhidden name, the game Data folder, the under= and
+  census notes, every absent render (row, json, to_file=, pair, links, nif, walk, place), the named folder and the
+  enabled-but-unread folder.
 - *From a link to a Data path*: `AssetLinkDataPathTests` — a `data\textures\…` or `data\meshes\…` path gets the
   verified hint naming its Data form, with the `data\` reason, on `asset_status`, `nif_inspect` and `place`; a miss
   gets no hint on `asset_status`, and on a mesh tool the convention sentence names its Data form, unverified; each NIF slot's Data path answers as a direct `asset_status` call; a slot the door refuses is its own
@@ -480,29 +825,68 @@ provided either; the generic lane does not, because it legitimately answers for 
   their winners, and a row without `links=` is unchanged; a disabled donor's walk marks each node from-source,
   elsewhere (named) or absent and `place` takes the set; the FaceGen pair is race-gated and keyed; a templated NPC
   pulls its root's face itself; a leveled template reaches each member one of 2 and a loop is a note; a script reaches
-  its `.pex` and no `.psc`; a start-game-enabled quest reaches its keyed `.seq`. `AssetWalkDoorTests` — each depth
-  reads each (plugin, group) once and the lines once per plugin, with no cell group; the lines of every NPC the walk
-  enters are voiced (`TheLinesOfEveryEnteredNpcAreVoiced`) and the nodes, edges and notes are a queue's
-  (`TheAnswerIsTheOneAQueueGave`); a reached template member and speaker come from the walk's read and the race its NPCs
-  share is read in the faces' round, with no single-key read in the walk (`NoRecordIsReadOnItsOwn`);
+  its `.pex` and no `.psc`; a start-game-enabled quest reaches its keyed `.seq`; an NPC seed reaches no line
+  (`AnNpcSeedReachesNoLine`), a line reached forward is judged and counted (`ALineReachedForwardIsJudgedAndCounted`)
+  and an off-order line seed is voiced (`AnOffOrderLineSeedIsVoiced`); an edge kind shows its rows and counts the rest
+  (`AnEdgeKindShowsItsRowsAndCountsTheRest`), reads what the whole walk reads (`AnEdgeKindLeavesTheWalkWhole`) and
+  chooses a path-only walk's rows (`AnEdgeKindChoosesAPathOnlyWalksRows`); a loop of records is counted, listed in json
+  and the file, and capped (`ALoopOfRecordsIsCountedAndListed`), closed at the depth cap (`ALoopClosedAtTheDepthCapIsCounted`)
+  and bounded in json by `max_chars` (`AJsonWalksCyclesStayWithinMaxChars`); a reached NPC is a boundary: through an
+  alias, spending no `max_nodes` (`ANpcReachedThroughAnAliasIsABoundary`), as a seed's template, the seed's face
+  unchanged (`ASeedsTemplateIsABoundaryAndItsFaceIsUnchanged`), as a leveled list's entry, the list entered
+  (`ALeveledNpcIsEnteredAndItsNpcsAreBoundaries`), and closing no loop (`ALoopThroughAReachedNpcIsNotReported`);
+  `walk.through` naming `Npc` enters it (`ThroughNamingNpcEntersAReachedNpc`) and, alone, leaves every other reached
+  type out (`ThroughNamingNpcAloneLeavesEveryOtherTypeOut`), and a `walk.through` without `Npc` or
+  an exclusion on `Npc` is unchanged (`ThroughWithoutNpcAndAStopOnNpcAreUnchanged`). `AssetWalkDoorTests` — each depth
+  reads each (plugin, group) once; no line is found off an NPC, with no reverse index and no topic or cell group read
+  (`NoLineIsFoundOffAnNpc`); a reached NPC is a boundary (`AReachedNpcIsABoundary`), and one `walk.through` enters
+  has no FaceGen and no note (`AnNpcThroughEntersHasNoFaceGen`); the nodes, edges and notes are a queue's
+  (`TheAnswerIsTheOneAQueueGave`); a seed's template member and a line's speaker come from the walk's read, with no
+  single-key read in the walk (`NoRecordIsReadOnItsOwn`);
   `AssetWalkTemplateDoorTests.ATemplateSharedByManyNpcsIsReadOncePerHop` — a template six NPCs share is read once
   per hop; an owner rank is not walked as a link (`AnOwnerRankIsNotWalkedAsALink`);
   the depth bound and the record cap stop where they did; `AssetWalkDoorFaultTests`
-  — a broken NPC group is the arm's fault note. Fragments and a `.pex`'s parent are not pinned by a test; they were
-  checked on the dev instance only.
+  — a broken NPC group is the arm's fault note. `AssetWalkPinTests` — the `listed`, `inferred` (a weight-variant
+  model), `fragment`, `.wav` voice and in-walk `bodytri` edges, and a seed's parts followed into any plugin
+  (`ASeedsPartsAreFollowedIntoAnyPlugin`); a `.pex`'s parent is `ArchiveReadOnceTests`'. `AssetWalkPartsTests` — each
+  forward job's rows and noise; each `walk-parts.json` entry followed (`EachPartFieldIsFollowed`); a cell's and a
+  topic's own links counted (`TheCellCountsOnlyItsOwnLinksNotFollowed`, `AssetWalkTests.ATopicSeedCountsOnlyItsOwnLinksNotFollowed`);
+  `*` keeps a cell's children (`FollowEveryLinkKeepsTheCellsPlacedBases`); a `walk.follow` path no record has, one
+  wrong past its first field, an indexed path, `*` beside names and a `*parent` climb (`AFollowPathNoRecordHasIsSaidByName`,
+  `AFollowPathWrongPastItsFirstFieldIsSaidByName`, `AnIndexedFollowPathFollowsThatElement`,
+  `FollowRefusesEveryLinkBesideNamesAndAnyParentClimb`); a path only deleted records were entered for, a path with no field,
+  and a named path read past a record whose links cannot be read (`UnreadLinksWalkTests.AFollowPathOnlyADeletedRecordHoldsIsSaidAsDeleted`,
+  `AFollowPathWithNoFieldIsSaidAsNamingNone`, `ANamedFollowReadsItsFieldPastARecordWhoseLinksCannotBeRead`); two cells' unions
+  read in one pass (`TwoCellsReadTheirUnionsInOnePass`); a miss in every source and the order is a note
+  (`AReachedRecordInNoSourceNorTheOrderIsSaid`).
+- *One FaceGen answer per NPC*: `NpcFaceDoorTests` — a plain NPC is its own pair on every lane and the check
+  judges it; a templated NPC is its root's pair on `formids=` (`asset_status` and `nif_inspect`), the walk and `place`, and the check excludes
+  it as templated; a leveled-template NPC names each member, one of N, on `formids=` and the walk, and
+  `place` refuses it; a donor-only NPC gives its pair through the walk's `from_source=` and `nif_inspect formids=`'s
+  `source_provider=` (`ADonorOnlyNpcGivesItsPairThroughTheLanesOwnSources`), and a clone in an unenabled `into=`
+  patch places by formid (`CopySourceFolderReadbackTests`); two plugins of one folder defining an NPC are read by
+  filename, first hit (`AFoldersPluginsAreReadInFilenameOrderFirstHit`); a plugin there that will not open fails
+  only the keys the order misses, on `nif_inspect formids=` and `place into=`
+  (`AnUnopenablePluginInTheFolderFailsOnlyTheKeysTheOrderMisses`); a walk's `formids=` and `records=` seeds share
+  one not-found sentence (`AWalksFormidsAndRecordsSeedsShareOneNotFoundSentence`); the pair is Mutagen's link
+  (`ThePairIsSpelledAsMutagensLink`); each no-pair input is one reason on every lane, and Mutagen names no link for
+  its fixture; no reason calls Mutagen's gate a bug; the check counts each exclusion by reason.
+  `NpcFaceUnreadOrderTests` — a plugin the index could not read, and an order that cannot be read, are each row's
+  reason.
 - *Suggesting a root prefix*: Pinned by `AssetPrefixHintTests` — the prefixed candidate is offered only when a real
   provider supplies it. Its non-asset-root cases (`sound\`) assert the same thing as its plain-miss cases, so it
   cannot see whether the generic lane prints the convention note: that half is not pinned.
 
 ## Where
 
-`src/housecarl-core/AssetResolver.cs` and `ArchiveDiscovery.cs` hold the build, its precedence and the archive ranks;
+`src/housecarl-core/AssetResolver.cs` and `ArchiveDiscovery.cs` hold the build, its precedence and the archive ranks; `LooseListings.cs` is the per-call listings and the one join; `ArchiveReader.cs` is a view's archive reads;
 `AssetSourceSelection.cs` and `OffOrderAssetSource.cs` decide which provider a read comes from; `AssetGlob.cs` and
 `AssetLinkHarvest.cs` are the two selectors; `Mo2SkipRules.cs` is the visibility rule (its ini read is in
 `Mo2Instance.cs`); `AssetDataPath.cs` is the link-to-Data-path door; `AssetPathHint.cs` is the root-prefix hint; `VoicePath.cs` and
 `VoiceCheck.cs` are the voice paths; `AssetRenameService.cs` is the renumber carry; `BsaArchive.cs` lists, unpacks and
 packs. `src/housecarl-mcp/AssetLayers.cs` is the service lane over all of it: the class `AssetLayers`, which the head
-builds over itself and the output instance and reaches through one-line delegators, with the SkyPatcher replay in `SkyPatcherReplay.cs`.
+builds over itself and the output instance and reaches through one-line delegators, with the SkyPatcher replay in `SkyPatcherReplay.cs`
+and the shared file selection in `FileSelection.cs`.
 `ModsPathAddress.cs` refuses a raw mods
 path, and `AssetArtifact.cs` is `asset_status`'s `to_file=` artifact. `AssetResults.cs` holds the records the lanes
 return. The tool fronts here are `AssetTools.cs`, `PlaceTools.cs` and `BsaTools.cs`. The other families' fronts and

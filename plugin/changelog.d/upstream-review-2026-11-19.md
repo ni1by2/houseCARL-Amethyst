@@ -1,0 +1,2 @@
+- **Integrate the houseCARL 2.2 tool API while retaining Linux and Amethyst support.** File tools share `paths=`, `layer` reads SkyPatcher/SPID/KID/BOS/FLM, and decompilation can select multiple scripts from saved providers.
+- **Preserve guarded Linux output in the expanded decompiler.** Native Champollion and captured-input checks also cover batches, whose successful files publish through Amethyst staging transactions.

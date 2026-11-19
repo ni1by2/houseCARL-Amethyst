@@ -192,6 +192,17 @@ def text(result):
     return '\n'.join(item.get('text', '') for item in result.get('content', []))
 
 
+def asset_selector(tools):
+    """Use the tested server's published selector; old release baselines remain testable."""
+    tool = next((t for t in tools if t.get('name') == 'housecarl_asset_status'), None)
+    properties = (tool or {}).get('inputSchema', {}).get('properties', {})
+    if 'paths' in properties:
+        return 'paths'
+    if 'asset_paths' in properties:
+        return 'asset_paths'
+    raise ValueError('housecarl_asset_status publishes neither paths nor asset_paths')
+
+
 def server_probe(root, server):
     client = MCP(server)
     try:
@@ -209,14 +220,22 @@ def server_probe(root, server):
         status = client.tool('housecarl_load_order_status', {})
         if status.get('isError'):
             raise ValueError('MCP status failed: ' + text(status))
-        assets = client.tool('housecarl_asset_status', {'asset_paths': ['Meshes/example.nif'], 'format': 'json'})
+        tools, cursor = [], None
+        while True:
+            page = client.rpc('tools/list', {'cursor': cursor} if cursor else {})
+            tools.extend(page.get('tools', []))
+            cursor = page.get('nextCursor')
+            if not cursor:
+                break
+        selector = asset_selector(tools)
+        assets = client.tool('housecarl_asset_status', {selector: ['Meshes/example.nif'], 'format': 'json'})
         if assets.get('isError') or 'Beta' not in text(assets) or 'unverified' not in text(assets):
             raise ValueError('MCP asset winner/provenance check failed: ' + text(assets))
         path = root / 'mods/Beta/Meshes/example.nif'
         original, stat = path.read_bytes(), path.stat()
         try:
             path.write_bytes(b'changed-after-refresh')
-            stale = client.tool('housecarl_asset_status', {'asset_paths': ['Meshes/example.nif']})
+            stale = client.tool('housecarl_asset_status', {selector: ['Meshes/example.nif']})
             if not stale.get('isError') or 'changed' not in text(stale):
                 raise ValueError('MCP accepted a changed saved source')
         finally:

@@ -115,7 +115,7 @@ public static class BethesdaPath
         var found = new List<string>(2);
         CollectMatches(root, segments, 0, found);
         if (found.Count > 1)
-            throw new IOException($"ambiguous case-insensitive Bethesda path '{canonical}' under '{root}'");
+            throw new AmbiguousBethesdaPathException($"ambiguous case-insensitive Bethesda path '{canonical}' under '{root}'");
         if (found.Count == 1) { resolved = found[0]; return true; }
         resolved = Under(root, canonical);
         return false;
@@ -169,3 +169,6 @@ public static class BethesdaPath
     static ArgumentException Invalid(string? path, string reason) =>
         new($"Expected a Data-relative Bethesda path, but {reason}: '{path}'", nameof(path));
 }
+
+/// <summary>Two physical Linux paths answer one case-insensitive Skyrim address; the caller must resolve the ambiguity.</summary>
+public sealed class AmbiguousBethesdaPathException(string message) : IOException(message);

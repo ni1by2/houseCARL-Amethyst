@@ -415,7 +415,7 @@ public sealed class AmethystSavedSnapshotTests
         try
         {
             using var scope = AmethystSnapshotContext.Use(snapshot);
-            var reply = DecompileTools.DecompileScript(service, pexPath, out_path: output, decompiler_backend: "champollion", bridge: tools);
+            var reply = DecompileTools.DecompileScript(service, new[] { pexPath }, out_path: output, decompiler_backend: "champollion", bridge: tools);
 
             Assert.True(File.Exists(Path.Combine(output, "CapturedBeforeMutation.psc")), reply);
             Assert.False(File.Exists(Path.Combine(output, "LiveAfterMutation.psc")), reply);
@@ -691,11 +691,11 @@ public sealed class AmethystSavedSnapshotTests
         using var world = new AmethystSnapshotWorld();
         using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
         using var scope = AmethystSnapshotContext.Use(service.CaptureSavedSnapshot());
-        var result = RecordsTools.Records(service, types: ["WEAP"], format: "json");
+        var result = RecordsTools.Records(service, types: new[] { "WEAP" }, format: "json");
         Assert.Contains("SnapshotBeta", result);
         Assert.DoesNotContain("SnapshotAlpha", result);
         Assert.DoesNotContain("SnapshotGamma", result);
-        Assert.Contains("SnapshotGamma", RecordsTools.Records(service, source: JsonSerializer.SerializeToElement("Dormant.esp"), types: ["WEAP"], format: "json"));
+        Assert.Contains("SnapshotGamma", RecordsTools.Records(service, source: JsonSerializer.SerializeToElement("Dormant.esp"), types: new[] { "WEAP" }, format: "json"));
 
         var (layer, error) = service.WriteArea.WithSourceChainForGuard(["Fixture.esp"], "from_source",
             (chain, failure) => (chain?.Arms.Single().Layer, failure));
@@ -712,7 +712,7 @@ public sealed class AmethystSavedSnapshotTests
         var snapshot = service.CaptureSavedSnapshot();
         using var scope = AmethystSnapshotContext.Use(snapshot);
         var output = Path.Combine(world.Root, "records.jsonl");
-        RecordsTools.Records(service, types: ["WEAP"], to_file: output, format: "json");
+        RecordsTools.Records(service, types: new[] { "WEAP" }, to_file: output, format: "json");
         var (manifest, _, error) = ResultArtifact.ReadIdentity(output, File.ReadAllText(output));
         Assert.Null(error);
         Assert.Equal(snapshot.Provenance, manifest!.AmethystSnapshot);

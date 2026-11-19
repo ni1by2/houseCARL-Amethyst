@@ -82,13 +82,17 @@ public static class CompileTools
         [Description("Optional. Absolute path to a mod-folder root of your choosing; houseCARL appends Scripts\\ unless the path already ends in it. patch= and into= are then ignored. Scripts load only from a mod's Scripts\\ folder, the manager's overwrite folder or the game's <Data>\\Scripts; elsewhere the .pex compiles with a warning that it will not deploy.")]
             string? out_path = null,
         [Description("Optional backend: 'caprica' or 'creation-kit'. If omitted, an explicitly configured CK compiler remains selected; otherwise Linux selects Caprica and Windows selects the CK compiler. No backend fallback occurs after a failure.")]
-            string? compiler_backend = null) => Guard.Tool(ToolNames.CompileScript, () =>
+            string? compiler_backend = null,
+        [Description("Confirms a later Amethyst redeployment may be required when writing into an existing staging folder.")]
+            bool confirm_amethyst_redeploy = false,
+        [Description("Confirms existing staging output may be immediately visible through a deployed symlink.")]
+            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.CompileScript, call =>
     {
-        // 1) the selected manager must be configured — the .pex lands under its staging/mods folder.
-        if (svc.ConfigPromptOrNull() is { } cfgPrompt) return cfgPrompt;
+        // 1) the selected manager must be configured — the .pex lands under the staging/mods folder.
+        if (svc.ConfigPromptOrNull() is { } cfgPrompt) return ToolAnswer.Refusal(cfgPrompt);
         // Lane exclusivity, out_path= first (it supersedes both); contract in docs/architecture/write-path.md.
         if (string.IsNullOrWhiteSpace(out_path) && LaneSentences.PatchIntoFolderRefusal(patch, into, ".pex") is { } patchInto)
-            return "error: " + patchInto;
+            return ToolAnswer.Refusal("error: " + patchInto);
         string? outputNote = !string.IsNullOrWhiteSpace(out_path) &&
                              (!string.IsNullOrWhiteSpace(patch) || !string.IsNullOrWhiteSpace(into))
             ? "note: out_path= was given, so patch=/into= are ignored (the .pex lands in out_path, not a houseCARL patch folder)."
@@ -97,16 +101,16 @@ public static class CompileTools
         // masked by a missing Linux Proton selection or compiler tool, since out_path= owns this lane by precedence.
         if (!string.IsNullOrWhiteSpace(out_path) &&
             PathArguments.NotAbsolute(out_path.Trim().Trim('"'), "out_path", "the mod-folder root to write into (houseCARL appends Scripts\\)", "C:\\MO2\\mods\\MyMod") is { } outputPathError)
-            return "error: " + outputPathError + (outputNote is null ? "" : "\n" + outputNote);
+            return ToolAnswer.Refusal("error: " + outputPathError + (outputNote is null ? "" : "\n" + outputNote));
 
         // 2) validate the script path.
         if (string.IsNullOrWhiteSpace(script))
-            return "error: no script given. Pass script= the full path to the .psc file to compile.";
+            return ToolAnswer.Refusal("error: no script given. Pass script= the full path to the .psc file to compile.");
         script = script.Trim().Trim('"');
         if (!File.Exists(script))
-            return $"error: no such file: '{script}'. Pass the full path to the .psc source.";
+            return ToolAnswer.Refusal($"error: no such file: '{script}'. Pass the full path to the .psc source.");
         if (!script.EndsWith(".psc", StringComparison.OrdinalIgnoreCase))
-            return $"error: '{Path.GetFileName(script)}' is not a .psc source file.";
+            return ToolAnswer.Refusal($"error: '{Path.GetFileName(script)}' is not a .psc source file.");
         script = Path.GetFullPath(script);
         var objectName = Path.GetFileNameWithoutExtension(script);
         var scriptDir = Path.GetDirectoryName(script)!;
@@ -124,27 +128,27 @@ public static class CompileTools
                 "creation-kit" => ToolDependency.PapyrusCompiler,
                 _ => (ToolDependency)(-1),
             };
-            if ((int)compilerDependency < 0) return "error: compiler_backend must be 'caprica' or 'creation-kit'; no compiler was run.";
+            if ((int)compilerDependency < 0) return ToolAnswer.Refusal("error: compiler_backend must be 'caprica' or 'creation-kit'; no compiler was run.");
         }
         else if (OperatingSystem.IsLinux() && bridge.Saved(ToolDependency.PapyrusCompiler) is { } savedCk)
         {
             selectedBackend = "creation-kit"; compilerDependency = ToolDependency.PapyrusCompiler;
             var validation = ToolBridge.Validate(ToolDependency.PapyrusCompiler, savedCk);
-            if (!validation.ok) return $"error: the configured Creation Kit compiler path is invalid ({validation.error}); fix it with {ToolNames.SetToolPath}(tool='papyrus_compiler', path=...). No Caprica fallback was attempted.";
+            if (!validation.ok) return ToolAnswer.Refusal($"error: the configured Creation Kit compiler path is invalid ({validation.error}); fix it with {ToolNames.SetToolPath}(tool='papyrus_compiler', path=...). No Caprica fallback was attempted.");
         }
         else if (OperatingSystem.IsLinux())
         { selectedBackend = "caprica"; compilerDependency = ToolDependency.Caprica; }
         else
         { selectedBackend = "creation-kit"; compilerDependency = ToolDependency.PapyrusCompiler; }
-        if (bridge.RequireOrPrompt(compilerDependency, out var compilerExe, svc.CompilerGameDirHints()) is { } toolPrompt) return toolPrompt;
+        if (bridge.RequireOrPrompt(compilerDependency, out var compilerExe, svc.CompilerGameDirHints()) is { } toolPrompt) return ToolAnswer.Refusal(toolPrompt);
         HousecarlCore.SteamProtonSelection? protonRunner = null;
         if (selectedBackend == "creation-kit" && OperatingSystem.IsLinux())
         {
             if (AmethystSnapshotContext.Current is not { } saved)
-                return "error: Creation Kit is a Windows executable; Linux execution requires the selected Amethyst Skyrim SE prefix and native Steam CompatToolMapping. Run it through an active Amethyst connection.";
+                return ToolAnswer.Refusal("error: Creation Kit is a Windows executable; Linux execution requires the selected Amethyst Skyrim SE prefix and native Steam CompatToolMapping. Run it through an active Amethyst connection.");
             try { protonRunner = HousecarlCore.SteamProtonResolver.Resolve(saved); }
-            catch (InvalidOperationException ex) { return "error: cannot resolve the selected Skyrim SE Proton runner: " + ex.Message; }
-            catch (Exception ex) { return $"error: cannot read the selected Skyrim SE Proton runner configuration ({ex.GetType().Name}: {ex.Message})."; }
+            catch (InvalidOperationException ex) { return ToolAnswer.Refusal("error: cannot resolve the selected Skyrim SE Proton runner: " + ex.Message); }
+            catch (Exception ex) { return ToolAnswer.Refusal($"error: cannot read the selected Skyrim SE Proton runner configuration ({ex.GetType().Name}: {ex.Message})."); }
         }
 
         // 4) caller extras: import_dirs= then the named set. An unknown set is refused and names the saved sets.
@@ -157,9 +161,9 @@ public static class CompileTools
             if (saved is null)
             {
                 var known = store.ImportSetNames();
-                return $"error: no saved import set named '{importSetName}'. " + (known.Count == 0
+                return ToolAnswer.Refusal($"error: no saved import set named '{importSetName}'. " + (known.Count == 0
                     ? "None are saved yet — pass import_dirs= once together with save_import_set= to create one."
-                    : "Saved sets: " + string.Join(", ", known) + ".");
+                    : "Saved sets: " + string.Join(", ", known) + "."));
             }
             callerExtras.AddRange(saved);
         }
@@ -206,9 +210,9 @@ public static class CompileTools
             if (gameDataSources is not null) candidates.Add(Path.Combine(gameDataSources, "TESV_Papyrus_Flags.flg"));
             flagsFile = candidates.FirstOrDefault(File.Exists) ?? "";
             if (flagsFile.Length == 0)
-                return "error: Caprica requires the actual Skyrim TESV_Papyrus_Flags.flg definitions; none were found beside the selected Skyrim install or its vanilla source directory. Set a valid CK compiler path or select compiler_backend='creation-kit'.";
+                return ToolAnswer.Refusal("error: Caprica requires the actual Skyrim TESV_Papyrus_Flags.flg definitions; none were found beside the selected Skyrim install or its vanilla source directory. Set a valid CK compiler path or select compiler_backend='creation-kit'.");
         }
-        if (!File.Exists(flagsFile)) return $"error: the selected Skyrim Papyrus flags file is missing: '{flagsFile}'. No compiler was run.";
+        if (!File.Exists(flagsFile)) return ToolAnswer.Refusal($"error: the selected Skyrim Papyrus flags file is missing: '{flagsFile}'. No compiler was run.");
         // The warning rides along whenever the scan ran, on either branch.
         var plan = PlanImports(script, scriptDir, compilerExe!, callerExtras, autoRoots, auto_imports, importSetName,
                                autoWarning, gameDataSources, scanFailed, useGameDataVanilla: selectedBackend == "caprica",
@@ -217,9 +221,9 @@ public static class CompileTools
         // The whole path travels as one `-i=` argument, so a path past the command-line cap is refused with the way out.
         var joinedLength = string.Join(";", plan.Dirs).Length;
         if (joinedLength > 30_000)
-            return $"error: the assembled import path is too long for one compiler command line ({plan.Dirs.Count} dirs, " +
+            return ToolAnswer.Refusal($"error: the assembled import path is too long for one compiler command line ({plan.Dirs.Count} dirs, " +
                    $"{joinedLength} chars; the limit is about 32000). Re-run with auto_imports=false and pass only the " +
-                   "dependencies this script needs via import_dirs= (save_import_set= will keep that list for next time).";
+                   "dependencies this script needs via import_dirs= (save_import_set= will keep that list for next time).");
 
         // 7) output folder: out_path= is user-owned, takes Scripts\ appended, and supersedes patch=/into= saying so.
         OutputLocations.RiderFolder rf;
@@ -228,12 +232,12 @@ public static class CompileTools
         {
             try { rf = svc.ResolveExplicitScriptFolder(out_path, out deployWarning); }
             // The ignored-lane note rides the refusal too — it is still true of the call about to be retyped.
-            catch (InvalidOperationException ex) { return "error: " + ex.Message + (outputNote is null ? "" : "\n" + outputNote); }
+            catch (InvalidOperationException ex) { return ToolAnswer.Refusal("error: " + ex.Message + (outputNote is null ? "" : "\n" + outputNote)); }
         }
         else
         {
             try { rf = svc.ResolveCompiledScriptFolder(patch, into); }
-            catch (InvalidOperationException ex) { return "error: " + ex.Message; }
+            catch (InvalidOperationException ex) { return ToolAnswer.Refusal("error: " + ex.Message); }
         }
 
         // 8) compile into a private empty directory under Amethyst; only validated bytes enter staging.
@@ -261,12 +265,12 @@ public static class CompileTools
                 var produced = Directory.EnumerateFiles(outputDir, "*", SearchOption.TopDirectoryOnly).ToArray();
                 var pexPath = Path.Combine(outputDir, objectName + ".pex");
                 if (produced.Length != 1 || !string.Equals(Path.GetFullPath(produced[0]), Path.GetFullPath(pexPath), StringComparison.OrdinalIgnoreCase))
-                    return "error: the compiler did not produce exactly the expected PEX file in its private output directory; nothing was published.";
+                    return ToolAnswer.Refusal("error: the compiler did not produce exactly the expected PEX file in its private output directory; nothing was published.");
                 PexFile parsed;
                 try { parsed = PexFile.CreateFromFile(pexPath, GameCategory.Skyrim); }
-                catch (Exception ex) { return $"error: compiler output '{Path.GetFileName(pexPath)}' is not a valid Skyrim PEX ({ex.Message}); nothing was published."; }
+                catch (Exception ex) { return ToolAnswer.Refusal($"error: compiler output '{Path.GetFileName(pexPath)}' is not a valid Skyrim PEX ({ex.Message}); nothing was published."); }
                 if (parsed.Objects.Count != 1 || !string.Equals(parsed.Objects[0].Name, objectName, StringComparison.OrdinalIgnoreCase))
-                    return $"error: compiler output did not contain exactly the requested Skyrim script '{objectName}'; nothing was published.";
+                    return ToolAnswer.Refusal($"error: compiler output did not contain exactly the requested Skyrim script '{objectName}'; nothing was published.");
                 var destination = Path.Combine(rf.OutputDir, objectName + ".pex");
                 if (transactional)
                 {
@@ -298,7 +302,7 @@ public static class CompileTools
         if (selectedBackend == "caprica" && compilerExe is not null && HousecarlCore.PapyrusCompile.ProbeCapricaVersion(compilerExe) is { } capricaVersion)
             rendered += $" Caprica version: {capricaVersion}.";
         if (transactional && !result.Success) rendered = "error: " + rendered;
-        return rendered;
+        return ToolAnswer.Outcome(result.Success, rendered);
     });
 
     /// <summary>Split a ';'-separated import-dir spec into trimmed, unquoted directories, dropping blanks.</summary>

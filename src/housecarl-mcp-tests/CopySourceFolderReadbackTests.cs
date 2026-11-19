@@ -59,7 +59,7 @@ public sealed class TwoDisabledDonorsWorld : IDisposable
         var baseKey = new ModKey("HcBase", ModType.Master);
         var raceFk = new FormKey(baseKey, 0x800);
         var baseMod = new SkyrimMod(baseKey, SkyrimRelease.SkyrimSE);
-        baseMod.Races.Add(new Race(raceFk, SkyrimRelease.SkyrimSE) { EditorID = "HcTwoRace" });
+        baseMod.Races.Add(new Race(raceFk, SkyrimRelease.SkyrimSE) { EditorID = "HcTwoRace", Flags = Race.Flag.FaceGenHead });
         Write(baseMod, "BaseMod");
 
         var donorKey = new ModKey("Donor", ModType.Plugin);
@@ -148,7 +148,7 @@ public sealed class CopySourceFolderReadbackTests : IDisposable
 
     string Copy(string patch) => CopyTools.Copy(
         _w.Svc, _w.Fid(_w.DonorNpc), new[] { "Override.esp", "Donor.esp" }, Seeds,
-        new[] { "Race:refuse" }, null, "HcTwoClone", patch, null);
+        Walks.Excl("Race:refuse"), null, "HcTwoClone", patch, null);
 
     /// <summary>The folder named for a given source arm, read out of the readback the way a caller reads it. The
     /// delimiter is the double quote a Windows folder name cannot contain, so a name holding an apostrophe or a
@@ -212,6 +212,7 @@ public sealed class CopySourceFolderReadbackTests : IDisposable
             .SelectMany(d => Directory.EnumerateFiles(d, "*.esp")).Single();
         var cloneKey = CloneKeyIn(patchPath);
 
+        // By formid: the patch is not enabled, and place reads the clone off the into= patch.
         var placed = PlaceTools.Place(_w.Svc, new[]
         {
             new PlaceTarget { Formid = $"{cloneKey.ID:X6}:{cloneKey.ModKey.FileName}", Kind = "mesh",
@@ -226,7 +227,7 @@ public sealed class CopySourceFolderReadbackTests : IDisposable
         // …and the folder a caller would otherwise reach for — the one the RECORD came from — does not have it.
         var wrong = PlaceTools.Place(_w.Svc, new[]
         {
-            new PlaceTarget { Formid = $"{cloneKey.ID:X6}:{cloneKey.ModKey.FileName}", Kind = "mesh",
+            new PlaceTarget { Path = FaceGenPath.For(cloneKey, FaceGenSlot.Mesh),
                               Source = _w.FaceRel, SourceProvider = TwoDisabledDonorsWorld.OverrideFolder },
         }, patch: "HcTwoWrong");
         Assert.Contains(TwoDisabledDonorsWorld.OverrideFolder, wrong);
@@ -258,7 +259,7 @@ public sealed class CopyEnabledDonorFolderTests : IDisposable
 
     string Copy(string source, string patch) => CopyTools.Copy(
         _w.Svc, _w.Fid(_w.DonorNpc), new[] { source }, Seeds,
-        new[] { "Race:refuse" }, null, "HcEnabledClone", patch, null);
+        Walks.Excl("Race:refuse"), null, "HcEnabledClone", patch, null);
 
     [Fact]
     public void AnActivePluginSourceNamesTheModFolderItLivesIn()
@@ -323,7 +324,7 @@ public sealed class CopyUnregisteredSourceFolderTests : IDisposable
     {
         var r = CopyTools.Copy(
             _w.Svc, _w.Fid(_w.DonorNpc), new[] { "Fresh.esp", "Donor.esp" }, Seeds,
-            new[] { "Race:refuse" }, null, "HcFreshClone", "HcFreshFolder", null);
+            Walks.Excl("Race:refuse"), null, "HcFreshClone", "HcFreshFolder", null);
 
         Assert.False(r.StartsWith("error:", StringComparison.Ordinal), "refused: " + r.Split('\n')[0]);
         var line = r.Split('\n').Single(l => l.StartsWith($"note: '{TwoDisabledDonorsWorld.UnregisteredFolder}'",
@@ -353,7 +354,7 @@ public sealed class CopyReservedFolderNameTests : IDisposable
     {
         var r = CopyTools.Copy(
             _w.Svc, _w.Fid(_w.DonorNpc), new[] { "Collide.esp", "Donor.esp" }, Seeds,
-            new[] { "Race:refuse" }, null, "HcReservedClone", "HcReservedFolder", null);
+            Walks.Excl("Race:refuse"), null, "HcReservedClone", "HcReservedFolder", null);
 
         Assert.False(r.StartsWith("error:", StringComparison.Ordinal), "refused: " + r.Split('\n')[0]);
         Assert.Contains($"Collide.esp (MO2 mod folder \"{TwoDisabledDonorsWorld.ReservedNameFolder}\"", r);
@@ -373,7 +374,7 @@ public sealed class CopyReservedFolderNameTests : IDisposable
 
         var placed = PlaceTools.Place(_w.Svc, new[]
         {
-            new PlaceTarget { Formid = _w.Fid(_w.DonorNpc), Kind = "mesh",
+            new PlaceTarget { Path = _w.FaceRel,
                               Source = _w.FaceRel, SourceProvider = TwoDisabledDonorsWorld.ReservedNameFolder },
         }, patch: "HcReservedPlace");
 

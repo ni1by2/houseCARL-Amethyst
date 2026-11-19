@@ -4,7 +4,8 @@ using SetupProgram = HousecarlSetup.Program;
 namespace HousecarlMcpTests;
 
 /// <summary>Migrated from the setup-update-lock-guard probe: re-running setup over a live install refuses before
-/// any copy, and a held file the pre-flight cannot see is caught mid-copy.</summary>
+/// any copy, and a held file the pre-flight cannot see is caught mid-copy. T1 pins the Codex skill record of the
+/// clean install the others start from.</summary>
 [Collection(SetupInstallerCollection.Name)]
 [Trait("tier", "unit")]
 public sealed class SetupUpdateLockTests
@@ -21,25 +22,18 @@ public sealed class SetupUpdateLockTests
         SetupInstallerSandbox.WriteFile(Path.Combine(box.Src, "server", "housecarl-mcp.exe"), ExeV1);
         SetupInstallerSandbox.WriteFile(Path.Combine(box.Src, "server", "Mutagen.Bethesda.dll"), new byte[] { 9 });
         SetupInstallerSandbox.WriteFile(Path.Combine(box.Src, "skills", "demo-skill", "SKILL.md"), "demo");
-        SetupInstallerSandbox.WriteFile(Path.Combine(box.UmbrellaPackageDir, "SKILL.md"), "umbrella");
     }
 
-    // T1: a clean first install succeeds, and the umbrella packed where the packager puts it lands at ~/.agents/skills/housecarl.
+    // T1: a clean install's Codex skill record names exactly the shipped skills, so no later prune or uninstall
+    // can take a foreign folder off the shared root. Pins unchanged behaviour.
     [Fact]
-    public void ACleanInstallLandsTheUmbrellaWhereThePackagerPutsIt()
+    public void ACleanInstallRecordsExactlyTheShippedSkills()
     {
-        var (packaged, why) = SetupInstallerSandbox.CodexPackagePath();
-        Assert.True(packaged is not null, why);
-
         using var box = new SetupInstallerSandbox();
         WriteLockPackage(box);
 
-        var clean = box.Install(SetupProgram.Target.Both);
-
-        Assert.Equal(SetupProgram.InstallOutcome.Installed, clean.Outcome);
-        Assert.True(File.Exists(SetupProgram.ClaudeDestExe(box.Home)));
-        Assert.True(File.Exists(SetupProgram.CodexDestExe(box.Home, box.Home)));
-        Assert.True(File.Exists(Path.Combine(SetupProgram.CodexSkillsRoot(box.Home), "housecarl", "SKILL.md")));
+        Assert.Equal(SetupProgram.InstallOutcome.Installed, box.Install(SetupProgram.Target.Both).Outcome);
+        Assert.Equal(new[] { "demo-skill" }, File.ReadAllLines(SetupProgram.CodexSkillRecord(box.Home, box.Home)));
     }
 
     // T2: with the Claude server exe held, the re-install refuses at pre-flight: no copy ran and the exe is byte-intact.

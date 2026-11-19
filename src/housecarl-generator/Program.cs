@@ -14,11 +14,14 @@ using HousecarlGenerator;
 // pass cost on a real order. Needs a live MO2 instance (or --plugin), so it is a manual harness, not a CI probe.
 if (args.Length > 0 && args[0] == "parent-in-hand") return ParentInHandProbe.Run(args[1..]);
 
+// Print the skill paragraphs generated from the runtime-format source into their committed regions (RuntimeFormatSourceTests holds them).
+if (args.Length > 0 && args[0] == "skill-text") return RuntimeFormatSkillText.Run(args[1..]);
+
 // Maintenance diagnostic: re-verify the mutable-collection whitelist on a Mutagen bump.
 if (args.Length > 0 && args[0] == "vocab") return Probe.RunVocab();
 
 // SkyPatcher harness: the whole-layer scan + INI-vs-INI conflict report off a LIVE MO2 instance, rendered
-// exactly as housecarl_skypatcher_layer returns it.
+// exactly as housecarl_layer returns it.
 if (args.Length > 0 && args[0] == "skypatcher-layer") return SkyPatcherHarness.RunLayer(args[1..]);
 
 // Index-build resilience: is group enumeration resumable past a parse throw?
@@ -50,6 +53,9 @@ if (args.Length > 0 && args[0] == "f1-measure") return F1MeasureProbe.Run(args[1
 
 // EXPLORATORY: does the successor reach a FaceGen beside the SECOND donor-side plugin?
 if (args.Length > 0 && args[0] == "f1-i14") return F1MeasureProbe.RunI14(args[1..]);
+
+// EXPLORATORY: the root-only listing door's cost against today's root glob, and the four distributor formats' discovery and parse, on a live instance.
+if (args.Length > 0 && args[0] == "distributor-front") return DistributorFrontProbe.Run(args[1..]);
 
 // One-shot verify: confirm the xEdit 4-char signature reflection path.
 if (args.Length > 0 && args[0] == "sig") return Probe.RunSig();

@@ -23,6 +23,12 @@ A json document is never a silently degraded mode. Truncation drops trailing ROW
 alongside `rendered`); it is never a cut of the serialized string at a byte budget, which would emit malformed JSON.
 The accounting and the notes ride inside the document rather than beside it.
 
+A row that is all here but not whole says so at the top too. When a record's deep read was cut at its line budget,
+the document carries `records_cut`, `cut_budget` and `cut_note` (the statement naming the first three cut records,
+the budget and the remedy), written by `JsonWire.WriteCuts` only when a rendered row was cut; an uncut document
+carries none of them. The delta and tree forms keep `records_cut` among their counts, so a `counts_only` census
+counts the cut rows without naming them.
+
 ### One leaf shape
 
 Every entry of a record's `fields` array, inline and in a `to_file` row, is `{path, value}` or `{path, note}`,
@@ -262,8 +268,8 @@ own lane can survive.
 `WriteNullableStringArray`, `WriteCapOverrun`, `MeasureUnit`); `src/housecarl-mcp/RenderCap.cs` holds
 `RenderCap.Overran`, the sentence the overrun member carries; `src/housecarl-mcp/SkseJsonDoc.cs` holds
 `SkseJsonDoc.Write`, `Fits` and `TailReserve` for the `housecarl_skse` family documents; `src/housecarl-mcp/ToolFrontWire.cs`
-holds the transport helpers every tool front shares on `Wire`: the `format=` switch (`WantsJson`), the one refusal
-render (`Refuse`, `RefusalPrefix`), the epoch stamp (`EpochLine`, `EpochInline`) and the char budgets
+holds the transport helpers every tool front shares on `Wire`: the `format=` switch (`WantsJson`), the refusal
+prefix (`RefusalPrefix`, which `ToolAnswer.Refusal` strips on json), the epoch stamp (`EpochLine`, `EpochInline`) and the char budgets
 (`DefaultMaxChars`, `ReadbackMaxChars`, `ContestedHostsShown`). That file is the transport switch for both lanes,
 text and json, which is why it is covered here although the epoch stamp it holds is the text lane's. Entry point:
 `format="json"` on every tool that takes it.

@@ -31,6 +31,7 @@ public sealed class SkyPatcherOverlayWeaponReplay
         var resolver = new StubResolver();
         resolver.Plugins.Add("HcSpOv.esp");
         resolver.EditorIds["HcNamedKeyword"] = KEid;
+        resolver.EditorIds["HcTestSword"] = weap.FormKey;   // the sword's own name, as the game's EditorID map holds it
 
         const string me = "HcSpOv.esp|800";
         Weapon = weap;
@@ -42,9 +43,9 @@ public sealed class SkyPatcherOverlayWeaponReplay
             Line("z.ini", 2, "filterByWeapons=HcTestSword:attackDamageToAdd=11"),
             Line("z.ini", 3, $"filterByWeapons={me}:critDamageSetToBase=true"),
             Line("z.ini", 4, $"filterByWeapons={me}:mirrorWeapon=Skyrim.esm|139B9"),
-            Line("z.ini", 5, $"filterByWeapons={me}:restrictToSkills=twohanded:speed=9"),
-            Line("z.ini", 25, $"filterByWeapons={me}:restrictToSkills=onehanded:speed=6"),
-            Line("z.ini", 26, $"filterByWeapons={me}:filterByHasAmmoFromWeaponList=1:stagger=7"),
+            Line("z.ini", 5, "filterByKeywords=HcKw.esp|802:restrictToSkills=twohanded:speed=9"),
+            Line("z.ini", 25, "filterByKeywords=HcKw.esp|802:restrictToSkills=onehanded:speed=6"),
+            Line("z.ini", 26, "filterByHasAmmoFromWeaponList=1:stagger=7"),
             Line("z.ini", 27, "filterByModNames=HcSpOv.esp:rangeMin=11"),
             Line("z.ini", 28, "filterByModNamesExcluded=HcSpOv.esp:rangeMin=99"),
             Line("z.ini", 6, $"filterByWeapons={me}:notAnOp=1"),

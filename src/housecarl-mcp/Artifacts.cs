@@ -13,8 +13,8 @@ internal sealed record SpillInfo(string Path, ResultArtifact.Manifest Manifest, 
     /// <summary>Rows exist that <see cref="ResultArtifact.Manifest.Total"/> cannot count (a seed the call never tried); the manifest's notes say which.</summary>
     public bool Partial { get; init; }
 
-    /// <summary>The file holds every row there is.</summary>
-    public bool Complete => !Partial && Manifest.Total == Manifest.RowCount;
+    /// <summary>The file holds every row there is, each one whole.</summary>
+    public bool Complete => !Partial && Manifest.Total == Manifest.RowCount && Manifest.RecordsCut == 0;
 
     /// <summary>What writing this artifact's DETAIL rows cost, in milliseconds; null when its rows read no body, so a render states a cost only where one was incurred (#582).</summary>
     public long? RenderMs { get; init; }
@@ -52,20 +52,26 @@ internal static class Artifacts
         // "complete result" is claimed only when the file holds every match; the sentence names the WINDOW, since
         // offset= alone makes one too and there the missing matches are the ones before it.
         bool whole = s.Complete, counted = m.Total == m.RowCount;
+        // Every row is in the file but some are cut: neither a complete result nor a window.
+        bool cutOnly = !whole && counted && !s.Partial;
         sb.Append('\n')
-          .Append(whole ? "spilled: complete result (" : "spilled: the returned WINDOW (")
+          .Append(whole ? "spilled: complete result (" : cutOnly ? "spilled: every row, NOT every row whole (" : "spilled: the returned WINDOW (")
           .Append(m.RowCount).Append(m.RowCount == 1 ? " row" : " rows")
           .Append(counted ? "" : $" of {m.Total} total matches")
+          .Append(m.RecordsCut > 0 ? $", {m.RecordsCut} cut" : "")
           .Append(") -> ").Append(s.Path).Append('\n')
           .Append(s.ToFile
               ? "  written at your request (to_file=): only this manifest is rendered inline.\n"
               : whole
                   ? "  the inline render hit max_chars, so the COMPLETE result was auto-spilled (nothing is lost; the rows above are a prefix).\n"
-                  : $"  the inline render hit max_chars; the spilled WINDOW is complete in the file, but the {m.Total - m.RowCount} matches outside the returned window are in NO file — widen the window with limit= and offset=, or use to_file= for the full result.\n")
+                  : cutOnly
+                      ? "  the inline render hit max_chars, so every row was auto-spilled (the rows above are a prefix); the cut rows are cut in the file too.\n"
+                      : $"  the inline render hit max_chars; the spilled WINDOW is complete in the file, but the {m.Total - m.RowCount} matches outside the returned window are in NO file — widen the window with limit= and offset=, or use to_file= for the full result.\n")
           .Append("  manifest: rows=").Append(m.RowCount)
           .Append(counted ? "" : $" of total={m.Total}")
           .Append("  identity=").Append(m.Identity ?? "<none>")
           .Append("  epoch=").Append(m.Epoch.Length > 0 ? m.Epoch : "<none>").Append('\n');
+        if (m.CutNote is { } cut) sb.Append("  cut: ").Append(cut).Append('\n');
         // The stamp's caveats beside it, not only inside the file: this block is all a to_file= caller sees (§2.1.1).
         if (s.EpochUnavailable is { Length: > 0 } why)
             sb.Append("  epoch: NONE — the load order could not be read for a fingerprint right now. ").Append(why)
@@ -107,6 +113,12 @@ internal static class Artifacts
         w.WriteNumber("total", m.Total);
         // Stated, not left derivable: false means the file is a window and the matches beyond it are in no file.
         w.WriteBoolean("complete", s.Complete);
+        if (m.RecordsCut > 0)
+        {
+            w.WriteNumber("records_cut", m.RecordsCut);
+            if (m.CutBudget is { } b) w.WriteNumber("cut_budget", b);
+            if (m.CutNote is { } cut) w.WriteString("cut_note", cut);
+        }
         if (m.Identity is null) w.WriteNull("identity"); else w.WriteString("identity", m.Identity);
         w.WriteStartArray("row_schema");
         foreach (var c in m.RowSchema) w.WriteStringValue(c);
@@ -150,7 +162,7 @@ internal static class Artifacts
         bool resolveNames, bool winnerFields, int depth,
         ArtifactTarget target, string reason, IReadOnlyList<KeyValuePair<string, string>> query,
         LeverNames? levers = null, int rowCap = int.MaxValue, FoldPlan? fold = null,
-        CancellationToken ct = default)
+        CancellationToken ct = default, int? lineBudget = null)
     {
         using var writer = new ResultArtifact.Writer();
         string[] schema;
@@ -176,7 +188,8 @@ internal static class Artifacts
             var foldDepths = fold?.Read().Depths;   // the quantified paths' depth, and the caller's own for the rest
             // The same reader the inline renders use; a cancel throws before Save, so no half artifact reaches disk.
             using var reader = new ScanDetailReader(svc, q, fields, depth, resolveNames, winnerFields,
-                                                    (levers ?? LeverNames.Legacy).ContainerHint, foldDepths, ct, wholePass: true);
+                                                    (levers ?? LeverNames.Legacy).ContainerHint, foldDepths, ct, wholePass: true,
+                                                    lineBudget: lineBudget);
             for (int i = 0; i < q.Keys.Count; i++)
             {
                 var fk = q.Keys[i];
@@ -196,7 +209,7 @@ internal static class Artifacts
                     });
                 else
                     // The row writer's own truncation note needs the caller's vocabulary, never a parameter that tool lacks.
-                    writer.WriteRow((w, ms) => JsonWire.WriteReadRecord(w, o, ms, rowCap, matches, levers: levers), o.Record!.Type);
+                    writer.WriteRow((w, ms) => JsonWire.WriteReadRecord(w, o, ms, rowCap, matches, levers: levers), o.Record!.Type, o.Record);
             }
         }
         else                                                                  // summary rows
@@ -278,7 +291,7 @@ internal static class Artifacts
                     w.WriteEndObject();
                 });
             else
-                writer.WriteRow((w, ms) => JsonWire.WriteReadRecord(w, o, ms, rowCap, hit, levers: levers), o.Record!.Type);
+                writer.WriteRow((w, ms) => JsonWire.WriteReadRecord(w, o, ms, rowCap, hit, levers: levers), o.Record!.Type, o.Record);
         }
         // The batch's one build; a batch of pure parse failures carries "", which refuses re-entry against any build.
         var epoch = outcomes.FirstOrDefault(o => o.Epoch is not null)?.Epoch ?? "";
@@ -298,8 +311,11 @@ internal static class Artifacts
     {
         using var writer = new ResultArtifact.Writer();
         foreach (var row in rows)
+        {
             writer.WriteRow((w, ms) => JsonWire.WriteDeltaRow(w, row, ms, int.MaxValue),
                             row.Error is null ? row.Subject?.RecordType : null);
+            if (row.CutAt is { } at) writer.Cuts.AddCompared(row.Formid, row.Subject?.EditorId, at);
+        }
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
                                           WithWinner(new[] { "formid", "type", "editorid", "editorid_note?", "subject", "reference", "stack_above?", "note?", "complete", "deltas", "delta_count", "no_verdict_count", "not_on_type?", "nothing_compared?", "agreed_count", "matched_list_count", "matched_item_count", "both_absent_count", "present_null_link_count", "unresolved_string_count" },
                                                      "stack_above?", rows.Any(r => r.StackWinner is not null)),
@@ -314,8 +330,11 @@ internal static class Artifacts
     {
         using var writer = new ResultArtifact.Writer();
         foreach (var row in rows)
+        {
             writer.WriteRow((w, ms) => JsonWire.WriteTreeRow(w, row, ms, int.MaxValue, LeverNames.Records),
                             row.Error is null ? row.Type : null);   // a records-only artifact: the rows speak the records vocabulary
+            if (row.CutAt is { } at) writer.Cuts.AddCompared(row.Formid, row.EditorId, at);
+        }
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
                                           WithWinner(new[] { "formid", "type", "editorid", "editorid_note?", "reference", "touchers", "child_declarers?", "nodes" },
                                                      "touchers", rows.Any(r => r.WinnerAt >= 0 && r.WinnerAt != r.Touchers.Count - 1)),
@@ -342,7 +361,7 @@ internal static class Artifacts
             writer.WriteRow((w, ms) => { JsonWire.WriteChainRow(w, row, ms, int.MaxValue); },
                             row.Error is null ? row.Type : null);
         var (manifest, err) = writer.Save(target, ToolNames.Records, query, "formid",
-                                          new[] { "formid", "type", "editorid", "nodes", "cycles?", "truncation?", "template_inheritance?" },
+                                          new[] { "formid", "error?", "type", "editorid", "nodes", "cycles?", "cycles_capped?", "truncation?", "note?", "template_inheritance?" },
                                           "input order", rows.Count, epoch ?? "", ManifestNotes(scan));
         return err is not null ? (null, err) : (new SpillInfo(target.Path, manifest!, reason), null);
     }
@@ -428,9 +447,14 @@ internal static class Artifacts
             foreach (var t in parsed) if (t.Length > 0) yield return t;
             yield break;
         }
-        foreach (var t in content.Split(commaSeparates ? ListSeparators : LineSeparators, StringSplitOptions.RemoveEmptyEntries))
+        if (commaSeparates)
         {
-            var tok = commaSeparates ? t.Trim('[', ']', '"', '\'', ' ', '\t') : t.Trim('"', ' ', '\t');
+            foreach (var t in ListFile.SplitCommaList(content)) yield return t;
+            yield break;
+        }
+        foreach (var t in content.Split(LineSeparators, StringSplitOptions.RemoveEmptyEntries))
+        {
+            var tok = t.Trim('"', ' ', '\t');
             if (tok.Length > 0) yield return tok;
         }
     }
@@ -448,64 +472,7 @@ internal static class Artifacts
         catch (JsonException) { return null; }
     }
 
-    static readonly char[] ListSeparators = { ',', '\r', '\n' };
     static readonly char[] LineSeparators = { '\r', '\n' };
-
-    /// <summary>Expand a list-valued tool input under the <c>@file</c> convention: one <c>"@&lt;absolute path&gt;"</c> element stands in place of the whole list, never splicing, and an artifact also yields the epoch demand the consuming call must check.
-    /// <para><paramref name="identity"/> is the column this parameter's list is made of — "formid" on the record lanes' FormID lists, "path" on the asset lane, "plugin" on a plugin-filename list. Only a "formid" list splits on commas; every other identity is a list of names in which a comma is legal, so it splits on line breaks. Re-entry contract in docs/architecture/output-and-artifacts.md.</para>
-    /// <para><paramref name="spelling"/> is how a caller writes the parameter, <c>{0}</c> standing for the list, when that is not <c>name=[…]</c>; a refusal's remedy names it so it is a spelling the tool accepts.</para></summary>
-    public static (string[]? Tokens, ArtifactDemand? Demand, string? EchoSource, string? Error) ExpandListInput(
-        string[] items, string paramName, string identity = "formid", string? spelling = null)
-    {
-        // The null/length guards keep a whitespace-only element on the per-item "not a FormID" path.
-        int atCount = items.Count(i => i is not null && i.TrimStart() is { Length: > 0 } t && t[0] == '@');
-        if (atCount == 0) return (items, null, null, null);
-        var label = paramName + "=";
-        var alone = spelling is null ? $"{paramName}=[\"@<path>\"]" : string.Format(spelling, "\"@<path>\"");
-        if (items.Length > 1)
-            return (null, null, null, $"error: {label} mixes an '@file' entry with inline entries — '@<path>' stands IN PLACE OF the whole list. " +
-                                      $"Pass {alone} alone, or put every entry in the file.");
-        var path = items[0].TrimStart().Substring(1).Trim().Trim('"', '\'');
-        if (path.Length == 0)
-            return (null, null, null, $"error: {label} '@' names a list file but no path follows it — pass {alone}.");
-        if (PathArguments.NotAbsolute(path, $"{label} list file", "the file the list is in",
-                identity.Equals("formid", StringComparison.OrdinalIgnoreCase) ? "C:\\work\\list.jsonl" : "C:\\work\\list.txt") is { } notAbsolute)
-            return (null, null, null, "error: " + notAbsolute);
-        string content;
-        try { content = File.ReadAllText(path); }
-        catch (Exception ex) { return (null, null, null, $"error: could not read {label} list file '{path}' — {ex.GetType().Name}: {ex.Message}"); }
-
-        if (ResultArtifact.LooksLikeArtifact(content))
-        {
-            var (manifest, tokens, aerr) = ResultArtifact.ReadIdentity(path, content);
-            if (aerr is not null) return (null, null, null, "error: " + aerr);
-            if (!manifest!.Identity!.Equals(identity, StringComparison.OrdinalIgnoreCase))
-                return (null, null, null, $"error: artifact '{path}' (from {manifest.Tool}) carries '{manifest.Identity}' identities, " +
-                                          $"not '{identity}' ones — there is no {identity} list in it for {label}.");
-            return (tokens!.ToArray(), new ArtifactDemand(path, manifest.Epoch), "@" + path, null);
-        }
-
-        // Only a FormID list splits on commas; a path or plugin list splits on line breaks ONLY — see SplitListTokens.
-        bool commaSeparates = identity.Equals("formid", StringComparison.OrdinalIgnoreCase);
-        var plain = SplitListTokens(content, commaSeparates).ToArray();
-        if (plain.Length == 0)
-            return (null, null, null, $"error: {label} list file '{path}' is empty — give one entry per line"
-                                      + (commaSeparates ? " (or comma-separated)." : "."));
-        return (plain, null, "@" + path, null);
-    }
-
-    /// <summary>Expand a plugin-filename list under the <c>@file</c> convention, one filename per line, for every tool that takes one.
-    /// <para>A filename that itself starts with '@' is written '@@' inline; a list file's own lines are read as written.</para></summary>
-    public static (string[]? Names, string? EchoSource, string? Error) ExpandPluginList(
-        string[] items, string paramName, string? spelling = null)
-    {
-        static bool Escaped(string? i) => i is not null && i.TrimStart().StartsWith("@@", StringComparison.Ordinal);
-        bool anyFile = items.Any(i => i is not null && i.TrimStart().StartsWith('@') && !Escaped(i));
-        if (!anyFile)
-            return (items.Select(i => Escaped(i) ? i.TrimStart().Substring(1) : i).ToArray(), null, null);
-        var (names, _, echo, err) = ExpandListInput(items, paramName, identity: "plugin", spelling: spelling);
-        return (names, echo, err);
-    }
 
     // ---- to_file validation -------------------------------------------------------------------------
 

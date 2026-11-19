@@ -43,12 +43,12 @@ public static class CheckTools
              ".nif/.dds still resolve only through mod folders MO2 has enabled, so a script shipped only inside the " +
              "not-yet-enabled mod reads unverifiable, not clean, and that mod's own facegen files are not seen, so " +
              "its NPCs read as absent bakes. Facegen resolves an NPC's race against the active order only, so NPCs " +
-             "of a race the file itself adds are counted as race-unresolved, not classified. Takes [\"@<absolute path>\"] in place of the list, a file with one entry per line, each line read as written; a filename that itself starts with '@' is written '@@' inline.")]
-            string[]? plugins = null,
-        [Description("Optional. Record types to sweep — signatures ('WEAP') or catalog names ('Weapon'); several types sweep their union. The cheapest scope: records of other types are skipped before any link walk or .pex read.")]
-            string[]? types = null,
-        [Description("Optional. Sweep only these records ('0BCC84:Skyrim.esm', …) — the re-check after a fix.")]
-            string[]? formids = null,
+             "of a race the file itself adds are counted as race-unresolved, not classified." + ListText.Plugins)]
+            ListArg? plugins = null,
+        [Description("Optional. Record types to sweep — signatures ('WEAP') or catalog names ('Weapon'); several types sweep their union. The cheapest scope: records of other types are skipped before any link walk or .pex read." + ListText.Names)]
+            ListArg? types = null,
+        [Description("Optional. Sweep only these records ('0BCC84:Skyrim.esm', …) — the re-check after a fix." + ListText.FormIds)]
+            ListArg? formids = null,
         [Description("Optional. Sweep only records whose EditorID contains this substring (case-insensitive). A record with no EditorID never matches.")]
             string? editorid_contains = null,
         [Description("Optional. Scripts family only: report only findings whose property name contains this substring (case-insensitive). A record left with no matching finding drops out of the listing.")]
@@ -59,8 +59,8 @@ public static class CheckTools
              "filename with its extension ('CoolMod.esp') or a group: base_masters (the five the game ships with) or " +
              "implicit (every plugin the order force-loads without a plugins.txt line: Creation Club plugins, " +
              "_ResourcePack.esl, and the base masters). A group member not in this order is dropped. It does not " +
-             "change the vanilla baseline the errors family splits out (see limit=), which is always the base-master set. Takes [\"@<absolute path>\"] in place of the list, a file with one entry per line, each line read as written; a filename that itself starts with '@' is written '@@' inline.")]
-            string[]? exclude = null,
+             "change the vanilla baseline the errors family splits out (see limit=), which is always the base-master set." + ListText.Plugins)]
+            ListArg? exclude = null,
         [Description("Optional. Which finding families and classes to run. Families: " +
              "'errors', 'scripts', 'dialogue', 'facegen'. Classes: 'dangling', 'missing_masters' (errors); " +
              "'unbound_object' (high), 'unbound_scalar' (medium), 'unbound' (both), " +
@@ -115,14 +115,17 @@ public static class CheckTools
              "dropped, not a face bug), 'never_baked' (neither file, for the Player or a CharGen preset, which the " +
              "Creation Kit never bakes; counted in the header and listed only under its own token). It covers " +
              "every NPC_ in scope that needs a bake plus every facegen file on disk whose key resolves to nothing. " +
-             "An NPC whose template carries the Traits flag has no bake of its own: excluded and counted, never " +
-             "flagged. The file classes (inert, foreign_index) are reported only on an unscoped sweep; under " +
+             "An NPC whose face is not its own pair, or that Mutagen names no pair for (though the Creation Kit " +
+             "bakes some 0x100 NPCs all the same), is excluded and counted by reason, never flagged: it has the " +
+             "Traits flag with a Template set, its race has no FaceGenHead flag, it has the Traits flag with no " +
+             "Template, or ACBS flag 0x100; one count holds the rest (no race, a race not read, or no pair for " +
+             "another reason). The file classes (inert, foreign_index) are reported only on an unscoped sweep; under " +
              "plugins=, exclude= or a record scope they are out of scope, not orphaned. It reports which files and " +
              "records win, never the render: it cannot read a .dds's pixels or bake geometry, so a clean row is " +
              "not a promise the face looks right. Not this family: a purple or white face (a missing texture), " +
              "player-only grey (RaceMenu), a brown weight face (save-baked weight), or an appearance distributed " +
-             "at runtime by SPID. Causes and repairs: " + ReadSentences.FaceGenDocUrl + ".")]
-            string[]? findings = null,
+             "at runtime by SPID. Causes and repairs: " + ReadSentences.FaceGenDocUrl + "." + ListText.Names)]
+            ListArg? findings = null,
         [Description("Optional. true = only the header totals and each family's histograms, no per-plugin or per-record listing. Errors: dangling refs by target plugin (the absent dependency behind many findings) and by source plugin (vanilla baseline against what your mods introduced). Scripts: unbound by property name. Dialogue: the totals and the unreachable seeds, no per-topic blocks. Facegen: by class, and by owning mod (the mod that wins the bake, not the plugin that wins the record). Totals stay exact; limit= caps histogram rows instead. The cheap before/after comparison around a fix.")]
             bool counts_only = false,
         [Description("Optional. 'text' (default) or 'json' — the same data sectioned per family, with the totals/capped/truncated accounting in the document.")]
@@ -143,8 +146,8 @@ public static class CheckTools
              "FormIDs ('0F1AC1:Skyrim.esm'). A DIAL validates one topic; a QUST validates every topic that quest " +
              "owns, plus the quest's own subrecords and its .seq once; a DLVW or DLBR gets a record-level check " +
              "(a bare DLVW crashes the Creation Kit's Dialogue Views editor). plugins=/types=/formids=/" +
-             "editorid_contains=/exclude= do not scope it.")]
-            string[]? seeds = null,
+             "editorid_contains=/exclude= do not scope it." + ListText.FormIds)]
+            ListArg? seeds = null,
         [Description("Optional. Dialogue family only: one plugin not in the active load order, folded in where " +
              "MO2 would load it — the end of the order for a regular plugin, after the last master for a .esm/.esl " +
              "or an ESM-flagged one, and at its own slot when the order already carries the filename (a shadowed " +
@@ -163,35 +166,36 @@ public static class CheckTools
              "counts_only=true, but only after the sweep has run, so do not pair them.")]
             string? to_file = null,
         [Description("Optional. Max characters before the response stops with a notice. 0 = the server default (~40k). The budget is divided among the families that ran and their parts, not spent in series. Raise it for a quest that owns many topics.")]
-            int max_chars = 0) => Guard.Tool(ToolNames.Check, () =>
+            int max_chars = 0) => Guard.Tool(ToolNames.Check, call =>
     {
-        if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
+        if (svc.ConfigPromptOrNull() is { } prompt) return ToolAnswer.Refusal(prompt);
         bool json = Wire.WantsJson(format, out var fmtErr);
-        if (fmtErr is not null) return fmtErr;
-        if (!SweepFamilySelection.TryParse(findings, out var selection, out var famErr)) return Wire.Refuse(json, "error: " + famErr);
-        int lim = limit <= 0 ? 1000 : limit;
+        if (fmtErr is not null) return ToolAnswer.Refusal(fmtErr);
+        // Every list through the one door; a FormID artifact on formids= or seeds= is epoch-checked once the order is captured.
+        var pluginsIn = plugins.Read("plugins", ListKind.Plugin);
+        var typesIn = types.Read("types", ListKind.Name);
+        var formidsIn = formids.Read("formids", ListKind.FormId);
+        var excludeIn = exclude.Read("exclude", ListKind.Plugin);
+        var findingsIn = findings.Read("findings", ListKind.Name);
+        var seedsIn = seeds.Read("seeds", ListKind.FormId);
+        foreach (var listErr in new[] { pluginsIn.Error, typesIn.Error, formidsIn.Error, excludeIn.Error, findingsIn.Error, seedsIn.Error })
+            if (listErr is not null) return ToolAnswer.Refusal(json, listErr);
+        var (pluginNames, typeNames, ids, excludeNames, families, seedIds) =
+            (pluginsIn.Tokens, typesIn.Tokens, formidsIn.Tokens, excludeIn.Tokens, findingsIn.Tokens, seedsIn.Tokens);
+        var pluginsEcho = pluginsIn.EchoSource;
 
-        // plugins= and exclude= are plugin-filename lists, so they take the @file spelling housecarl_records' scope takes.
-        string? pluginsEcho = null;
-        if (plugins is { Length: > 0 })
-        {
-            var (names, echo, perr) = Artifacts.ExpandPluginList(plugins, "plugins");
-            if (perr is not null) return Wire.Refuse(json, perr);
-            plugins = names; pluginsEcho = echo;
-        }
-        if (exclude is { Length: > 0 })
-        {
-            var (names, _, xerr) = Artifacts.ExpandPluginList(exclude, "exclude");
-            if (xerr is not null) return Wire.Refuse(json, xerr);
-            exclude = names;
-        }
+        if (!SweepFamilySelection.TryParse(families, out var selection, out var famErr)) return ToolAnswer.Refusal(json, "error: " + famErr);
+        int lim = limit <= 0 ? 1000 : limit;
+        // The sweep's document, refused exactly when it carries the whole-call error the json document writes as ok:false.
+        ToolAnswer Answer(CheckSweep s) => ToolAnswer.Outcome(CheckOutcome.For(s).Error is null,
+            json ? JsonWire.RenderCheck(s, max_chars, lim) : CheckTextRender.RenderCheck(s, max_chars, lim));
 
         // What every family agrees is malformed, checked before any is dispatched and rendered through the normal
         // refusal path so format='json' still gets a document. Syntax refuses here, scope matching stays family-local.
-        if (SweepSharedInput.Error(svc, plugins, types, formids, editorid_contains, exclude) is { } inputErr)
+        if (SweepSharedInput.Error(svc, pluginNames, typeNames, ids, editorid_contains, excludeNames) is { } inputErr)
         {
             var refusal = new CheckSweep(selection, SharedInputError: inputErr);
-            return json ? JsonWire.RenderCheck(refusal, max_chars, lim) : CheckTextRender.RenderCheck(refusal, max_chars, lim);
+            return Answer(refusal);
         }
 
         // ---- the dialogue family's off-order fold ------------------------------------------------------
@@ -200,14 +204,14 @@ public static class CheckTools
         if (source is { } srcEl && srcEl.ValueKind is not (System.Text.Json.JsonValueKind.Null or System.Text.Json.JsonValueKind.Undefined))
         {
             if (!selection.Ran.Contains(SweepFamily.Dialogue))
-                return Wire.Refuse(json, "error: source= folds an off-order plugin into the DIALOGUE family's resolution, and this call runs no dialogue family — add findings=[\"dialogue\"] with seeds=, or drop source=. The swept families (errors, scripts, facegen) take an off-order plugin on plugins= instead, which sweeps that file's own records.");
+                return ToolAnswer.Refusal(json, "error: source= folds an off-order plugin into the DIALOGUE family's resolution, and this call runs no dialogue family — add findings=[\"dialogue\"] with seeds=, or drop source=. The swept families (errors, scripts, facegen) take an off-order plugin on plugins= instead, which sweeps that file's own records.");
             if (selection.Ran.Count > 1)
-                return Wire.Refuse(json, "error: source= folds an off-order plugin into the DIALOGUE family's resolution, and it is the only family with that arm — the swept families beside it in this call (errors, scripts, facegen) take an off-order plugin on plugins= instead, which sweeps the file's own records. Run findings=[\"dialogue\"] with source= on its own, and the swept families in their own call.");
-            if (ParseFoldPole(srcEl, out var foldPlugin, out var foldMod) is { } poleErr) return Wire.Refuse(json, poleErr);
+                return ToolAnswer.Refusal(json, "error: source= folds an off-order plugin into the DIALOGUE family's resolution, and it is the only family with that arm — the swept families beside it in this call (errors, scripts, facegen) take an off-order plugin on plugins= instead, which sweeps the file's own records. Run findings=[\"dialogue\"] with source= on its own, and the swept families in their own call.");
+            if (ParseFoldPole(srcEl, out var foldPlugin, out var foldMod) is { } poleErr) return ToolAnswer.Refusal(json, poleErr);
             var probe = svc.ProbeSourceArm(foldPlugin!, foldMod, out var probeErr);
-            if (probeErr is not null) return Wire.Refuse(json, "error: " + probeErr);
+            if (probeErr is not null) return ToolAnswer.Refusal(json, "error: " + probeErr);
             if (probe!.InOrder)
-                return Wire.Refuse(json, $"error: source='{probe.Plugin}' is ACTIVE in the load order, and the dialogue family already validates against the active order's winners — its records are what the check reads. Drop source=; it folds a plugin that is NOT enabled in MO2 into that resolution.", probe.Stamp);
+                return ToolAnswer.Refusal(json, $"error: source='{probe.Plugin}' is ACTIVE in the load order, and the dialogue family already validates against the active order's winners — its records are what the check reads. Drop source=; it folds a plugin that is NOT enabled in MO2 into that resolution.", probe.Stamp);
             dialogueFold = probe;
         }
 
@@ -217,24 +221,27 @@ public static class CheckTools
         // The order every family below answers from, captured once so the response root can say whether it had lost
         // plugins once for the whole call, rather than leaving the fact to whichever families ran (#353).
         var order = svc.CaptureView().Stamp;
+        foreach (var d in new[] { formidsIn.Demand, seedsIn.Demand })
+            if (d is { } demand && demand.Epoch != order.Epoch)
+                return ToolAnswer.Refusal(json, "error: " + RecordReads.ArtifactEpochMismatch(demand, order.Epoch));
         ErrorCheckResult? errors = null;
         ScriptCheckResult? scripts = null;
         if (selection.Ran.Contains(SweepFamily.Errors))
-            errors = svc.CheckErrors(plugins, lim, formids, editorid_contains, types,
-                                     SweepFindings.Tokens(selection.ErrorClasses), counts_only, exclude, offOrderMemo);
+            errors = svc.CheckErrors(pluginNames, lim, ids, editorid_contains, typeNames,
+                                     SweepFindings.Tokens(selection.ErrorClasses), counts_only, excludeNames, offOrderMemo);
         if (selection.Ran.Contains(SweepFamily.Scripts))
-            scripts = svc.ValidateScripts(plugins, lim, formids, editorid_contains,
-                                          types, property_contains, SweepFindings.Tokens(selection.ScriptClasses),
-                                          counts_only, exclude, offOrderMemo);
+            scripts = svc.ValidateScripts(pluginNames, lim, ids, editorid_contains,
+                                          typeNames, property_contains, SweepFindings.Tokens(selection.ScriptClasses),
+                                          counts_only, excludeNames, offOrderMemo);
         FaceGenCheckResult? facegen = null;
         if (selection.Ran.Contains(SweepFamily.Facegen))
-            facegen = svc.CheckFaceGen(plugins, lim, formids, editorid_contains, types,
-                                       FaceGenTokens(selection.FaceGenClasses), counts_only, exclude, offOrderMemo);
+            facegen = svc.CheckFaceGen(pluginNames, lim, ids, editorid_contains, typeNames,
+                                       FaceGenTokens(selection.FaceGenClasses), counts_only, excludeNames, offOrderMemo);
         DialogueCheckResult? dialogue = null;
         if (selection.Ran.Contains(SweepFamily.Dialogue))
             // Its own scope, not the plugins= list, since this family selects records. With no seeds it raises the
             // cost refusal rather than widening to the whole order.
-            dialogue = svc.CheckDialogue(seeds, lim, counts_only, dialogueFold);
+            dialogue = svc.CheckDialogue(seedIds, lim, counts_only, dialogueFold);
 
         // One call, one build: the root marker is a RESPONSE-level claim about the order every family answered from,
         // so a freshness rebuild between the captures is compared here and refused loud (#353).
@@ -256,7 +263,7 @@ public static class CheckTools
              ?? Seam(facegen?.Epoch, "facegen") ?? Seam(dialogue?.Epoch, "dialogue") ?? foldSeam) is { } seam)
         {
             var torn = new CheckSweep(selection, OrderSeamError: seam);
-            return json ? JsonWire.RenderCheck(torn, max_chars, lim) : CheckTextRender.RenderCheck(torn, max_chars, lim);
+            return Answer(torn);
         }
 
         var sweep = new CheckSweep(selection, errors, scripts, dialogue, facegen, Order: order);
@@ -267,26 +274,26 @@ public static class CheckTools
         {
             // The same validator the records surface runs: absolute, .jsonl, and outside the pruned results
             // directory.
-            if (Artifacts.ValidateToFile(path, svc.ResultsDir) is { } verr) return Wire.Refuse(json, verr);
+            if (Artifacts.ValidateToFile(path, svc.ResultsDir) is { } verr) return ToolAnswer.Refusal(json, verr);
             if (counts_only)
-                return Wire.Refuse(json, "error: counts_only= returns the histograms with no findings, and to_file= "
+                return ToolAnswer.Refusal(json, "error: counts_only= returns the histograms with no findings, and to_file= "
                                        + "writes the findings - the two contradict; drop one.");
             var query = new[]
             {
                 new KeyValuePair<string, string>("findings", string.Join(",", selection.Ran.Select(SweepFamilySelection.Token))),
-                new KeyValuePair<string, string>("plugins", plugins is { Length: > 0 } ? pluginsEcho ?? string.Join(",", plugins) : "<whole order>"),
+                new KeyValuePair<string, string>("plugins", pluginNames is { Length: > 0 } ? pluginsEcho ?? string.Join(",", pluginNames) : "<whole order>"),
                 new KeyValuePair<string, string>("limit", lim.ToString()),
             };
             // No family answered, so nothing is written and the sweep renders as it would without to_file=, which is
             // where every refusal's ground is already stated.
             if (CheckOutcome.For(sweep).Ran.Count == 0)
-                return json ? JsonWire.RenderCheck(sweep, max_chars, lim) : CheckTextRender.RenderCheck(sweep, max_chars, lim);
+                return Answer(sweep);
             var (spill, artErr) = CheckArtifact.Write(sweep, path, query);
-            if (artErr is not null) return Wire.Refuse(json, "error: " + artErr);
-            return CheckArtifact.RenderManifestOnly(sweep, spill!, json, Wire.Cap(max_chars));
+            if (artErr is not null) return ToolAnswer.Refusal(json, "error: " + artErr);
+            return ToolAnswer.Served(CheckArtifact.RenderManifestOnly(sweep, spill!, json, Wire.Cap(max_chars)));
         }
 
-        return json ? JsonWire.RenderCheck(sweep, max_chars, lim) : CheckTextRender.RenderCheck(sweep, max_chars, lim);
+        return Answer(sweep);
     });
 
     /// <summary>Parse the dialogue fold's address — the off-order half of the <c>records</c> pole grammar, which is

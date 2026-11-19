@@ -18,7 +18,7 @@ public sealed partial class LoadOrderService
     public static LoadOrderService WithAmethystSnapshot(string manifest, UserConfigStore store)
     {
         var connection = AmethystConnection.Open(manifest);
-        return new(null, "", "", "", configured: true, maxPlugins: 0, store) { _snapshotManifest = connection.ManifestPath };
+        return new(null, "", "", "", "", configured: true, maxPlugins: 0, store) { _snapshotManifest = connection.ManifestPath };
     }
 
     /// <summary>Capture and bind the saved graph; the request filter supplies the request scope and final validation.</summary>
@@ -49,7 +49,6 @@ public sealed partial class LoadOrderService
         _profileDir = snapshot.ProfileDir; _profileName = Path.GetFileName(snapshot.ProfileDir);
         _modsDir = snapshot.ModsDir; _dataDir = snapshot.VanillaDataDir; _overwriteDir = snapshot.OverwriteDir;
         _resolvedPaths = snapshot.OrderedPluginPaths;
-        _orderWarnings = [AmethystSnapshotProvenance.Warning];
         _text = GameLanguage.ReadSavedSnapshot(snapshot);
         GameLanguage.Bind(_text);
         InvalidateAssetResolver();
@@ -83,7 +82,7 @@ public sealed partial class LoadOrderService
         {
             var snapshot = CurrentSavedSnapshot();
             var view = SavedResolverLocked().Capture();
-            return new(snapshot.Composition, _orderWarnings, view.PluginCount, 0, false,
+            return new(snapshot.Composition, [AmethystSnapshotProvenance.Warning], view.PluginCount, 0, false,
                 _profileDir, _modsDir, _dataDir, _overwriteDir, _profileName, null, view.ExcludedPlugins,
                 view.Epoch, view.ContainedRecordCount);
         }

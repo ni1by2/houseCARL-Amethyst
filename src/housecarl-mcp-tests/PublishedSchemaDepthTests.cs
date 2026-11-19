@@ -180,8 +180,7 @@ public sealed class PublishedSchemaDepthTests : IClassFixture<CappedSchemaServer
                 "sets":[{"path":"Function","value":"GetItemCount"}]}}]}}]}
             """);
 
-        Assert.DoesNotContain(ServerFixture.GenericError, r.Text);
-        Assert.Contains("013989:Skyrim.esm", r.Text);
+        Assert.True(r.IsError, r.Describe());   // the config prompt is a refusal
         Assert.True(r.BodyRan, r.Describe());
     }
 

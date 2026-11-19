@@ -66,7 +66,7 @@ internal sealed class OutputLocations
     public RiderFolder ResolveCompiledScriptFolder(string? patchName, string? into)
     {
         var f = ResolvePatchModFolder(patchName, into, "houseCARL_Scripts", new RiderNaming("patch", Noun: ".pex"));
-        var scripts = Path.Combine(f.ModFolder, "Scripts");
+        var scripts = LooseListings.OnDisk(f.ModFolder, "Scripts");
         if (!AmethystStagingWrite.IsActive) Directory.CreateDirectory(scripts);
         return f with { OutputDir = scripts };
     }
@@ -197,7 +197,7 @@ internal sealed class OutputLocations
     public RiderFolder ResolveDecompiledSourceFolder(string? patchName, string? into)
     {
         var f = ResolvePatchModFolder(patchName, into, "houseCARL_Scripts", new RiderNaming("patch", Noun: ".psc"));
-        var src = Path.Combine(f.ModFolder, "Source", "Scripts");
+        var src = LooseListings.OnDisk(f.ModFolder, "Source", "Scripts");
         if (!AmethystStagingWrite.IsActive) Directory.CreateDirectory(src);
         return f with { OutputDir = src };
     }
@@ -242,7 +242,7 @@ internal sealed class OutputLocations
     RiderFolder ResolveSeqFolder(OutputRoots snapshot, string? patchName, string? into)
     {
         var f = ResolvePatchModFolder(snapshot, patchName, into, "houseCARL_SEQ", new RiderNaming("patch", Noun: ".seq"));
-        var seq = Path.Combine(f.ModFolder, "SEQ");
+        var seq = LooseListings.OnDisk(f.ModFolder, "SEQ");
         if (!AmethystStagingWrite.IsActive) Directory.CreateDirectory(seq);
         return f with { OutputDir = seq };
     }
@@ -319,7 +319,7 @@ internal sealed class OutputLocations
             catch (InvalidOperationException ex) { return SeqOutcome.Fail(ex.Message); }
 
             var seqName = Path.GetFileNameWithoutExtension(pluginPath) + ".seq";
-            var dest = Path.Combine(rf.OutputDir, seqName);
+            var dest = LooseListings.OnDisk(rf.OutputDir, seqName);
 
             // Identical bytes are reported, not rewritten, but an identical file OLDER than the plugin is stamped
             // forward for the mtime-based staleness test, and a failed touch falls THROUGH to the real write.
@@ -614,7 +614,7 @@ internal sealed class OutputLocations
         var hits = new List<string>();
         foreach (var dir in Directory.EnumerateDirectories(roots.ModsDir))
         {
-            var esp = Path.Combine(dir, espFileName);
+            var esp = LooseListings.OnDisk(dir, espFileName);
             if (File.Exists(esp) && IsHouseCarlOwned(dir)) hits.Add(esp);
         }
         return hits;
@@ -747,7 +747,7 @@ internal sealed class OutputLocations
             "\r\n" +
             "[installedFiles]\r\n" +
             "size=0\r\n";
-        AmethystStagingWrite.DeferOwnerMetadata(Path.Combine(folder, "meta.ini"), content);
+        AmethystStagingWrite.DeferOwnerMetadata(LooseListings.OnDisk(folder, "meta.ini"), content);
     }
 
     /// <summary>Is a located file the copy the MO2 install serves for its filename, and if not, why not? One half of "does the game load this file", independent of <see cref="TickStanding"/>, since a copy can be both shadowed and unticked with a remedy each. NotAnInstallCopy is deliberately the zero value.</summary>
@@ -895,6 +895,10 @@ internal sealed class OutputLocations
             return new(cand, $"mod '{mod.Trim()}'", modServed, JudgeTick(comp, fn), modDetail, true, null, null);
         }
         var hits = Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, plugin);
+        if (hits.Count == 0 && Mo2LoadOrder.UnopenedModFolders(comp, modsDir) is { Count: > 0 } unopened)
+            return new(null, "", ServedStanding.NotAnInstallCopy, TickStanding.Unregistered, null, false, null,
+                $"'{Path.GetFileName(plugin)}' is in no folder houseCARL could open, and {unopened.Count} mod folder(s) could not be " +
+                $"opened ({Mo2LoadOrder.Named(unopened)}): it may be in one of them. Make those folders readable and run this again.");
         if (hits.Count == 0)
             return new(null, "", ServedStanding.NotAnInstallCopy, TickStanding.Unregistered, null, false, null,
                 $"'{Path.GetFileName(plugin)}' is in no mod folder (enabled, disabled, or not-yet-listed in MO2), the overwrite folder, or the game Data folder. Check the filename, pass an absolute path"

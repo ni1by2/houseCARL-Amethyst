@@ -1,4 +1,5 @@
-[
+{"version": "8.0.1",
+"records": [
  {
   "recordType": "NPC",
   "sig": "NPC_",
@@ -8,6 +9,7 @@
    {
     "name": "filterByNpcs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -17,6 +19,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -25,6 +28,7 @@
    {
     "name": "filterByRaces",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -33,6 +37,7 @@
    {
     "name": "filterByDefaultOutfits",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -41,6 +46,7 @@
    {
     "name": "filterByFactions",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -51,6 +57,7 @@
    {
     "name": "filterByClass",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Exclude"
@@ -60,6 +67,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -70,6 +78,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -80,6 +89,7 @@
    {
     "name": "filterByGender",
     "kind": "recordSpecific",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -88,6 +98,7 @@
    {
     "name": "filterByPCLevelMult",
     "kind": "recordSpecific",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -96,6 +107,7 @@
    {
     "name": "filterByAutoCalc",
     "kind": "recordSpecific",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -104,6 +116,7 @@
    {
     "name": "filterByEssential",
     "kind": "recordSpecific",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -112,6 +125,7 @@
    {
     "name": "filterByProtected",
     "kind": "recordSpecific",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -120,6 +134,7 @@
    {
     "name": "restrictToRaces",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -128,6 +143,7 @@
    {
     "name": "restrictToGender",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -136,6 +152,7 @@
    {
     "name": "restrictToVoiceType",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -144,6 +161,7 @@
    {
     "name": "restrictToFlags",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -152,6 +170,7 @@
    {
     "name": "restrictToTemplateFlags",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -160,6 +179,7 @@
    {
     "name": "restrictToMaleModelContains",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -168,6 +188,7 @@
    {
     "name": "restrictToSkill",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -176,10 +197,56 @@
    {
     "name": "rvsRestrictToTraits",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
     "selects": "bool"
+   },
+   {
+    "name": "filterByCombatStyle",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByTemplate",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByTemplateFlag",
+    "kind": "recordSpecific",
+    "role": "narrower",
+    "connectives": [
+     "Exclude"
+    ],
+    "selects": "flag"
+   },
+   {
+    "name": "restrictToKeywords",
+    "kind": "restrict",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "keyword"
+   },
+   {
+    "name": "restrictToCombatStyle",
+    "kind": "restrict",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
    }
   ],
   "operations": [
@@ -572,6 +639,55 @@
     "tractability": "HARD",
     "stateful": false,
     "note": "keyed attack data; syntax in race-hook"
+   },
+   {
+    "name": "haircolor",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "setRandomCombatStyle",
+    "shape": "set",
+    "tractability": "HARD",
+    "note": "a random combat style from the list, picked at runtime"
+   },
+   {
+    "name": "speedMultiplier",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "clearClassFromAttributes",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "raceAttack",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "changeBaseObject",
+    "shape": "set",
+    "tractability": "CLEAN"
+   }
+  ],
+  "player": {
+   "foundBy": [
+    "filterByDefaultOutfits",
+    "filterByClass",
+    "filterByCombatStyle",
+    "filterByTemplate"
+   ],
+   "neverRemovedBy": [
+    "filterByKeywordsExcluded",
+    "filterByFactionsExcluded",
+    "filterByEditorIdContainsExcluded"
+   ]
+  },
+  "keywordsAlsoFrom": [
+   {
+    "path": "Race"
    }
   ]
  },
@@ -584,6 +700,7 @@
    {
     "name": "filterByWeapons",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -593,6 +710,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -601,6 +719,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -611,6 +730,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -621,6 +741,7 @@
    {
     "name": "filterByFirstPersonModel",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "Or"
     ],
@@ -629,6 +750,7 @@
    {
     "name": "filterBySkills",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -638,6 +760,7 @@
    {
     "name": "filterByAnimationType",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "Or"
     ],
@@ -646,6 +769,7 @@
    {
     "name": "hasPlugins",
     "kind": "hasPlugins",
+    "role": "gate",
     "connectives": [
      "",
      "Or"
@@ -655,6 +779,7 @@
    {
     "name": "restrictToSkills",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -664,6 +789,7 @@
    {
     "name": "restrictToFlags",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -673,11 +799,23 @@
    {
     "name": "filterByHasAmmoFromWeaponList",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
     "selects": "other",
     "note": "independent filter group; no further detail documented"
+   },
+   {
+    "name": "filterByNameContains",
+    "kind": "crosscutting",
+    "role": "finder",
+    "connectives": [
+     "",
+     "Or",
+     "Excluded"
+    ],
+    "selects": "name"
    }
   ],
   "operations": [
@@ -975,6 +1113,36 @@
     "tractability": "CLEAN",
     "stateful": false,
     "note": "object bounds"
+   },
+   {
+    "name": "attackDamageMatch",
+    "shape": "mirror",
+    "tractability": "HARD"
+   },
+   {
+    "name": "valueMatch",
+    "shape": "mirror",
+    "tractability": "HARD"
+   },
+   {
+    "name": "dwMatch",
+    "shape": "mirror",
+    "tractability": "HARD"
+   },
+   {
+    "name": "acswMatch",
+    "shape": "mirror",
+    "tractability": "HARD"
+   },
+   {
+    "name": "setFlags",
+    "shape": "flags",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "removeFlags",
+    "shape": "flags",
+    "tractability": "CLEAN"
    }
   ]
  },
@@ -987,6 +1155,7 @@
    {
     "name": "filterByArmors",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -996,6 +1165,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1004,6 +1174,7 @@
    {
     "name": "filterByArmorTypes",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Excluded"
@@ -1014,6 +1185,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1024,6 +1196,7 @@
    {
     "name": "filterByBipedSlots",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1035,6 +1208,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1045,6 +1219,7 @@
    {
     "name": "filterByNameContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1055,6 +1230,7 @@
    {
     "name": "filterByArmorAddons",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1066,6 +1242,7 @@
    {
     "name": "hasPlugins",
     "kind": "hasPlugins",
+    "role": "gate",
     "connectives": [
      "",
      "Or"
@@ -1075,6 +1252,7 @@
    {
     "name": "restrictToBipedSlots",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1084,6 +1262,7 @@
    {
     "name": "restrictToKeywords",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1323,6 +1502,38 @@
     "tractability": "CLEAN",
     "stateful": false,
     "note": "object bounds"
+   },
+   {
+    "name": "reCalcArmorRating",
+    "shape": "set",
+    "tractability": "HARD",
+    "note": "recomputed from the armor's own data at load"
+   },
+   {
+    "name": "reCalcArmorRatingv2",
+    "shape": "set",
+    "tractability": "HARD",
+    "note": "recomputed from the armor's own data at load"
+   },
+   {
+    "name": "valueMatch",
+    "shape": "mirror",
+    "tractability": "HARD"
+   },
+   {
+    "name": "armaRaceToAdd",
+    "shape": "collection",
+    "tractability": "COLLECTION"
+   },
+   {
+    "name": "modelMale",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "modelFemale",
+    "shape": "set",
+    "tractability": "CLEAN"
    }
   ]
  },
@@ -1335,14 +1546,17 @@
    {
     "name": "filterByAmmos",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
-     ""
+     "",
+     "Excluded"
     ],
     "selects": "form"
    },
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1351,6 +1565,7 @@
    {
     "name": "filterByAlternateTextures",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -1360,6 +1575,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1370,6 +1586,7 @@
    {
     "name": "filterByWeightLessThan",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -1379,6 +1596,7 @@
    {
     "name": "hasPlugins",
     "kind": "hasPlugins",
+    "role": "gate",
     "connectives": [
      "",
      "Or"
@@ -1388,11 +1606,23 @@
    {
     "name": "restrictToBolts",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
     "selects": "bool",
     "note": "true = bolts only; false = non-bolts (arrows)"
+   },
+   {
+    "name": "filterByKeywords",
+    "kind": "crosscutting",
+    "role": "finder",
+    "connectives": [
+     "",
+     "Or",
+     "Excluded"
+    ],
+    "selects": "keyword"
    }
   ],
   "operations": [
@@ -1542,6 +1772,11 @@
     "tractability": "CLEAN",
     "stateful": false,
     "note": "ignoresnormalweaponresistance, nonplayable, nonbolt"
+   },
+   {
+    "name": "addToFormList",
+    "shape": "collection",
+    "tractability": "COLLECTION"
    }
   ]
  },
@@ -1554,6 +1789,7 @@
    {
     "name": "filterBySpells",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -1563,6 +1799,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1571,6 +1808,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1581,6 +1819,7 @@
    {
     "name": "filterByMgefs",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1591,6 +1830,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1601,6 +1841,7 @@
    {
     "name": "restrictToCastingType",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1609,12 +1850,40 @@
    {
     "name": "filterByFlags",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
      "Excluded"
     ],
     "selects": "flag"
+   },
+   {
+    "name": "filterByCastingPerk",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByType",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
+   },
+   {
+    "name": "restrictToSchool",
+    "kind": "restrict",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
    }
   ],
   "operations": [
@@ -1715,6 +1984,27 @@
     "tractability": "COLLECTION",
     "stateful": false,
     "note": "removes all magic effects"
+   },
+   {
+    "name": "mgefsToChangeFirst",
+    "shape": "compound",
+    "tractability": "HARD"
+   },
+   {
+    "name": "mgefsToChangeDamageHealthEffects",
+    "shape": "compound",
+    "tractability": "HARD"
+   },
+   {
+    "name": "equipSlot",
+    "shape": "set",
+    "tractability": "CLEAN"
+   }
+  ],
+  "keywordsAlsoFrom": [
+   {
+    "path": "Effects",
+    "keyPath": "BaseEffect"
    }
   ]
  },
@@ -1727,6 +2017,7 @@
    {
     "name": "filterByScrolls",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -1736,6 +2027,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1744,6 +2036,7 @@
    {
     "name": "filterByAlternateTextures",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -1752,6 +2045,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1762,6 +2056,7 @@
    {
     "name": "filterByMgefs",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1772,12 +2067,60 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
      "Excluded"
     ],
     "selects": "editorid"
+   },
+   {
+    "name": "filterByFlags",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     "",
+     "Or",
+     "Excluded"
+    ],
+    "selects": "flag"
+   },
+   {
+    "name": "filterByMinimumSkillLevel",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "number"
+   },
+   {
+    "name": "filterByType",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
+   },
+   {
+    "name": "restrictToCastingType",
+    "kind": "restrict",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
+   },
+   {
+    "name": "restrictToSchool",
+    "kind": "restrict",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
    }
   ],
   "operations": [
@@ -1934,6 +2277,16 @@
     "tractability": "COLLECTION",
     "stateful": false,
     "note": "=true clears alt textures"
+   },
+   {
+    "name": "mgefsToChangeFirst",
+    "shape": "compound",
+    "tractability": "HARD"
+   },
+   {
+    "name": "mgefsToChangeDamageHealthEffects",
+    "shape": "compound",
+    "tractability": "HARD"
    }
   ]
  },
@@ -1946,6 +2299,7 @@
    {
     "name": "filterByEnchs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -1955,6 +2309,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -1963,6 +2318,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1973,6 +2329,7 @@
    {
     "name": "filterByMgefs",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -1983,6 +2340,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2101,6 +2459,7 @@
    {
     "name": "filterByMgefs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -2110,6 +2469,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      "",
      "Excluded"
@@ -2119,6 +2479,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2129,6 +2490,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2139,6 +2501,7 @@
    {
     "name": "filterByArchetypes",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2147,6 +2510,7 @@
    {
     "name": "filterBySounds",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2155,6 +2519,7 @@
    {
     "name": "effectShaders",
     "kind": "recordSpecific",
+    "role": "narrower",
     "connectives": [
      "Excluded"
     ],
@@ -2163,6 +2528,7 @@
    {
     "name": "modNamesLastOverridden",
     "kind": "overrideAware",
+    "role": "narrower",
     "connectives": [
      "Excluded"
     ],
@@ -2171,6 +2537,7 @@
    {
     "name": "restrictToCastingType",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2179,6 +2546,7 @@
    {
     "name": "restrictToDeliveryType",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2187,6 +2555,7 @@
    {
     "name": "restrictToActorValue",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2195,6 +2564,7 @@
    {
     "name": "restrictToResistType",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2203,6 +2573,7 @@
    {
     "name": "restrictToAreaEffects",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2211,10 +2582,29 @@
    {
     "name": "restrictToDetrimentalEffects",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
     "selects": "bool"
+   },
+   {
+    "name": "filterByDamageHealthMgefs",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "flag"
+   },
+   {
+    "name": "restrictToMagicSkill",
+    "kind": "restrict",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
    }
   ],
   "operations": [
@@ -2357,6 +2747,11 @@
     "tractability": "HARD",
     "stateful": false,
     "note": "form~slot ~-packed; null~slot removes a sound by slot"
+   },
+   {
+    "name": "magicItemDescription",
+    "shape": "set",
+    "tractability": "CLEAN"
    }
   ]
  },
@@ -2369,6 +2764,7 @@
    {
     "name": "filterByAlchs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -2378,6 +2774,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2386,6 +2783,7 @@
    {
     "name": "filterByAlternateTextures",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2394,6 +2792,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2404,6 +2803,7 @@
    {
     "name": "filterByMgefs",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2414,12 +2814,22 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
      "Excluded"
     ],
     "selects": "editorid"
+   },
+   {
+    "name": "filterByType",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
    }
   ],
   "operations": [
@@ -2520,6 +2930,16 @@
     "tractability": "COLLECTION",
     "stateful": false,
     "note": "=true clears alt textures"
+   },
+   {
+    "name": "mgefsToChangeFirst",
+    "shape": "compound",
+    "tractability": "HARD"
+   },
+   {
+    "name": "mgefsToChangeDamageHealthEffects",
+    "shape": "compound",
+    "tractability": "HARD"
    }
   ]
  },
@@ -2532,6 +2952,7 @@
    {
     "name": "filterByIngs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -2541,6 +2962,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2549,6 +2971,7 @@
    {
     "name": "filterByAlternateTextures",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2557,6 +2980,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2567,12 +2991,22 @@
    {
     "name": "filterByMgefs",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
      "Excluded"
     ],
     "selects": "mgef"
+   },
+   {
+    "name": "filterByType",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "enum"
    }
   ],
   "operations": [
@@ -2680,6 +3114,11 @@
     "tractability": "COLLECTION",
     "stateful": false,
     "note": "=true clears alt textures"
+   },
+   {
+    "name": "mgefsToChangeAdd",
+    "shape": "compound",
+    "tractability": "HARD"
    }
   ]
  },
@@ -2692,6 +3131,7 @@
    {
     "name": "filterByBooks",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -2701,6 +3141,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2709,6 +3150,7 @@
    {
     "name": "filterByAlternateTextures",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2717,6 +3159,7 @@
    {
     "name": "filterByCastingPerk",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2725,6 +3168,7 @@
    {
     "name": "filterByFlags",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2733,6 +3177,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2743,12 +3188,22 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
      "Excluded"
     ],
     "selects": "editorid"
+   },
+   {
+    "name": "filterBySpellKeywords",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     "Or"
+    ],
+    "selects": "keyword"
    }
   ],
   "operations": [
@@ -2938,6 +3393,7 @@
    {
     "name": "filterByMiscs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -2947,6 +3403,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -2955,6 +3412,7 @@
    {
     "name": "filterByAlternateTextures",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -2963,6 +3421,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -2973,6 +3432,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -3084,6 +3544,7 @@
    {
     "name": "filterBySoulGems",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -3093,6 +3554,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -3101,6 +3563,7 @@
    {
     "name": "filterByAlternateTextures",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -3109,6 +3572,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -3234,6 +3698,7 @@
    {
     "name": "filterByOutfits",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      ""
     ],
@@ -3242,6 +3707,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -3250,6 +3716,7 @@
    {
     "name": "filterByForms",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -3278,7 +3745,7 @@
     "shape": "collection",
     "tractability": "COLLECTION",
     "stateful": false,
-    "note": "FormID-only; pair written formA=formB"
+    "note": "Plugin|FormID or EditorID; pair written formA=formB"
    },
    {
     "name": "clear",
@@ -3298,6 +3765,7 @@
    {
     "name": "filterByFormLists",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      ""
     ],
@@ -3306,6 +3774,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -3332,7 +3801,7 @@
     "shape": "collection",
     "tractability": "COLLECTION",
     "stateful": false,
-    "note": "FormID-only; pair written formA=formB"
+    "note": "Plugin|FormID or EditorID; pair written formA=formB"
    },
    {
     "name": "clear",
@@ -3341,6 +3810,9 @@
     "stateful": false,
     "note": "=true removes all forms"
    }
+  ],
+  "directNarrowedBy": [
+   "filterByModNames"
   ]
  },
  {
@@ -3352,6 +3824,7 @@
    {
     "name": "filterByLLs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      ""
     ],
@@ -3360,6 +3833,7 @@
    {
     "name": "noFilterLL",
     "kind": "noFilter",
+    "role": "all",
     "connectives": [
      ""
     ],
@@ -3368,6 +3842,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -3378,6 +3853,7 @@
    {
     "name": "filterByLLNPCs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      ""
     ],
@@ -3386,10 +3862,20 @@
    {
     "name": "noFilterLLNPC",
     "kind": "noFilter",
+    "role": "all",
     "connectives": [
      ""
     ],
     "selects": "bool"
+   },
+   {
+    "name": "filterByModNames",
+    "kind": "crosscutting",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "modname"
    }
   ],
   "operations": [
@@ -3491,6 +3977,10 @@
     "stateful": false,
     "note": "=true removes all flags"
    }
+  ],
+  "filterless": "nothing",
+  "ignores": [
+   "filterByModNames"
   ]
  },
  {
@@ -3502,6 +3992,7 @@
    {
     "name": "filterByContainers",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      ""
     ],
@@ -3510,12 +4001,22 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
      "Excluded"
     ],
     "selects": "other"
+   },
+   {
+    "name": "filterByModNames",
+    "kind": "crosscutting",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "modname"
    }
   ],
   "operations": [
@@ -3586,6 +4087,7 @@
    {
     "name": "filterByCobjs",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -3595,6 +4097,7 @@
    {
     "name": "filterByIngredients",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -3605,6 +4108,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -3616,8 +4120,10 @@
    {
     "name": "filterByWorkBenchKeywords",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
-     ""
+     "",
+     "Excluded"
     ],
     "selects": "workbenchkeyword",
     "note": "workbench keyword; exact token filterByWorkBenchKeywords"
@@ -3625,6 +4131,7 @@
    {
     "name": "filterWorkbenchKeywords",
     "kind": "recordSpecific",
+    "role": "narrower",
     "connectives": [
      "Excluded"
     ],
@@ -3634,6 +4141,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -3644,11 +4152,21 @@
    {
     "name": "restrictToKeywords",
     "kind": "restrict",
+    "role": "narrower",
     "connectives": [
      ""
     ],
     "selects": "keyword",
     "note": "restrict by keyword on created object, else ignore; source file lists this under Operations"
+   },
+   {
+    "name": "filterByModNames",
+    "kind": "crosscutting",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "modname"
    }
   ],
   "operations": [
@@ -3742,6 +4260,11 @@
     "tractability": "COLLECTION",
     "stateful": false,
     "note": "on the created object"
+   },
+   {
+    "name": "addToCobjsAdjusted",
+    "shape": "compound",
+    "tractability": "HARD"
    }
   ]
  },
@@ -3754,14 +4277,17 @@
    {
     "name": "filterByCells",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
-     ""
+     "",
+     "Excluded"
     ],
     "selects": "form"
    },
    {
     "name": "skipRecordByLightingTemplateFromMod",
     "kind": "overrideAware",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -3771,11 +4297,66 @@
    {
     "name": "skipRecordByModNameContains",
     "kind": "overrideAware",
+    "role": "narrower",
     "connectives": [
      ""
     ],
     "selects": "modname",
     "note": "skip if record's source mod name contains a substring"
+   },
+   {
+    "name": "filterByModNames",
+    "kind": "crosscutting",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "modname"
+   },
+   {
+    "name": "filterByLocations",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByAcousticSpace",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByMusicType",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterBySkyRegion",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByImageSpace",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
    }
   ],
   "operations": [
@@ -4110,7 +4691,25 @@
     "tractability": "CLEAN",
     "stateful": false,
     "note": "same cell flag set"
+   },
+   {
+    "name": "fullName",
+    "shape": "rename",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "location",
+    "shape": "set",
+    "tractability": "CLEAN"
    }
+  ],
+  "ignores": [
+   "filterByModNames"
+  ],
+  "directNarrowedBy": [
+   "filterByCellsExcluded",
+   "skipRecordByLightingTemplateFromMod",
+   "skipRecordByModNameContains"
   ]
  },
  {
@@ -4122,6 +4721,7 @@
    {
     "name": "filterByLocations",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -4131,6 +4731,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -4140,6 +4741,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -4150,6 +4752,7 @@
    {
     "name": "filterByMusicType",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -4159,6 +4762,7 @@
    {
     "name": "filterByParentLocation",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -4168,6 +4772,7 @@
    {
     "name": "filterByUnreportedCrimeFaction",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -4177,6 +4782,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -4237,6 +4843,7 @@
    {
     "name": "filterByEncounterZones",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -4246,6 +4853,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -4254,6 +4862,7 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -4319,10 +4928,21 @@
    {
     "name": "filterByRefs",
     "kind": "primary",
+    "role": "direct",
+    "connectives": [
+     "",
+     "Excluded"
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByModNames",
+    "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
-    "selects": "form"
+    "selects": "modname"
    }
   ],
   "operations": [
@@ -4332,7 +4952,19 @@
     "tractability": "CLEAN",
     "stateful": false,
     "note": "=true; disable a reference. NPCs excluded from disabling. REFR patcher is the least-mature/iUpdateRefs-gated surface — flagged in-development, test in-game"
+   },
+   {
+    "name": "replaceBaseObject",
+    "shape": "set",
+    "tractability": "CLEAN"
    }
+  ],
+  "filterless": "nothing",
+  "ignores": [
+   "filterByModNames"
+  ],
+  "directNarrowedBy": [
+   "filterByRefsExcluded"
   ]
  },
  {
@@ -4344,14 +4976,17 @@
    {
     "name": "filterByFactions",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
-     ""
+     "",
+     "Excluded"
     ],
     "selects": "form"
    },
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -4372,6 +5007,21 @@
     "tractability": "CLEAN",
     "stateful": false,
     "note": "comma-separated faction flags"
+   },
+   {
+    "name": "relationshipToAdd",
+    "shape": "collection",
+    "tractability": "COLLECTION"
+   },
+   {
+    "name": "relationshipToChange",
+    "shape": "collection",
+    "tractability": "COLLECTION"
+   },
+   {
+    "name": "relationshipToRemove",
+    "shape": "collection",
+    "tractability": "COLLECTION"
    }
   ]
  },
@@ -4384,11 +5034,21 @@
    {
     "name": "filterByMovementTypes",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
     ],
     "selects": "form"
+   },
+   {
+    "name": "filterByModNames",
+    "kind": "crosscutting",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "modname"
    }
   ],
   "operations": [
@@ -4469,6 +5129,7 @@
    {
     "name": "filterByProjectiles",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -4478,6 +5139,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -4486,12 +5148,22 @@
    {
     "name": "filterByEditorIdContains",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
      "Excluded"
     ],
     "selects": "other"
+   },
+   {
+    "name": "filterByAlternateTextures",
+    "kind": "recordSpecific",
+    "role": "finder",
+    "connectives": [
+     ""
+    ],
+    "selects": "form"
    }
   ],
   "operations": [
@@ -4565,6 +5237,11 @@
     "tractability": "CLEAN",
     "stateful": false,
     "note": "comma-separated projectile flags"
+   },
+   {
+    "name": "model",
+    "shape": "set",
+    "tractability": "CLEAN"
    }
   ]
  },
@@ -4577,6 +5254,7 @@
    {
     "name": "filterByRaces",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -4586,6 +5264,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -4594,6 +5273,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -4604,6 +5284,7 @@
    {
     "name": "filterByMaleModelContains",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -4612,6 +5293,7 @@
    {
     "name": "filterByFemaleModelContains",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      ""
     ],
@@ -4620,10 +5302,22 @@
    {
     "name": "filterByVoiceType",
     "kind": "recordSpecific",
+    "role": "finder",
     "connectives": [
      "Or"
     ],
     "selects": "voicetype"
+   },
+   {
+    "name": "filterByEditorIdContains",
+    "kind": "crosscutting",
+    "role": "finder",
+    "connectives": [
+     "",
+     "Or",
+     "Excluded"
+    ],
+    "selects": "editorid"
    }
   ],
   "operations": [
@@ -4899,6 +5593,26 @@
     "shape": "collection",
     "tractability": "COLLECTION",
     "stateful": false
+   },
+   {
+    "name": "changeStats",
+    "shape": "compound",
+    "tractability": "HARD"
+   },
+   {
+    "name": "voiceTypeMale",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "voiceTypeFemale",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "keywordToAddIfKeywordsEIDDoesNotContain",
+    "shape": "compound",
+    "tractability": "HARD"
    }
   ]
  },
@@ -4911,6 +5625,7 @@
    {
     "name": "filterByRaces",
     "kind": "primary",
+    "role": "direct",
     "connectives": [
      "",
      "Excluded"
@@ -4920,6 +5635,7 @@
    {
     "name": "filterByModNames",
     "kind": "crosscutting",
+    "role": "narrower",
     "connectives": [
      ""
     ],
@@ -4928,6 +5644,7 @@
    {
     "name": "filterByKeywords",
     "kind": "crosscutting",
+    "role": "finder",
     "connectives": [
      "",
      "Or",
@@ -4958,6 +5675,11 @@
     "stateful": false,
     "note": "remove events by event name (comma-separated)"
    }
+  ],
+  "directNarrowedBy": [
+   "filterByRacesExcluded",
+   "filterByKeywordsExcluded",
+   "filterByModNames"
   ]
  },
  {
@@ -4968,5 +5690,106 @@
   "note": "OMOD — no documented grammar; surface the gap",
   "filters": [],
   "operations": []
+ },
+ {
+  "recordType": "Light",
+  "sig": "LIGH",
+  "subfolder": "light",
+  "primaryFilter": "filterByLights",
+  "filters": [
+   {
+    "name": "filterByLights",
+    "kind": "primary",
+    "role": "direct",
+    "connectives": [
+     "",
+     "Excluded"
+    ],
+    "selects": "form"
+   },
+   {
+    "name": "filterByModNames",
+    "kind": "crosscutting",
+    "role": "narrower",
+    "connectives": [
+     ""
+    ],
+    "selects": "modname"
+   },
+   {
+    "name": "filterByEditorIdContains",
+    "kind": "crosscutting",
+    "role": "finder",
+    "connectives": [
+     "",
+     "Or",
+     "Excluded"
+    ],
+    "selects": "editorid"
+   }
+  ],
+  "operations": [
+   {
+    "name": "radius",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "color",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "fade",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "falloffExponent",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "fov",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "nearDistance",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "time",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "flickerPeriod",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "flickerIntensityAmplitude",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "flickerMovementAmplitude",
+    "shape": "set",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "setFlags",
+    "shape": "flags",
+    "tractability": "CLEAN"
+   },
+   {
+    "name": "removeFlags",
+    "shape": "flags",
+    "tractability": "CLEAN"
+   }
+  ]
  }
 ]
+}

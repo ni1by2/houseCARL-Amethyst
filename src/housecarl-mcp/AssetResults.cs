@@ -18,6 +18,9 @@ public sealed record AssetPathResult(string RelPath, AssetHit? Hit, string? Erro
     /// <summary>Who ships this copy: the mod folder behind a BSA, else the provider's own name — the same fallback <see cref="FaceGenCheck"/>'s pair classifier uses, empty string included.</summary>
     internal static string Owner(AssetProvider p) => p.OwningMod is { Length: > 0 } m ? m : p.Source;
 
+    /// <summary>On a formids= row whose pair is a template root's, the face door's line naming it; null otherwise.</summary>
+    public string? FaceNote { get; init; }
+
     /// <summary>The named provider's standing on this path; null when the call named no provider or the row did not resolve.</summary>
     public ProviderStanding? Standing { get; init; }
 
@@ -32,7 +35,16 @@ public sealed record AssetPathResult(string RelPath, AssetHit? Hit, string? Erro
 public sealed record ResolvedNifLink(NifLink Link, AssetHit? Hit);
 
 /// <summary>One entry of <c>asset_status</c>'s <c>formids=</c> SELECT: the caller's raw token, the FormKey it parsed to, or the sentence to report instead. A malformed token is ONE error row, never a failed call.</summary>
-public sealed record FaceGenSeed(string Token, FormKey? Key, string? Error);
+public sealed record FaceGenSeed(string Token, FormKey? Key, string? Error)
+{
+    /// <summary>One <c>formids=</c> token through the door: the seed, or, whatever the door threw, one error seed that
+    /// answers as its own row, ending with <paramref name="expected"/>.</summary>
+    internal static FaceGenSeed Parse(FormIdDoor door, string raw, string expected)
+    {
+        try { return new FaceGenSeed(raw, door.Parse(raw), null); }
+        catch (Exception ex) { return new FaceGenSeed(raw, null, $"not a FormID: {Guard.Flatten(ex.Message)} {expected}"); }
+    }
+}
 
 /// <summary>The data behind housecarl_asset_status: one <see cref="AssetPathResult"/> per queried path, the build-level caveats that make an Exists=false answer provisional, what each <c>under=</c> selector had to say, the paging window (a negative <see cref="Total"/> means nothing paged), <see cref="Refusal"/>, the declared-cost or unknown-provider refusal under which nothing was resolved and no other member carries an answer, and the <see cref="Provider"/> every row is read against.</summary>
 public sealed record AssetStatusData(
@@ -48,15 +60,20 @@ public sealed record AssetStatusData(
     int Offset = 0,
     int Limit = 0,
     string? Refusal = null,
-    string? Provider = null)
+    string? Provider = null,
+    IReadOnlyList<string>? Notes = null)
 {
+    /// <summary>The call's own notes (an input given that this lane does not use), counted in the accounting's notes=.</summary>
+    public int NoteCount => (SelectorNotes?.Count ?? 0) + (Notes?.Count ?? 0);
+
     /// <summary>How many paths the selection named — <see cref="Results"/>'s own count when nothing paged.</summary>
     public int Selected => Total < 0 ? Results.Count : Total;
 
 }
 
-/// <summary>A named provider's standing on one path: its copy wins, another layer's copy wins over it, or it ships no copy.</summary>
-public enum ProviderStanding { Wins, Shadowed, NotProvided }
+/// <summary>A named provider's standing on one path: its copy wins, another layer's copy wins over it, it holds a copy
+/// MO2 hides, or it ships no copy.</summary>
+public enum ProviderStanding { Wins, Shadowed, Hidden, NotProvided }
 
 internal static class ProviderStandings
 {
@@ -67,7 +84,7 @@ internal static class ProviderStandings
         foreach (var p in hit.Providers)
             if (AssetSourceSelection.NameMatches(p, provider, hit.ProviderNames))
                 return AssetSourceSelection.NameMatches(hit.Winner!, provider, hit.ProviderNames) ? ProviderStanding.Wins : ProviderStanding.Shadowed;
-        return ProviderStanding.NotProvided;
+        return hit.Hidden?.HeldBy(provider) == true ? ProviderStanding.Hidden : ProviderStanding.NotProvided;
     }
 
     /// <summary>The machine token both the json row and the artifact column carry.</summary>
@@ -75,8 +92,45 @@ internal static class ProviderStandings
     {
         ProviderStanding.Wins => "wins",
         ProviderStanding.Shadowed => "shadowed",
+        ProviderStanding.Hidden => "hidden",
         _ => "not_provided",
     };
+}
+
+/// <summary>Why a path has no copy to read: MO2 hides the copies a root holds, or none is there at all. The one place
+/// every absent render takes its reason from, so no render probes the name.</summary>
+internal static class AbsentWords
+{
+    /// <summary>"hidden by MO2 (…) in 'Mod'" when a root holds the path hidden, else "no active mod or BSA provides <paramref name="what"/>".</summary>
+    internal static string Why(HiddenCopies? hidden, string what = "this path") =>
+        hidden is { } h ? h.Sentence() : $"no active mod or BSA provides {what}";
+
+    /// <summary>How many holders a json object names; 'holders_total' counts them all.</summary>
+    internal const int HoldersShown = 10;
+
+    /// <summary>The hidden copies as one json object, the shape every surface writes.</summary>
+    internal static Dictionary<string, object> Doc(HiddenCopies h) => new()
+    {
+        ["rule"] = h.Rule.Kind switch
+        {
+            HiddenKind.RootName => "root_name",
+            HiddenKind.SkipDirectory => "skip_directory",
+            HiddenKind.SkipSuffix => "skip_suffix",
+        },
+        ["match"] = h.Rule.Token,
+        ["hidden_path"] = h.HiddenPath,
+        ["holders"] = h.Holders.Take(HoldersShown).ToList(),
+        ["holders_total"] = h.Holders.Count,
+        ["note"] = h.Sentence(),
+    };
+
+    /// <summary>The hidden copies as a json member, written only when there are some, so a row with none is the row it always was.</summary>
+    internal static void Write(System.Text.Json.Utf8JsonWriter w, HiddenCopies? hidden, string name = "hidden")
+    {
+        if (hidden is null) return;
+        w.WritePropertyName(name);
+        System.Text.Json.JsonSerializer.Serialize(w, Doc(hidden));
+    }
 }
 
 /// <summary>One provider of an SKSE-layer file: the mod, "overwrite", "Data" or BSA filename, and whether it is a "loose" file or a "BSA" entry.</summary>
@@ -155,7 +209,7 @@ public enum SkseRefVerdict
 /// <summary>One reference a config declares, paired with its load-order <see cref="Verdict"/> and a <see cref="Detail"/> line: the resolved FormKey for OK, the reason otherwise.</summary>
 public sealed record SkseAuditedRef(HousecarlCore.SkseConfigRef Ref, SkseRefVerdict Verdict, string? Detail);
 
-/// <summary>One config file's audit: its VFS provenance as the full winner-first chain, of which only the WINNER is read, every reference it declares with a verdict, and a named <see cref="ReadError"/> when the winning copy could not be read.</summary>
+/// <summary>One config file's audit: its VFS provenance as the full winner-first chain, of which only the WINNER is read, every reference it declares with a verdict, a named <see cref="ReadError"/> when the winning copy could not be read, and <see cref="ArchiveOnly"/> when the winner is a BSA, so no loose copy exists.</summary>
 public sealed record SkseConfigFileAudit(
     string RelPath,
     string FileName,
@@ -165,7 +219,8 @@ public sealed record SkseConfigFileAudit(
     IReadOnlyList<SkseProvider> Providers,
     IReadOnlyList<SkseAuditedRef> Refs,
     string? ReadError,
-    bool MultiLine = true);
+    bool MultiLine = true,
+    bool ArchiveOnly = false);
 
 /// <summary>The data behind housecarl_skse findings='config': every SKSE-plugin config with each reference it declares resolved to a verdict, plus the build-level caveats.</summary>
 public sealed record SkseConfigAuditData(
@@ -261,7 +316,71 @@ public sealed record SkyPatcherLayerData(
     IReadOnlyList<string> AssetWarnings,
     string ProfileName,
     /// <summary>One line's lint by folder, file and line index, valid only inside the call that handed this data over; null when not asked for.</summary>
-    Func<HousecarlCore.SkyPatcherDiscovery.FolderScan, HousecarlCore.SkyPatcherDiscovery.IniFile, int, IReadOnlyList<string>>? Lint = null);
+    Func<HousecarlCore.SkyPatcherDiscovery.FolderScan, HousecarlCore.SkyPatcherDiscovery.IniFile, int, IReadOnlyList<string>>? Lint = null)
+{
+    /// <summary>The forms a line names that the call's records selectors select, by folder, file and line index, valid like <see cref="Lint"/>; null when no selector was given.</summary>
+    public Func<HousecarlCore.SkyPatcherDiscovery.FolderScan, HousecarlCore.SkyPatcherDiscovery.IniFile, int, IReadOnlyList<HousecarlCore.SkyPatcherOverlay.LineForm>>? Select { get; init; }
+
+    /// <summary>The refusal the selectors earned (a bad FormID, a stale artifact, no named plugin loaded), or null.</summary>
+    public string? SelectRefusal { get; init; }
+
+    /// <summary>What the answer leaves out of the selectors (named plugins the order does not carry), or null.</summary>
+    public string? SelectNote { get; init; }
+
+    /// <summary>The plugins an EditorID sweep could not open, one note each; kept on a zero answer, unlike <see cref="NoOpNotes"/>.</summary>
+    public IReadOnlyList<string> UnreadableNotes { get; init; } = [];
+
+    /// <summary>Whether the call reads SkyPatcher's lines; false for a call naming other formats only, whose SkyPatcher lists are empty.</summary>
+    public bool SkyPatcherRead { get; init; } = true;
+
+    /// <summary>SPID's layer, read in the same replay context; null when the call does not read SPID.</summary>
+    public DistributorLayerData? Spid { get; init; }
+
+    /// <summary>KID's layer, read in the same replay context after SPID's; null when the call does not read KID.</summary>
+    public DistributorLayerData? Kid { get; init; }
+
+    /// <summary>BOS's layer, read in the same replay context after KID's; null when the call does not read BOS.</summary>
+    public DistributorLayerData? Bos { get; init; }
+
+    /// <summary>FLM's layer, read in the same replay context after BOS's; null when the call does not read FLM.</summary>
+    public DistributorLayerData? Flm { get; init; }
+}
+
+/// <summary>One distributor format's layer (SPID's, KID's, BOS's, FLM's): the files it reads in its order, each line split, and, when
+/// the call resolves them, each line's read, the format's own line rows and the lines the records selectors keep.
+/// Valid only in its call.</summary>
+public sealed record DistributorLayerData(HousecarlCore.DistributorFormat Format, IReadOnlyList<DistributorFileData> Files, string ProfileName)
+{
+    /// <summary>Each file's line reads, index for index with its lines; null when the call does not resolve them.</summary>
+    public IReadOnlyList<IReadOnlyList<HousecarlCore.DistributorLines.IRead?>>? Reads { get; init; }
+
+    /// <summary>The format's own row under a line, by (file index, line index): SPID's first-wins place; empty for a format with none.</summary>
+    public IReadOnlyDictionary<(int File, int Line), string> LineRows { get; init; } = new Dictionary<(int, int), string>();
+
+    /// <summary>The lines the records selectors keep, by (file index, line index); null when no selector was given.</summary>
+    public IReadOnlyDictionary<(int File, int Line), DistributorSelected>? Selected { get; init; }
+
+    /// <summary>The plugins an EditorID sweep could not open during this call, one note each.</summary>
+    public IReadOnlyList<string> UnreadableNotes { get; init; } = [];
+}
+
+/// <summary>One distributor file: the file as discovery found it, its lines as its format splits them, and why it could not be read.</summary>
+public sealed record DistributorFileData(HousecarlCore.DistributorDiscovery.ConfigFile File, IReadOnlyList<HousecarlCore.DistributorLines.ILine> Lines, string? ReadError)
+{
+    /// <summary>Whether filter= keeps this file: its name or providing mod contains <paramref name="filter"/> (trimmed,
+    /// non-blank), in any case.</summary>
+    public bool Matches(string filter)
+        => File.RelPath.Contains(filter, StringComparison.OrdinalIgnoreCase)
+           || (File.WinningProvider?.Contains(filter, StringComparison.OrdinalIgnoreCase) ?? false);
+}
+
+/// <summary>What the selectors keep of one distributor line: the forms, and the plugins it names as a term.</summary>
+public sealed record DistributorSelected(IReadOnlyList<HousecarlCore.DistributorLines.Named> Forms, IReadOnlyList<string> PluginTerms);
+
+/// <summary>The records selectors carried onto SkyPatcher lines: a line is selected by a form it names. Both given, a form must pass both, as on records.</summary>
+public sealed record SkyPatcherLineSelect(
+    IReadOnlyList<string>? FormIds, IReadOnlyList<string>? Plugins, bool DefinedIn,
+    IReadOnlyList<HousecarlCore.ArtifactDemand> Demands);
 
 /// <summary>One no-op write, the true-ITM class: a SET-class op that applied in the full replay but wrote the value <see cref="Already"/> there.</summary>
 public sealed record SkyPatcherNoOpWrite(
@@ -277,13 +396,16 @@ public sealed record SkyPatcherFolderOutcome(
     bool Enabled);
 
 /// <summary>One provider of a mesh path: the mod, "overwrite", "Data" or BSA filename, and whether it is a "loose" file or a "BSA" entry.</summary>
-public sealed record NifProvider(string Name, string Kind, bool OffOrder = false, bool OwnerEnabled = false)
+public sealed record NifProvider(string Name, string Kind, bool OffOrder = false, bool OwnerEnabled = false, AssetKind SourceKind = AssetKind.Loose)
 {
     /// <summary>The provenance line when these bytes came out of a copy the game is NOT loading, null for an in-order provider; a response that did not say so would read as what the game shows.</summary>
-    public string? Provenance => OffOrder ? WriteSentences.PlaceSourceOffOrder(Name, OwnerEnabled) : null;
+    public string? Provenance => OffOrder ? WriteSentences.PlaceSourceOffOrder(Name, OwnerEnabled, SourceKind) : null;
 
     /// <summary>The spelling every listing prints, through the one formatter the asset surface uses; the printed token is the token <c>source_provider=</c> accepts, so a caller can copy it back verbatim (#340).</summary>
     public string Text => HousecarlCore.AssetSourceSelection.Describe(Name, Kind);
+
+    /// <summary>The MO2 layer an archive provider ships from, so a provider= name matches its archives' copies; null for a loose one.</summary>
+    public string? OwningMod { get; init; }
 }
 
 /// <summary>The per-path data behind housecarl_nif_inspect: one mesh path's VFS resolution — the <see cref="Inspected"/> provider whose bytes were parsed, the full winner-to-loser chain, contention and <see cref="Absent"/> flags — joined to exactly one of <see cref="Inspect"/> and a named <see cref="Error"/>. The batch-level caveats live on <see cref="NifInspectBatchData"/>.</summary>
@@ -294,17 +416,27 @@ public sealed record NifInspectData(
     bool Ambiguous,
     bool Absent,
     HousecarlCore.NifInspect? Inspect,
-    string? Error,
-    /// <summary>Each texture-set slot string, keyed as the NIF spells it, to the Data path it names and that path's resolution.</summary>
-    IReadOnlyDictionary<string, NifSlotLink>? SlotLinks = null)
+    string? Error)
 {
     public static NifInspectData Fail(string relPath, string error)
         => new(relPath, null, Array.Empty<NifProvider>(), false, false, null, error);
+
+    /// <summary>Every site at which the copy read names a file, each resolved against the load order; null unless the paths section was asked.</summary>
+    public IReadOnlyList<ResolvedNifLink>? Links { get; init; }
+
+    /// <summary>Why the paths section could not read this mesh's links; null when it did or was not asked.</summary>
+    public string? LinksError { get; init; }
+
+    /// <summary>On a formids= mesh that is a template root's, the face door's line naming it; null otherwise.</summary>
+    public string? FaceNote { get; init; }
+
+    /// <summary>A paths= entry that is a file on disk, read as that file: no winner and no providers.</summary>
+    public bool OnDisk { get; init; }
+
+    /// <summary>On a file on disk inside the mods tree, the line naming its Data path and mod folder; null otherwise.</summary>
+    public string? DiskNote { get; init; }
 }
 
-/// <summary>One texture slot's link: the resolution of the Data path it names through <see cref="HousecarlCore.AssetDataPath"/>
-/// (the path is the hit's), or the named reason the string is no Data path.</summary>
-public sealed record NifSlotLink(HousecarlCore.AssetHit? Hit, string? Error);
 
 /// <summary>The batch behind housecarl_nif_inspect: per-path <see cref="Results"/> in INPUT ORDER, plus the build-level caveats one asset capture pins for the whole batch, which is what makes an ABSENT result provisional.</summary>
 public sealed record NifInspectBatchData(
@@ -315,7 +447,10 @@ public sealed record NifInspectBatchData(
     IReadOnlyList<string> Warnings,
     string ProfileName);
 
-/// <summary>The data behind housecarl_nif_set: the VFS resolution joined to the verified write outcome, described by exactly one of <see cref="Report"/>, a named <see cref="Error"/> with nothing written, and <see cref="NeedsAcknowledge"/>, the in-place first-touch consent prompt.</summary>
+/// <summary>A nif_set result's kind: the in-place consent prompt, a refusal (nothing written, unless a write landed and failed its size check), or a verified write.</summary>
+public enum NifSetState { Consent, Refused, Written }
+
+/// <summary>The data behind housecarl_nif_set: the VFS resolution joined to the verified write outcome, described by exactly one of <see cref="Report"/>, a named <see cref="Error"/> (nothing written, unless a write landed and failed its size check), and <see cref="NeedsAcknowledge"/>, the in-place first-touch consent prompt.</summary>
 public sealed record NifSetResult(
     string RelPath,
     NifProvider? Edited,
@@ -338,6 +473,11 @@ public sealed record NifSetResult(
 
     public static NifSetResult NeedsAck(string prompt, NifProvider edited, IReadOnlyList<NifProvider> providers, string profileName)
         => new("", edited, providers, false, null, null, true, prompt, true, false, null, null, null, Array.Empty<string>(), profileName);
+
+    /// <summary>Which of the three this result is; the tool's verdict and its render both branch on it.</summary>
+    public NifSetState State => NeedsAcknowledge ? NifSetState.Consent
+        : Report is null || Error is not null ? NifSetState.Refused
+        : NifSetState.Written;
 
     /// <summary>True when the edited mesh landed in a mod folder this call CREATED, which MO2 registers at the highest priority, so it out-ranks the current winner on enable while an into= folder has to be sorted above it.</summary>
     public bool FreshFolder { get; init; }
@@ -381,8 +521,9 @@ public sealed record PlaceResult(string AssetPath, bool Placed, long Bytes, stri
     /// <summary>The mod folder these bytes were read out of when it is NOT one the active profile includes; non-null is a fact the response must state.</summary>
     public string? SourceOffOrderProvider { get; init; }
 
-    /// <summary>Whether that off-order mod is one MO2 TICKS — true means the bytes came out of a root archive no active plugin binds, not out of an unticked mod.</summary>
+    /// <summary>Whether that off-order mod is one MO2 TICKS — true means the bytes came out of a root archive no active plugin binds, or a loose file its folder did not list this build, not out of an unticked mod.</summary>
     public bool SourceOffOrderOwnerEnabled { get; init; }
+    public AssetKind SourceOffOrderKind { get; init; }
 
     /// <summary>Whether <see cref="CurrentWinner"/> is MO2's overwrite folder — the TOP loose root, so the only remedy is to move or delete that copy, which the render has to say instead.</summary>
     public bool WinnerIsOverwrite { get; init; }

@@ -1,0 +1,378 @@
+using HousecarlMcp;
+using Mutagen.Bethesda;
+using Mutagen.Bethesda.Plugins;
+using Mutagen.Bethesda.Skyrim;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+/// <summary>One target resolver (#1321): a direct-list EditorID names the first record loaded under the name within its
+/// scope, the one the replay takes; a target that names nothing says why on its line; EditorIDs are walked once per call.</summary>
+[Trait("tier", "integration")]
+public sealed class SkyPatcherTargetResolverTests
+{
+    const string Ini = "HcTargets.ini";
+    static readonly ModKey Other = ModKey.FromFileName("HcSpRelOther.esp");
+
+    string Post(SkyPatcherRelevanceWorld w, string fid, string field) => RecordsTools.Records(w.Svc, formids: new[] { fid },
+        source: SkyPatcherRelevanceWorld.Post(), project: new RecordsTools.RecordsProject { form = "fields", fields = new[] { field } });
+
+    // HcSpRelOther.esp, loading after HcSpRel.esp, defines a second armor named HcPlainCuirass.
+    static SkyPatcherRelevanceWorld DuplicateWorld(string ini) => new(new[] { (Ini, ini) }, otherPlugin: true,
+        otherRecords: o => o.Armors.Add(new Armor(new FormKey(o.ModKey, 0x810), SkyrimRelease.SkyrimSE) { EditorID = "HcPlainCuirass" }));
+
+    [Fact]
+    public void ADuplicatedEditorIdPatchesOnlyTheFirstLoadedRecord()
+    {
+        using var w = DuplicateWorld("filterByArmors=HcPlainCuirass:value=42\r\n");
+        Assert.Contains("Value = 42", Post(w, w.Plain, "Value"));
+        Assert.Contains("Value = 0", Post(w, "000810:HcSpRelOther.esp", "Value"));
+    }
+
+    [Fact]
+    public void ADuplicatedEditorIdSaysOnItsLineWhichRecordTheReplayTakes()
+    {
+        using var w = DuplicateWorld("filterByArmors=HcPlainCuirass:value=42\r\n");
+        Assert.Contains("target 'HcPlainCuirass' (in a filterByArmors) names 2 Armor records; the replay takes the first loaded, 000811:HcSpRel.esp from HcSpRel.esp.",
+            SkyPatcherTools.Layer(w.Svc, filter: Ini));
+    }
+
+    // HcSpRelOther.esp overrides HcHeelBoots and renames it: the game's map keeps the name the master loaded first.
+    [Fact]
+    public void AnEditorIdARenamingOverrideDropsStillNamesTheRecord()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=HcHeelBoots:value=43\r\n") }, otherPlugin: true,
+            otherRecords: o => o.Armors.Add(new Armor(new FormKey(ModKey.FromFileName("HcSpRel.esp"), 0x810), SkyrimRelease.SkyrimSE) { EditorID = "HcRenamedBoots" }));
+        Assert.Contains("Value = 43", Post(w, w.Heel, "Value"));
+    }
+
+    [Fact]
+    public void ATargetThatNamesNothingIsReportedOnItsLine()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini,
+            "filterByArmors=HcNoSuchArmor:value=5\r\n"
+            + "filterByArmors=HcSpRel.esp|zz:value=6\r\n"
+            + "filterByArmors=HcGone.esp|800:value=7\r\n"
+            + "filterByArmors=HcSpRel.esp|899:value=8\r\n") });
+        var layer = SkyPatcherTools.Layer(w.Svc, filter: Ini);
+        Assert.Contains("target 'HcNoSuchArmor' (in a filterByArmors) finds no record by that EditorID among Armor records in the active order.", layer);
+        Assert.Contains("target 'HcSpRel.esp|zz' (in a filterByArmors) is not a FormID SkyPatcher can read", layer);
+        Assert.Contains("target 'HcGone.esp|800' (in a filterByArmors) names plugin 'HcGone.esp', which is not in the active order, so it names nothing.", layer);
+        Assert.Contains("target 'HcSpRel.esp|899' (in a filterByArmors) names 000899:HcSpRel.esp, which no plugin in the active order defines, so it names nothing.", layer);
+        Assert.Contains("no-op scan: 1 explicit EditorID target(s) did not resolve", layer);   // the malformed address is no EditorID
+    }
+
+    // HcSpRel.esp's keyword HcKw2 loads the name before HcSpRelOther.esp's armor of the same name, and the keyword line
+    // puts keywords in the call's walk: the armor lookup still finds the armor, whatever other lines the layer holds.
+    [Fact]
+    public void ANameAnotherTypeAlsoHoldsStillNamesTheScopedRecord()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=HcKw2:value=44\r\nfilterByKeywords=HcKw2:weight=3\r\n") }, otherPlugin: true,
+            otherRecords: o => o.Armors.Add(new Armor(new FormKey(o.ModKey, 0x810), SkyrimRelease.SkyrimSE) { EditorID = "HcKw2" }));
+        Assert.Contains("Value = 44", Post(w, "000810:HcSpRelOther.esp", "Value"));
+    }
+
+    [Fact]
+    public void A0xFormIdTargetIsNotReportedAsAMiss()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=HcSpRel.esp|0x000810:value=9\r\n") });
+        Assert.DoesNotContain("target '", SkyPatcherTools.Layer(w.Svc, filter: Ini));
+        Assert.Contains("Value = 9", Post(w, w.Heel, "Value"));
+    }
+
+    // Names in a direct list, a keyword filter and a keyword op: one walk covers all three scopes, and the next call walks again.
+    [Fact]
+    public void EditorIdsAreWalkedOncePerCall()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini,
+            "filterByArmors=HcPlainCuirass:value=3\r\n"
+            + "filterByKeywords=HcHeelKw:keywordsToAdd=HcAddKw\r\n") });
+        var before = w.Svc.Counters.EditorIdSweeps;
+        SkyPatcherTools.Layer(w.Svc, filter: Ini);
+        Assert.Equal(1, w.Svc.Counters.EditorIdSweeps - before);
+        before = w.Svc.Counters.EditorIdSweeps;
+        RecordsTools.Records(w.Svc, formids: new[] { w.Plain, w.Heel, w.Both }, source: SkyPatcherRelevanceWorld.Post(),
+            project: new RecordsTools.RecordsProject { form = "fields", fields = new[] { "Value", "Keywords" } });
+        Assert.Equal(1, w.Svc.Counters.EditorIdSweeps - before);
+        // a comparison of two replayed poles opens two replay contexts; they share the call's one table
+        before = w.Svc.Counters.EditorIdSweeps;
+        RecordsTools.Records(w.Svc, formids: new[] { w.Plain }, source: SkyPatcherRelevanceWorld.Post(), versus: SkyPatcherRelevanceWorld.Post(),
+            project: new RecordsTools.RecordsProject { form = "delta", fields = new[] { "Value" } });
+        Assert.Equal(1, w.Svc.Counters.EditorIdSweeps - before);
+    }
+
+    // A later walk of another type that finds an earlier-loaded holder of a name puts it first: HcDupName is an armor in
+    // HcSpRel.esp and a keyword in HcSpRelOther.esp, and the keyword is walked first.
+    [Fact]
+    public void ALaterWalkGivesANameToTheRecordLoadedFirst()
+    {
+        using var w = new SkyPatcherRelevanceWorld(Array.Empty<(string, string)>(), otherPlugin: true,
+            records: m => m.Armors.Add(new Armor(new FormKey(m.ModKey, 0x830), SkyrimRelease.SkyrimSE) { EditorID = "HcDupName" }),
+            otherRecords: o => o.Keywords.Add(new Keyword(new FormKey(o.ModKey, 0x830), SkyrimRelease.SkyrimSE) { EditorID = "HcDupName" }));
+        var table = SkyPatcherEditorIdTable.For(w.Svc.CaptureView(), null);
+        table.Cover(new[] { typeof(IKeywordGetter) });
+        table.Cover(new[] { typeof(IArmorGetter) });
+        var holders = table.Find("HcDupName", null, out _);
+        Assert.Equal(new FormKey(ModKey.FromFileName("HcSpRel.esp"), 0x830), holders[0].Record);
+        Assert.Equal(2, holders.Count);
+    }
+
+    // Holders sort by load position alone: the keyword HcKw2 in HcSpRel.esp comes before HcSpRelOther.esp's armor, whatever the type names.
+    [Fact]
+    public void HoldersOfOneNameSortByLoadPositionNotType()
+    {
+        using var w = new SkyPatcherRelevanceWorld(Array.Empty<(string, string)>(), otherPlugin: true,
+            otherRecords: o => o.Armors.Add(new Armor(new FormKey(o.ModKey, 0x830), SkyrimRelease.SkyrimSE) { EditorID = "HcKw2" }));
+        var table = SkyPatcherEditorIdTable.For(w.Svc.CaptureView(), null);
+        table.Cover(new[] { typeof(IKeywordGetter), typeof(IArmorGetter) });
+        Assert.Equal(new FormKey(ModKey.FromFileName("HcSpRel.esp"), 0x802), table.Find("HcKw2", null, out _)[0].Record);
+    }
+
+    // One call holds one table per view: a second order's view inside the same call gets a table of its own.
+    [Fact]
+    public void ACallGivesEachViewItsOwnTable()
+    {
+        using var a = new SkyPatcherRelevanceWorld(Array.Empty<(string, string)>());
+        using var b = new SkyPatcherRelevanceWorld(Array.Empty<(string, string)>());
+        var (va, vb) = (a.Svc.CaptureView(), b.Svc.CaptureView());   // taken outside the call, which pins one view
+        using var call = CallContext.Begin();
+        var first = SkyPatcherEditorIdTable.For(va, null);
+        Assert.Same(first, SkyPatcherEditorIdTable.For(va, null));
+        Assert.NotSame(first, SkyPatcherEditorIdTable.For(vb, null));
+    }
+
+    // A name starting with a digit is not in the call's first walk; its own lookup walks its scope.
+    [Fact]
+    public void ADigitFirstEditorIdTargetResolves()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=1HcDigit:value=5\r\n") },
+            records: m => m.Armors.Add(new Armor(new FormKey(m.ModKey, 0x830), SkyrimRelease.SkyrimSE) { EditorID = "1HcDigit" }));
+        Assert.Contains("Value = 5", Post(w, "000830:HcSpRel.esp", "Value"));
+    }
+
+    // The Excluded spelling resolves its EditorID like the direct list: only the first loaded HcPlainCuirass is left out.
+    [Fact]
+    public void AnExcludedEditorIdLeavesOutOnlyTheFirstLoadedRecord()
+    {
+        using var w = DuplicateWorld("filterByArmorsExcluded=HcPlainCuirass:value=7\r\n");
+        Assert.Contains("Value = 0", Post(w, w.Plain, "Value"));
+        Assert.Contains("Value = 7", Post(w, "000810:HcSpRelOther.esp", "Value"));
+    }
+
+    // The conflict detector resolves an EditorID target, so a record named by EditorID in one INI and by FormID in another is one target.
+    [Fact]
+    public void ARecordNamedByEditorIdAndByFormIdConflictsWithItself()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { ("HcA.ini", "filterByArmors=HcPlainCuirass:value=3\r\n"),
+            ("HcB.ini", "filterByArmors=HcSpRel.esp|811:value=4\r\n") });
+        Assert.Contains("1 set-conflict(s)", SkyPatcherTools.Layer(w.Svc));
+    }
+
+    // addToLLs carries no form type: its item is looked up among every item type, as SkyPatcher's untyped lookup finds it.
+    [Fact]
+    public void AnUntypedOpFindsItsEditorId()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByLLs=HcSpRel.esp|820:addToLLs=HcPlainCuirass~1~1\r\n") },
+            subfolder: "leveledList",
+            records: m => m.LeveledItems.Add(new LeveledItem(new FormKey(m.ModKey, 0x820), SkyrimRelease.SkyrimSE) { EditorID = "HcLvl" }));
+        Assert.Contains("Entries = [list: 1 item(s)]", Post(w, "000820:HcSpRel.esp", "Entries"));
+    }
+
+    // HcList holds HcPlainCuirass.
+    static void AddList(SkyrimMod m) => m.FormLists.Add(new FormList(new FormKey(m.ModKey, 0x840), SkyrimRelease.SkyrimSE)
+    {
+        EditorID = "HcList",
+        Items = new() { new FormLink<ISkyrimMajorRecordGetter>(new FormKey(m.ModKey, 0x811)) },
+    });
+
+    // formsToReplace has no lookup scope, so its EditorIDs miss whatever other lines the layer walks, as on main.
+    [Fact]
+    public void AnUnscopedOpEditorIdMissesBesideAScopedOne()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini,
+            "filterByFormLists=HcSpRel.esp|840:formsToAdd=HcHeelBoots:formsToReplace=HcPlainCuirass=HcBothBoots\r\n") },
+            subfolder: "formList", records: AddList);
+        Assert.Contains("formList\\HcTargets.ini:1: 'formsToReplace=HcPlainCuirass=HcBothBoots' — form(s) not resolvable; skipped.",
+            Post(w, "000840:HcSpRel.esp", "Items"));
+    }
+
+    // formsToReplace has no lookup scope, so its EditorID misses even after the call's armor lookup has walked armor names.
+    [Fact]
+    public void AnUnscopedOpEditorIdMissesAfterAScopedWalk()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=HcPlainCuirass:value=3\r\n"),
+            ("../formList/HcList.ini", "filterByFormLists=HcSpRel.esp|840:formsToReplace=HcPlainCuirass=HcBothBoots:formsToAdd=HcHeelBoots\r\n") },
+            records: AddList);
+        var read = RecordsTools.Records(w.Svc, formids: new[] { w.Plain, "000840:HcSpRel.esp" }, source: SkyPatcherRelevanceWorld.Post(),
+            project: new RecordsTools.RecordsProject { form = "fields", fields = new[] { "Value", "Items" } });
+        Assert.Contains("Value = 3", read);
+        Assert.Contains("HcList.ini:1: 'formsToReplace=HcPlainCuirass=HcBothBoots' — form(s) not resolvable; skipped.", read);
+    }
+
+    // A form-list item EditorID is looked up among every type: a call that looks none up walks only its own scopes.
+    [Fact]
+    public void ACallThatLooksUpNoFormListItemWalksOnlyItsScopes()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=HcPlainCuirass:value=3\r\n"),
+            ("../formList/HcList.ini", "filterByFormLists=HcSpRel.esp|840:formsToAdd=HcHeelBoots\r\n") }, records: AddList);
+        var before = w.Svc.Counters.EditorIdTypesWalked;
+        Assert.Contains("Value = 3", Post(w, w.Plain, "Value"));
+        Assert.Equal(1, w.Svc.Counters.EditorIdTypesWalked - before);
+        Assert.Contains("Items = [list: 2 item(s)]", Post(w, "000840:HcSpRel.esp", "Items"));
+    }
+
+    // The layer's no-op scan compares only set-class ops, so a form-list item it replays is not looked up; a post read still resolves it.
+    [Fact]
+    public void TheLayersNoOpScanWalksNoEveryTypeScope()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByFormLists=HcSpRel.esp|840:formsToAdd=HcHeelBoots\r\n") },
+            subfolder: "formList", records: AddList);
+        var before = w.Svc.Counters.EditorIdTypesWalked;
+        var layer = SkyPatcherTools.Layer(w.Svc);
+        Assert.Contains("0 no-op write(s)", layer);
+        Assert.DoesNotContain("could not be replayed", layer);
+        Assert.Equal(0, w.Svc.Counters.EditorIdTypesWalked - before);
+        Assert.Contains("Items = [list: 2 item(s)]", Post(w, "000840:HcSpRel.esp", "Items"));
+    }
+
+    // A call whose first lookup is a form-list item walks its scope and the call's other scopes in one sweep.
+    [Fact]
+    public void AFirstFormListItemLookupWalksOnce()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=HcPlainCuirass:value=3\r\n"),
+            ("../formList/HcList.ini", "filterByFormLists=HcSpRel.esp|840:formsToAdd=HcHeelBoots\r\n") }, records: AddList);
+        var before = w.Svc.Counters.EditorIdSweeps;
+        Assert.Contains("Items = [list: 2 item(s)]", Post(w, "000840:HcSpRel.esp", "Items"));
+        Assert.Equal(1, w.Svc.Counters.EditorIdSweeps - before);
+    }
+
+    // Without Tweaks a form-list item is looked up only among the 12 types the game keeps names of.
+    [Fact]
+    public void WithoutTweaksAFormListItemWalksOnlyKeptTypes()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByFormLists=HcSpRel.esp|840:formsToAdd=HcHeelKw\r\n") },
+            subfolder: "formList", tweaks: false, records: AddList);
+        var before = w.Svc.Counters.EditorIdTypesWalked;
+        Assert.Contains("Items = [list: 2 item(s)]", Post(w, "000840:HcSpRel.esp", "Items"));
+        Assert.Equal(12, w.Svc.Counters.EditorIdTypesWalked - before);
+    }
+
+    // Without Tweaks the game keeps no armor names, so the call's armor scope is never walked.
+    [Fact]
+    public void WithoutTweaksAGappedScopeIsNotWalked()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini, "filterByArmors=HcPlainCuirass:value=3\r\nfilterByKeywords=HcHeelKw:weight=3\r\n") },
+            tweaks: false);
+        var before = w.Svc.Counters.EditorIdTypesWalked;
+        Post(w, w.Heel, "Weight");
+        Assert.Equal(1, w.Svc.Counters.EditorIdTypesWalked - before);
+    }
+
+    // Without Tweaks a form-list item EditorID resolves for a type the game keeps names of, and a miss names those types.
+    [Fact]
+    public void WithoutTweaksAFormListItemEditorIdOfAKeptTypeResolves()
+    {
+        using var w = new SkyPatcherRelevanceWorld(new[] { (Ini,
+            "filterByFormLists=HcSpRel.esp|840:formsToAdd=HcHeelKw\r\nfilterByFormLists=HcSpRel.esp|840:formsToAdd=HcHeelBoots\r\n") },
+            subfolder: "formList", tweaks: false, records: AddList);
+        var read = Post(w, "000840:HcSpRel.esp", "Items");
+        Assert.Contains("Items = [list: 2 item(s)]", read);
+        Assert.Contains("formList\\HcTargets.ini:2: 'formsToAdd=HcHeelBoots' — EditorID 'HcHeelBoots' finds nothing: powerofthree's Tweaks (SKSE\\Plugins\\po3_Tweaks.dll) is not in this order, so of the record types of the SkyrimMajorRecord group the game keeps EditorIDs only of Cell, GlobalFloat, GlobalInt, GlobalShort, HeadPart, IdleAnimation, Keyword, MusicType, Quest, Race, VoiceType, Worldspace records; not applied.", read);
+        Assert.DoesNotContain("HcHeelKw' finds nothing", read);
+    }
+
+    static readonly ModKey Rel = ModKey.FromFileName("HcSpRel.esp");
+
+    static void AddCell(SkyrimMod m, uint id, string editorId, params IPlaced[] refs)
+    {
+        var cell = new Cell(new FormKey(m.ModKey, id), SkyrimRelease.SkyrimSE) { EditorID = editorId, Flags = Cell.Flag.IsInteriorCell };
+        foreach (var r in refs) cell.Temporary.Add(r);
+        var sub = new CellSubBlock { BlockNumber = 0, GroupType = GroupTypeEnum.InteriorCellSubBlock };
+        sub.Cells.Add(cell);
+        var block = new CellBlock { BlockNumber = 0, GroupType = GroupTypeEnum.InteriorCellBlock };
+        block.SubBlocks.Add(sub);
+        m.Cells.Records.Add(block);
+    }
+
+    // HcSpRel.esp's cell holds a reference and a placed NPC, the reference named HcShared; HcSpRelOther.esp, loading after
+    // it, holds a keyword HcShared and a cell with a reference of its own.
+    static SkyPatcherRelevanceWorld CellWorld() => new(Array.Empty<(string, string)>(), otherPlugin: true,
+        records: m => AddCell(m, 0x850, "HcRoom",
+            new PlacedObject(new FormKey(m.ModKey, 0x851), SkyrimRelease.SkyrimSE) { EditorID = "HcShared" },
+            new PlacedNpc(new FormKey(m.ModKey, 0x852), SkyrimRelease.SkyrimSE) { EditorID = "HcPlacedNpc" }),
+        otherRecords: o =>
+        {
+            o.Keywords.Add(new Keyword(new FormKey(o.ModKey, 0x850), SkyrimRelease.SkyrimSE) { EditorID = "HcShared" });
+            AddCell(o, 0x851, "HcOtherRoom", new PlacedObject(new FormKey(o.ModKey, 0x852), SkyrimRelease.SkyrimSE) { EditorID = "HcOtherRef" });
+        });
+
+    // A walk over every type reads each group of each plugin once: the cell, its reference and placed NPC share one read of the cells.
+    [Fact]
+    public void AnEveryTypeWalkReadsEachGroupOfEachPluginOnce()
+    {
+        using var w = CellWorld();
+        var view = w.Svc.CaptureView();
+        var before = new Dictionary<(string Plugin, string Group), int>(w.Svc.Counters.GroupReads);
+        SkyPatcherEditorIdTable.For(view, null).Cover(w.Svc.Types.ResolveScope(nameof(SkyrimMajorRecord))!);
+        var reads = w.Svc.Counters.GroupReads.Select(kv => (kv.Key, N: kv.Value - before.GetValueOrDefault(kv.Key))).Where(r => r.N > 0).ToList();
+        Assert.All(reads, r => Assert.Equal(1, r.N));
+        Assert.Contains(reads, r => r.Key == ("HcSpRel.esp", "Cells"));
+        Assert.Contains(reads, r => r.Key == ("HcSpRelOther.esp", "Cells"));
+    }
+
+    // A type no group map holds walks each plugin whole, once, and yields each of its records once.
+    [Fact]
+    public void AWalkOfATypeNoGroupMapHoldsReadsEachPluginOnce()
+    {
+        using var w = CellWorld();
+        var view = w.Svc.CaptureView();
+        var before = new Dictionary<(string Plugin, string Group), int>(w.Svc.Counters.GroupReads);
+        var recs = view.RecordVersionsOfType(new[] { typeof(ISkyrimMajorRecordGetter) }, new List<PluginUnreadableException>()).ToList();
+        Assert.Equal(recs.Count, recs.Select(r => (r.fk, r.plugin)).Distinct().Count());
+        Assert.Contains(recs, r => r.fk == new FormKey(Rel, 0x852));
+        var reads = w.Svc.Counters.GroupReads.Select(kv => (kv.Key, N: kv.Value - before.GetValueOrDefault(kv.Key))).Where(r => r.N > 0).ToList();
+        Assert.All(reads, r => Assert.Equal(1, r.N));
+        Assert.Contains(reads, r => r.Key == ("HcSpRel.esp", "*flat"));
+    }
+
+    // Over every type, the first loaded holder of a name another type in a later plugin shares comes first: the reference, then the keyword.
+    [Fact]
+    public void AnEveryTypeWalkPutsTheFirstLoadedHolderFirst()
+    {
+        using var w = CellWorld();
+        var table = SkyPatcherEditorIdTable.For(w.Svc.CaptureView(), null);
+        table.Cover(w.Svc.Types.ResolveScope(nameof(SkyrimMajorRecord))!);
+        Assert.Equal(new[] { new FormKey(Rel, 0x851), new FormKey(Other, 0x850) }, table.Find("HcShared", null, out _).Select(h => h.Record));
+        Assert.Equal(new FormKey(Rel, 0x852), Assert.Single(table.Find("HcPlacedNpc", null, out _)).Record);
+    }
+
+    // Two records of one name in one plugin tie by the file, whose keywords come before its cells, not by the walk's type
+    // order (bos-lines Q1 (a), DECISIONS 2026-11-15 (13): the game's map keeps the one named first).
+    [Fact]
+    public void ASamePluginTieGoesByFileOrderNotTypeOrder()
+    {
+        using var w = new SkyPatcherRelevanceWorld(Array.Empty<(string, string)>(), records: m =>
+        {
+            m.Keywords.Add(new Keyword(new FormKey(m.ModKey, 0x860), SkyrimRelease.SkyrimSE) { EditorID = "HcTie" });
+            AddCell(m, 0x861, "HcTie");
+        });
+        var table = SkyPatcherEditorIdTable.For(w.Svc.CaptureView(), null);
+        table.Cover(new[] { typeof(ICellGetter), typeof(IKeywordGetter) });
+        Assert.Equal(new[] { new FormKey(Rel, 0x860), new FormKey(Rel, 0x861) }, table.Find("HcTie", null, out _).Select(h => h.Record));
+    }
+
+    // The file place counts records inside nested groups: a cell, in its block and sub-block groups, comes before a
+    // form list whose group follows the cells, whatever the walk's type order.
+    [Fact]
+    public void ASamePluginTieCountsARecordInsideNestedGroups()
+    {
+        using var w = new SkyPatcherRelevanceWorld(Array.Empty<(string, string)>(), records: m =>
+        {
+            AddCell(m, 0x862, "HcNestedTie");
+            m.FormLists.Add(new FormList(new FormKey(m.ModKey, 0x863), SkyrimRelease.SkyrimSE) { EditorID = "HcNestedTie" });
+        });
+        var table = SkyPatcherEditorIdTable.For(w.Svc.CaptureView(), null);
+        table.Cover(new[] { typeof(IFormListGetter), typeof(ICellGetter) });
+        Assert.Equal(new[] { new FormKey(Rel, 0x862), new FormKey(Rel, 0x863) }, table.Find("HcNestedTie", null, out _).Select(h => h.Record));
+    }
+}

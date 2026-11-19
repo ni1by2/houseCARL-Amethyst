@@ -4,7 +4,7 @@ using Xunit;
 
 namespace HousecarlMcpTests;
 
-/// <summary>housecarl_skypatcher_layer's filter=. A filter that matches no INI must say so; returning the
+/// <summary>housecarl_layer's filter=. A filter that matches no INI must say so; returning the
 /// unfiltered overview instead is indistinguishable from a call that passed no filter at all.</summary>
 [Trait("tier", "unit")]
 public sealed class SkyPatcherLayerFilterTests
@@ -18,7 +18,7 @@ public sealed class SkyPatcherLayerFilterTests
 
     static SkyPatcherLayerData Layer(params SkyPatcherDiscovery.FolderScan[] folders) =>
         new(new SkyPatcherDiscovery.LayerScan(folders, Array.Empty<string>(), ReadIncomplete: false,
-                new Dictionary<string, bool>()),
+                new SkyPatcherDiscovery.Switches(new Dictionary<string, bool>(), null)),
             Conflicts: Array.Empty<SkyPatcherConflicts.SkyPatcherConflict>(),
             Itms: Array.Empty<SkyPatcherConflicts.SkyPatcherItm>(),
             Duplicates: Array.Empty<SkyPatcherConflicts.SkyPatcherDuplicate>(),
@@ -382,22 +382,25 @@ public sealed class SkyPatcherLayerFilterTests
         Assert.DoesNotContain("INI(s) match", text);
     }
 
+    /// <summary>The scan notes are often why a filter matched nothing, so they stay; the no-op notes are about the whole
+    /// layer's replay, so a zero answer leaves them to the overview (#1286).</summary>
     [Fact]
-    public void ZeroMatchStillRendersTheScanNotes()
+    public void ZeroMatchKeepsTheScanNotesAndDropsTheNoOpNotes()
     {
         var d = OneNpcFolder();
         var withNotes = d with
         {
             Scan = new SkyPatcherDiscovery.LayerScan(d.Scan.Folders,
                 new[] { "subfolder 'npcs' is not a documented SkyPatcher record type" },
-                ReadIncomplete: false, new Dictionary<string, bool>()),
+                ReadIncomplete: false, new SkyPatcherDiscovery.Switches(new Dictionary<string, bool>(), null)),
             NoOpNotes = new[] { "a replay note" },
         };
 
         var text = SkyPatcherWire.RenderLayer(withNotes, "weapon", 80_000);
 
         Assert.Contains("not a documented SkyPatcher record type", text);
-        Assert.Contains("a replay note", text);
+        Assert.DoesNotContain("a replay note", text);
+        Assert.Contains("a replay note", SkyPatcherWire.RenderLayer(withNotes, "npc", 80_000));   // a match still carries them
     }
 
     [Fact]
@@ -408,7 +411,7 @@ public sealed class SkyPatcherLayerFilterTests
         {
             Scan = new SkyPatcherDiscovery.LayerScan(d.Scan.Folders,
                 Enumerable.Range(1, 40).Select(i => $"scan note {i} " + new string('x', 200)).ToArray(),
-                ReadIncomplete: false, new Dictionary<string, bool>()),
+                ReadIncomplete: false, new SkyPatcherDiscovery.Switches(new Dictionary<string, bool>(), null)),
         };
 
         var full = SkyPatcherWire.RenderLayer(withNotes, "weapon", 1_000_000);
@@ -428,7 +431,7 @@ public sealed class SkyPatcherLayerFilterTests
         {
             Scan = new SkyPatcherDiscovery.LayerScan(d.Scan.Folders,
                 Enumerable.Range(1, 40).Select(i => $"scan note {i} " + new string('x', 200)).ToArray(),
-                ReadIncomplete: false, new Dictionary<string, bool>()),
+                ReadIncomplete: false, new SkyPatcherDiscovery.Switches(new Dictionary<string, bool>(), null)),
             ReadIncomplete = true,
         };
 

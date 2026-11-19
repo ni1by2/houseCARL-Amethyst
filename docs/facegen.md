@@ -22,18 +22,42 @@ winner. For a vanilla NPC an overhaul re-dresses, that is `Skyrim.esm\`, not the
 cross-folder fallback: the engine reads that one path and regenerates if nothing wins there. The leading index
 byte is masked to `00` because the file already lives in the defining plugin's own named folder.
 
-Because the path is that transform, the file layer answers for a whole order in one call:
-`housecarl_asset_status` with `formids=` a list of NPCs derives both halves of each bake and resolves them
-together, one row per path, each naming the other half's winner beside its own. The whole-order sweep is two
-calls (`housecarl_records types=["NPC_"] to_file=<file>` for the identity set, then
-`housecarl_asset_status formids=["@<file>"] to_file=<file2>`) and the artifact's `winner_mod`, `pair_winner_mod`,
-`winner_kind` and `pair_differs` columns are the pairing map. Use it when you want the file-layer provenance
-over the order; `housecarl_check findings=["facegen"]` is what adds the record winner and the classes below — and
-what drops the two populations named at the end of this page. `formids=` reads no record, so it applies neither
-exclusion: every templated follower and every horse, dragon and draugr shell in the list comes back as two rows
-with no provider. Nor does it know the two kinds `check` puts in `never_baked` rather than `bake_absent` (the
-Player and CharGen presets; below). A row count off the artifact is therefore not a finding count, and the
-artifact's `pair_exists=false` total will not match `check`'s `bake_absent`.
+## One answer per NPC
+
+Which pair an NPC's face is drawn from is one answer, and every tool reads the same one: `housecarl_asset_status`
+`formids=` and `walk=true` and `housecarl_nif_inspect formids=` name it, `housecarl_place formid=` places it (and
+refuses an NPC with several template roots), and this check judges an NPC's own pair and leaves the rest out,
+naming no pair. The pair is
+Mutagen's resolved FaceGen link (the path above, spelled `Meshes\`/`Textures\`), asked on the NPC its face is drawn
+from. houseCARL adds two
+things Mutagen does not do:
+
+- **The Traits template walk.** An NPC whose `Template` is set with the `Traits` flag draws its face from the first
+  NPC down that chain without the flag, so the answer is that root's pair, with the line "the face of template root
+  X". A leveled-list template gives each member's pair, marked "one of N".
+- **A reason when Mutagen names no pair**, the first input of its gate the record leaves unmet, stated once:
+  - the race is not set, not read, or not a race;
+  - the race has no `FaceGenHead` flag (a horse, a dragon, a draugr shell): no FaceGen, as the CK bakes none;
+  - the `Traits` flag is set with no `Template`: Mutagen names no face;
+  - `ACBS` flag `0x100` (xEdit's 'Use Template?'): Mutagen names no face for it, though the CK bakes some of
+    these NPCs (vanilla ships `Skyrim.esm\000F9644.nif` for `AudioTemplateHorse`).
+
+  A FormID no plugin in the order defines, or one that is not an NPC, is a reason too. Each tool shows a reason
+  where it would show the pair: an `asset_status` or `nif_inspect` `formids=` row, a walk note, a `place` refusal, a counted exclusion
+  here.
+
+The file layer therefore answers for a whole order in one call: `housecarl_asset_status` with `formids=` a list
+of NPCs reads each NPC, then resolves both halves of its pair together, one row per path, each naming the other
+half's winner beside its own. The whole-order sweep is two calls — `housecarl_records types=["NPC_"]
+to_file=<file>` for the identity set, then `housecarl_asset_status formids=["@<file>"] to_file=<file2>` — and the
+artifact's `winner_mod`, `pair_winner_mod`, `winner_kind`, `pair_differs` and `face_note` columns are the pairing
+map. A templated NPC's rows are its root's pair, so a root shared by many NPCs appears once per NPC; an NPC with no
+pair is a row per reason in `error` (a leveled template's pairless member or broken chain entry is one, beside the
+other members' pair rows). Use it when you want the file-layer provenance over the order;
+`housecarl_check findings=["facegen"]` is what adds the record winner and the classes below. `formids=` does not
+know the two kinds `check` puts in `never_baked` rather than `bake_absent` (the Player and CharGen presets; below),
+and it lists a templated NPC the check leaves out. A row count off the artifact is therefore not a finding count,
+and the artifact's `pair_exists=false` total will not match `check`'s `bake_absent`.
 
 `pair_differs` is decided on the winners' owning **mods** (`winner_mod` / `pair_winner_mod`), not on their
 provider names (`winner` / `pair_winner`, which for a BSA is the archive's own filename). Vanilla ships every
@@ -59,14 +83,15 @@ findings=["facegen"]`'s job, using the table below.
 | `inert` | The key resolves to a placed reference, to no record at all, to a plugin not in the order, or the filename is malformed. | Nothing. No actor reads that path. |
 | `never_baked` | Neither half anywhere, for the Player or a CharGen preset, which the Creation Kit never bakes. Counted, listed only under its own token. | Usually nothing. If it is placed and renders dark, bake it (Ctrl+F4). |
 
-Two exclusions the check applies silently in the counts and never as a fault. An NPC whose `Template` is set with
-the `Traits` flag inherits its appearance and has no bake of its own — recompute the path against the template's
-FormID if you need it. An NPC whose race lacks the `FaceGenHead` flag (a horse, a dragon, a draugr shell) has no
-baked head at all.
+The check leaves out, and counts by reason in its header, every NPC whose one answer is not its own pair: a
+Traits-templated NPC, whose face is its template root's bake (`housecarl_asset_status formids=` names that pair),
+and each NPC with a reason above — a race without `FaceGenHead`, the `Traits` flag with no `Template`, and `ACBS`
+flag `0x100`, each its own count, and one count (`npcs_excluded_race_unresolved`) for the rest: no race, a race not
+read, or no pair for another reason. None is ever a finding.
 
 The Creation Kit does not bake four kinds of NPC (measured on the vanilla masters, 2026-09-26): a Traits-templated
 NPC (2 of 2,464 baked), one on a race without `FaceGenHead` (1 of 1,940), a CharGen face preset (the
-`IsCharGenFacePreset` flag in `ACBS`; 0 of 201), and the Player (`000007:Skyrim.esm`). The first two are the exclusions above. A preset or the Player with
+`IsCharGenFacePreset` flag in `ACBS`; 0 of 201), and the Player (`000007:Skyrim.esm`). The first two are among the exclusions above. A preset or the Player with
 neither half on disk is `never_baked`, not `bake_absent`: counted in the header, listed only when named, like
 `family_split`, and carried in every `to_file=` artifact. A preset duplicated into a placed follower and never baked
 lands there too, so list the class when auditing followers. An NPC with no head parts (`PNAM`) is not on that list:
@@ -167,8 +192,11 @@ nothing the user can observe.
 
 ## Fixing it
 
-**Make the right files win.** `housecarl_place` with a `formid` member and no `kind` places both halves at once,
-into a new MO2 mod folder the user then enables. Place both halves from the same source — one alone re-creates the
+**Make the right files win.** `housecarl_place` with a `formid` member and no `kind` places both halves of the
+pair the NPC's face is drawn from at once, into a new MO2 mod folder the user then enables. For a Traits-templated
+NPC that is its template root's pair, the face of every NPC on that root, and the row says "face: the face of
+template root X". The NPC is read from the active order or the `into=` patch; a leveled template's several roots,
+or an NPC with no pair, refuses the call; place one root by its own FormID, or the file by `path=`. Place both halves from the same source — one alone re-creates the
 mismatch. A same-FormID, same-defining-master placement needs no mesh edit: the `.nif` already embeds the path
 that resolves to the destination's `.dds`. Only a renumber or a re-home breaks that, and then slot 6 needs
 rewriting.

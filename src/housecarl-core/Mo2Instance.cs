@@ -94,45 +94,91 @@ public static class Mo2Instance
 
         var profile  = CleanValue(FindValue(lines, "selected_profile"));
         var gamePath = CleanValue(FindValue(lines, "gamePath"));
-        var baseDir  = CleanValue(FindValue(lines, "base_directory"));
 
         if (string.IsNullOrWhiteSpace(profile))  problems?.Add($"{IniFileName} has no selected_profile (open a profile in MO2 once)");
         if (string.IsNullOrWhiteSpace(gamePath)) problems?.Add($"{IniFileName} has no gamePath (MO2 doesn't know where the game is)");
 
-        // base_directory SET but missing is its own problem; an absent one is the documented portable default and stays quiet.
-        if (!string.IsNullOrWhiteSpace(baseDir) && !Directory.Exists(baseDir))
-            problems?.Add($"{IniFileName} sets base_directory='{baseDir}' but that folder doesn't exist — falling back to the instance dir for mods/ + profiles/");
+        // MO2's PathSettings: base is base_directory when the key is present, else the ini's folder, with no fallback.
+        var baseRaw = FindValue(lines, "base_directory", SettingsSection);
+        bool baseSet = baseRaw is not null;
+        var basePath = baseSet ? CleanValue(baseRaw) ?? "" : instanceDir;
+        bool baseBad = baseSet && !Path.IsPathFullyQualified(basePath), baseRefused = false;
+        var mods      = Root("mod_directory", "mods");
+        var profiles  = Root("profiles_directory", "profiles");
+        var overwrite = Root("overwrite_directory", "overwrite");
 
-        // base_directory overrides where mods/ + profiles/ live; absent (the common portable case) ⇒ the instance dir.
-        var basePath = (!string.IsNullOrWhiteSpace(baseDir) && Directory.Exists(baseDir)) ? baseDir! : instanceDir;
-        var modsDir    = Path.Combine(basePath, "mods");
-        var profileDir = string.IsNullOrWhiteSpace(profile)  ? "" : Path.Combine(basePath, "profiles", profile!);
+        var modsDir    = mods?.Dir ?? "";
+        var profileDir = string.IsNullOrWhiteSpace(profile) || profiles is null ? "" : Path.Combine(profiles.Value.Dir, profile!);
         var dataDir    = string.IsNullOrWhiteSpace(gamePath) ? "" : Path.Combine(gamePath!, "Data");
 
         if (profileDir.Length > 0 && !Directory.Exists(profileDir))
-            problems?.Add($"the active profile's folder is missing: '{profileDir}'");
+            problems?.Add($"the active profile's folder is missing: '{profileDir}' (the profiles folder is {profiles!.Value.From})");
         else if (profileDir.Length > 0 && !File.Exists(Path.Combine(profileDir, "loadorder.txt")))
             problems?.Add($"profile '{profile}' has no loadorder.txt yet (open it in MO2 once so it writes its profile files)");
-        if (!Directory.Exists(modsDir)) problems?.Add($"the mods folder is missing: '{modsDir}'");
+        if (mods is not null && !Directory.Exists(modsDir) && new DirectoryInfo(modsDir).LinkTarget is null)
+            problems?.Add($"the mods folder is missing: '{modsDir}' ({mods.Value.From}; MO2 creates it when it next starts)");
         if (dataDir.Length > 0 && !Directory.Exists(dataDir))
             problems?.Add($"the game Data folder is missing: '{dataDir}' (from gamePath '{gamePath}')");
 
         // Validity is decided on the real outputs, NOT the problems list (so TryResolve with a null list is correct).
         bool ok = !string.IsNullOrWhiteSpace(profile) && !string.IsNullOrWhiteSpace(gamePath)
+                  && mods is not null && profiles is not null && overwrite is not null
                   && Directory.Exists(profileDir) && File.Exists(Path.Combine(profileDir, "loadorder.txt"))
-                  && Directory.Exists(modsDir) && Directory.Exists(dataDir);
+                  && (Directory.Exists(modsDir) || new DirectoryInfo(modsDir).LinkTarget is not null) && Directory.Exists(dataDir);
         if (!ok) return null;
 
-        // Overwrite is derived base-relative like mods and profiles, but never gates validity.
-        return new Mo2InstancePaths(instanceDir, profile!, profileDir, modsDir, dataDir, gamePath!, Path.Combine(basePath, "overwrite"));
+        // A missing overwrite does not gate validity, a refused one does; see docs/architecture/mo2-instance.md.
+        return new Mo2InstancePaths(instanceDir, profile!, profileDir, modsDir, dataDir, gamePath!, overwrite!.Value.Dir);
+
+        // One root by MO2's getConfigurablePath: the [Settings] key if present, else %BASE_DIR%/<name>; null when refused.
+        (string Dir, string From)? Root(string key, string name)
+        {
+            var raw = FindValue(lines, key, SettingsSection);
+            var value = raw is null ? null : CleanValue(raw) ?? "";
+            bool usesBase = value is null || value.Contains(BaseDirToken, StringComparison.Ordinal);
+            if (usesBase && baseBad)
+            {
+                if (!baseRefused) problems?.Add($"{IniFileName} [Settings] base_directory='{basePath}' {NotFullPath}");
+                baseRefused = true;
+                return null;
+            }
+            if (value is null)
+                return (Path.Combine(basePath, name),
+                        baseSet ? $"the default under base_directory '{basePath}'" : "the default under the instance folder");
+            var expanded = value.Replace(BaseDirToken, basePath, StringComparison.Ordinal);
+            if (!OperatingSystem.IsWindows()) expanded = expanded.Replace('\\', Path.DirectorySeparatorChar);
+            // A relative instance folder the caller gave is read as given; a relative value from the ini is not.
+            bool underInstanceDir = usesBase && !baseSet;
+            if (!underInstanceDir && !Path.IsPathFullyQualified(expanded))
+            {
+                problems?.Add($"{IniFileName} [Settings] {key}='{value}' {NotFullPath} or one starting %BASE_DIR%/");
+                return null;
+            }
+            var missingBase = usesBase && baseSet && !Directory.Exists(basePath) ? $", under base_directory '{basePath}', which is missing" : "";
+            return (Path.TrimEndingDirectorySeparator(Path.GetFullPath(expanded)), $"from {key}='{value}' in {IniFileName}{missingBase}");
+        }
     }
 
-    /// <summary>First <c>key=</c> line's raw value, the key matched case-insensitively and ignoring section headers, which is safe only because the keys read here are unique across the file; null if the key is not present.</summary>
-    static string? FindValue(string[] lines, string key)
+    const string SettingsSection = "Settings";
+    const string BaseDirToken = "%BASE_DIR%";
+    const string NotFullPath = "is not a full path: MO2 reads it against the folder MO2 was started from, which houseCARL cannot see; set a full path";
+
+    /// <summary>First <c>key=</c> line's raw value, the key matched case-insensitively; with <paramref name="section"/> only
+    /// lines under that <c>[section]</c> header count, without it every section does (safe only for keys unique across the
+    /// file); null if the key is not present.</summary>
+    static string? FindValue(string[] lines, string key, string? section = null)
     {
+        bool inSection = section is null;
         foreach (var raw in lines)
         {
             var line = raw.TrimStart();
+            if (section is not null && line.StartsWith('['))
+            {
+                var end = line.IndexOf(']');
+                inSection = end > 0 && line.AsSpan(1, end - 1).Equals(section, StringComparison.OrdinalIgnoreCase);
+                continue;
+            }
+            if (!inSection) continue;
             int eq = line.IndexOf('=');
             if (eq < 0) continue;
             // Tolerate whitespace around '=' — MO2 2.5.x writes "key = value"; older MO2 wrote "key=value".

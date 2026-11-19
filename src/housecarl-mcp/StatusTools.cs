@@ -4,7 +4,7 @@ using ModelContextProtocol.Server;
 
 namespace HousecarlMcp;
 
-/// <summary>Read-only view of the active MO2 profile's load-order composition; the enabled/disabled picture is read fresh each call, while the resolved and record counts reflect the resolver's last build.</summary>
+/// <summary>Read-only view of the active MO2 profile's load-order composition; the enabled/disabled picture and the counts are the call's build, re-read at its start when the profile changed.</summary>
 [McpServerToolType]
 public static class StatusTools
 {
@@ -12,10 +12,12 @@ public static class StatusTools
      Description(
          "Report what houseCARL sees in the active MO2 profile: enabled and disabled mods, active and inactive plugins, " +
          "the implicit force-loaded masters and CC, how many plugins resolved to real files, and any load-order " +
-         "warnings; filter= swaps the name lists and warnings for a verdict on one mod or plugin (enabled? localized?). " +
-         "The enabled/disabled picture is read fresh each call, so a toggle in MO2 shows at once; the resolved count " +
-         "is rebuilt automatically when the profile changed, with no restart (a 'refresh still pending' note means MO2 " +
-         "was mid-write). Without filter=, also reports the resolved Papyrus script-log and SKSE crash-log folders, " +
+         "warnings; filter= swaps the name lists and warnings for a verdict on one mod, plugin or Nexus id (enabled? " +
+         "localized? which folders carry Nexus mod N? which plugins name this one as a master?). " +
+         "The enabled/disabled picture and the resolved count are re-read at the start of a call when the profile " +
+         "changed, so a toggle in MO2 shows with no restart; while another call is writing, or when the re-read came back " +
+         "empty, status answers at once off the build from before the change; a 'refresh is still pending' note says so when " +
+         "the current profile's files changed, and a switch to another profile shows no note. Without filter=, also reports the resolved Papyrus script-log and SKSE crash-log folders, " +
          "where to read logs for triage (auto-detected, or set with " + ToolNames.SetToolPath + "). Every call " +
          "reports the running server's build version (the release version, then '+' and the full commit sha). " +
          "Changes nothing.")]
@@ -23,9 +25,12 @@ public static class StatusTools
         LoadOrderService svc,
         ToolPathResolver tools,
         [Description("Optional. A mod folder (e.g. 'Requiem Lite 2') or plugin filename (e.g. 'Requiem.esp'): is that " +
-            "mod enabled, is that plugin active, inactive or implicit, and the plugin's serving folder, other copies, " +
-            "header flags (localized refuses in-place writes), masters and record count. Always reads the active " +
-            "profile. Omit for the whole-profile summary.")]
+            "mod enabled and its Nexus id, is that plugin active, inactive or implicit, and the plugin's serving folder, other copies, " +
+            "header flags (localized refuses in-place writes), masters, record count, and the plugins naming it as a " +
+            "master: those in the load order, then copies on disk the game does not load (in a disabled or unlisted mod " +
+            "folder, unchecked in plugins.txt, or not in loadorder.txt), marked. A positive whole number (e.g. '131131') is also read as a Nexus mod id: every mod folder whose " +
+            "meta.ini carries it, enabled or not; 0 and below are no id, as in MO2. Always reads the active profile. " +
+            "Omit for the whole-profile summary.")]
             string? filter = null,
         [Description("Optional. A profile name to inspect without switching to it (e.g. 'Default', 'Modded'): reports " +
             "its enabled and disabled mods and active and inactive plugins, to compare load orders across profiles. Omit " +
@@ -33,23 +38,25 @@ public static class StatusTools
             "filter=, both render.")]
             string? profile = null,
         [Description("Optional. Max characters before name lists are cut with an explicit notice. 0 = the server default (~40k).")]
-            int max_chars = 0) => Guard.Tool(ToolNames.LoadOrderStatus, () =>
+            int max_chars = 0) => Guard.Tool(ToolNames.LoadOrderStatus, call =>
     {
         // The server line goes ahead of the config prompt: an unconfigured server is exactly the stale staged install this line exists to catch.
-        if (svc.ConfigPromptOrNull() is { } prompt) return StatusWire.ServerLine + prompt;
+        if (svc.ConfigPromptOrNull() is { } prompt) return ToolAnswer.Refusal(StatusWire.ServerLine + prompt);
         var data = svc.StatusData();
         var logs = StatusWire.LogFolders(tools);                 // resolved Papyrus/crash log dirs (pure — no persist)
         var profiles = svc.NamedProfileComposition(profile);     // available-profile discovery + inactive-profile inspection: text parse only, no index build, no switch
         // Read only for a filter: the facts are a per-plugin locate and header read, and the whole-profile summary asks about none.
-        var facts = filter is { Length: > 0 } ? svc.PluginFactsFor(filter.Trim(), data) : null;
-        var rendered = StatusWire.Render(data, logs, profiles, filter, facts, Wire.Cap(max_chars));
+        var name = filter is { Length: > 0 } ? filter.Trim() : null;
+        var facts = name is not null && data.ModsFolderUnreadable is null ? svc.PluginFactsFor(name, data) : null;
+        var lookups = name is null ? null : FilterLookups.Read(name, data);
+        var rendered = StatusWire.Render(data, logs, profiles, filter, facts, Wire.Cap(max_chars), lookups);
         var pending = new AmethystTransactionCoordinator().PendingSummary();
-        if (pending.Count == 0) return rendered;
+        if (pending.Count == 0) return ToolAnswer.Served(rendered);
         var summary = "\nstaging transactions needing attention (" + pending.Count + "):\n" + string.Join("\n", pending.Select(t =>
             $"  {t.Id} · {t.State} · {t.Operation}" + (t.Diagnostic is null ? "" : $" · {t.Diagnostic}")));
-        return Wire.Cap(max_chars) > 0 && rendered.Length + summary.Length > Wire.Cap(max_chars)
+        return ToolAnswer.Served(Wire.Cap(max_chars) > 0 && rendered.Length + summary.Length > Wire.Cap(max_chars)
             ? rendered + "\nstaging transaction summary omitted at max_chars=" + Wire.Cap(max_chars)
-            : rendered + summary;
+            : rendered + summary);
     });
 }
 
@@ -60,7 +67,7 @@ static class StatusWire
     public static string ServerLine => "server:   " + ServerBuild.Line + "\n";
 
     public static string Render(LoadOrderStatusData d, IReadOnlyList<LogFolderView> logs, NamedProfileResult profiles,
-                                string? filter, PluginFacts? facts, int cap)
+                                string? filter, PluginFacts? facts, int cap, FilterLookups? lookups = null)
     {
         var c = d.Composition;
         int checkedActive = c.ActivePluginNames.Count;
@@ -71,8 +78,19 @@ static class StatusWire
         var sb = new StringBuilder();
         sb.Append("load order status — profile '").Append(d.ProfileName).Append("'\n");
         sb.Append(ServerLine);
-        // The resolved MO2 instance; null means explicit-paths mode, which has no MO2 instance folder.
-        sb.Append("instance: ").Append(AmethystSnapshotContext.Current is not null ? "Amethyst saved-snapshot mode" : d.InstanceDir ?? "explicit-paths mode (no MO2 instance configured)").Append('\n');
+        // The resolved MO2 instance; null means explicit-paths mode, which has no MO2 instance folder. That mode names
+        // its configured overwrite root here — the only answer that reads it back, where instance mode has set_mo2_instance's.
+        sb.Append("instance: ");
+        if (AmethystSnapshotContext.Current is not null) sb.Append("Amethyst saved-snapshot mode");
+        else if (d.InstanceDir is { } instanceDir) sb.Append(instanceDir);
+        else
+        {
+            sb.Append("explicit-paths mode (no MO2 instance configured)");
+            if (d.OverwriteDir.Length > 0) sb.Append(" · overwrite: ").Append(d.OverwriteDir);
+        }
+        sb.Append('\n');
+        if (d.ModsFolderUnreadable is { } unread)
+            sb.Append("[!] ").Append(unread).Append(" Every record, check, asset and write call refuses until it can be opened.\n");
         sb.Append("mods:    ").Append(c.EnabledMods.Count).Append(" enabled · ").Append(c.DisabledMods.Count).Append(" disabled\n");
         sb.Append("plugins in load order: ").Append(c.OrderedPluginNames.Count).Append('\n');
         sb.Append("  active:   ").Append(gameLoaded).Append("  (").Append(checkedActive).Append(" checked + ").Append(impl).Append(" implicit masters/CC)\n");
@@ -82,7 +100,7 @@ static class StatusWire
         if (d.Epoch is not null) sb.Append("  epoch=").Append(d.Epoch);   // the current build's fingerprint — bulk responses stamp the build they read, matched against this
         sb.Append('\n');
         // The containment map's size, in band: it is built on every index build, so its cost is stated rather than discovered as memory.
-        sb.Append("containment: ").Append(d.ContainedRecordCount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture))
+        if (d.ModsFolderUnreadable is null) sb.Append("containment: ").Append(d.ContainedRecordCount.ToString("N0", System.Globalization.CultureInfo.InvariantCulture))
           .Append(" child record(s) mapped to a containing record (the '*parent' step reads this)\n");
         if (d.ProfileChanged)
             sb.Append("[!] the profile changed mid-call and a refresh is still pending — houseCARL re-reads it " +
@@ -93,7 +111,7 @@ static class StatusWire
 
         if (filter is { Length: > 0 })
         {
-            AppendLookup(sb, c, d.ExcludedPlugins, filter.Trim(), facts);
+            AppendLookup(sb, c, d.ExcludedPlugins, filter.Trim(), facts, d.ModsFolderUnreadable is not null, lookups, cap);
             return sb.ToString().TrimEnd('\n');
         }
 
@@ -167,10 +185,13 @@ static class StatusWire
         int shown = 0;
         foreach (var n in names)
         {
-            if (sb.Length >= cap) { sb.Append("  ... [showing ").Append(shown).Append(" of ").Append(names.Count).Append("; raise max_chars to see all]\n"); break; }
+            if (sb.Length >= cap) { sb.Append("  ").Append(CutNotice(shown, names.Count)).Append('\n'); break; }
             sb.Append("  - ").Append(n).Append('\n'); shown++;
         }
     }
+
+    /// <summary>The notice a name list cut at max_chars ends with.</summary>
+    static string CutNotice(int shown, int total) => $"... [showing {shown} of {total}; raise max_chars to see all]";
 
     /// <summary>Render the requested named profile's composition, or a refusal: explicit-paths mode has no profiles folder, and a name matching none lists the real options. A match says plainly that the active profile is unchanged.</summary>
     static void AppendNamedProfile(StringBuilder sb, NamedProfileResult p, int cap)
@@ -228,7 +249,7 @@ static class StatusWire
 
     static void AppendLookup(StringBuilder sb, HousecarlCore.Mo2Composition c,
                              IReadOnlyDictionary<string, string> excluded, string name,
-                             PluginFacts? facts = null)
+                             PluginFacts? facts, bool modsUnreadable, FilterLookups? lookups, int cap)
     {
         sb.Append("\nfilter '").Append(name).Append("':\n");
 
@@ -239,6 +260,8 @@ static class StatusWire
             Contains(c.DisabledMods, name) ? "DISABLED (mod present but switched OFF — houseCARL excludes it)" :
                                              "not found in modlist.txt (not a managed mod folder name, or a UI separator)";
         sb.Append("  as a mod:    ").Append(asMod);
+        if (lookups?.ModNexusId > 0) sb.Append(" · Nexus id ").Append(lookups.ModNexusId);
+        else if (lookups is { ModNexusId: null }) sb.Append(" · Nexus id unknown — its meta.ini could not be read");
         // A near-miss is an easy slip, so point at the nearest real mod folders across both the enabled and disabled lists.
         if (modMiss) sb.Append(HousecarlCore.PluginNameSuggest.DidYouMean(name, c.EnabledMods.Concat(c.DisabledMods)));
         sb.Append('\n');
@@ -254,14 +277,22 @@ static class StatusWire
         // The common slip is the mod-folder name passed where the .esp filename was wanted; the suggester turns that into the plugin filename.
         if (pluginMiss) sb.Append(HousecarlCore.PluginNameSuggest.DidYouMean(name, c.OrderedPluginNames));
         sb.Append('\n');
+        if (lookups?.NexusId > 0) AppendNexusFolders(sb, c, lookups, cap);
 
         // An active plugin can still be excluded from the index, so the ACTIVE line above must not be taken as the whole truth.
         if (excluded.TryGetValue(name, out var why))
             sb.Append("  [!] EXCLUDED this session: ").Append(why).Append("\n      → houseCARL does NOT read this plugin, so any record it overrides is answered without its version.\n");
 
+        // No mod folder was read, so no copy can be placed: say so rather than "no folder holds it".
+        if (modsUnreadable && !pluginMiss)
+            sb.Append("  served from: unknown — houseCARL could not open the mods folder, so which folder serves this plugin cannot be read\n");
+
         // A name the profile lists as a plugin: its copies, then the header facts and the LOCALIZED flag the in-place write lanes refuse on.
+        // A plugin's dependents line: here, ahead of the copies, when no header was read, else under its masters line (docs/architecture/mo2-instance.md).
+        bool isPlugin = HousecarlCore.PluginFile.IsPlugin(name);
+        if (facts?.Header is null && isPlugin) AppendDependents(sb, lookups?.Dependents, cap);
         if (facts is null) return;
-        AppendCopies(sb, facts.Copies);
+        AppendCopies(sb, facts.Copies, facts.Unopened);
         if (facts.Moved is { } m)
             sb.Append("  index:       had the copy in ").Append(m.Indexed)
               .Append(m.NotRefreshed is { } held ? $"; not refreshed: {held}\n" : "; refreshed now, so later calls read the served copy\n");
@@ -279,6 +310,7 @@ static class StatusWire
               .Append(" · ESL flag ").Append(Bit(h.Light, ext == ".esl", "light"))
               .Append(" · ").Append(h.RecordCount.ToString("N0", inv)).Append(" records (HEDR)\n");
             sb.Append("  masters (").Append(h.Masters.Count).Append("): ").Append(h.Masters.Count == 0 ? "none" : string.Join(", ", h.Masters)).Append('\n');
+            if (isPlugin) AppendDependents(sb, lookups?.Dependents, cap);
         }
         sb.Append("  localized:   ").Append(facts.Localized switch
         {
@@ -289,29 +321,103 @@ static class StatusWire
                 "no (header flag clear) — its text is inside the plugin.",
             _ when facts.HeaderFrom is not null =>
                 "UNKNOWN — houseCARL could not read this plugin's header, so neither answer is established.",
-            _ => "UNKNOWN — " + (facts.Copies.Count == 0 ? "no file of this name" : "several copies and none served") +
+            _ => "UNKNOWN — " + (facts.Unopened.Count > 0 ? "no folder houseCARL could open holds it"
+                                : facts.Copies.Count == 0 ? "no file of this name" : "several copies and none served") +
                  ", so no header was read.",
         }).Append('\n');
     }
 
+    /// <summary>The mod folders whose meta.ini carries the Nexus id the filter reads as, each with its state in the profile.</summary>
+    static void AppendNexusFolders(StringBuilder sb, HousecarlCore.Mo2Composition c, FilterLookups l, int cap)
+    {
+        sb.Append("  as a Nexus id: ");
+        if (l.NexusFolders is not { } folders)
+        { sb.Append("unknown — houseCARL could not open the mods folder, so no meta.ini was read\n"); return; }
+        if (folders.Count == 0) sb.Append("no mod folder's meta.ini carries it");
+        else
+        {
+            string State(string f) => Contains(c.EnabledMods, f) ? "enabled" : Contains(c.DisabledMods, f) ? "disabled" : "not in modlist.txt";
+            sb.Append(folders.Count).Append(folders.Count == 1 ? " mod folder: " : " mod folders: ");
+            AppendJoined(sb, folders.Select(f => f + " (" + State(f) + ")").ToList(), cap);
+        }
+        sb.Append('\n');
+        if (l.UnreadMeta.Count > 0)
+            sb.Append("  [!] ").Append(l.UnreadMeta.Count).Append(" folder(s) not read (a meta.ini that would not read, or a folder that would not open), so a folder carrying this id may be missing: ")
+              .Append(HousecarlCore.Mo2LoadOrder.Named(l.UnreadMeta)).Append('\n');
+    }
+
+    /// <summary>The plugins whose header names this one as a master: the loaded ones in load order, then copies on disk the game does not load, marked.</summary>
+    static void AppendDependents(StringBuilder sb, HousecarlCore.MasterDependentsResult? d, int cap)
+    {
+        sb.Append("  named as a master by");
+        if (d is null) { sb.Append(": unknown — houseCARL could not open the mods folder, so no plugin header was read\n"); return; }
+        if (d.InOrder.Count + d.OnDisk.Count == 0) sb.Append(": none, in the order or on disk");
+        else
+        {
+            sb.Append(" (").Append(d.InOrder.Count).Append(" in the order");
+            if (d.OnDisk.Count > 0) sb.Append(" · ").Append(d.OnDisk.Count).Append(" on disk, not loaded");
+            sb.Append("): ");
+            AppendJoined(sb, d.InOrder.Concat(d.OnDisk.Select(x => x.Plugin + " [not loaded: " + x.Where + (x.Why is null ? "" : ", " + x.Why) + "]")).ToList(), cap);
+        }
+        sb.Append('\n');
+        if (d.UnopenedFolders.Count + d.UnreadHeaders.Count > 0)
+        {
+            sb.Append("  [!] not read, so a plugin naming it there is missing above:");
+            if (d.UnopenedFolders.Count > 0) sb.Append(' ').Append(d.UnopenedFolders.Count).Append(" folder(s) would not open (").Append(HousecarlCore.Mo2LoadOrder.Named(d.UnopenedFolders)).Append(')');
+            if (d.UnreadHeaders.Count > 0) sb.Append(d.UnopenedFolders.Count > 0 ? ";" : "").Append(' ').Append(d.UnreadHeaders.Count).Append(" header(s) would not read (").Append(string.Join("; ", d.UnreadHeaders)).Append(')');
+            sb.Append('\n');
+        }
+    }
+
+    /// <summary>Comma-joined names, cut at <paramref name="cap"/> with an explicit notice.</summary>
+    static void AppendJoined(StringBuilder sb, IReadOnlyList<string> names, int cap)
+    {
+        for (int i = 0; i < names.Count; i++)
+        {
+            if (sb.Length >= cap) { sb.Append(' ').Append(CutNotice(i, names.Count)); return; }
+            if (i > 0) sb.Append(", ");
+            sb.Append(names[i]);
+        }
+    }
+
     /// <summary>Which folder serves the plugin, then every other same-named copy with its layer state and size.</summary>
-    static void AppendCopies(StringBuilder sb, IReadOnlyList<PluginCopy> copies)
+    static void AppendCopies(StringBuilder sb, IReadOnlyList<PluginCopy> copies, IReadOnlyList<string> unopened)
     {
         var inv = System.Globalization.CultureInfo.InvariantCulture;
         string Line(PluginCopy x) => x.Where + " · " + (x.Bytes is { } b ? b.ToString("N0", inv) + " bytes" : "size unreadable")
                                      + (x.Served == OutputLocations.ServedStanding.Shadowed ? " · shadowed" : "");
         var served = copies.FirstOrDefault(x => x.Served == OutputLocations.ServedStanding.Serves);
         sb.Append("  served from: ").Append(served is null
-            ? (copies.Count == 0 ? "none — no folder holds a file of this name" : "none — no enabled folder holds this file")
+            ? (unopened.Count > 0 ? $"unknown — {unopened.Count} mod folder(s) could not be opened ({HousecarlCore.Mo2LoadOrder.Named(unopened)}), and it may be in one of them"
+               : copies.Count == 0 ? "none — no folder holds a file of this name" : "none — no enabled folder holds this file")
             : Line(served)).Append('\n');
         foreach (var x in copies)
             if (x != served) sb.Append("  also in:     ").Append(Line(x)).Append('\n');
     }
 
-    static bool Contains(IReadOnlyList<string> list, string name)
+    internal static bool Contains(IReadOnlyList<string> list, string name)
     {
         foreach (var s in list) if (string.Equals(s, name, StringComparison.OrdinalIgnoreCase)) return true;
         return false;
+    }
+}
+
+/// <summary>What a filter value reads as beyond a mod and a plugin, read fresh per call: the named mod folder's Nexus id (0 for none, null when its meta.ini will not read), the value as a Nexus id (0 when it is not a positive whole number, MO2's rule) and the folders carrying it (null when the mods folder will not list), and, for a plugin filename, the plugins naming it as a master (null when the mods folder will not open).</summary>
+public sealed record FilterLookups(int? ModNexusId, int NexusId, IReadOnlyList<string>? NexusFolders, IReadOnlyList<string> UnreadMeta,
+                                   HousecarlCore.MasterDependentsResult? Dependents)
+{
+    public static FilterLookups Read(string name, LoadOrderStatusData d)
+    {
+        var c = d.Composition;
+        bool readable = d.ModsFolderUnreadable is null;
+        bool isMod = StatusWire.Contains(c.EnabledMods, name) || StatusWire.Contains(c.DisabledMods, name);
+        int? modId = readable && isMod && d.ModsDir.Length > 0 ? HousecarlCore.Mo2ModMeta.ModIdOf(Path.Combine(d.ModsDir, name)) : 0;
+        int nexusId = int.TryParse(name, System.Globalization.NumberStyles.None, System.Globalization.CultureInfo.InvariantCulture, out var id) && id > 0 ? id : 0;
+        var unread = new List<string>();
+        var folders = nexusId > 0 && readable ? HousecarlCore.Mo2ModMeta.FoldersWithModId(d.ModsDir, nexusId, unread) : null;
+        var dependents = readable && HousecarlCore.PluginFile.IsPlugin(name)
+            ? HousecarlCore.MasterDependents.Find(c, d.ModsDir, d.DataDir, d.OverwriteDir, name) : null;
+        return new FilterLookups(modId, nexusId, folders, unread, dependents);
     }
 }
 

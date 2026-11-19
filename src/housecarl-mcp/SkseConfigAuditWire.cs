@@ -18,6 +18,16 @@ static class SkseConfigAuditWire
     /// <summary>What this family's accounting counts: the config FILES the audit covers.</summary>
     internal const string RowNoun = "config(s)";
 
+    /// <summary>What a config only inside a BSA is said to be, one sentence for every framework.</summary>
+    internal const string ArchiveOnlyNote = ArchiveOnlyWhere + ": " + LooseOnly + "it may never be read";
+    const string ArchiveOnlyWhere = "only inside a BSA";
+    const string LooseOnly = "most SKSE plugins read loose files only, so ";
+
+    /// <summary>The line naming what the audit leaves to the layer tool: IsSkyPatcherIni's two arms, root and switches file.</summary>
+    internal static readonly string LeftToLayer =
+        "(SkyPatcher's INIs are left out of this audit, as " + HousecarlCore.ToolNames.Layer + " reads them: any name holding .ini under " +
+        HousecarlCore.SkyPatcherDiscovery.Root + "\\, and the file " + HousecarlCore.RuntimeFormats.SkyPatcher.SwitchesFile + ".)";
+
     public static string Render(SkseConfigAuditData d, string? filter, int cap, RowWindow window = default, int trailer = 0)
     {
         if (filter is { Length: > 0 }) return RenderFiltered(d, filter.Trim(), cap, window, trailer);
@@ -30,7 +40,7 @@ static class SkseConfigAuditWire
         var tail = "\n(scope: form-shaped references only — a hex FormID + plugin filename, or a plugin-named folder gate. Bare " +
                    "EditorID/name strings are not validated (Wave 2). Extraction is heuristic over token shapes: a token in a comment " +
                    "or disabled block still counts — 'references this file declares', not 'the DLL will use'. A folder that SHOULD carry " +
-                   "references but shows none may use a reference shape not yet recognized.)\n" + Caveats(d, cap) +
+                   "references but shows none may use a reference shape not yet recognized.)\n" + LeftToLayer + "\n" + Caveats(d, cap) +
                    "\n→ filter='<folder/mod/filename/plugin>' to audit one group and see every reference (OKs included).";
         var healthyFiles0 = d.Files.Where(f => f.ReadError is null && f.Refs.Count > 0 && f.Refs.All(r => r.Verdict == SkseRefVerdict.Ok)).ToList();
         var noRefFiles0 = d.Files.Where(f => f.ReadError is null && f.Refs.Count == 0).ToList();
@@ -124,20 +134,10 @@ static class SkseConfigAuditWire
             h => $"  - {Loc(h)}: '{h.Ref.Raw}' → {h.Audited.Detail}{Prov(h.File)}", tally)) missed++;
         if (!AppendHits(sb, "UNPARSEABLE — shape-matched tokens that can't be normalized (flagged, never guessed)", unparseable, budget,
             h => $"  - {Loc(h)}: '{h.Ref.Raw}' → {h.Audited.Detail}{Prov(h.File)}", tally)) missed++;
-        string ReadErrCut(int shown) => "  ... [" + shown + " of " + readErrors.Count + "; raise max_chars]\n";
-        int readErrCut = readErrors.Count == 0 ? 0 : ReadErrCut(readErrors.Count).Length;
-        if (readErrors.Count > 0 && !SkseRenderParts.Head(sb, budget - readErrCut, "\nread errors — configs that could not be read/decoded (NOT counted as clean) (" + readErrors.Count + "):\n")) missed++;
-        else if (readErrors.Count > 0)
-        {
-            int rows3 = budget - readErrCut;
-            int shown = 0;
-            foreach (var f in readErrors)
-            {
-                var row = "  - " + f.RelPath + ": " + f.ReadError + Prov(f) + "\n";
-                if (sb.Length + row.Length > rows3) { sb.Append(ReadErrCut(shown)); break; }
-                sb.Append(row); shown++; tally.Mark(f.RelPath);
-            }
-        }
+        if (!AppendFiles(sb, "read errors — configs that could not be read/decoded (NOT counted as clean)", readErrors, budget,
+            f => "  - " + f.RelPath + ": " + f.ReadError + Prov(f), tally)) missed++;
+        if (!AppendFiles(sb, "configs " + ArchiveOnlyWhere, rows.Where(f => f.ArchiveOnly).ToList(), budget,
+            f => "  - " + f.RelPath + Prov(f), tally, ": " + LooseOnly + "they may never be read")) missed++;
 
         // ── Accounted-for remainder: everything that is not a diagnostic, so nothing is dropped. ──
         var healthyFiles = d.Files.Where(f => f.ReadError is null && f.Refs.Count > 0 && f.Refs.All(r => r.Verdict == SkseRefVerdict.Ok)).ToList();
@@ -207,7 +207,8 @@ static class SkseConfigAuditWire
                 .Concat(d.Files.Select(f => f.WinningProvider).Where(p => !string.IsNullOrEmpty(p)).Select(p => p!))
                 .Concat(d.Files.SelectMany(f => f.Refs.Select(r => r.Ref.Plugin)));
             sb.Append("\nnothing under SKSE\\Plugins matched. ")
-              .Append(HousecarlCore.PluginNameSuggest.DidYouMean(filter, suggestPool));
+              .Append(HousecarlCore.PluginNameSuggest.DidYouMean(filter, suggestPool))
+              .Append('\n').Append(LeftToLayer);
             sb.Append(tail);   // a "no match" over an incompletely-read build must carry the caveat (Q3)
             return sb.ToString().TrimEnd('\n') + Accounting();
         }
@@ -221,6 +222,7 @@ static class SkseConfigAuditWire
             if (f.ProviderCount > 1)
                 sb.Append("  [!] contested by ").Append(f.ProviderCount).Append(" mods (winner audited): ")
                   .Append(string.Join(" › ", f.Providers.Select(p => $"{p.Name} ({p.Kind})"))).Append('\n');
+            if (f.ArchiveOnly) sb.Append("  [!] ").Append(ArchiveOnlyNote).Append('\n');
             if (f.ReadError is not null) sb.Append("  [!] ").Append(f.ReadError).Append('\n');
             else if (f.Refs.Count == 0) sb.Append("  (no form-shaped references)\n");
             int head = sb.Length;
@@ -306,6 +308,25 @@ static class SkseConfigAuditWire
         return true;
     }
 
+    // A list of whole files under one heading (label, count, then any reason), cut at the budget with its own notice;
+    // false when not even the heading fits.
+    static bool AppendFiles(StringBuilder sb, string label, IReadOnlyList<SkseConfigFileAudit> files, int cap,
+                            Func<SkseConfigFileAudit, string> line, RowTally tally, string reason = "")
+    {
+        if (files.Count == 0) return true;
+        string Cut(int shown) => "  ... [" + shown + " of " + files.Count + "; raise max_chars]\n";
+        int room = cap - Cut(files.Count).Length;
+        if (!SkseRenderParts.Head(sb, room, "\n" + label + " (" + files.Count + ")" + reason + ":\n")) return false;
+        int n = 0;
+        foreach (var f in files)
+        {
+            var row = line(f) + "\n";
+            if (sb.Length + row.Length > room) { sb.Append(Cut(n)); break; }
+            sb.Append(row); n++; tally.Mark(f.RelPath);
+        }
+        return true;
+    }
+
     /// <summary>How many build-level caveat notes this answer carries — the accounting's <c>notes</c> count.</summary>
     internal static int NoteCount(SkseConfigAuditData d) => (d.ReadIncomplete ? 1 : 0) + d.Warnings.Count + d.BsaFailures.Count + d.RootFailures.Count;
 
@@ -349,6 +370,7 @@ static class SkseConfigAuditWire
             w.WriteNumber("broken", Verdicts(SkseRefVerdict.Dangling) + Verdicts(SkseRefVerdict.Unparseable));
             w.WriteNumber("inert", Verdicts(SkseRefVerdict.PluginMissing));
             w.WriteNumber("read_errors", allFiles.Count(x => x.ReadError is not null));
+            w.WriteNumber("archive_only", allFiles.Count(x => x.ArchiveOnly));
             w.WriteEndObject();
 
             w.WriteStartArray("files");
@@ -404,6 +426,7 @@ static class SkseConfigAuditWire
         w.WriteNumber("provider_count", file.ProviderCount);
         SkseJsonDoc.Providers(w, file.Providers);
         SkseJsonDoc.Nullable(w, "read_error", file.ReadError);
+        if (file.ArchiveOnly) w.WriteString("note", ArchiveOnlyNote);
         if (!close) return;
         w.WriteStartArray("references");
         w.WriteEndArray();

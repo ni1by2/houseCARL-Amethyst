@@ -16,38 +16,37 @@ compatibility: Requires the houseCARL MCP server and a configured Mod Organizer 
 
 ## Overview
 
-SPID (Spell Perk Item Distributor, by powerofthree) is an SKSE plugin that distributes forms (spells, perks, items, shouts, keywords, outfits, factions, AI packages) **to NPCs at runtime**,
+SPID (Spell Perk Item Distributor, by powerofthree) is an SKSE plugin that distributes forms —
+spells, perks, items, shouts, keywords, outfits, factions, AI packages — **to NPCs at runtime**,
 driven by plain-text `_DISTR.ini` files. It writes nothing to plugins or saves and redistributes
 from scratch each launch, so a SPID mod is trace-free to add or remove. This skill composes and
 reads SPID lines, taking every form type, filter, modifier and value from `references/` — look a
 token up, never invent one, because a wrong token fails silently.
 
-**Scope.** SPID's target is NPCs. It is *best* for groups (faction, race, level, trait) and it can
+**Scope.** SPID's target is NPCs. It is *best* for groups — faction, race, level, trait — and it can
 also name one NPC by EditorID or FormID (`references/filters.md` §1 and §2), so a single-NPC
-distribution is a real SPID line, not a refusal. For one NPC, `housecarl:skypatcher-authoring` is
+distribution is a real SPID line, not a refusal. For one NPC, `skypatcher-authoring` is
 usually the *better* fit, and a record's *own fields* are its job outright; a keyword onto *item
-records* is `housecarl:kid-authoring`. Siblings carry the `housecarl:` prefix on a Claude Code
-plugin install; a Codex flat install sees the bare folder name (`kid-authoring`).
+records* is `kid-authoring`.
 
 ## First step — open the grammar reference
 
-The grammar is uniform (one line shape across all 10 form types) so open only what your task
+The grammar is uniform — one line shape across all 10 form types — so open only what your task
 touches:
 
-- **`references/grammar-core.md`**: read first: the seven pipe sections, file discovery and
+- **`references/grammar-core.md`** — read first: the seven pipe sections, file discovery and
   distribution order, the FormID and EditorID forms, and how filters combine. Almost every task
   needs it.
-- **`references/form-types.md`**: read it when you are deciding *what* is being distributed, or
+- **`references/form-types.md`** — read it when you are deciding *what* is being distributed, or
   when `Form =` will not infer the type.
-- **`references/filters.md`**: read it whenever targeting is in question; §3 owns what a Level
+- **`references/filters.md`** — read it whenever targeting is in question; §3 owns what a Level
   Filter does and does not reach.
-- **`references/value-tables.md`**: a lookup, not a read: open it for a skill index, a trait letter
+- **`references/value-tables.md`** — a lookup, not a read: open it for a skill index, a trait letter
   or a package-list type and close it again.
-- **`references/index.jsonl`**: grep it to jump straight to the right section instead of reading a
+- **`references/index.jsonl`** — grep it to jump straight to the right section instead of reading a
   whole file.
 
-Read grammar-core and the one or two reference files needed for the task. Do not bulk-load the
-reference set.
+Read grammar-core plus the one or two files you need — don't bulk-load everything.
 
 ## Workflow — compose a distribution line
 
@@ -56,7 +55,7 @@ reference set.
    fly). The generic `Form =` infers the type from the named record — except SleepOutfit and Skin,
    which must be named explicitly (`references/form-types.md`).
 
-2. **Identify the target NPCs** (*to whom*) and pick the filter section(s) in
+2. **Identify the target NPCs** — *to whom* — and pick the filter section(s) in
    `references/filters.md`. The inputs to have from the user before composing: the form, the group
    receiving it, and any level, chance or count bound on it.
    - by **name / EditorID / keyword / race-keyword / template** → **String** filter (position 1)
@@ -75,7 +74,7 @@ reference set.
      override that **renames** the record, which is ordinary on a heavily overhauled order. Read the
      winner's EditorID before trusting the name; use the FormID when it has changed
      (`references/grammar-core.md` §6).
-   - **Count the pipes**: each section is positional. Positions are 0-based everywhere in this skill
+   - **Count the pipes** — each section is positional. Positions are 0-based everywhere in this skill
      and in `references/`: `FormOrEditorID` is position 0, String 1, Form 2, Level 3, Trait 4, Count 5,
      Chance 6 (`references/grammar-core.md` §4). So a value meant for Chance sits after six pipes, one
      meant for Count after five. Leave an unused middle section blank (`||`) or `NONE`; a trailing
@@ -90,11 +89,12 @@ reference set.
    range; zero-based package index; package-list type `0`–`4`; a `0`–`100` chance (default 100).
    Append `!` to the chance to make it deterministic (consistent per NPC + save across sessions).
 
-5. **Place the file** at `Data/<name>_DISTR.ini` — the **`_DISTR` suffix is mandatory** and the file
-   is flat in `Data/`, never in a per-type subfolder; without either it is never read. Files load
-   alphabetically A→Z, each top-to-bottom; comment with `;`. Ship it inside a mod the mod manager
-   handles, then confirm the placement with `housecarl_asset_status` (*Check the reach before you
-   write it*, below).
+5. **Place the file** at `Data/<name>_DISTR.ini` — **`_DISTR` in the name is mandatory** (in that
+   case) and the file is flat in `Data/`, never in a per-type subfolder; without either it is never
+   read. Files load in the byte order of their names, not alphabetically, and a file's lines go by
+   key before line order (`references/grammar-core.md` §2-§3); comment on a line of its own with `;`.
+   Ship it inside a mod the mod manager handles, then confirm the placement (*Check the reach before
+   you write it*, below).
 
 ## Two worked lines
 
@@ -122,25 +122,16 @@ are empty; every pipe before Chance is still written.
 
 A SPID line is written blind unless you measure the population first. Three checks, all read-only:
 
-1. **Size the group the filter names**, before composing: `housecarl_records` with `types`, a
-   `where` predicate for the faction or keyword, and `counts_only=true` — the cheap census. A
-   faction or keyword test is one quantified step, and it takes either spelling: the link step
-   (`Factions[*any].Faction->editorid = BanditFaction`), which resolves the target record's EditorID,
-   or the **FormLink wire form** (`Factions[*any].Faction = 01BCC0:Skyrim.esm`), which compares the
-   link itself. Prefer the wire form when you already hold the FormID (it needs no second
-   resolution) and the link step when you only know the EditorID. Either way, resolve the field path
-   with `housecarl:mutagen-reference` rather than guessing it. For a **union** of groups, one call
-   does it: a comma list inside the predicate (`Factions[*any].Faction in [01BCC0:Skyrim.esm,
-   0267BE:Skyrim.esm]`) censuses both at once, where one predicate per group needs a call each.
-2. **Count how many of those are on a PC level multiplier**, when a Level Filter is in play:
-   `housecarl_records` with the same `types`, check 1's predicate **and**
-   `"Configuration.Level.LevelMult >= 0"` together in `where`, and `counts_only=true`. `where`
-   predicates are ANDed, so dropping check 1's term counts every scaling NPC in the order instead
-   of the group the line names. That is the population the re-distribution pass covers, not the
-   population the line reaches — see *Verifying a distribution actually happened*.
-3. **Prove the file is the one the game reads**, after placing it: `housecarl_asset_status` with
-   `asset_paths=["<name>_DISTR.ini"]`, a Data-relative path like any other. It names the winning
-   source, every source that provides it, and whether more than one contends.
+1. **Size the group the filter names**, before composing: count the NPCs whose faction or keyword
+   list holds the group. Resolve the field path with `mutagen-reference` rather than guessing it.
+2. **Count how many of those are on a PC level multiplier**, when a Level Filter is in play: check
+   1's group **and** a PC level multiplier, together. Without the group it counts every scaling NPC
+   in the order instead of the group the line names. That is the population the re-distribution
+   pass covers, not the population the line reaches — see *Verifying a distribution actually
+   happened*.
+3. **Prove the file is the one the game reads**, after placing it: `<name>_DISTR.ini` is a
+   Data-relative path like any other asset. Find the winning source, every source that provides it,
+   and whether more than one contends.
 
 **A census is a floor.** Both counts read each record's *own* local data. An NPC that inherits its
 factions or stats from a template has that data masked on its own record, while SPID matches the
@@ -148,25 +139,21 @@ resolved NPC (`references/grammar-core.md` §11), so a templated actor SPID reac
 Say that alongside the number rather than passing it off as the resolved population.
 
 **Stop condition.** Quote the counts you measured and no others; never state a reach you did not
-measure. **What the surface cannot do:** nothing reports the set a *composed line* reaches (SPID's
-own parse of the seven sections, trait letters and chance (issue #614)) and nothing checks that a
-drafted `_DISTR.ini` parses offline: `housecarl_skse` says outright that distributor INIs in `Data\`
-root are covered by no family, and no issue is filed for a SPID parse check.
+measure.
 
 ## Bundled-or-warn, and the version window
 
 The `references/` corpus documents SPID **7.3.0**. If a form type, filter, trait or behaviour is not
-in it, **say so — do not fabricate a plausible token.** There is no backstop on this path: no
-houseCARL tool reads a `_DISTR.ini`, and SPID skips an unparseable line, an unknown filter term or
-an unresolvable form with no error, so a guessed token yields a file that quietly distributes
-nothing. The only checks that exist are the three under *Check the reach before you write it*.
+in it, **say so — do not fabricate a plausible token.** SPID skips an unparseable line, an unknown
+filter term or an unresolvable form with no error, so a guessed token yields a file that quietly
+distributes nothing. Before the write, the checks are the three under *Check the reach before you
+write it*; after launch, the log and live actors under *Verifying a distribution actually happened*.
 
 The window runs **both** ways. Above 7.3.0 the corpus may be behind — surface that and offer to
 re-derive. **Below 7.3.0 a documented feature may not exist yet**: `references/filters.md` marks the
 `Actor [ACHR]` Form filter *(added in 7.3)*, and on an older install that line is skipped silently.
 Read the installed version before relying on a dated feature — but read it from the right place.
-`housecarl_skse` with `findings='inventory'` and `filter=` the SPID DLL name reports what the DLL's
-static version manifest declares (name, author, version) without loading it. For SPID that number
+The SPID DLL's static SKSE version manifest declares name, author and version. For SPID that number
 is a **major-version floor only** (below), so it cannot settle a 7.3 question either way: it says
 7.0.0 on every 7.x install, and reading it as "the version" is what makes a 7.3-only token look
 unavailable on a 7.3.1 install.
@@ -176,8 +163,8 @@ version. [source]** `v.PluginVersion(Version::MAJOR)`
 in the `SKSEPlugin_Version` export (`SPID/src/main.cpp`, SPID 7.3.0, commit `31e76d3`; unchanged at
 7.3.3), where `Version::MAJOR` is `PROJECT_VERSION_MAJOR` off `set(VERSION 7.3.0)` in
 `SPID/CMakeLists.txt`. Minor and patch are never written, so **every** SPID 7.x release declares
-7.0.0 to SKSE. So `housecarl_skse` reporting 7.0.0 is a truthful read of a lossy export, not a
-misread (houseCARL issue #667) — and being lossy, it can never *contradict* another source in the
+7.0.0 to SKSE. So a manifest read of 7.0.0 is a truthful read of a lossy export, not a misread —
+and being lossy, it can never *contradict* another source in the
 minor or patch digit, only fail to speak to it.
 
 Three sources, in order of authority:
@@ -185,14 +172,13 @@ Three sources, in order of authority:
 - **The DLL's own Win32 file-version resource** is the authoritative number:
   `FILEVERSION @PROJECT_VERSION_MAJOR@, @PROJECT_VERSION_MINOR@, @PROJECT_VERSION_PATCH@, 0`
   (`SPID/cmake/version.rc.in`). It is stamped on the binary itself, so it describes the file that
-  will actually load. Read it from the DLL's file properties (Details tab, "File version"); no
-  houseCARL tool reads it.
+  will actually load. Read it from the DLL's file properties (Details tab, "File version").
 - **MO2's `meta.ini` `version=`** is the version string MO2 recorded for the **download** at install
   time, not a read of the DLL. It is the best number you have without opening the file's properties,
   and it usually agrees — but it **lags**: a repack, a manual update dropped over an existing mod, or
   a mod-page version that is not the plugin's own version all leave it stale. Drop SPID 7.1 into a
   folder whose `meta.ini` still reads 7.3.1 and it will still read 7.3.1.
-- **The SKSE manifest** (`housecarl_skse`) is a floor: it proves 7.x, nothing finer.
+- **The SKSE manifest** is a floor: it proves 7.x, nothing finer.
 
 Gate a dated feature on the lower of what you actually verified. `meta.ini` alone is enough for a
 routine call; when a 7.3-only token like the `Actor [ACHR]` Form filter is load-bearing and
@@ -211,7 +197,7 @@ they differ, and say which one you gated on.
   likely crash the game (`references/form-types.md`).
 - **One modifier per String or Form expression.** `-Guard+ActorTypeNPC` is invalid; Traits is the
   only section that allows mixing (`F/-U/L`).
-- **End the filename in `_DISTR` and keep it flat in `Data/`.** A file without the suffix, or filed
+- **Put `_DISTR` in the filename and keep it flat in `Data/`.** A file without it, or filed
   into a per-type subfolder, is ignored entirely — no line in it ever runs.
 - **Map "match by X" onto one of the four filter sections** (text → String, form → Form, level/skill
   → Level, trait → Trait) and look it up in `references/filters.md`. There are exactly four; a filter invented
@@ -233,9 +219,10 @@ what SPID looked up; only a live actor shows what SPID applied.
   launch and writes nothing into the save, so actors in a pre-existing save do pick up a rule added
   afterwards. The INIs are read **once per game launch**, though: a rule added while the game runs
   needs a restart, and the actor has to load in that new session.
-- **A dynamic keyword IS reachable.** A keyword SPID creates at runtime has no plugin FormID (nothing in xEdit to point at) but it is in the game's keyword array, so `Keyword.GetKeyword()`
+- **A dynamic keyword IS reachable.** A keyword SPID creates at runtime has no plugin FormID —
+  nothing in xEdit to point at — but it is in the game's keyword array, so `Keyword.GetKeyword()`
   finds it by name, which is what makes a no-ESP keyword distribution verifiable from script at all.
-  For the signature use `housecarl:papyrus-reference`; the SPID side is in `references/form-types.md`.
+  For the signature use `papyrus-reference`; the SPID side is in `references/form-types.md`.
 - **Chance skips actors by design.** A `Chance` below 100 is *supposed* to miss some NPCs, so two
   sampled actors without the form is an ordinary outcome for `||||||50` — and the roll is re-made
   each session unless `!` pins it per NPC. Set Chance to 100 before calling a rule failed.
@@ -244,7 +231,7 @@ what SPID looked up; only a live actor shows what SPID applied.
   only NPCs on a PC level multiplier and exists to re-evaluate them as the player levels — it does
   not shrink the target set. `references/filters.md` §3 owns this with its source citation; check 2
   under *Check the reach before you write it* counts the difference.
-- **Sample somewhere NPCs must be**: testing practice, not a SPID rule. An interior cell with known
+- **Sample somewhere NPCs must be** — testing practice, not a SPID rule. An interior cell with known
   occupants beats an exterior spawn marker: finding no NPC in scan range there is inconclusive, not
   a failing distribution.
 
