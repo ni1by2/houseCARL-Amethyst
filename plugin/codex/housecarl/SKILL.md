@@ -16,7 +16,7 @@ compatibility: Requires the houseCARL MCP server and an explicitly selected Amet
 # houseCARL
 
 Read the selected Amethyst saved snapshot through the houseCARL MCP server, check the record schema, then write a staging patch for review and activation through Amethyst. Every dependent result carries saved-generation and freshness information; a successful write does not prove what the game loads. Use the routing table to choose the grammar skill and follow the read order before writing.
-Each tool description defines its parameters.
+Each tool description defines its parameters. With the 2.2 API, file selectors use `paths=`, runtime distributor inspection uses `housecarl_layer`, and `housecarl_nif_inspect` takes `formids=` for NPC faces. Retired parameter names refuse with migration guidance.
 
 The user's instructions take precedence over guidelines provided in a skill.
 
