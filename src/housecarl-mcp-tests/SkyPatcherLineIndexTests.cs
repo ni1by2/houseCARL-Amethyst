@@ -28,18 +28,44 @@ public sealed class SkyPatcherLineIndexTests : IDisposable
         Assert.Contains("Weight = 0", Post(_w.Heel));
     }
 
+    // a direct list next to a finder reaches the named records plus the found ones: HcHeelBoots by name, HcBothBoots by both
     [Fact]
-    public void ATwoFilterLineReachesTheRecordBothFiltersMatch()
+    public void ATwoFilterLineReachesTheNamedAndTheFoundRecords()
     {
         Assert.Contains("Value = 9", Post(_w.Both));
-        Assert.Contains("Value = 0", Post(_w.Heel));
+        Assert.Contains("Value = 9", Post(_w.Heel));
+        Assert.Contains("Value = 0", Post(_w.Plain));
     }
 
     [Fact]
     public void ALineNamingByEditorIdOrA0xValueStillApplies()
     {
         Assert.Contains("Keywords = [list: 1 item(s)]", Post(_w.Plain));   // HcAddKw, by EditorID
-        Assert.Contains("Keywords = [list: 1 item(s)]", Post(_w.Heel));    // its own HcHeelKw only: 0x000810 names nothing
+        Assert.Contains("Keywords = [list: 2 item(s)]", Post(_w.Heel));    // its own HcHeelKw and HcAddKw: 0x000810 names it, as SkyPatcher reads 0x
+    }
+}
+
+/// <summary>A direct list beside a finder is not indexed under its named records alone: the record only the finder reaches is patched.</summary>
+[Trait("tier", "integration")]
+public sealed class SkyPatcherLineIndexFinderTests : IDisposable
+{
+    // :1 names HcPlainCuirass; its keyword finder HcKw2 reaches HcBothBoots, which the line does not name.
+    readonly SkyPatcherRelevanceWorld _w = new(new[]
+    {
+        ("HcIndexFinder.ini", "filterByArmors=HcSpRel.esp|000811:filterByKeywords=HcSpRel.esp|000802:value=13\r\n"),
+    });
+
+    public void Dispose() => _w.Dispose();
+
+    string Post(string fid) => RecordsTools.Records(_w.Svc, formids: new[] { fid }, source: SkyPatcherRelevanceWorld.Post(),
+        project: new RecordsTools.RecordsProject { form = "fields", fields = new[] { "Value" } });
+
+    [Fact]
+    public void ARecordOnlyTheFinderReachesIsPatched()
+    {
+        Assert.Contains("Value = 13", Post(_w.Both));
+        Assert.Contains("Value = 13", Post(_w.Plain));
+        Assert.Contains("Value = 0", Post(_w.Heel));
     }
 }
 
@@ -85,7 +111,7 @@ public sealed class SkyPatcherLayerGroupReadTests : IDisposable
     [Fact]
     public void TheTargetsGroupIsReadOnce()
     {
-        var d = GroupReadDelta.Of(_w.Svc, () => SkyPatcherTools.SkyPatcherLayer(_w.Svc), "HcTargets.ini");
+        var d = GroupReadDelta.Of(_w.Svc, () => SkyPatcherTools.Layer(_w.Svc), "HcTargets.ini");
         Assert.Equal(new Dictionary<(string, string), int> { [("HcSpRel.esp", "Armors")] = 1 }, d);
     }
 }
@@ -106,7 +132,7 @@ public sealed class SkyPatcherNoOpOrderTests : IDisposable
     [Fact]
     public void NoOpRowsListInLineOrder()
     {
-        var r = SkyPatcherTools.SkyPatcherLayer(_w.Svc);
+        var r = SkyPatcherTools.Layer(_w.Svc);
         int first = r.IndexOf("HcNoOpOrder.ini:1 ", StringComparison.Ordinal), second = r.IndexOf("HcNoOpOrder.ini:2 ", StringComparison.Ordinal);
         Assert.True(first >= 0 && second >= 0, r);
         Assert.True(first < second, r);

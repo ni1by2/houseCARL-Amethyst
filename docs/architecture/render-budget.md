@@ -69,7 +69,11 @@ assembled from a roster of write sites: the render composes the whole response o
 the fixed part. The pieces that vary with the cut go through `BoundedBody.Reserve` as an upper bound instead.
 
 `BoundedBody` is the one place either transport appends anything `max_chars` can refuse; every body write goes
-through `Emit`, and a subject's own share sits on top of the response-wide test, not instead of it.
+through `Emit`, and a subject's own share sits on top of the response-wide test, not instead of it. One line is
+added outside it: the order note `Guard` leads an answer with while some enabled mod folder would not open
+([`tool-call-argument-shim.md`](tool-call-argument-shim.md)) is added after the body was capped, so such an
+answer can run past `max_chars` by the note's length, and an overrun sentence's "this response is N chars" leaves
+it out (a known gap in the `max_chars` exactness family, kept as is).
 
 #### Known under-fills — open gaps, not design
 
@@ -151,7 +155,8 @@ json answers cannot disagree. Its rules:
 
 - **Every omission is a subtraction against the sweep's own totals, taken after emission stops**, so the separate
   causes sum to the total exactly rather than by two counters happening to agree. The accounting line and the
-  boundary footer are reserved out of the caller's `max_chars` before the body renders, never appended past it.
+  boundary footer are reserved out of the caller's `max_chars` before the body renders, never appended past it;
+  only the order note above is added past it.
 - **A lane declares the SUBJECTS it actually has** (`SweepSubject`), and every sentence, json field, remedy and
   reserve derives from that set — so a lane without sections cannot claim about them and a lane with them cannot
   fail to. Subjects are lane facts, never a findings taxonomy. A json field named for a subject is present exactly
@@ -198,6 +203,12 @@ call. What a call spent comes back as `render_ms`, which is how the estimates ar
 per-service settings (`Bounds` on the service, `MaxAssetPaths` on the assets area) so a test lowers only its
 own world's; production never assigns them. `AccountingReserve` is held back from
 `max_chars` so the accounting line is paid for inside the cap.
+
+`CutReserve` (600 chars) is held back the same way for the statement naming the records a deep read cut, on the
+batch and scan lanes in both transports. `CutHold` charges it once, from the first row whose read was cut, so an
+answer with no cut row holds nothing and renders as before. The delta and tree forms need no hold: their statement
+is written in the header, ahead of the rows the cap is checked against. The dense table holds none: like its
+`read_note`, the statement rides the unreserved trailer after the rows.
 
 The comparison forms (delta/tree) are **measured, not predicted** (#932). The first reset dropped a predicted
 per-row cost, because each of four reviews found a read path it missed. The second dropped a flat worst-row price,

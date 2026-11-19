@@ -1,6 +1,6 @@
 ---
-updated: 2026-09-30
-covers: [src/housecarl-mcp/OutputLocations.cs, src/housecarl-mcp/PatchStemShadow.cs, src/housecarl-mcp/SeqTools.cs, src/housecarl-mcp/Artifacts.cs, src/housecarl-mcp/ResultsStore.cs, src/housecarl-core/ResultArtifact.cs, src/housecarl-core/AtomicFile.cs, src/housecarl-core/FileStamp.cs, src/housecarl-core/OrderStamp.cs, src/housecarl-core/PathArguments.cs]
+updated: 2026-11-17
+covers: [src/housecarl-mcp/OutputLocations.cs, src/housecarl-mcp/PatchStemShadow.cs, src/housecarl-mcp/SeqTools.cs, src/housecarl-mcp/Artifacts.cs, src/housecarl-mcp/ListInput.cs, src/housecarl-mcp/ListParams.cs, src/housecarl-mcp/ResultsStore.cs, src/housecarl-core/ResultArtifact.cs, src/housecarl-core/AtomicFile.cs, src/housecarl-core/FileStamp.cs, src/housecarl-core/OrderStamp.cs, src/housecarl-core/PathArguments.cs, src/housecarl-core/ListFile.cs]
 ---
 # Output locations and result artifacts: where a write lands, and the contracts that hold it
 
@@ -45,6 +45,13 @@ The files listed above cite the shared contracts below under ADR 0001.
 - **Two dispositions write one:** `to_file=`, because the caller asked, which renders only the manifest inline; and
   the `ceiling` auto-spill, because the inline render hit `max_chars`, which renders the prefix it managed and claims
   the complete result only when the file holds every match, naming where the missing matches are when it cannot.
+- **A cut row is counted on line 1:** the writer counts each row whose deep read was cut at its line budget
+  (`Writer.Cuts`, beside `type_counts`; a delta or tree row counts a comparison whose side was cut), and the manifest
+  carries `records_cut`, `cut_budget`, `cut_records` (every cut FormID) and a `notes` clause naming the first ten.
+  `SpillInfo.Complete` is false while any row is cut, so the spill block says `every row, NOT every row whole` with a
+  `cut:` line naming the first three (json: `complete: false`, `records_cut`, `cut_budget`, `cut_note`). `row_count`,
+  `total` and `type_counts` count rows as before. The budget a `to_file=` read runs under is in
+  `docs/architecture/read-engine.md`.
 
 ### Generated reports publish after completion
 
@@ -64,10 +71,42 @@ server-side consumption is EPOCH-CHECKED against the current build: a mismatch i
 epochs, with deliberately NO stale-override parameter. The check happens after the consuming call's own capture,
 inside the service, so the check and the answer read the same build. An artifact whose identity column is not the
 one the parameter takes is refused by name, and an identity that is not a FormID is not epoch-checked at all,
-because it names no record that could go stale.
+because it names no record that could go stale; `exclude=` alone compares a `path` artifact's epoch, into a note,
+never a refusal (assets.md, "Selecting a set of paths").
 
-**Error rows are not identity-bearing.** A row carrying an `error` member documents a failure and does not name a
-record, so extraction SKIPS them: re-entering an artifact means "the records this file resolved". An all-error
+**Every list parameter goes through one list door.** A tool's list parameter is typed `ListArg`, not `string[]`,
+and its entries are read only through `ListDoor.Read`, so a new list takes `@file` without having to opt in. The
+spec objects' own lists (`plugins.names`, `project.fields`, `walk.seed_paths`, `walk.through`) go through the same
+door at the head of `housecarl_records`; the JSON-element lists (`ops`, `assignments`, create's `records`, place's
+`assets`) keep their JSON shape but read their file through the same reader. The door owns the whole convention:
+
+- an entry with a leading `@` stands in place of the whole list, so one beside inline entries is refused;
+- `@@x` is the literal `@x` as an inline entry, except after `references=`' `!` (`!@@x` stays as written); the
+  JSON-element lists' bare-string spelling (`ops="@@x"`) is a file path, never an entry;
+- the path must follow the `@` and be absolute, and the file must be readable and not blank; each of those failures
+  is one sentence (`HousecarlCore.ListFile`), the same on every list and on `where=`'s `in @<file>` operand. A file
+  that is not blank but parses to no entry (separators only, or `[]`) gets its reader's own sentence: the door's
+  `ListFile.Empty` on most lists, `ListParams`' empty-array sentence on the JSON-element lists, and the operand's
+  own on `in @<file>`;
+- the parameter's `ListKind` says what the file may hold: `formid` (lines or commas, or a `formid` artifact),
+  `path` (lines, a JSON array, or a `path` artifact), `plugin` and `name` (lines or a JSON array). A `formid` file
+  is split on commas and line breaks, each entry trimmed of brackets, quotes, spaces and tabs, empties dropped, and
+  never parsed as JSON. A `path`, `plugin` or `name` file opening with `[` that parses is read as a JSON array, each
+  element trimmed of whitespace and blank ones dropped, and any other such file as lines, each trimmed of double
+  quotes, spaces and tabs, blank lines dropped;
+- `references=`'s `!` before an `@file` entry negates every token the file holds.
+
+The door returns the `ArtifactDemand` and never checks it: each consumer checks it against its own capture. The
+asset walk checks `formids=` and `records=` each, `nif_inspect formids=` and `check formids=`/`seeds=` check theirs,
+`exclude=` reads its demand's epoch and walk notes into notes (`FileExclusion`), and `forward`/`remove` still refuse
+a `formid` artifact outright. An artifact with a manifest and no rows is refused as no list, except under
+`exclude=` (`ListKind.Exclusion`, `ReadIdentity`'s `noRowsIsEmpty`), where it is the empty set; an all-error
+artifact is refused there too. Four string-typed lists, `compile_script import_dirs=`,
+`nexus_check_updates mods=`, `nexus_identify md5=` and `nif_inspect sections=`, have their own separators and take
+no `@file`. Neither does an op's `values=` inside `ops=`, which is data written to a record.
+
+**Error rows are not identity-bearing.** A row carrying a non-null `error` member documents a failure and does not
+name a record, so extraction SKIPS them (a null `error`, which the asset walk writes on every node, is no error: #1319): re-entering an artifact means "the records this file resolved". An all-error
 artifact refuses by its real cause, never by accusing the file; the "was it edited?" refusal is reserved for a
 SUCCESS row missing the identity column, which a server-written artifact never contains.
 
@@ -156,6 +195,12 @@ prefix so a throwing lane and a returning lane can both use it.
   — the epoch mismatch refuses naming both epochs, with no override. `RecordsArtifactTests.AnArtifactDeclaringNoIdentityColumnRefusesReEntryByName`
   — an artifact with no identity column refuses re-entry by name. `RecordsScopeAtFileTests.AFormIdArtifactIsRefusedByItsIdentityInOneShortSentence`
   — an artifact whose identity column is not the one the parameter takes is refused by that identity in one sentence.
+- *Re-entering an artifact*, the list door: `ListDoorTests` — a file answers as the same list inline on every
+  list kind (`AWalkRecordsArtifactWalksTheSameNodesAsTheListInline` is #1284), a FormID artifact is epoch-checked on
+  the walk, `nif_inspect formids=` and `check`, `@@` is literal everywhere, and each file mistake is one sentence on
+  every list; `ListDoorSurfaceTests` that every `ListArg` parameter is published as an array of strings carrying
+  the `["@<absolute path>"]` sentence. *No test pins `copy` or `merge_plugins` reading a file into a write that
+  lands; both are pinned on a refusal reached through the file.*
 - *Re-entering an artifact*, error rows: pinned across `RecordsArtifactTests`' re-entry facts —
   `AMixedArtifactReEntersOnItsResolvedRowsWithNoWasItEditedMisdiagnosis` (error rows are skipped) and
   `AnAllErrorArtifactIsRefusedByItsRealCauseNeverByAccusingTheFile` (an all-error artifact refuses by its real cause).

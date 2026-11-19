@@ -2,41 +2,62 @@ using HousecarlCore;
 namespace HousecarlMcp;
 
 /// <summary>The last-line tool-body guard: every MCP tool body runs inside
-/// <see cref="Tool(string,System.Func{string})"/> so an unconverted exception returns a named error; the
-/// stay-wrapped contract is in <c>docs/architecture/tool-call-argument-shim.md</c>.</summary>
+/// <see cref="Tool(string,System.Func{ToolCall,ToolAnswer},System.Threading.CancellationToken)"/>, which renders the body's
+/// <see cref="ToolAnswer"/> once, so an unconverted exception returns a named error and a refusal carries <c>isError</c>;
+/// the stay-wrapped contract is in <c>docs/architecture/tool-call-argument-shim.md</c>.</summary>
 internal static class Guard
 {
     /// <summary>Rethrow only a real request cancellation; a cancel with a live request token is named as a body failure.</summary>
-    public static string Tool(string tool, Func<string> body, CancellationToken ct = default)
+    public static string Tool(string tool, Func<ToolCall, ToolAnswer> body, CancellationToken ct = default)
     {
-        using var mark = MidCallChange.Begin();   // a plugin changed mid-call refuses the whole call
-        using var language = GameLanguage.Begin();   // the service binds its order's language and string winners to this call
-        try { var answer = body(); return Changed(mark) ?? answer; }
+        using var call = new ToolCall();
+        try { var answer = body(call); return Render(call, Changed(call) ?? answer); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception) when (Changed(mark) is { } refusal) { return refusal; }
-        catch (ProfileUnreadableException ex) { return Transient(ex); }
-        catch (GameLanguageRefusedException ex) { return "error: " + ex.Message; }
-        catch (Exception ex) { return Named(tool, ex); }
+        catch (Exception ex) { return Render(call, Caught(tool, call, ex)); }
     }
 
     /// <summary>The async twin, for tool bodies that await.</summary>
-    public static async Task<string> Tool(string tool, Func<Task<string>> body, CancellationToken ct = default)
+    public static async Task<string> Tool(string tool, Func<ToolCall, Task<ToolAnswer>> body, CancellationToken ct = default)
     {
-        using var mark = MidCallChange.Begin();
-        using var language = GameLanguage.Begin();
-        try { var answer = await body(); return Changed(mark) ?? answer; }
+        using var call = new ToolCall();
+        try { var answer = await body(call); return Render(call, Changed(call) ?? answer); }
         catch (OperationCanceledException) when (ct.IsCancellationRequested) { throw; }
-        catch (Exception) when (Changed(mark) is { } refusal) { return refusal; }
-        catch (ProfileUnreadableException ex) { return Transient(ex); }
-        catch (GameLanguageRefusedException ex) { return "error: " + ex.Message; }
-        catch (Exception ex) { return Named(tool, ex); }
+        catch (Exception ex) { return Render(call, Caught(tool, call, ex)); }
     }
 
-    /// <summary>The call's refusal when a plugin it relied on changed on disk mid-call, else null.</summary>
-    static string? Changed(MidCallChange.Scope mark) => mark.Settle() is { } why ? "error: " + why : null;
+    /// <summary>The one render: the answer's text led by the order's note when the call read an order that carries one, and a refusal marked on the call's result.</summary>
+    static string Render(ToolCall call, ToolAnswer answer)
+    {
+        if (answer.Refused) CallVerdict.MarkRefused();
+        var text = answer.Render();
+        return call.Owns && call.Context.Build?.OrderNote is { } note ? Lead(text, note) : text;
+    }
 
-    /// <summary>A profile file locked by MO2 mid-re-sort is a named transient, not an internal failure.</summary>
-    static string Transient(ProfileUnreadableException ex) => "error: " + ex.Message;
+    /// <summary><paramref name="note"/> ahead of <paramref name="text"/>: its first line, or a JSON object's first member.</summary>
+    static string Lead(string text, string note)
+    {
+        if (!text.StartsWith('{')) return note + "\n" + text;
+        if (System.Text.Json.Nodes.JsonNode.Parse(text) is not System.Text.Json.Nodes.JsonObject body) return text;
+        var led = new System.Text.Json.Nodes.JsonObject { ["order_note"] = note };
+        foreach (var (k, v) in body.ToList()) { body.Remove(k); led[k] = v; }
+        return led.ToJsonString(new System.Text.Json.JsonSerializerOptions { WriteIndented = true, Encoder = JsonTextEncoder.Encoder });
+    }
+
+    /// <summary>The Guard's own refusals, each text on every transport.</summary>
+    static ToolAnswer Caught(string tool, ToolCall call, Exception ex) => Changed(call) ?? ex switch
+    {
+        // a profile file locked by MO2 mid-re-sort, a game language houseCARL cannot read, and a configured explicit
+        // root that is not a folder are named refusals, not internal failures
+        ProfileUnreadableException or GameLanguageRefusedException or ExplicitRootRefusedException or AmbiguousBethesdaPathException
+            => ToolAnswer.Refusal(Wire.RefusalPrefix + ex.Message),
+        ModsFolderUnreadableException => ToolAnswer.Refusal(Wire.RefusalPrefix + ex.Message + " " + ToolNames.LoadOrderStatus + " still answers, to show what was read."),
+        _ => ToolAnswer.Refusal(Named(tool, ex)),
+    };
+
+    /// <summary>The call's refusal when its record and file views split (the roots or the plugin order moved between them),
+    /// or a plugin it relied on changed on disk mid-call, naming the files written if a write committed first; else null.</summary>
+    static ToolAnswer? Changed(ToolCall call) =>
+        (call.Context.Refusal(call.Mark) ?? call.Mark.Settle()) is { } why ? ToolAnswer.Refusal(Wire.RefusalPrefix + why) : null;
 
     static string Named(string tool, Exception ex)
     {
@@ -53,4 +74,40 @@ internal static class Guard
         if (s.Length > 0 && !s.EndsWith('.')) s += ".";
         return s.Length > 300 ? s[..300] + "…" : s;
     }
+}
+
+/// <summary>One tool call, opened by <see cref="Guard"/> around its body and handed to it; the call's own scopes live here.</summary>
+internal sealed class ToolCall : IDisposable
+{
+    /// <summary>A plugin changed mid-call refuses the whole call.</summary>
+    internal MidCallChange.Scope Mark { get; } = MidCallChange.Begin();
+
+    /// <summary>The service binds its order's language and string winners to this call.</summary>
+    readonly GameLanguage.Scope _language = GameLanguage.Begin();
+
+    /// <summary>The call's one view of the load order, which the service's getters fill and serve.</summary>
+    readonly CallContext.Scope _context = CallContext.Begin();
+
+    /// <summary>The call's context.</summary>
+    internal CallContext Context => _context.Context;
+
+    /// <summary>True for the outermost call, whose answer goes back to the caller.</summary>
+    internal bool Owns => _context.Owns;
+
+    public void Dispose() { _context.Dispose(); _language.Dispose(); Mark.Dispose(); }
+}
+
+/// <summary>Whether the call was refused, opened by the call-tool filter and set by <see cref="Guard"/>, so the result the
+/// filter returns carries <c>isError</c>; outside a filter (a test calling a tool method) nothing is opened and nothing is set.</summary>
+internal sealed class CallVerdict
+{
+    static readonly AsyncLocal<CallVerdict?> Current = new();
+
+    /// <summary>True once the call's answer was a refusal.</summary>
+    public bool Refused { get; private set; }
+
+    /// <summary>Open the verdict for one call; the filter reads it after the call returns.</summary>
+    public static CallVerdict Begin() => Current.Value = new CallVerdict();
+
+    internal static void MarkRefused() { if (Current.Value is { } v) v.Refused = true; }
 }

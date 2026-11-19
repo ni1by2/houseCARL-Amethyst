@@ -1,0 +1,492 @@
+using System.Text.Json;
+using HousecarlMcp;
+using Xunit;
+
+namespace HousecarlMcpTests;
+
+/// <summary>exclude= on the shared file selection (#1319): a walk's to_file= output re-enters as a path list, and
+/// "what a mod ships that the walk does not reach" is two calls, the walk to a file and the provider minus that file, on
+/// asset_status, nif_inspect and decompile_script alike.</summary>
+[Trait("tier", "unit")]
+public sealed class FileExclusionTests : IClassFixture<AssetWalkWorld>
+{
+    readonly AssetWalkWorld _w;
+    public FileExclusionTests(AssetWalkWorld w) => _w = w;
+
+    const string Mod = "Cape";
+    const int Big = 400_000;
+
+    string File(string tag) => Path.Combine(_w.Root, tag + "-" + Guid.NewGuid().ToString("N") + ".jsonl");
+
+    /// <summary>The walk from the cape mesh to a file: the mesh, its texture and its SMP XML, all the cape mod's.</summary>
+    string CapeWalk()
+    {
+        var f = File("reached");
+        var r = AssetTools.AssetStatus(_w.Svc, paths: new[] { AssetWalkWorld.CapeNif }, walk: Walks.On, source_provider: Mod, to_file: f);
+        Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
+        return f;
+    }
+
+    static string[] Rows(string file) => System.IO.File.ReadAllLines(file).Skip(1)
+        .Select(l => JsonDocument.Parse(l).RootElement.GetProperty("path").GetString()!).ToArray();
+
+    static string Fold(string p) => p.Replace('/', '\\').ToLowerInvariant();
+
+    /// <summary>The json rows' paths of an asset_status call, and its selector notes.</summary>
+    static (string[] Paths, string[] Notes) Json(string response)
+    {
+        using var doc = JsonDocument.Parse(response);
+        var r = doc.RootElement;
+        return (r.GetProperty("results").EnumerateArray().Select(x => x.GetProperty("path").GetString()!).ToArray(),
+                r.GetProperty("selector_notes").EnumerateArray().Select(n => n.GetString()!).ToArray());
+    }
+
+    string Status(string[]? exclude, string? provider = Mod, string[]? paths = null, bool counts = false)
+        => AssetTools.AssetStatus(_w.Svc, paths: paths, provider: provider, exclude: exclude, counts_only: counts,
+                                  format: counts ? null : "json", max_chars: Big);
+
+    /// <summary>The re-entry bug: a walk's file, whose rows carry "error": null, enters paths= as the walk's nodes.</summary>
+    [Fact]
+    public void AWalkFileReEntersAsAPathsList()
+    {
+        var f = CapeWalk();
+        var nodes = Rows(f);
+        Assert.Equal(3, nodes.Length);
+        var r = AssetTools.AssetStatus(_w.Svc, paths: new[] { "@" + f }, counts_only: true);
+        Assert.DoesNotContain("ERROR rows", r);
+        Assert.Contains($"census: counted={nodes.Length} ", r);
+    }
+
+    /// <summary>Q1 (a), two calls: the provider minus the walk's file is exactly what it ships that the walk does not
+    /// reach, compared ignoring case and slash direction, and the note counts what it removed.</summary>
+    [Fact]
+    public void AProviderMinusItsWalkFileIsWhatItShipsThatTheWalkDoesNotReach()
+    {
+        var f = CapeWalk();
+        var shipped = Json(Status(null)).Paths;
+        var reached = Rows(f).Select(Fold).ToHashSet();
+        var expected = shipped.Where(p => !reached.Contains(Fold(p))).ToArray();
+        Assert.NotEmpty(expected);
+        Assert.True(expected.Length < shipped.Length);
+
+        var (paths, notes) = Json(Status(new[] { "@" + f }));
+        Assert.Equal(expected, paths);
+        Assert.Equal($"exclude= removed {shipped.Length - expected.Length} of the {shipped.Length} selected path(s).", Assert.Single(notes));
+        Assert.Contains($"census: counted={expected.Length} ", Status(new[] { "@" + f }, counts: true));
+    }
+
+    /// <summary>Matching ignores case and slash direction, and a plain entry naming a folder takes everything beneath it.</summary>
+    [Fact]
+    public void MatchingIgnoresCaseAndSlashesAndAFolderTakesWhatIsBeneath()
+    {
+        var one = Json(Status(new[] { AssetWalkWorld.CapeNif.ToUpperInvariant().Replace('\\', '/') }, null,
+                              new[] { AssetWalkWorld.CapeNif, AssetWalkWorld.FxNif })).Paths;
+        Assert.Equal(new[] { AssetWalkWorld.FxNif }, one);
+
+        var all = Json(Status(null)).Paths;
+        var noMeshes = Json(Status(new[] { "MESHES" })).Paths;
+        Assert.Equal(all.Where(p => !p.StartsWith(@"meshes\", StringComparison.OrdinalIgnoreCase)), noMeshes);
+        var (noPex, pexNotes) = Json(Status(new[] { "scripts/*.PEX" }));
+        Assert.Equal(all.Where(p => !p.EndsWith(".pex", StringComparison.OrdinalIgnoreCase)), noPex);
+        // A glob that removed a path is not counted as matching nothing.
+        Assert.Equal($"exclude= removed {all.Length - noPex.Length} of the {all.Length} selected path(s).", Assert.Single(pexNotes));
+    }
+
+    /// <summary>Q2 (a): an entry the selection does not hold is counted in a note, not refused.</summary>
+    [Fact]
+    public void AnEntryTheSelectionDoesNotHoldIsCountedInANote()
+    {
+        var all = Json(Status(null)).Paths;
+        var (paths, notes) = Json(Status(new[] { "textures/hcwalk/nowhere.dds", AssetWalkWorld.CapeNif }));
+        Assert.Equal(all.Length - 1, paths.Length);
+        Assert.Equal($"exclude= removed 1 of the {all.Length} selected path(s); 1 of its 2 entries matched no selected path, so removed nothing.",
+                     Assert.Single(notes));
+    }
+
+    /// <summary>A plain entry takes whole path segments: a prefix of a file's name names nothing.</summary>
+    [Fact]
+    public void APlainEntryMatchesWholeSegmentsOnly()
+    {
+        var (paths, notes) = Json(Status(new[] { "meshes/hcwalk/cape" }, null, new[] { AssetWalkWorld.CapeNif }));
+        Assert.Equal(new[] { AssetWalkWorld.CapeNif }, paths);
+        Assert.Equal("exclude= removed 0 of the 1 selected path(s); 1 of its 1 entries matched no selected path, so removed nothing.", Assert.Single(notes));
+    }
+
+    /// <summary>A row with an error is never removed: a formids= token that is not a FormID is its own row, its path the token.</summary>
+    [Fact]
+    public void AnErrorRowIsNeverRemoved()
+    {
+        var (paths, notes) = Json(AssetTools.AssetStatus(_w.Svc, formids: new[] { "nope" }, exclude: new[] { "nope" }, format: "json", max_chars: Big));
+        Assert.Equal(new[] { "nope" }, paths);
+        Assert.Contains("exclude= removed 0 of the 1 selected path(s) (1 of them error rows, which it never removes); " +
+                        "1 of its 1 entries matched no selected path, so removed nothing.", notes);
+    }
+
+    /// <summary>Q2 (a): an exclusion that empties the selection is the answer, zero rows, not a refusal.</summary>
+    [Fact]
+    public void AnExclusionThatEmptiesTheSelectionAnswersZeroRows()
+    {
+        // The Cape mod's seven files, a literal so a change of the total fails here, not in a sibling call too.
+        var (paths, notes) = Json(Status(new[] { "**" }));
+        Assert.Empty(paths);
+        Assert.Equal("exclude= removed 7 of the 7 selected path(s).", Assert.Single(notes));
+        Assert.Contains("census: counted=0 ", Status(new[] { "**" }, counts: true));
+    }
+
+    /// <summary>nif_inspect takes exclude=: the provider's meshes less the walk's, and an explicit path it removes has no row.</summary>
+    [Fact]
+    public void NifInspectTakesExclude()
+    {
+        var f = CapeWalk();
+        var r = NifTools.NifInspect(_w.Svc, provider: Mod, exclude: new[] { "@" + f }, counts_only: true);
+        var all = NifTools.NifInspect(_w.Svc, provider: Mod, counts_only: true);
+        // The walk's three files leave four of the cape mod's seven, of which two are meshes; whole lines and literal
+        // totals, so a count in the tens fails.
+        var lines = r.Split('\n').Select(l => l.TrimEnd('\r')).ToArray();
+        Assert.True(lines[0].EndsWith("(2 meshes selected, provider \"Cape\")"), r);
+        Assert.Contains("note: exclude= removed 3 of the 7 selected path(s).", lines);
+        Assert.Contains("note: 2 file(s) the selectors matched are not .nif meshes and were left out; under=[\"meshes/**/*.nif\"] selects only meshes.", lines);
+        Assert.True(all.Split('\n')[0].TrimEnd('\r').EndsWith("(3 meshes selected, provider \"Cape\")"), all);
+        Assert.DoesNotContain("exclude=", all);
+
+        var two = NifTools.NifInspect(_w.Svc, paths: new[] { AssetWalkWorld.CapeNif, AssetWalkWorld.FxNif },
+                                      exclude: new[] { AssetWalkWorld.CapeNif });
+        Assert.True(two.Contains("exclude= removed 1 of the 2 selected path(s)."), two);
+        Assert.Contains(AssetWalkWorld.FxNif, two, StringComparison.OrdinalIgnoreCase);
+        Assert.DoesNotContain(AssetWalkWorld.CapeNif, two, StringComparison.OrdinalIgnoreCase);
+    }
+
+    /// <summary>decompile_script takes exclude=: an explicit Data path it removes has no row, and the rest still read.</summary>
+    [Fact]
+    public void DecompileScriptTakesExclude()
+    {
+        var outDir = Path.Combine(_w.Root, "psc-" + Guid.NewGuid().ToString("N"));
+        var r = DecompileTools.DecompileScript(_w.Svc, paths: new[] { AssetWalkWorld.BadPex, AssetWalkWorld.ChildPex },
+                                               exclude: new[] { AssetWalkWorld.BadPex.Replace('\\', '/').ToUpperInvariant() }, out_path: outDir);
+        Assert.Contains("exclude= removed 1 of the 2 selected path(s).", r);
+        Assert.DoesNotContain(AssetWalkWorld.BadPex, r, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains(AssetWalkWorld.ChildPex, r, StringComparison.OrdinalIgnoreCase);
+        Assert.Contains("[accounting] total=1", r);
+    }
+
+    /// <summary>With no selector of the load order's, exclude= is said, never silently dropped: on a file on disk,
+    /// and on a walk seeded by records alone.</summary>
+    [Fact]
+    public void AnExclusionWithNothingSelectedSaysSo()
+    {
+        const string none = "exclude= removed 0 of the 0 selected path(s); 1 of its 1 entries matched no selected path, so removed nothing.";
+        var disk = Path.Combine(_w.ModsDir, Mod, AssetWalkWorld.ChildPex);
+        var pex = DecompileTools.DecompileScript(_w.Svc, paths: new[] { disk }, exclude: new[] { "scripts" },
+                                                 out_path: Path.Combine(_w.Root, "psc-" + Guid.NewGuid().ToString("N")));
+        Assert.Contains(none, pex);
+        var nif = NifTools.NifInspect(_w.Svc, paths: new[] { Path.Combine(_w.ModsDir, Mod, AssetWalkWorld.CapeNif) }, exclude: new[] { "meshes" });
+        Assert.Contains(none, nif);
+        var walk = AssetTools.AssetStatus(_w.Svc, records: new[] { _w.Id("HcWalkHero") }, walk: Walks.On, exclude: new[] { "meshes" },
+                                          counts_only: true);
+        Assert.Contains(none, walk);
+    }
+
+    /// <summary>Row 11: exclude=[] is unset, as the other selectors read an empty list: each tool answers as without it.</summary>
+    [Fact]
+    public void AnEmptyExcludeIsUnset()
+    {
+        var none = Array.Empty<string>();
+        var diskNif = Path.Combine(_w.ModsDir, Mod, AssetWalkWorld.CapeNif);
+        Assert.Equal(NifTools.NifInspect(_w.Svc, paths: new[] { diskNif }), NifTools.NifInspect(_w.Svc, paths: new[] { diskNif }, exclude: none));
+        var diskPex = Path.Combine(_w.ModsDir, Mod, AssetWalkWorld.ChildPex);
+        string Pex(string[]? e)
+        {
+            var dir = "psc-" + Guid.NewGuid().ToString("N");
+            return DecompileTools.DecompileScript(_w.Svc, paths: new[] { diskPex }, exclude: e, out_path: Path.Combine(_w.Root, dir)).Replace(dir, "");
+        }
+        Assert.Equal(Pex(null), Pex(none));
+        Assert.Equal(Status(null), Status(none));
+
+        // Files on disk need no instance, so an unconfigured one reads them with exclude=[] too, not the config prompt.
+        using var unconfigured = LoadOrderService.WithInstance(null, 0, new UserConfigStore(Path.Combine(_w.Root, "user-" + Guid.NewGuid().ToString("N") + ".json")));
+        var prompt = unconfigured.ConfigPromptOrNull();
+        Assert.NotNull(prompt);
+        var nif = NifTools.NifInspect(unconfigured, paths: new[] { diskNif }, exclude: none);
+        Assert.NotEqual(prompt, nif);
+        Assert.Equal(NifTools.NifInspect(unconfigured, paths: new[] { diskNif }), nif);
+        string Batch(string[]? e)
+        {
+            var dir = "psc-" + Guid.NewGuid().ToString("N");
+            return DecompileTools.DecompileScript(unconfigured, paths: new[] { diskPex }, exclude: e, out_path: Path.Combine(_w.Root, dir), format: "json").Replace(dir, "");
+        }
+        var batch = Batch(none);
+        Assert.NotEqual(prompt, batch);
+        Assert.Equal(Batch(null), batch);
+    }
+
+    /// <summary>Q3 (a): a walk cut at walk.max_nodes leads the answer with a note naming the fix; the rows still come.</summary>
+    [Fact]
+    public void ACutWalksFileLeadsWithANoteAndTheRowsStillCome()
+    {
+        var f = File("cut");
+        var w = AssetTools.AssetStatus(_w.Svc, records: new[] { _w.Id("HcWalkHero") }, walk: Walks.Of("{\"max_nodes\": 1}"),
+                                       from_source: new[] { AssetWalkWorld.Plugin }, to_file: f);
+        Assert.Contains("walk.max_nodes=1", w);
+        AssertLeadsCut(f, "walk.max_nodes=1");
+        // It leads a selector's own note too.
+        var (_, notes) = Json(AssetTools.AssetStatus(_w.Svc, provider: Mod, under: new[] { "meshes/nowhere" }, exclude: new[] { "@" + f },
+                                                     format: "json", max_chars: Big));
+        Assert.StartsWith($"exclude= file '{f}' is a lower bound", notes[0]);
+        Assert.StartsWith("under 'meshes/nowhere' matched no file", notes[1]);
+    }
+
+    /// <summary>Q3 (a): a walk stopped at the path bound is a lower bound too.</summary>
+    [Fact]
+    public void AWalkStoppedAtThePathBoundLeadsWithANote()
+    {
+        var f = File("bound");
+        var prior = _w.Svc.AssetArea.MaxAssetPaths;
+        _w.Svc.AssetArea.MaxAssetPaths = 1;
+        try { Assert.Contains("the walk stopped at 1 files", AssetTools.AssetStatus(_w.Svc, paths: new[] { AssetWalkWorld.CapeNif }, walk: Walks.On, to_file: f)); }
+        finally { _w.Svc.AssetArea.MaxAssetPaths = prior; }
+        AssertLeadsCut(f, "the walk stopped at 1 files");
+    }
+
+    void AssertLeadsCut(string file, string said)
+    {
+        var plain = Json(Status(null)).Paths;
+        var (paths, notes) = Json(Status(new[] { "@" + file }));
+        Assert.StartsWith($"exclude= file '{file}' is a lower bound of what its walk reaches — ", notes[0]);
+        Assert.Contains(said, notes[0]);
+        Assert.EndsWith("re-walk with to_file= past what cut it (raise the walk.max_nodes or walk.depth the note names; for the " +
+                        "path bound, which no parameter raises, walk from fewer records=, paths=, under= or provider= seeds, as " +
+                        "exclude= takes one file; name the left-out edge kinds in walk.through; or make the unread file " +
+                        "readable) and pass the new file.", notes[0]);
+        Assert.Equal(plain.Length - Rows(file).Count(p => plain.Contains(p, StringComparer.OrdinalIgnoreCase)), paths.Length);
+    }
+
+    /// <summary>Call A (b): a walk.through file that hid edge-kind rows, a walk that could not read a script's parent, and
+    /// one that could not read a mesh's links each lead with the lower-bound note; a left-out line counting record types
+    /// only, or no rows, does not.</summary>
+    [Fact]
+    public void AWalkFileShortOfItsReachedSetLeadsWithTheLowerBoundNote()
+    {
+        string Walked(string tag, Func<string, string> walk)
+        {
+            var f = File(tag);
+            Assert.DoesNotContain("error:", walk(f));
+            return f;
+        }
+        string Lead(string f) => Json(Status(new[] { "@" + f })).Notes[0];
+        string Bound(string f) => $"exclude= file '{f}' is a lower bound of what its walk reaches — ";
+
+        var hid = Walked("through", f => AssetTools.AssetStatus(_w.Svc, paths: new[] { AssetWalkWorld.CapeNif }, walk: Walks.Of("{\"through\": [\"texture\"]}"), to_file: f));
+        Assert.StartsWith(Bound(hid) + "left out, not in walk.through: 1 smp row. So a path", Lead(hid));
+
+        var parent = Walked("parent", f => AssetTools.AssetStatus(_w.Svc, paths: new[] { AssetWalkWorld.BadPex }, walk: Walks.On, to_file: f));
+        Assert.StartsWith(Bound(parent) + AssetWalkWorld.BadPex + ": its parent class was not read — ", Lead(parent), StringComparison.OrdinalIgnoreCase);
+
+        // A mesh whose links cannot be read: the walk's note as it writes it, put into a whole walk's file.
+        var cape = CapeWalk();
+        var lines = System.IO.File.ReadAllLines(cape);
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(lines[0])!.AsObject();
+        if (manifest["notes"] is not System.Text.Json.Nodes.JsonArray notes) manifest["notes"] = notes = new System.Text.Json.Nodes.JsonArray();
+        notes.Add($"walk note: {AssetWalkWorld.CapeNif}: its links were not read — could not read the mesh bytes.");
+        lines[0] = manifest.ToJsonString();
+        var links = File("links");
+        System.IO.File.WriteAllLines(links, lines);
+        Assert.StartsWith(Bound(links) + AssetWalkWorld.CapeNif + ": its links were not read — could not read the mesh bytes. So a path", Lead(links));
+
+        // Not a cut: a through that shows every edge kind the walk met, and one that leaves record types out only.
+        var none = Walked("none", f => AssetTools.AssetStatus(_w.Svc, paths: new[] { AssetWalkWorld.CapeNif }, walk: Walks.Of("{\"through\": [\"texture\", \"smp\"]}"), to_file: f));
+        Assert.DoesNotContain(Json(Status(new[] { "@" + none })).Notes, n => n.Contains("lower bound"));
+        var types = Walked("types", f => AssetTools.AssetStatus(_w.Svc, records: new[] { _w.Id("HcWalkHero") }, walk: Walks.Of("{\"follow\": \"*\", \"through\": [\"HeadPart\"]}"),
+                                                                 from_source: new[] { AssetWalkWorld.Plugin }, to_file: f));
+        Assert.Contains("left out, not in walk.through: 1 ", System.IO.File.ReadLines(types).First());
+        Assert.DoesNotContain(Json(Status(new[] { "@" + types })).Notes, n => n.Contains("lower bound"));
+    }
+
+    /// <summary>Q3 (a): a file written on another build leads with a note naming both epochs; the rows still come.</summary>
+    [Fact]
+    public void AFileFromAnotherBuildLeadsWithANoteAndTheRowsStillCome()
+    {
+        var f = CapeWalk();
+        var lines = System.IO.File.ReadAllLines(f);
+        var epoch = JsonDocument.Parse(lines[0]).RootElement.GetProperty("epoch").GetString()!;
+        Assert.NotEmpty(epoch);
+        var old = File("old");
+        lines[0] = lines[0].Replace($"\"epoch\":\"{epoch}\"", "\"epoch\":\"e2-0000000000000000\"");
+        System.IO.File.WriteAllLines(old, lines);
+
+        var (now, _) = Json(Status(new[] { "@" + f }));
+        var (paths, notes) = Json(Status(new[] { "@" + old }));
+        Assert.Equal(now, paths);
+        Assert.Equal($"exclude= file '{old}' was written on another build (epoch=e2-0000000000000000; this build is epoch={epoch}), " +
+                     "so it may not hold what that call answers now — re-run the call that wrote it with to_file= and pass the new file.", notes[0]);
+        // An epoch an older houseCARL wrote is not called another build: it cannot be compared.
+        var older = File("older");
+        System.IO.File.WriteAllLines(older, lines.Select((l, i) => i == 0 ? l.Replace("\"epoch\":\"e2-0000000000000000\"", "\"epoch\":\"0000000000000000\"") : l));
+        Assert.StartsWith($"exclude= file '{older}' carries an epoch an older houseCARL wrote (epoch=0000000000000000)",
+                          Json(Status(new[] { "@" + older })).Notes[0]);
+        // A file written with no epoch says it cannot tell.
+        var bare = File("bare");
+        lines[0] = lines[0].Replace("\"epoch\":\"e2-0000000000000000\"", "\"epoch\":\"\"");
+        System.IO.File.WriteAllLines(bare, lines);
+        Assert.Equal($"exclude= file '{bare}' carries no epoch, so whether it was written on this build is unknown — " +
+                     "re-run the call that wrote it with to_file= and pass the new file.", Json(Status(new[] { "@" + bare })).Notes[0]);
+        // The same build says nothing of it.
+        Assert.DoesNotContain(Json(Status(new[] { "@" + f })).Notes, n => n.Contains("another build"));
+    }
+
+    /// <summary>A file's manifest query echo, by key.</summary>
+    static Dictionary<string, string> Query(string file)
+        => JsonDocument.Parse(System.IO.File.ReadLines(file).First()).RootElement.GetProperty("query").EnumerateObject()
+               .ToDictionary(p => p.Name, p => p.Value.ToString());
+
+    /// <summary>F1-a: a provider-minus file records its exclusion, the '@file' as given or the inline count; a file of a
+    /// call without exclude= has no exclude key.</summary>
+    [Fact]
+    public void AnExcludeCallsFileRecordsTheExclusion()
+    {
+        var f = CapeWalk();
+        var minus = File("minus");
+        Assert.DoesNotContain("error:", AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: new[] { "@" + f }, to_file: minus));
+        Assert.Equal("@" + f, Query(minus)["exclude"]);
+        var inline = File("inline");
+        AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: new[] { AssetWalkWorld.CapeNif, "scripts/*.pex" }, to_file: inline);
+        Assert.Equal("2 inline entries", Query(inline)["exclude"]);
+        var plain = File("plain");
+        AssetTools.AssetStatus(_w.Svc, provider: Mod, to_file: plain);
+        Assert.DoesNotContain("exclude", Query(plain).Keys);
+    }
+
+    /// <summary>Row 4: a walk seeded by a provider minus an exclusion records it among its seeds; one without does not.</summary>
+    [Fact]
+    public void AWalksFileRecordsItsSeedsExclusion()
+    {
+        var f = File("walk-minus");
+        Assert.DoesNotContain("error:", AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: new[] { "scripts" }, walk: Walks.On, to_file: f));
+        Assert.Equal("1 inline entry", Query(f)["exclude"]);
+        var plain = File("walk-plain");
+        AssetTools.AssetStatus(_w.Svc, provider: Mod, walk: Walks.On, to_file: plain);
+        Assert.DoesNotContain("exclude", Query(plain).Keys);
+    }
+
+    /// <summary>Row 5: nif_inspect's file records the exclusion; one without does not.</summary>
+    [Fact]
+    public void NifInspectsFileRecordsTheExclusion()
+    {
+        var walked = CapeWalk();
+        var f = File("nif-minus");
+        Assert.DoesNotContain("error:", NifTools.NifInspect(_w.Svc, provider: Mod, exclude: new[] { "@" + walked }, to_file: f));
+        Assert.Equal("@" + walked, Query(f)["exclude"]);
+        var plain = File("nif-plain");
+        NifTools.NifInspect(_w.Svc, provider: Mod, to_file: plain);
+        Assert.DoesNotContain("exclude", Query(plain).Keys);
+    }
+
+    /// <summary>F1-b: a call refused for a bad window, no selector, records= without a walk, a bad to_file= or counts_only=
+    /// with to_file= answers that refusal before an '@file' with an epoch captures the view to compare it.</summary>
+    [Fact]
+    public void ACheapRefusalComesBeforeTheExclusionFileIsRead()
+    {
+        var f = CapeWalk();
+        var ex = new[] { "@" + f };
+        var calls = new Func<string[]?, string>[]
+        {
+            e => AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: e, offset: -1),
+            e => AssetTools.AssetStatus(_w.Svc, exclude: e),
+            e => AssetTools.AssetStatus(_w.Svc, provider: Mod, records: new[] { _w.Id("HcWalkHero") }, exclude: e),
+            e => AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: e, to_file: "relative.jsonl"),
+            e => AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: e, counts_only: true, to_file: File("counts")),
+        };
+        foreach (var call in calls)
+        {
+            var without = call(null);
+            Assert.StartsWith("error:", without);
+            var checks = _w.Svc.Counters.ProfileFreshnessChecks;
+            Assert.Equal(without, call(ex));
+            Assert.Equal(checks, _w.Svc.Counters.ProfileFreshnessChecks);
+        }
+    }
+
+    /// <summary>The list door's own refusal for an '@file' beside inline entries, and a blank entry, refused.</summary>
+    [Fact]
+    public void MixedFileAndInlineAndABlankEntryAreRefused()
+    {
+        var f = CapeWalk();
+        var mixed = AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: new[] { "@" + f, AssetWalkWorld.FxNif });
+        Assert.Contains("exclude= mixes an '@file' entry with inline entries", mixed);
+        var blank = AssetTools.AssetStatus(_w.Svc, provider: Mod, exclude: new[] { " " });
+        Assert.StartsWith("error: exclude= has a blank entry", blank);
+    }
+}
+
+/// <summary>Q3 (a) on an order that does not build: a file with an epoch says this call could not compare it.</summary>
+[Trait("tier", "unit")]
+public sealed class FileExclusionNoOrderTests : IDisposable
+{
+    readonly string _root = Path.Combine(Path.GetTempPath(), "hc-exclude-noorder-" + Guid.NewGuid().ToString("N"));
+    readonly string _instance;
+    const string Tex = @"textures\hcnoorder\a.dds";
+
+    /// <summary>An instance whose profile enables no plugin, so the order cannot be read for a stamp; one loose texture.</summary>
+    public FileExclusionNoOrderTests()
+    {
+        _instance = Path.Combine(_root, "instance");
+        var profile = Path.Combine(_instance, "profiles", "Default");
+        var tex = Path.Combine(_instance, "mods", "TexMod", Tex);
+        Directory.CreateDirectory(profile);
+        Directory.CreateDirectory(Path.GetDirectoryName(tex)!);
+        Directory.CreateDirectory(Path.Combine(_root, "game", "Data"));
+        File.WriteAllText(Path.Combine(_instance, "ModOrganizer.ini"),
+            "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
+            + Path.Combine(_root, "game").Replace(@"\", @"\\") + ")\r\n");
+        File.WriteAllText(Path.Combine(profile, "loadorder.txt"), "# header\r\n");
+        File.WriteAllText(Path.Combine(profile, "plugins.txt"), "");
+        File.WriteAllText(Path.Combine(profile, "modlist.txt"), "# header\r\n+TexMod\r\n");
+        File.WriteAllBytes(tex, new byte[] { 1, 2, 3 });
+    }
+
+    public void Dispose() { try { Directory.Delete(_root, true); } catch { /* temp cleanup best-effort */ } }
+
+    [Fact]
+    public void AFileWithAnEpochOnAnOrderThatCannotBeReadSaysItCouldNotCompare()
+    {
+        using var svc = LoadOrderService.WithInstance(_instance, 0, new UserConfigStore(Path.Combine(_root, "user")));
+        var f = Path.Combine(_root, "made.jsonl");
+        Assert.DoesNotContain("error:", AssetTools.AssetStatus(svc, paths: new[] { Tex }, to_file: f));
+        var lines = File.ReadAllLines(f);
+        var manifest = System.Text.Json.Nodes.JsonNode.Parse(lines[0])!.AsObject();
+        Assert.Equal("", manifest["epoch"]!.GetValue<string>());
+        manifest["epoch"] = "e2-0000000000000000";
+        lines[0] = manifest.ToJsonString();
+        File.WriteAllLines(f, lines);
+        using var doc = JsonDocument.Parse(AssetTools.AssetStatus(svc, paths: new[] { Tex }, exclude: new[] { "@" + f }, format: "json"));
+        Assert.StartsWith($"exclude= file '{f}' was written at epoch=e2-0000000000000000, and this call could not read the load order to compare — ",
+                          doc.RootElement.GetProperty("selector_notes")[0].GetString());
+    }
+}
+
+/// <summary>Q3 (a) on a walk cut at walk.depth: a chain of lists walked one hop out.</summary>
+[Trait("tier", "unit")]
+public sealed class FileExclusionDepthTests : IClassFixture<AssetWalkDoorWorld>
+{
+    readonly AssetWalkDoorWorld _w;
+    public FileExclusionDepthTests(AssetWalkDoorWorld w) => _w = w;
+
+    [Fact]
+    public void AWalkCutAtItsDepthLeadsWithANoteAndTheRowsStillCome()
+    {
+        var f = Path.Combine(Path.GetTempPath(), "hc-exclude-depth-" + Guid.NewGuid().ToString("N") + ".jsonl");
+        try
+        {
+            var w = AssetTools.AssetStatus(_w.Svc, records: new[] { FormIdToken.Of(_w.Keys["HcDoorChain0"]) },
+                                           walk: Walks.Of("{\"follow\": \"*\", \"depth\": 1}"), to_file: f);
+            Assert.True(w.Contains("hops from a seed and were not entered"), w);
+            var r = AssetTools.AssetStatus(_w.Svc, paths: new[] { "textures/nowhere.dds" }, exclude: new[] { "@" + f });
+            Assert.True(r.Contains($"exclude= file '{f}' is a lower bound of what its walk reaches — 1 record(s) sit more than walk.depth=1 hops"), r);
+            // The walk reached no file, so its file has no rows: the empty set, which removes nothing.
+            Assert.Contains("exclude= removed 0 of the 1 selected path(s).", r);
+            Assert.Contains("(1 path selected", r);
+            // Every other list keeps the door's no-rows refusal.
+            Assert.Contains("has a manifest but no rows", AssetTools.AssetStatus(_w.Svc, paths: new[] { "@" + f }));
+        }
+        finally { File.Delete(f); }
+    }
+}

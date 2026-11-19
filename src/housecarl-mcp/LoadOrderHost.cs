@@ -15,10 +15,10 @@ internal readonly record struct Mo2Roots(string ProfileDir, string DataDir, stri
 /// <summary>The head members areas share; contract in docs/architecture/load-order-service.md.</summary>
 internal interface ILoadOrderHost
 {
-    /// <summary>The record resolver, built on first access and kept fresh on every later one.</summary>
+    /// <summary>The record resolver, built on first access and refreshed at any read with no pin to serve (outside a call, a call's first record read, a write's first read in the gate, which takes the write's view); then the pin's frozen copy.</summary>
     LoadOrderResolver Resolver { get; }
 
-    /// <summary>The live asset resolver, for a core check that captures it itself.</summary>
+    /// <summary>The asset resolver, for a core check that captures it itself: in a call, the call's frozen copy; outside one, the live build.</summary>
     AssetResolver Assets { get; }
 
     /// <summary>The four roots in one <c>_gate</c> hold, derived first; throws what derivation throws.</summary>
@@ -48,6 +48,7 @@ internal interface ILoadOrderHost
     /// <summary>The in-place consent over the user config store, one per service.</summary>
     InPlaceConsent InPlaceConsent { get; }
 
-    /// <summary>The live serving-copy check over the profile parsed once: null when MO2 still serves each index copy, else the first move.</summary>
-    ServingCopyMove? ServingCopyMoved(IEnumerable<(string Plugin, string? IndexedPath)> plugins);
+    /// <summary>The serving-copy check over the call's held roots and profile read; with <paramref name="live"/> or no build held (outside a call, in the write gate before the write's view)
+    /// over the live roots, and with no profile read held (those, or a call that kept none) the profile parsed once: null when MO2 still serves each index copy, else the first move.</summary>
+    ServingCopyMove? ServingCopyMoved(IEnumerable<(string Plugin, string? IndexedPath)> plugins, bool live = false);
 }

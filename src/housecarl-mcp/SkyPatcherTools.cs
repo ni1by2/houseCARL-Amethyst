@@ -6,49 +6,235 @@ using Mutagen.Bethesda.Plugins;
 
 namespace HousecarlMcp;
 
-/// <summary>Read-only view of the SkyPatcher distributor layer: a whole-layer inventory plus the INI-vs-INI conflict report; one record's post-SkyPatcher state is the overlay source pole on <c>housecarl_records</c> instead.</summary>
+/// <summary>Read-only view of the runtime distributor layers (SkyPatcher, SPID, KID, BOS, FLM): a whole-layer inventory plus the INI-vs-INI conflict report, or the lines naming selected records; one record's post-SkyPatcher state is the overlay source pole on <c>housecarl_records</c> instead.</summary>
 [McpServerToolType]
 public static class SkyPatcherTools
 {
-    [McpServerTool(Name = ToolNames.SkypatcherLayer, ReadOnly = true, Title = "SkyPatcher layer (INIs, apply order, conflicts)"),
+    static DistributorFormat[]? _landed;
+
+    /// <summary>The distributor rows whose lines block has landed, so their lines are read; built on first use, so the rows parse there and not at type init.</summary>
+    static DistributorFormat[] Landed => _landed ??= RuntimeFormats.Distributors.Where(d => d.LinesRead).ToArray();
+
+    /// <summary>The distributor= values this build reads: SkyPatcher, and each landed distributor row.</summary>
+    static string[] Read => new[] { "skypatcher" }.Concat(Landed.Select(d => d.Key)).ToArray();
+
+    /// <summary>The formats read, as the refusals name them.</summary>
+    static string ReadNames => Prose(new[] { "SkyPatcher" }.Concat(Landed.Select(d => d.Name)).ToList(), "and");
+
+    /// <summary>The distributor= values read, quoted, as the refusals list them.</summary>
+    static string ReadValues => Prose(Read.Select(v => $"'{v}'").ToList(), "or");
+
+    /// <summary>A list in prose: "a", "a or b", "a, b or c".</summary>
+    internal static string Prose(IReadOnlyList<string> xs, string last)
+        => xs.Count <= 1 ? string.Concat(xs) : string.Join(", ", xs.Take(xs.Count - 1)) + $" {last} " + xs[^1];
+
+    /// <summary>Formats houseCARL does not read, by the name a caller asks for them.</summary>
+    static readonly (string Name, string Full)[] NotRead =
+    {
+        ("oar", "Open Animation Replacer"), ("ied", "Immersive Equipment Displays"),
+        ("desc", "Description Framework"), ("dsd", "Dynamic String Distributor"),
+    };
+
+    /// <summary>Formats later on the same table with no row yet, answered not read yet by name (DECISIONS 2026-11-13 (14) Q4).</summary>
+    static readonly (string Name, string Full)[] Later = { ("lid", "Security Overhaul SKSE - Lock Variations") };
+
+    static (string Name, string Full)[]? _notYet;
+
+    /// <summary>Formats the layer is to read whose lines this build does not read yet: the rows of the runtime-format
+    /// source not landed, then the later formats; built on the first refusal, so the rows parse there and not at type init.</summary>
+    static (string Name, string Full)[] NotYet => _notYet ??= NotYetOf(RuntimeFormats.Distributors, Landed).Concat(Later).ToArray();
+
+    /// <summary>The rows of <paramref name="all"/> not landed, by key: two parses of the source give rows equal in value but
+    /// not as records, whose lists compare by reference.</summary>
+    internal static (string Name, string Full)[] NotYetOf(IEnumerable<DistributorFormat> all, IEnumerable<DistributorFormat> landed)
+    {
+        var keys = landed.Select(d => d.Key).ToHashSet();
+        return all.Where(d => !keys.Contains(d.Key)).Select(d => (d.Key, d.Name)).ToArray();
+    }
+
+    /// <summary>The refusal for a distributor= value this build does not read, or null when every value is read.</summary>
+    internal static string? DistributorRefusal(IReadOnlyList<string>? values)
+    {
+        foreach (var raw in values ?? Array.Empty<string>())
+        {
+            var v = (raw ?? "").Trim().ToLowerInvariant();
+            if (Read.Contains(v)) continue;
+            if (NotRead.FirstOrDefault(f => f.Name == v) is { Full: { } full })
+                return $"error: distributor='{v}' is not read: houseCARL does not read {full} files, so it cannot list their lines. distributor= takes {ReadValues}, or omit it for every format read.";
+            if (NotYet.FirstOrDefault(f => f.Name == v) is { Full: { } soon })
+                return $"error: distributor='{v}' is not read yet: this build reads {ReadNames} lines, and {soon} lines are not among them. distributor= takes {ReadValues}, or omit it for every format read.";
+            return $"error: distributor='{raw}' is not a format — {string.Join(", ", Read.Select(x => $"'{x}'"))} are read; {string.Join(", ", NotRead.Select(f => f.Name))} are not read; {string.Join(", ", NotYet.Select(f => f.Name))} {(NotYet.Length == 1 ? "is" : "are")} not read yet.";
+        }
+        return null;
+    }
+
+    /// <summary>The plugins= selector: the records scope's two members, read onto lines.</summary>
+    public sealed class LayerScope
+    {
+        [Description("Plugin filenames, e.g. [\"Requiem.esp\"]." + ListText.Plugins)]
+        public string[]? names { get; set; }
+
+        [Description("When true, keep only records defined in the named plugins, dropping records they only override.")]
+        public bool defined_in { get; set; }
+    }
+
+    [McpServerTool(Name = ToolNames.Layer, ReadOnly = true, Title = "Runtime layers (SkyPatcher, SPID, KID, BOS and FLM INIs, apply order, conflicts)"),
      Description(
-         "Inventory the SkyPatcher layer of the active load order: the runtime record edits the record tools otherwise " +
-         "miss. Scans Data\\SKSE\\Plugins\\SkyPatcher as the DLL reads it: every loose INI per type folder in filename " +
-         "apply order (BSA-packed INIs are flagged as not applied), the mod that wins each file, same-path collisions " +
-         "(the loser's content is never read; flagged), Plugin.esp.ini filename gates evaluated against the load " +
-         "order, and SkyPatcher.ini per-type toggles. Then reports conflicts between INIs: two files setting the same " +
-         "field of the same record to different values (the later-sorted file wins; add and remove ops accumulate and " +
+         "Inventory the runtime distributor layers of the active load order, SkyPatcher, SPID, KID, BOS and FLM, read as the files declare it (what a DLL does at runtime is not claimed): the runtime edits the record tools otherwise " +
+         "miss. SkyPatcher: scans Data\\SKSE\\Plugins\\SkyPatcher as the DLL reads it: every loose file with '.ini' in its name per type folder in the DLL's " +
+         "read order (the folder's own files, then each depth of subfolders, A to Z; folders in patcher order) (BSA-packed INIs are flagged as not applied), the mod that wins each file, same-path collisions " +
+         "(the loser is never read; flagged), Plugin.esp.ini filename gates evaluated against the load " +
+         "order (a name ending in '.ini' spelt in any case but lower ('.INI', '.Ini'), or naming a plugin with more text after it, is flagged as not read), and SkyPatcher.ini per-type switches (a missing switch is off, Light excepted). Then reports conflicts between INIs: two files setting the same " +
+         "field of the same record to different values (the later-read file wins; add and remove ops accumulate and " +
          "are not conflicts), and three ITM classes: dead writes (a later line of the same file unconditionally " +
          "re-covers every target of an earlier set, whatever the value; partial or conditional-only overwrites are not " +
          "flagged), cross-INI duplicates (two files set the same field and target to the same value), and no-op writes " +
-         "(the replay shows the set writes the value the record already has). An entry whose applicability also " +
-         "depends on other filters is flagged conditional, not guessed. filter= narrows to the type folders holding a " +
-         "match. For records' computed post-SkyPatcher state use " + ToolNames.Records + " with " +
+         "(the replay shows the set writes the value the record already has). An entry also gated by other " +
+         "filters is flagged conditional, not guessed. filter= lists the matching INIs' lines with their " +
+         "notes. SPID, KID, BOS and FLM: their _DISTR, _KID, _SWAP and _FLM .ini files in Data, in their order, read as distributor= says. Which lines touch a record or plugin: formids= and plugins= select the lines naming a form they select, " +
+         "as on " + ToolNames.Records + ", each match labelled target, filter, value or unknown key. For records' computed post-SkyPatcher state use " + ToolNames.Records + " with " +
          "source={\"overlay\": \"skypatcher\", \"state\": \"post\"} over formids= or a scan. Read-only.")]
-    public static string SkyPatcherLayer(
+    public static string Layer(
         LoadOrderService svc,
-        [Description("Optional. A type-folder (e.g. 'weapon'), providing-mod, or INI filename substring (case-insensitive). " +
+        [Description("Optional. Which formats to read: 'skypatcher', 'spid', 'kid', 'bos', 'flm'. Omit for every format read; with no selector and no " +
+            "filter= that answers SkyPatcher's layer, then one summary line each for SPID, KID, BOS and FLM (distributor=[\"spid\"], [\"kid\"], [\"bos\"] or [\"flm\"] lists " +
+            "the files). 'oar', 'ied', 'desc' and 'dsd' are answered not read; 'lid' is not read yet. SPID is read as SPID 7.3 reads it: every " +
+            "file directly in Data with '_DISTR' in its name and the '.ini' extension (both case-sensitive), in its order (names " +
+            "in byte order), the mod that wins each (a shadowed copy is never read; a BSA-only one is flagged not applied). " +
+            "filter= expands a file's lines with what SPID does with each: a line it skips or drops, a filter form it skips, a " +
+            "keyword it creates, string filters matched in the running game against an NPC's name, its own and its template's EditorIDs and its keywords' EditorIDs, its race's and SPID-created ones included (not read), and each Outfit, SleepOutfit or " +
+            "Skin line's place in its first-wins order (a Form line's by its value's type, so an outfit value places it among the Outfit lines). Which NPCs a line reaches is not evaluated here; " + ToolNames.Records + " where=[\"spid reaches <line>\"] evaluates it. Under formids= and plugins= " +
+            "an NPC named in a plain or '+' filter is the target (in a '-' list, a filter), the handed-out form the value, any other filter form a filter; a plugin " +
+            "term touches its plugin; an outfit or list is not followed to what it holds. KID is read as KID 4.0.6 and 4.1.0 read it: every " +
+            "file directly in Data with '_KID' in its name and the '.ini' extension (both case-sensitive), names in byte order, the winning " +
+            "copy of each. filter= expands a file's lines with what KID does with each: a line it drops with no log (a type not one " +
+            "of its 19, spelt exactly), one it fails to parse and logs 'Failed to parse entry' for (a FormID it cannot read, a " +
+            "chance that is not a number, a group line with an empty member), one it drops as it looks up the forms (an empty " +
+            "keyword, or a keyword FormID naming no keyword; every exact plain filter, or every '-' filter, failing; every '+' " +
+            "group losing a part; a group line keeping no keyword), a group line with no members section or no members, which " +
+            "KID ignores with a warning, a filter it skips, a keyword it creates where no keyword " +
+            "holds the name, a filter name no record holds kept as text and matched in the running game against an item's EditorID or " +
+            "name (not read). Which items a line tags is not evaluated here (" + ToolNames.Records + " where=[\"kid reaches <line>\"] evaluates it): its filter forms are resolved and labelled, but no filter, trait or chance is tested against items. Under formids= and " +
+            "plugins= a filter form of the line's own type is the target (in a '-' list, a filter), the keyword the value, any other " +
+            "filter form a filter; a plugin term touches its plugin; a form list is not followed to what it holds. BOS is read as BOS 3.4.0 and " +
+            "3.5.0 read it: every file directly in Data with '_SWAP' in its name and the '.ini' extension (both case-sensitive), names in byte " +
+            "order, the mod that wins each (a shadowed copy is never read; a BSA-only one is flagged not applied); every section, a header repeated in any case joining the first, a line repeated in its section read " +
+            "once. filter= expands a file's lines with what BOS does with each: a line it drops and logs (a base or a whole swap naming nothing, " +
+            "a swap naming its own base with no properties, a base set whose swap set keeps more than one form but fewer than its bases), a FormID " +
+            "side BOS's stoul cannot read, said to stop BOS's load (the game's outcome not claimed; a base set's single swap excepted, whose line BOS drops as naming no form), a set member naming nothing left out, a FormID with a load index added as BOS adds " +
+            "it, a condition naming no record kept as text and matched in the running game (not read), a condition of a type BOS never matches (under '-', one that " +
+            "excludes nothing), a base no reference is looked up by (a keyword, a form list, a placed reference in a form swap), a property line naming no property, and " +
+            "each kept line's place among its base's lines of its map, the last tried first. Which references a line swaps is not evaluated: no " +
+            "condition, chance or random pick is tested. Under formids= and plugins= the base (a reference or a base object) is the target, each " +
+            "swap a value, each condition of the section's header a filter; BOS names no plugin as a term. FLM is read as FLM 1.8.1 reads it: every " +
+            "file directly in Data with '_FLM' in its name and the '.ini' extension (both case-sensitive), names in byte order, then every '.ini' in " +
+            "Data\\FLM (that folder's own order is not claimed), the winning copy of each; the unnamed section, keys in any case. filter= expands a " +
+            "file's lines with what FLM does with each, in its order (file by file its Filter then its Collection lines first, then file by file its Alias and " +
+            "Group lines, then the rest, each file key by key): a key it does not know or a wrong field count, a filter it finds true, false (the line " +
+            "filtered out) or invalid with what decides it (inline, the alternative that holds or else each alternative's first failing condition, " +
+            "invalid at a condition not led by '+' or '-'; a '#name', its Filter line's value, invalid when no Filter line defines it by then (for a Collection " +
+            "line's, in its own file or an earlier one); a plugin a filter names gates the line and touches nothing), a name " +
+            "defined twice (the first wins; aliases and groups count from their own file on), a list, alias or collection keyword naming nothing " +
+            "(the line or collection dropped), an item naming nothing (skipped, the rest added), a FormID with load index 02 or 04 rewritten to " +
+            "Dawnguard's or Dragonborn's, a Remove line that does nothing and a FormsPair line FLM always counts invalid, and what each kept line " +
+            "adds to which list, a form already in it skipped. Collection members, mod events and what a list holds in game are not read. Under " +
+            "formids= and plugins= the list (a simplified key's fixed list marked implied) is the target, each form added a value, one a group, " +
+            "alias or '*' list brings in labelled through it, a collection's keywords filters; FLM names no plugin as a term." + ListText.Names)]
+            ListArg? distributor = null,
+        [Description("Optional. A type-folder (e.g. 'weapon'), providing-mod, or INI filename substring (case-insensitive); for SPID, KID, BOS and FLM a file name or providing mod, its files expanded. " +
             "Lists only the type folders holding a match, each in full apply order so the files sorting around a match " +
-            "stay visible, with the matching files expanded to their individual patch lines. Omit for the whole-layer overview.")]
+            "stay visible, with the matching files expanded to their individual patch lines and their notes: a direct or " +
+            "Excluded target that names nothing says why (an unreadable FormID, a plugin not in the order or spelt with a " +
+            "space, a FormID no plugin defines, an EditorID found nowhere or of a type the game keeps no names of), and an " +
+            "EditorID naming several records says which the replay takes; a post read warns on such a hidden direct EditorID " +
+            "too. Omit it, formids= and plugins= for the whole-layer overview.")]
             string? filter = null,
+        [Description("Optional. Lines naming these records ('XXXXXX:Plugin.esp' or the runtime form), anywhere on the line: " +
+            "a target, a filter form or an op value, by Plugin|FormID or by an EditorID the replay looks up (a SPID, KID, BOS or FLM line names it by FormID~Plugin, a 0x runtime FormID or an EditorID; formids= itself takes 'XXXXXX:Plugin.esp' or the runtime form, never FormID~Plugin)." + ListText.FormIds)]
+            ListArg? formids = null,
+        [Description("Optional. Lines naming a record these plugins touch (define or override, as on " + ToolNames.Records +
+            "); defined_in: true keeps records they define. With formids= a form must pass both.")]
+            LayerScope? plugins = null,
         [Description("Optional. Max characters before lists are cut with an explicit notice. 0 = the server default (~40k).")]
             int max_chars = 0,
-        CancellationToken ct = default) => Guard.Tool(ToolNames.SkypatcherLayer, () =>
+        CancellationToken ct = default) => Guard.Tool(ToolNames.Layer, call =>
     {
-        if (svc.ConfigPromptOrNull() is { } prompt) return prompt;
-        return svc.SkyPatcherLayer(data => SkyPatcherWire.RenderLayer(data, filter, Wire.Cap(max_chars)), ct);
+        var distributorIn = distributor.Read("distributor", ListKind.Name);
+        var formidsIn = formids.Read("formids", ListKind.FormId);
+        var pluginsIn = ListDoor.ReadItems(plugins?.names, "plugins.names", ListKind.Plugin, "plugins={{\"names\": [{0}]}}");
+        foreach (var err in new[] { distributorIn.Error, formidsIn.Error, pluginsIn.Error })
+            if (err is not null) return ToolAnswer.Refusal(err);
+        if (DistributorRefusal(distributorIn.Tokens) is { } notRead) return ToolAnswer.Refusal(notRead);
+        // An empty distributor= reads as an omitted one.
+        bool Asked(string key) => distributorIn.Tokens is not { Length: > 0 } || distributorIn.Tokens.Any(t => (t ?? "").Trim().Equals(key, StringComparison.OrdinalIgnoreCase));
+        if (plugins is not null && pluginsIn.Tokens is not { Length: > 0 })
+            return ToolAnswer.Refusal("error: plugins= selects by plugins.names — pass plugins={\"names\": [\"X.esp\"]} (defined_in narrows those names).");
+        if (svc.ConfigPromptOrNull() is { } prompt) return ToolAnswer.Refusal(prompt);
+        var select = formidsIn.Tokens is null && pluginsIn.Tokens is null ? null
+            : new SkyPatcherLineSelect(formidsIn.Tokens, pluginsIn.Tokens, plugins?.defined_in ?? false,
+                new[] { formidsIn.Demand }.OfType<ArtifactDemand>().ToList());
+        string? echo = select is null ? null : SkyPatcherWire.SelectEcho(formidsIn, pluginsIn, select.DefinedIn);
+        return svc.SkyPatcherLayer(data => data.SelectRefusal is { } refused
+            ? ToolAnswer.Refusal(refused)
+            : ToolAnswer.Served(DistributorWire.RenderLayers(data, filter, Wire.Cap(max_chars), echo, everyFormat: distributorIn.Tokens is not { Length: > 0 })), ct, select,
+            skyPatcher: Asked("skypatcher"), spid: Asked("spid"), filter: filter, kid: Asked("kid"), bos: Asked("bos"), flm: Asked("flm"));
     }, ct);
 }
 
 /// <summary>Renders the SkyPatcher reader DTOs as text, bounded by max_chars with explicit cut notices; the caveats are always rendered.</summary>
 static class SkyPatcherWire
 {
-    // ---- housecarl_skypatcher_layer ------------------------------------------------------------------
+    // ---- housecarl_layer -----------------------------------------------------------------------------
 
-    /// <summary>The layer render, inside max_chars; a cap too small for its header, owed notices and caveats says so.</summary>
-    public static string RenderLayer(SkyPatcherLayerData d, string? filter, int cap) => RenderCap.Settle(Render(d, filter, cap), cap);
+    /// <summary>The layer render, inside max_chars; a cap too small for its header, owed notices and caveats says so.
+    /// <paramref name="selectEcho"/> names the records selectors when <see cref="SkyPatcherLayerData.Select"/> is set.</summary>
+    public static string RenderLayer(SkyPatcherLayerData d, string? filter, int cap, string? selectEcho = null)
+        => RenderCap.Settle(Render(d, filter, cap, selectEcho), cap);
 
-    static string Render(SkyPatcherLayerData d, string? filter, int maxChars)
+    /// <summary>The selectors as the header names them, the file a list came from included.</summary>
+    internal static string SelectEcho(ListRead formids, ListRead plugins, bool definedIn)
+    {
+        string List(ListRead r) => r.EchoSource ?? "[" + string.Join(", ", r.Tokens!) + "]";
+        var parts = new List<string>();
+        if (formids.Tokens is not null) parts.Add("formids=" + List(formids));
+        if (plugins.Tokens is not null) parts.Add("plugins=" + List(plugins) + (definedIn ? " (defined_in)" : ""));
+        return string.Join(" and ", parts);
+    }
+
+    /// <summary>Per INI the filter keeps, the patch lines naming a selected form and the forms each names, in line order.</summary>
+    static Dictionary<SkyPatcherDiscovery.IniFile, List<(int Index, IReadOnlyList<SkyPatcherOverlay.LineForm> Forms)>> Picked(
+        SkyPatcherLayerData d, Func<SkyPatcherDiscovery.FolderScan, SkyPatcherDiscovery.IniFile, int, IReadOnlyList<SkyPatcherOverlay.LineForm>> select,
+        string? filter)
+    {
+        var picked = new Dictionary<SkyPatcherDiscovery.IniFile, List<(int, IReadOnlyList<SkyPatcherOverlay.LineForm>)>>(ReferenceEqualityComparer.Instance);
+        foreach (var f in d.Scan.Folders)
+            foreach (var file in f.Files.Where(x => filter is null || Matches(filter, f, x)))
+                for (int i = 0; i < file.Lines.Count; i++)
+                    if (select(f, file, i) is { Count: > 0 } forms)
+                    {
+                        if (!picked.TryGetValue(file, out var rows)) picked[file] = rows = new();
+                        rows.Add((i, forms));
+                    }
+        return picked;
+    }
+
+    /// <summary>Where one selected form sits on its line, as the label under it reads.</summary>
+    static string FormLabel(SkyPatcherOverlay.LineForm f)
+    {
+        var place = f.Place switch
+        {
+            SkyPatcherOverlay.FormPlace.Target => "target",
+            SkyPatcherOverlay.FormPlace.Filter => "filter",
+            SkyPatcherOverlay.FormPlace.Value => "value",
+            _ => "unknown key",
+        };
+        var id = FormIdToken.Of(f.Form);
+        return "          ↳ " + place + " " + f.Key + ": "
+               + (f.ByEditorId ? f.Token + " → " + id : id) + "\n";
+    }
+
+    /// <summary>The layer render before <see cref="RenderCap.Settle"/>: the body a joined answer carries as SkyPatcher's part.</summary>
+    internal static string Render(SkyPatcherLayerData d, string? filter, int maxChars, string? selectEcho)
     {
         var sb = new StringBuilder();
         // The caveats close the render, so their room is held back before the body is laid.
@@ -56,16 +242,25 @@ static class SkyPatcherWire
         int cap = maxChars - caveats.Length;
         var folders = d.Scan.Folders;
         filter = string.IsNullOrWhiteSpace(filter) ? null : filter.Trim();   // a blank filter is no filter, never a match-everything
-        // A filter matching nothing must never fall through to the unfiltered overview — that reads as the whole layer.
+        // A selection matching nothing must never fall through to the unfiltered overview — that reads as the whole layer.
         if (filter is { } zero && !folders.Any(f => f.Files.Any(x => Matches(zero, f, x))))
             return ZeroMatch(d, zero, cap, caveats);   // the block is composed ONCE; charging it twice spends it twice
+        var picked = d.Select is { } select ? Picked(d, select, filter) : null;
+        // The files listed with their lines: those holding a selected line, or else those the filter matches; null for the overview.
+        var hits = picked is not null ? picked.Keys.ToHashSet(ReferenceEqualityComparer.Instance)
+            : filter is { } q ? folders.SelectMany(f => f.Files.Where(x => Matches(q, f, x))).ToHashSet(ReferenceEqualityComparer.Instance)
+            : null;
+        bool narrowed = hits is not null;
+        bool Hit(SkyPatcherDiscovery.IniFile x) => hits!.Contains(x);
+        if (picked is { Count: 0 })
+            return ZeroSelect(d, selectEcho!, filter, cap, caveats);
         int files = folders.Sum(f => f.Files.Count);
         int applied = folders.Sum(f => f.PatchingEnabled ? f.Files.Count(x => x.NotApplied is null) : 0);
         int lines = folders.Sum(f => f.Files.Sum(x => x.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch)));
         int appliedLines = folders.Sum(f => f.PatchingEnabled
             ? f.Files.Where(x => x.NotApplied is null).Sum(x => x.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch)) : 0);
 
-        sb.Append("SkyPatcher layer — profile '").Append(d.ProfileName).Append("' — ")
+        sb.Append("SkyPatcher layer (SkyPatcher ").Append(SkyPatcherCatalog.Load().Version).Append(" model) — profile '").Append(d.ProfileName).Append("' — ")
           .Append(folders.Count).Append(" type folder(s), ").Append(files).Append(" INI(s) (")
           .Append(applied).Append(" applied), ").Append(lines).Append(" patch line(s)");
         if (appliedLines != lines) sb.Append(" (").Append(appliedLines).Append(" in applied files)");   // a gated file's lines must not read as live
@@ -77,7 +272,15 @@ static class SkyPatcherWire
         if (folders.Count == 0)
             sb.Append("\nno SkyPatcher INIs in the active order (no Data\\SKSE\\Plugins\\SkyPatcher content, or SkyPatcher itself is not installed).\n");
         // filter= selects at the FOLDER level, so a late-sorting match is never cut by the cap and a matching folder still lists every file in apply order.
-        if (filter is { } hdr)
+        if (picked is not null)
+            sb.Append("lines naming a form of ").Append(selectEcho).Append(filter is null ? "" : " in filter '" + filter + "'").Append(" — ")
+              .Append(picked.Values.Sum(r => r.Count)).Append(" line(s) in ")
+              .Append(picked.Count).Append(" of ").Append(files)
+              .Append(" INI(s), in ").Append(folders.Count(f => f.Files.Any(Hit)))
+              .Append(" of ").Append(folders.Count)
+              .Append(" type folder(s); only those folders are listed below, each in full apply order with the matching " +
+                      "files expanded to those lines, each selected form labelled where the line names it (the counts above are the whole layer).\n");
+        else if (filter is { } hdr)
             sb.Append("filter '").Append(hdr).Append("' — ")
               .Append(folders.Sum(f => f.Files.Count(x => Matches(hdr, f, x)))).Append(" of ").Append(files)
               .Append(" INI(s) match, in ").Append(folders.Count(f => f.Files.Any(x => Matches(hdr, f, x))))
@@ -85,26 +288,28 @@ static class SkyPatcherWire
               .Append(" type folder(s); only those folders are listed below, each in full apply order with the matching " +
                       "files expanded to their lines (the counts above are the whole layer).\n");
 
-        string folderCut = filter is null
+        string folderCut = !narrowed
             ? "... [remaining folders omitted at max_chars — raise it or pass filter=]\n"
-            : "... [remaining matching folders omitted at max_chars — raise it or narrow filter=]\n";
+            : picked is not null
+                ? "... [remaining matching folders omitted at max_chars — raise it or narrow formids=/plugins=]\n"
+                : "... [remaining matching folders omitted at max_chars — raise it or narrow filter=]\n";
         // The header above is already in sb; the hint is advice, so it is written only where it fits beside what is owed.
         int sectionsOwed = SectionsMissed(ReportNames, maxChars).Length;
         int owed = sectionsOwed + (folders.Count > 0 ? folderCut.Length : 0);
         // The notes close the body but take a quarter of what the caveats leave, charged before the report sections so
         // they cannot spend it, and never more than the header and owed notices leave.
-        var notes = NoteLines(d, Math.Min(cap / BatchRender.CaveatShare, cap - sb.Length - owed));
+        var notes = NoteLines(d, Math.Min(cap / BatchRender.CaveatShare, cap - sb.Length - owed), noOps: true);
         cap -= notes.Length;
         string hint = sb.Length + owed + Hint.Length <= cap ? Hint : "";
         int budget = cap - hint.Length - sectionsOwed;
         // Each line is admitted by the width it writes, with its cut notice's room held back.
-        int listRoom = budget - folderCut.Length - FileCut.Length - (filter is null ? 0 : LineCut.Length);
+        int listRoom = budget - folderCut.Length - FileCut.Length - (narrowed ? LineCut.Length : 0);
         bool listCut = false;
         foreach (var f in folders)
         {
-            if (filter is { } sel && !f.Files.Any(x => Matches(sel, f, x))) continue;
+            if (narrowed && !f.Files.Any(Hit)) continue;
             if (listCut) { sb.Append(folderCut); break; }
-            var head = FolderHead(f, filter);
+            var head = FolderHead(f, narrowed ? Hit : null, d.Scan.PatcherSwitches);
             if (sb.Length + head.Length > listRoom) { sb.Append(folderCut); break; }
             sb.Append(head);
             foreach (var file in f.Files)
@@ -114,15 +319,18 @@ static class SkyPatcherWire
                 if (sb.Length + row.Length > listRoom) { sb.Append(FileCut); listCut = true; break; }
                 sb.Append(row);
                 // Every file of a selected folder is listed — a match's neighbours are where it sorts; only a match expands.
-                if (filter is not { } q || !Matches(q, f, file)) continue;
-                for (int i = 0; i < file.Lines.Count; i++)
+                if (!narrowed || !Hit(file)) continue;
+                var rows = picked?[file] ?? Enumerable.Range(0, file.Lines.Count)
+                    .Where(i => file.Lines[i].Kind == SkyPatcherLineKind.Patch)
+                    .Select(i => (Index: i, Forms: (IReadOnlyList<SkyPatcherOverlay.LineForm>)Array.Empty<SkyPatcherOverlay.LineForm>())).ToList();
+                foreach (var (i, forms) in rows)
                 {
                     var l = file.Lines[i];
-                    if (l.Kind != SkyPatcherLineKind.Patch) continue;
                     var line = "      :" + (i + 1) + "  " + l.Raw.Trim() + "\n"
                                + (l.Note is null ? "" : "          [!] " + l.Note + "\n")
                                + string.Concat((d.Lint?.Invoke(f, file, i) ?? Array.Empty<string>())
-                                   .Select(n => "          [!] " + n + "\n"));
+                                   .Select(n => "          [!] " + n + "\n"))
+                               + string.Concat(forms.Select(FormLabel));
                     if (sb.Length + line.Length > listRoom) { sb.Append(LineCut); listCut = true; break; }
                     sb.Append(line);
                 }
@@ -137,7 +345,7 @@ static class SkyPatcherWire
                 c => "  - [" + c.Subfolder + "] " + c.Field + " @ " + c.Target + ":\n",
                 c => c.Entries.Select((e, i) => "      " + Path.GetFileName(e.File) + ":" + e.Line + "  " + e.Op + "=" + e.Value
                     + (i == c.Entries.Count - 1 ? "   ← WINS (last in apply order)" : "")   // by index: value-equal entries must not both claim the win
-                    + (e.Conditional ? "   [conditional — the line carries further filters]" : "") + "\n")))
+                    + (e.Conditional ? "   [conditional — a gate, finder or narrower on the line decides whether it reaches this target]" : "") + "\n")))
             missed.Add(ReportNames[0]);
 
         if (deadWrites > 0 && !Section(sb, budget,
@@ -148,7 +356,7 @@ static class SkyPatcherWire
                 m => m.Entries.Select(e => "      :" + e.Line + "  " + e.Op + "=" + e.Value + "  @ " + e.Targets
                     + "   ← DEAD (overwritten by "
                     + string.Join(", ", e.KillerLines.Select(k => k == e.Line ? $":{k} (a later op on the same line)" : $":{k}")) + ")"
-                    + (e.Conditional ? "   [carries further filters — dead regardless: the overwrite is unconditional]" : "") + "\n")))
+                    + (e.Conditional ? "   [conditional — a gate, finder or narrower on the line decides whether it reaches this target; dead regardless: the overwrite is unconditional]" : "") + "\n")))
             missed.Add(ReportNames[1]);
 
         if (d.Duplicates.Count > 0 && !Section(sb, budget,
@@ -157,7 +365,7 @@ static class SkyPatcherWire
                 d.Duplicates, "",
                 c => "  - [" + c.Subfolder + "] " + c.Field + " @ " + c.Target + ":\n",
                 c => c.Entries.Select(e => "      " + Path.GetFileName(e.File) + ":" + e.Line + "  " + e.Op + "=" + e.Value
-                    + (e.Conditional ? "   [conditional — the line carries further filters]" : "") + "\n")))
+                    + (e.Conditional ? "   [conditional — a gate, finder or narrower on the line decides whether it reaches this target]" : "") + "\n")))
             missed.Add(ReportNames[2]);
 
         if (d.NoOps.Count > 0 && !Section(sb, budget,
@@ -179,9 +387,10 @@ static class SkyPatcherWire
     /// <summary>The line every layer render closes with, spelled once so it is charged before the body.</summary>
     const string Hint = "\n→ " + ToolNames.Records + " formids=['<FormID>'] source={\"overlay\": \"skypatcher\", \"state\": \"post\"} for one record's computed post-SkyPatcher state; filter='<folder/mod/file>' for just the type folders holding a match, each listed in full apply order with the matching files expanded to their lines.";
 
-    /// <summary>The replay notes and the scan notes as one list, cut to <paramref name="room"/> and counted by the shared caveat cut.</summary>
-    static string NoteLines(SkyPatcherLayerData d, int room) =>
-        BatchRender.CutLines(new BatchRender.CaveatList(d.NoOpNotes.Concat(d.Scan.Notes).ToList(), "[!] ", "note(s)"), room);
+    /// <summary>The replay notes (with <paramref name="noOps"/>), the unreadable-plugin notes, the selectors' note and the scan notes as one list, cut to <paramref name="room"/> and counted by the shared caveat cut.</summary>
+    static string NoteLines(SkyPatcherLayerData d, int room, bool noOps) =>
+        BatchRender.CutLines(new BatchRender.CaveatList((noOps ? d.NoOpNotes : Enumerable.Empty<string>()).Concat(d.UnreadableNotes)
+            .Concat(d.SelectNote is { } s ? new[] { s } : Array.Empty<string>()).Concat(d.Scan.Notes).ToList(), "[!] ", "note(s)"), room);
 
     const string FileCut = "  ... [cut at max_chars]\n";
     const string LineCut = "      ... [lines cut at max_chars]\n";
@@ -195,15 +404,16 @@ static class SkyPatcherWire
         "  ... [" + missed.Count + " section(s) omitted at max_chars=" + cap + " (" + string.Join(", ", missed) + "); raise max_chars to see them]\n";
 
     /// <summary>A type folder's heading line, with its counts and flags.</summary>
-    static string FolderHead(SkyPatcherDiscovery.FolderScan f, string? filter)
+    static string FolderHead(SkyPatcherDiscovery.FolderScan f, Func<SkyPatcherDiscovery.IniFile, bool>? hit, SkyPatcherDiscovery.Switches switches)
     {
         int fLines = f.Files.Sum(x => x.Lines.Count(l => l.Kind == SkyPatcherLineKind.Patch));
-        int fMatched = filter is { } fq ? f.Files.Count(x => Matches(fq, f, x)) : f.Files.Count;
+        int fMatched = hit is null ? f.Files.Count : f.Files.Count(hit);
         var sb = new StringBuilder();
         sb.Append("\n").Append(f.Subfolder).Append(": ").Append(f.Files.Count).Append(" INI(s)");
         if (fMatched != f.Files.Count) sb.Append(" (").Append(fMatched).Append(" matching, expanded)");   // the header must describe the listing under it
         sb.Append(", ").Append(fLines).Append(" patch line(s)");
-        if (!f.PatchingEnabled) sb.Append("  [!] toggled OFF in SkyPatcher.ini — the DLL skips this whole folder");
+        if (!f.PatchingEnabled) sb.Append("  [!] SkyPatcher.ini ").Append(SkyPatcherDiscovery.SwitchOffReason(switches, f.Subfolder)).Append(" — the DLL skips this whole folder");
+        if (f.SwitchUnknown) sb.Append("  [!] SkyPatcher.ini could not be read — whether the DLL runs this patcher is unknown; its lines are replayed as if it does");
         if (f.Catalog is null) sb.Append("  [!] not a documented SkyPatcher record type — content listed, not interpreted");
         return sb.Append('\n').ToString();
     }
@@ -273,11 +483,33 @@ static class SkyPatcherWire
                   .Concat(folders.SelectMany(f => f.Files).Select(x => x.WinningProvider).Where(p => p is not null)!)
                   .Concat(folders.SelectMany(f => f.Files).Select(x => x.SortKey))))
               .Append(" The type folder(s) present are: ").Append(string.Join(", ", folders.Select(f => f.Subfolder)))
-              .Append(". Omit filter= for the whole-layer overview.\n");
+              .Append(d.Select is null ? ". Omit filter= for the whole-layer overview.\n"
+                  : ". Omit filter= for every line the selectors name; omit it, formids= and plugins= for the whole-layer overview.\n");
         }
-        // The scan notes (shadowed copies, undocumented subfolders) are often why the filter matched nothing.
+        return CloseZero(d, sb, cap, caveats);
+    }
+
+    /// <summary>What records selectors matching no line return: the zero count, how lines are matched, never the overview.</summary>
+    static string ZeroSelect(SkyPatcherLayerData d, string echo, string? filter, int cap, string caveats)
+    {
+        var folders = d.Scan.Folders;
+        int files = folders.Sum(f => f.Files.Count);
+        var sb = new StringBuilder();
+        sb.Append("SkyPatcher layer — lines naming a form of ").Append(echo).Append(filter is null ? "" : " in filter '" + filter + "'")
+          .Append(" — 0 of ").Append(files).Append(" INI(s) hold one [profile '").Append(d.ProfileName).Append("']\n\n")
+          .Append("nothing matched: no patch line names such a form as a target, a filter form, an op value or under a key SkyPatcher does not document. A line names a form " +
+                  "by Plugin|FormID, or by an EditorID where the replay looks one up; a ~name~ literal names no record. " +
+                  "Omit formids=, plugins= and filter= for the whole-layer overview.\n");
+        return CloseZero(d, sb, cap, caveats);
+    }
+
+    /// <summary>A zero answer's close: the unreadable-plugin and scan notes (the unreadable one can explain a selector zero,
+    /// not a filter= one, which matches names only) and the caveats. The no-op notes are about the whole layer's replay,
+    /// so a zero answer leaves them to the overview.</summary>
+    static string CloseZero(SkyPatcherLayerData d, StringBuilder sb, int cap, string caveats)
+    {
         // With no caveats the notes close the reply, and their last newline is trimmed, so it is not charged.
-        sb.Append(NoteLines(d, cap - sb.Length + (caveats.Length == 0 ? 1 : 0)));
+        sb.Append(NoteLines(d, cap - sb.Length + (caveats.Length == 0 ? 1 : 0), noOps: false));
         sb.Append(caveats);   // always rendered, as in the filtered and unfiltered renders
         return sb.ToString().TrimEnd('\n');
     }
@@ -285,7 +517,7 @@ static class SkyPatcherWire
     /// <summary>The build-level caveats as one string, so the render can charge them before its body is laid. The
     /// hedge sentence is written whatever the budget — it IS the alarm — and the lists under it are cut and counted
     /// like the note lists, since a lost archive drive or a blocked tree makes any of them long.</summary>
-    static string Caveats(SkyPatcherLayerData d, int cap)
+    internal static string Caveats(SkyPatcherLayerData d, int cap)
     {
         var sb = new StringBuilder();
         if (d.ReadIncomplete)

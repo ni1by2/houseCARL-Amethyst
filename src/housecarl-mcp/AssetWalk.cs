@@ -13,11 +13,34 @@ public enum WalkStanding { FromSource, Elsewhere, Present, Absent, Error }
 /// <summary>One file the walk reached: its Data path, the edge and the node or record that pulled it, its standing, the
 /// copy that answers it (the source's, else the winner), whether the game finds it by FormID, and a note.</summary>
 public sealed record AssetWalkNode(string Path, string Edge, string PulledBy, WalkStanding Standing,
-                                   PlacementSource? Copy, bool Keyed = false, string? Note = null, string? Error = null);
+                                   PlacementSource? Copy, bool Keyed = false, string? Note = null, string? Error = null,
+                                   HiddenCopies? Hidden = null);
 
-/// <summary>The data behind <c>asset_status walk=true</c>: every node in walk order, what the walk noted (records not
-/// found, boundaries, gaps), the source it read files from, the record sources (none on a path-only walk), and the
-/// build caveats.</summary>
+/// <summary>The walk's notes that say its rows are short of everything it reaches, so a reader of its file can tell a
+/// cut walk from a whole one by the same words the walk wrote.</summary>
+internal static class WalkCut
+{
+    internal const string MaxNodes = "the walk stopped entering records at walk.max_nodes=";
+    internal const string Files = "the walk stopped at ";
+    internal const string DepthTail = "hops from a seed and were not entered";
+    internal const string LinksUnread = ": its links were not read — ";
+    internal const string ParentUnread = ": its parent class was not read — ";
+    internal const string LeftOut = "left out, not in walk.through: ";
+    /// <summary>The tail of an edge-kind count on the left-out line, "N &lt;edge&gt; row(s)"; a record-type count has none.</summary>
+    internal const string Row = " row";
+
+    /// <summary>Is this walk note one that says the walk's rows do not hold everything it reaches?</summary>
+    internal static bool Says(string note) =>
+        note.StartsWith(MaxNodes, StringComparison.Ordinal) || note.StartsWith(Files, StringComparison.Ordinal)
+        || note.Contains(DepthTail, StringComparison.Ordinal)
+        || note.Contains(LinksUnread, StringComparison.Ordinal) || note.Contains(ParentUnread, StringComparison.Ordinal)
+        || note.StartsWith(LeftOut, StringComparison.Ordinal)
+           && note[LeftOut.Length..].Split(", ").Any(c => c.EndsWith(Row, StringComparison.Ordinal) || c.EndsWith(Row + "s", StringComparison.Ordinal));
+}
+
+/// <summary>The data behind <c>asset_status walk=true</c>: every node shown in walk order, what the walk noted (records
+/// not found, boundaries, gaps), the source it read files from, the record sources (none on a path-only walk), the
+/// build caveats, and the record cycles it found, each a loop of records, with whether the search cap stopped them.</summary>
 public sealed record AssetWalkData(
     IReadOnlyList<AssetWalkNode> Nodes,
     IReadOnlyList<string> Notes,
@@ -28,38 +51,47 @@ public sealed record AssetWalkData(
     IReadOnlyList<string> RootFailures,
     IReadOnlyList<string> Warnings,
     string ProfileName,
+    IReadOnlyList<string> Cycles,
+    bool CyclesCapped,
     string? Refusal = null);
 
 internal sealed partial class AssetLayers
 {
-    /// <summary>Records the walk enters, past which it stops and says so.</summary>
-    internal int MaxWalkRecords { get; set; } = 2_000;
+    /// <summary>The face door's sentence for a key a walk with from_source= finds nothing at.</summary>
+    internal const string RecordSourcesUnset = "no plugin in this order or the record sources defines it";
 
-    /// <summary>How many form-link hops from a seed record the walk enters: NPC → head part → its extra part's texture set.</summary>
-    internal const int RecordDepth = 3;
+    /// <summary>The face door's not-found sentence for a lane reading <paramref name="poles"/>: the order's alone when
+    /// every pole is the winner, else <paramref name="named"/>.</summary>
+    internal static string UnsetFor(IEnumerable<string> poles, string named) => poles.All(SourcePoles.IsWinner) ? NpcFace.Unset : named;
 
     /// <summary>The asset walk (SPEC §3 with a file edge): from seed paths and seed records to every file they reach,
-    /// through the paths a record lists, its implicit files (FaceGen, scripts, fragments, .seq, voice) and the links a
+    /// through the paths a record lists, its implicit files (a seed NPC's FaceGen, scripts, fragments, .seq, an entered
+    /// line's voice) and the links a
     /// file names (a mesh's textures, SMP XML and BODYTRI, a script's parent), each node resolved against
     /// <paramref name="sourceProvider"/> first and then the load order. Records are read through
-    /// <paramref name="fromSource"/> (default the winner) and the walk follows form links only into records the
-    /// from_source plugins define, and for a seed read through 'winner' its own plugin's; others are boundaries. <paramref name="keyedSeeds"/> are the seed
-    /// paths a formids= row derived from an NPC's id. Contract in docs/architecture/assets.md, Walking the links.</summary>
+    /// <paramref name="fromSource"/> (default the winner; a reached record no arm holds, the load order), and the walk
+    /// follows the links in each record's part fields and its child records, or the fields walk.follow names. <paramref name="keyedSeeds"/> are the seed
+    /// paths a formids= row derived from an NPC's id. <paramref name="values"/> are the walk's follow, depth, budget, through and
+    /// exclusions (null: the defaults); <paramref name="badSeeds"/> are seed tokens that are not FormIDs, each an error
+    /// node. Contract in docs/architecture/assets.md, Walking the links.</summary>
     public AssetWalkData AssetWalk(IReadOnlyList<string> seedPaths, IReadOnlyList<FormKey> seedRecords,
                                    IReadOnlyList<string>? fromSource, string? sourceProvider,
-                                   IReadOnlySet<string>? keyedSeeds = null)
+                                   IReadOnlyDictionary<string, string?>? keyedSeeds = null,
+                                   WalkGrammar.Values? values = null, IReadOnlyList<(string Raw, string Error)>? badSeeds = null)
     {
+        values ??= WalkGrammar.Values.Defaults(WalkGrammar.AssetDefaultDepth);
+        badSeeds ??= Array.Empty<(string, string)>();
         var (pin, captured) = _host.CapturePinAndAssets(null);
         var view = captured.View;
         sourceProvider = sourceProvider?.Trim() is { Length: > 0 } sp ? sp : null;
         if (sourceProvider is not null && AssetSourceChoice.Parse(sourceProvider).Pole != AssetSourcePole.Named) sourceProvider = null;
         var poles = fromSource is { Count: > 0 } ? fromSource : new[] { SourcePoles.Winner };
-        AssetWalkData Done(List<AssetWalkNode> nodes, List<string> notes, bool truncated, string? refusal = null)
+        AssetWalkData Done(List<AssetWalkNode> nodes, List<string> notes, bool truncated, string? refusal = null, RecordCycles? cycles = null)
             => new(nodes, notes, sourceProvider, seedRecords.Count > 0 ? poles : Array.Empty<string>(), truncated, view.BsaFailures, view.RootFailures, captured.Warnings,
-                   captured.ProfileName, refusal);
+                   captured.ProfileName, cycles?.Loops ?? Array.Empty<string>(), cycles?.Capped == true, refusal);
 
-        if (seedPaths.Count == 0 && seedRecords.Count == 0)
-            return Done(new(), new(), false, "error: the walk has no seed — pass asset_paths=, under=, provider=, formids= or records=.");
+        if (seedPaths.Count == 0 && seedRecords.Count == 0 && badSeeds.Count == 0)
+            return Done(new(), new(), false, "error: the walk has no seed — pass paths=, under=, provider=, formids= or records=.");
         // A source no provider and no mod folder answers to would mark every node elsewhere or absent, so it is refused by name.
         if (sourceProvider is not null && !view.HasSourceProvider(sourceProvider))
             return Done(new(), new(), false,
@@ -73,32 +105,43 @@ internal sealed partial class AssetLayers
         int cap = MaxAssetPaths;
         bool truncated = false, filesCut = false;
 
-        void AddFile(string raw, string edge, string pulledBy, bool keyed = false, string? note = null)
+        // Every node enters here, an error node too: one row per path, counted against the file cap.
+        bool Admit(string path)
+        {
+            if (!seen.Add(path)) return false;
+            if (nodes.Count >= cap) { truncated = filesCut = true; return false; }
+            return true;
+        }
+        void AddError(string raw, WalkEdgeKind edge, string pulledBy, string error, bool keyed = false, string? note = null)
+        {
+            if (Admit(raw)) nodes.Add(ErrorNode(raw, edge.Token(), pulledBy, error) with { Keyed = keyed, Note = note });
+        }
+        void AddFile(string raw, WalkEdgeKind edge, string pulledBy, bool keyed = false, string? note = null)
         {
             string rel;
             try { rel = AssetResolver.ValidateRelPath(raw); }
-            catch (ArgumentException ex)
-            {
-                nodes.Add(ErrorNode(raw, edge, pulledBy, ex.Message) with { Keyed = keyed, Note = note });
-                return;
-            }
-            if (!seen.Add(rel)) return;
-            if (nodes.Count >= cap) { truncated = filesCut = true; return; }
-            nodes.Add(Stand(view, rel, edge, pulledBy, keyed, note, sourceProvider));
+            catch (ArgumentException ex) { AddError(raw, edge, pulledBy, ex.Message, keyed, note); return; }
+            if (!Admit(rel)) return;
+            nodes.Add(Stand(view, rel, edge.Token(), pulledBy, keyed, note, sourceProvider));
             queue.Enqueue(nodes.Count - 1);
         }
 
-        foreach (var p in seedPaths) AddFile(p, "seed", "the selection", keyed: keyedSeeds?.Contains(p) == true);
+        foreach (var p in seedPaths) AddFile(p, WalkEdgeKind.Seed, "the selection", keyed: keyedSeeds?.ContainsKey(p) == true, note: keyedSeeds?.GetValueOrDefault(p));
+        foreach (var (raw, error) in badSeeds) AddError(raw, WalkEdgeKind.Seed, "the selection", error);
 
         using var session = pin.Resolver.OpenSession();
         var overlays = new List<IDisposable>();
+        var leftOutTypes = new List<string>();
+        int leftOutAt = -1;
+        RecordCycles? cycles = null;
         try
         {
             if (seedRecords.Count > 0)
             {
                 var chain = _host.BuildWalkSources(pin.View, session, captured.Roots, poles, overlays, out var chainErr);
                 if (chain is null) return Done(new(), new(), false, "error: " + chainErr);
-                WalkRecords(view, sourceProvider, pin.View, session, chain, seedRecords, overlays, AddFile, notes, ref truncated);
+                try { cycles = WalkRecords(view, sourceProvider, pin.View, session, chain, seedRecords, overlays, AddFile, notes, values, leftOutTypes, ref leftOutAt, ref truncated); }
+                catch (WalkGrammar.WalkRefused r) { return Done(new(), new(), false, "error: " + r.Message); }
             }
 
             // File edges: a mesh's links and a script's parent, read off the copy that answers the node.
@@ -108,76 +151,119 @@ internal sealed partial class AssetLayers
                 if (n.Copy is null) continue;
                 if (n.Path.EndsWith(".nif", StringComparison.OrdinalIgnoreCase))
                 {
-                    var (links, err) = MeshLinks(n.Copy);
-                    if (links is null) { notes.Add($"{n.Path}: its links were not read — {err}"); continue; }
+                    var (links, err) = MeshLinks(view, n.Copy);
+                    if (links is null) { notes.Add($"{n.Path}{WalkCut.LinksUnread}{err}"); continue; }
                     foreach (var l in links)
                     {
-                        if (l.DataPath is { } d) AddFile(d, l.Kind.Token(), n.Path);
-                        else nodes.Add(ErrorNode(l.Raw, l.Kind.Token(), n.Path, l.Error!));
+                        if (l.DataPath is { } d) AddFile(d, l.Kind.Edge(), n.Path);
+                        else AddError(l.Raw, l.Kind.Edge(), n.Path, l.Error!);
                     }
                 }
                 else if (n.Path.EndsWith(".pex", StringComparison.OrdinalIgnoreCase))
                 {
-                    var (bytes, readErr) = AssetResolver.ReadPlacementSource(n.Copy);
-                    if (bytes is null) { nodes.Add(ErrorNode(n.Path, "parent", n.Path, $"its parent class was not read — {readErr ?? "could not read the script bytes."}")); continue; }
-                    try { if (AssetWalkEdges.ParentPex(bytes) is { } parent) AddFile(parent, "parent", n.Path); }
-                    catch (Exception ex) { nodes.Add(ErrorNode(n.Path, "parent", n.Path, $"its parent class was not read — {ex.Message}")); }
+                    // A parent that cannot be read is a note on the script, as a mesh's unread links are, not a second row at its path.
+                    var (bytes, readErr) = view.ReadSource(n.Copy);
+                    if (bytes is null) { notes.Add($"{n.Path}{WalkCut.ParentUnread}{readErr ?? "could not read the script bytes."}"); continue; }
+                    try { if (AssetWalkEdges.ParentPex(bytes) is { } parent) AddFile(parent, WalkEdgeKind.Parent, n.Path); }
+                    catch (Exception ex) { notes.Add($"{n.Path}{WalkCut.ParentUnread}{ex.Message}"); }
                 }
             }
         }
         finally { foreach (var o in overlays) { try { o.Dispose(); } catch { /* releasing the off-order overlays */ } } }
 
         if (filesCut)
-            notes.Add($"the walk stopped at {cap} files (the asset_status path bound); what it reached so far is listed.");
-        return Done(nodes, notes, truncated);
+            notes.Add($"{WalkCut.Files}{cap} files (the asset_status path bound); "
+                      + (values.Edges is null ? "what it reached so far is listed."
+                         : "of what it reached so far, the rows of walk.through's edge kinds are listed and the rest counted on the left-out line."));
+        // The walk is whole; through's edge kinds choose only the rows shown, so every lane reads the same set.
+        if (values.Edges is { } edges)
+        {
+            var shown = edges.Select(k => k.Token()).Append(WalkEdgeKind.Seed.Token()).ToHashSet(StringComparer.Ordinal);
+            var hidden = nodes.Where(n => !shown.Contains(n.Edge)).Select(n => n.Edge).ToList();
+            nodes = nodes.Where(n => shown.Contains(n.Edge)).ToList();
+            // The record half's line where it stood, now counting the rows too; a path-only walk's goes last.
+            var line = WalkGrammar.LeftOutLine(leftOutTypes, hidden);
+            if (leftOutAt >= 0) notes[leftOutAt] = line; else notes.Add(line);
+        }
+        if (cycles is { Loops.Count: > 0 } c)
+        {
+            notes.Add($"{c.Loops.Count} record cycle(s) found (recorded, not an error): a lower bound, one per link the search finds closing a loop; a loop met again through a record already searched is not counted, and one through a record not entered (past walk.depth or walk.max_nodes, a reached NPC kept as a boundary, or past a link the walk does not follow) is not seen; the format=json walk answer (not counts_only=) lists the loops that fit max_chars and counts the rest, and a to_file= or spilled file lists every loop found.");
+            if (c.Capped) notes.Add($"the cycle search stopped at {RecordReads.WalkCycleCap} loops — more loops are there than are counted.");
+        }
+        return Done(nodes, notes, truncated, cycles: cycles);
     }
+
+    /// <summary>The note counting the NPCs a walk reached past a seed and kept as boundaries.</summary>
+    internal static string NpcBoundaryNote(int count)
+        => $"{count} NPC(s) the walk reached past a seed were kept as boundaries, not entered (no files, no links); seed one with records= to walk it, or name Npc in walk.through beside every other record type to keep, since a set walk.through enters only the types it names.";
+
+    /// <summary>The record cycles a walk found, each stated as its loop of records, and whether the search cap stopped it.</summary>
+    internal sealed record RecordCycles(IReadOnlyList<string> Loops, bool Capped);
 
     /// <summary>A node whose path could not be resolved or read on.</summary>
     static AssetWalkNode ErrorNode(string path, string edge, string pulledBy, string error)
         => new(path, edge, pulledBy, WalkStanding.Error, null, Error: error);
 
-    /// <summary>The files one copy of a mesh names, unresolved; or why they could not be read.</summary>
-    internal static (IReadOnlyList<NifLink>? Links, string? Error) MeshLinks(PlacementSource copy)
+    /// <summary>The files one copy of a mesh names, each once at its first site, unresolved; or why they could not be read.</summary>
+    internal static (IReadOnlyList<NifLink>? Links, string? Error) MeshLinks(AssetResolver.AssetView view, PlacementSource copy)
     {
-        var (bytes, readErr) = AssetResolver.ReadPlacementSource(copy);
-        return bytes is null ? (null, readErr ?? "could not read the mesh bytes.") : NifLinks.Read(bytes);
+        var (bytes, readErr) = view.ReadSource(copy);
+        if (bytes is null) return (null, readErr ?? "could not read the mesh bytes.");
+        var (links, err) = NifLinks.Read(bytes);
+        return links is null ? (null, err) : (NifLinks.FirstSites(links), null);
     }
 
     /// <summary>One node's standing: the named source's copy if it ships the path, else the winner, else absent.</summary>
     static AssetWalkNode Stand(AssetResolver.AssetView view, string rel, string edge, string pulledBy, bool keyed, string? note, string? source)
     {
         var place = view.ResolveForPlacement(rel);
+        // The named folder's own hidden copy, else the build's: a hidden node keeps its node and says why it is absent.
+        var hidden = place.Hidden;
         if (source is not null)
         {
             var pick = AssetSourceSelection.Select(place, AssetSourceChoice.Named(source), n => view.TryResolveOffOrderProvider(n, rel));
             if (pick.Verdict == AssetSourceVerdict.Selected)
                 return new AssetWalkNode(rel, edge, pulledBy, WalkStanding.FromSource, pick.Source, keyed, note);
+            hidden = pick.OffOrderHidden ?? hidden;
         }
-        if (place.Sources.Count == 0) return new AssetWalkNode(rel, edge, pulledBy, WalkStanding.Absent, null, keyed, note);
-        return new AssetWalkNode(rel, edge, pulledBy, source is null ? WalkStanding.Present : WalkStanding.Elsewhere,
-                                 place.Sources[0], keyed, note);
+        if (place.Sources.Count == 0) return new AssetWalkNode(rel, edge, pulledBy, WalkStanding.Absent, null, keyed, note, Hidden: hidden);
+        if (source is null) return new AssetWalkNode(rel, edge, pulledBy, WalkStanding.Present, place.Sources[0], keyed, note);
+        // Another layer wins; the named folder's own hidden copy rides along so the node says why it ships none.
+        return new AssetWalkNode(rel, edge, pulledBy, WalkStanding.Elsewhere, place.Sources[0], keyed, note,
+                                 Hidden: hidden?.HeldBy(source) == true ? hidden : null);
     }
 
-    internal delegate void FileSink(string raw, string edge, string pulledBy, bool keyed = false, string? note = null);
+    internal delegate void FileSink(string raw, WalkEdgeKind edge, string pulledBy, bool keyed = false, string? note = null);
 
-    /// <summary>The record half: every seed and every record its form links reach inside the from_source plugins and,
-    /// for a seed read through 'winner', its own plugin, each contributing the paths it lists and its implicit files.</summary>
-    void WalkRecords(AssetResolver.AssetView view, string? source, LoadOrderResolver.IndexView index, LoadOrderResolver.OverlaySession session, SourceChain chain, IReadOnlyList<FormKey> seeds, List<IDisposable> overlays, FileSink addFile,
-                     List<string> notes, ref bool truncated)
+    /// <summary>The record half: every seed and every record it reaches, each contributing the paths it lists and its
+    /// implicit files; a seed NPC its FaceGen too; a reached NPC is a boundary unless walk.through names Npc. By default
+    /// a record is left by the links in its part fields (<see cref="WalkParts"/>) and by its child records, read across
+    /// every plugin that touches it; walk.follow names the fields instead ("*" every form link, children too). A reached record no
+    /// from_source arm holds is read off the load order, and its rows say so. <paramref name="leftOut"/> gets the type of
+    /// each record walk.through left out, and <paramref name="leftOutAt"/> the index of the note that counts them.
+    /// Returns the record cycles over the links it followed, one out of a record at walk.depth too.</summary>
+    RecordCycles WalkRecords(AssetResolver.AssetView view, string? source, LoadOrderResolver.IndexView index, LoadOrderResolver.OverlaySession session, SourceChain chain, IReadOnlyList<FormKey> seeds, List<IDisposable> overlays, FileSink addFile,
+                             List<string> notes, WalkGrammar.Values values, List<string> leftOut, ref int leftOutAt, ref bool truncated)
     {
+        int maxDepth = values.Depth, maxRecords = values.MaxNodes;
+        // null: the part fields and children; else the named fields, or every form link and children when it holds "*".
+        var follow = values.Follow;
+        bool everyLink = WalkGrammar.FollowsEveryLink(follow);
+        // What walk.exclusions kept as boundaries.
+        int stopped = 0;
         var seenRec = new HashSet<FormKey>();
-        var frontier = new List<(FormKey Key, string PulledBy, IReadOnlySet<ModKey>? Home)>();
-        // The plugins each from_source arm names, as copy binds them (RecordCopy): an override donor's own records are
-        // entered. A seed read through 'winner' also enters its own plugin; one read through a named plugin does not.
-        var named = new HashSet<ModKey>();
-        foreach (var arm in chain.Arms)
-        {
-            if (string.Equals(arm.Spelling, SourcePoles.Winner, StringComparison.OrdinalIgnoreCase)) continue;
-            try { named.Add(ModKey.FromFileName(Path.GetFileName(arm.Spelling))); } catch { /* a spelling that names no plugin binds nothing */ }
-        }
-        foreach (var s in seeds) if (seenRec.Add(s)) frontier.Add((s, "seed", null));
+        // Every link followed out of an entered record, one at walk.depth too though not entered, and each entered record's EditorID, for the cycles.
+        var edges = new Dictionary<FormKey, List<FormKey>>();
+        var editorIds = new Dictionary<FormKey, string?>();
+        // The NPCs reached past depth 0 kept as boundaries, walk.through not naming Npc.
+        int npcBoundaries = 0;
+        var frontier = new List<(FormKey Key, string PulledBy)>();
+        foreach (var s in seeds) if (seenRec.Add(s)) frontier.Add((s, "seed"));
         int pastDepth = 0;
-        var boundaries = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
+        // The form links on entered records the follow rule did not walk, per holding type.
+        var notFollowed = new Dictionary<string, int>(StringComparer.Ordinal);
+        // The arms already read the whole order when one is the winner, so a miss there is a miss everywhere.
+        bool readsOrder = chain.Arms.Any(a => SourcePoles.IsWinner(a.Spelling));
         var inferCache = AssetWalkEdges.EmptyCache();
         (IAssetLinkCache? Cache, string? Loop)? voice = null;
         IAssetLinkCache? Voice()
@@ -192,110 +278,239 @@ internal sealed partial class AssetLayers
             }
             return voice.Value.Cache;
         }
-        var raceCaches = new Dictionary<FormKey, (IAssetLinkCache?, string?)>();
         int entered = 0;
-        var npcs = new List<(FormKey Key, string Label)>();
+        // One buffer for every entered record's followed links, one for its whole link set, cleared by each read.
+        var links = new List<FormKey>();
+        var allLinks = new HashSet<FormKey>();
+        var linkBuffer = new List<FormKey>();
+        var unreadParts = new List<string>();
+        // The named walk.follow paths some entered record reads, and why each other one could not be; the rest are said at the end.
+        var followFound = follow is not null && !everyLink ? new HashSet<string>(StringComparer.Ordinal) : null;
+        var followWrong = followFound is null ? null : new Dictionary<string, string>(StringComparer.Ordinal);
+
+        // True when walk.exclusions or walk.through keeps the record out: a stop is a boundary, a type outside through
+        // is left out, neither entered; a refuse ends the call. Unset, no record is judged.
+        bool judging = values.Exclusions.Count > 0 || values.Through is not null;
+        bool Judged(IMajorRecordGetter body, FormKey fk, string pulledBy)
+        {
+            var type = RecordNaming.StripOverlay(body.GetType().Name);
+            if (WalkExclusionMatch.Match(values.Exclusions, type) is { } x)
+            {
+                if (x.Refuse) throw new WalkGrammar.WalkRefused(WalkExclusionMatch.RefuseSentence(type, fk, pulledBy));
+                stopped++;
+                return true;
+            }
+            if (values.Through is { } through && !through.Contains(type)) { leftOut.Add(type); return true; }
+            return false;
+        }
 
         // Template members, races and speakers: the walk's own read when it reached them, else a round of their own.
         // Only these types are kept, so no cell or worldspace body holds its group's bytes past its depth.
         var members = new MemberReads(chain, keys => BodyGather.Winners(index, session, keys));
         IMajorRecordGetter? Fetch(FormKey fk) => members.Get(fk);
+        var faces = new NpcFace(Fetch, UnsetFor(chain.Arms.Select(a => a.Spelling), RecordSourcesUnset));
 
         // Breadth-first by depth, each depth's records read at once through the door: the order a queue would enter them.
         for (int depth = 0; frontier.Count > 0; depth++)
         {
             var fetched = chain.FetchMany(frontier.Select(f => f.Key).ToList());
-            var bodies = frontier.Select(f => fetched[f.Key].Hit?.Body).Where(b => b is INpcGetter or ILeveledNpcGetter or IRaceGetter).ToList();
-            members.Know(bodies!);
+            // A reached record no arm holds is read off the load order, as a round; a seed is read only through the arms.
+            var orderKeys = depth > 0 && !readsOrder ? frontier.Where(f => fetched[f.Key].IsMiss).Select(f => f.Key).ToList() : null;
+            var fromOrder = orderKeys is { Count: > 0 } ? BodyGather.Winners(index, session, orderKeys) : null;
             // What this depth does with each record, in order: a fault or a miss is a note, the rest are entered until the
             // record cap, where the walk stops.
-            var steps = new List<(FormKey Key, string PulledBy, IReadOnlySet<ModKey>? Home, SourceHit? Hit, string? Note)>();
+            var steps = new List<(FormKey Key, string PulledBy, IMajorRecordGetter? Body, SourceArm? Arm, string? Note)>();
             bool capped = false;
-            foreach (var (fk, pulledBy, homeIn) in frontier)
+            foreach (var (fk, pulledBy) in frontier)
             {
                 var got = fetched[fk];
-                if (got.Fault is { } fault) steps.Add((fk, pulledBy, homeIn, null, $"record {FormIdToken.Of(fk)} (pulled by {pulledBy}): '{fault.Arm.Spelling}' has it but could not read it — {fault.Cause}"));
-                else if (got.Hit is null)
-                    steps.Add((fk, pulledBy, homeIn, null, $"record {FormIdToken.Of(fk)} (pulled by {pulledBy}) is in none of the sources consulted: " +
-                                                           string.Join(", ", chain.Arms.Select(a => a.Where)) + "."));
-                else if (++entered > MaxWalkRecords) { capped = true; break; }
-                else steps.Add((fk, pulledBy, homeIn, got.Hit, null));
+                IMajorRecordGetter? body = got.Hit?.Body;
+                string? note = null;
+                if (got.Fault is { } fault) note = $"record {FormIdToken.Of(fk)} (pulled by {pulledBy}): '{fault.Arm.Spelling}' has it but could not read it — {fault.Cause}";
+                else if (body is null && fromOrder is not null)
+                {
+                    try { body = fromOrder(fk); }
+                    catch (Exception ex) { note = $"record {FormIdToken.Of(fk)} (pulled by {pulledBy}): the load order has it but could not read it — {ex.Message}"; }
+                }
+                if (note is null && body is null)
+                    note = $"record {FormIdToken.Of(fk)} (pulled by {pulledBy}) is in none of the sources consulted: " +
+                           string.Join(", ", chain.Arms.Select(a => a.Where)) + (fromOrder is null ? "." : ", nor the load order.");
+                if (note is not null) { steps.Add((fk, pulledBy, null, null, note)); continue; }
+                // A reached record is judged on the type its read body reports; a seed never is.
+                if (depth > 0 && judging && Judged(body!, fk, pulledBy)) continue;
+                // A reached NPC is a boundary when walk.through is unset (#1371); a through set has judged it above.
+                if (depth > 0 && values.Through is null && body is INpcGetter) { npcBoundaries++; continue; }
+                if (++entered > maxRecords) { capped = true; break; }
+                steps.Add((fk, pulledBy, body, got.Hit?.Arm, null));
             }
-            // Only the NPCs this depth enters have their template chains read.
-            members.Templates(steps.Select(s => s.Hit?.Body).OfType<INpcGetter>());
-            var next = new List<(FormKey Key, string PulledBy, IReadOnlySet<ModKey>? Home)>();
-            foreach (var (fk, pulledBy, homeIn, entry, note) in steps)
+            members.Know(steps.Select(s => s.Body).Where(b => b is INpcGetter or ILeveledNpcGetter or IRaceGetter)!);
+            // Only the seed NPCs have their template chains read, for their FaceGen.
+            if (depth == 0) members.Templates(steps.Select(s => s.Body).OfType<INpcGetter>());
+            // The child unions of this depth's cells and topics, read together across their plugins.
+            var children = follow is null || everyLink ? ChildUnions(index, session, steps.Where(s => s.Body is not null).Select(s => (s.Key, s.Body!, s.Arm))) : null;
+            var next = new List<(FormKey Key, string PulledBy)>();
+            foreach (var (fk, pulledBy, entry, arm, note) in steps)
             {
-                if (entry is not { } hit) { notes.Add(note!); continue; }
-                var home = homeIn ?? (string.Equals(hit.Arm.Spelling, SourcePoles.Winner, StringComparison.OrdinalIgnoreCase)
-                    ? new HashSet<ModKey>(named) { fk.ModKey } : named);
-                var body = hit.Body;
+                if (entry is not { } body) { notes.Add(note!); continue; }
                 var type = RecordNaming.StripOverlay(body.GetType().Name);
-                var label = body.EditorID is { Length: > 0 } edid ? $"{type} {edid} [{FormIdToken.Of(fk)}]" : $"{type} [{FormIdToken.Of(fk)}]";
+                var label = (body.EditorID is { Length: > 0 } edid ? $"{type} {edid} [{FormIdToken.Of(fk)}]" : $"{type} [{FormIdToken.Of(fk)}]")
+                            + (arm is null ? " (read from the load order: no from_source plugin has it)" : "");
 
-                foreach (var p in AssetLinkHarvest.HarvestAssetPaths(new[] { body })) addFile(p, "listed", label);
+                editorIds[fk] = body.EditorID;
+                var listed = AssetLinkHarvest.HarvestAssetPaths(new[] { body }, out var unlisted);
+                foreach (var p in listed) addFile(p, WalkEdgeKind.Listed, label);
+                if (unlisted is not null) notes.Add($"{label}: part of the paths it lists could not be read, so files it names there may be missing — {unlisted}");
                 try { foreach (var e in AssetWalkEdges.Inferred(body, inferCache)) addFile(e.Path, e.Edge, label, e.Keyed, e.Note); }
                 catch (Exception ex) { notes.Add($"{label}: its inferred links were not read — {ex.Message}"); }
                 foreach (var e in AssetWalkEdges.Fragments(body)) addFile(e.Path, e.Edge, label, e.Keyed, e.Note);
 
-                if (body is INpcGetter npc)
-                {
-                    FaceGenOf(npc, label, Fetch, raceCaches, addFile, notes);
-                    npcs.Add((fk, label));
-                }
+                // Only a seed NPC's face is listed.
+                if (depth == 0 && body is INpcGetter npc) FaceGenOf(npc, label, faces, addFile, notes);
+                // A line the walk entered, a seed or reached forward, is voiced; no line is found off an NPC.
                 if (body is IDialogResponsesGetter info)
-                {
                     if (Voice() is { } vc) VoiceOf(view, source, info, label, vc, Fetch, addFile, notes);
-                }
 
-                foreach (var link in body.EnumerateFormLinks())
+                if (everyLink)
                 {
-                    if (link.IsNull || link.FormKey == fk) continue;
-                    if (!home.Contains(link.FormKey.ModKey)) { boundaries[link.FormKey.ModKey.FileName] = boundaries.GetValueOrDefault(link.FormKey.ModKey.FileName) + 1; continue; }
-                    if (depth >= RecordDepth) { if (seenRec.Add(link.FormKey)) pastDepth++; continue; }
-                    if (seenRec.Add(link.FormKey)) next.Add((link.FormKey, label, home));
+                    // Through the one link door: a deleted record links to nothing, a perk read leniently is followed and
+                    // said, and one whose links cannot be read is said and not followed.
+                    if (RecordLinks.List(body, links, out var unread) is { } lenient) notes.Add(LenientNote(label, fk, lenient));
+                    if (unread is not null) notes.Add($"{label}: its links could not be read, so the walk does not go past it — {unread}");
+                    // Every link holds a child's links, not the child, so its children are entered as the default enters them.
+                    if (unread is null) ChildrenOf(body, children!.GetValueOrDefault(fk), label, links, notes);
+                }
+                else
+                {
+                    unreadParts.Clear();
+                    WalkParts.Links(body, follow ?? WalkParts.For(type), links, unreadParts, followFound, followWrong);
+                    foreach (var u in unreadParts) notes.Add($"{label}: the links under {u} could not be read, so the walk does not follow them");
+                    if (follow is null) ChildrenOf(body, children!.GetValueOrDefault(fk), label, links, notes);
+                    // The rest of its own form links, counted per type, read through the link door, which says a lenient read
+                    // and a fault; a fault leaves it uncounted, its fields read on their own above.
+                    if (OwnLinks(body, follow is null, allLinks, linkBuffer, out var unreadAll) is { } lenient) notes.Add(LenientNote(label, fk, lenient));
+                    if (unreadAll is not null)
+                        notes.Add($"{label}: its links could not be read whole, so the walk follows only its {(follow is null ? "part fields" : "fields walk.follow names")} and does not count the rest — {unreadAll}");
+                    allLinks.Remove(fk);
+                    allLinks.Remove(FormKey.Null);
+                    allLinks.ExceptWith(links);
+                    int left = allLinks.Count;
+                    if (left > 0) notFollowed[type] = notFollowed.GetValueOrDefault(type) + left;
+                }
+                var outgoing = edges[fk] = new List<FormKey>();
+                foreach (var link in links)
+                {
+                    if (link.IsNull) continue;
+                    // A self-link is a loop of one, recorded as the records walk records it, and walks nowhere new.
+                    if (link == fk) { outgoing.Add(link); continue; }
+                    // Recorded at walk.depth too, so a link back to an entered record closes its loop; one to a record
+                    // never entered closes none.
+                    outgoing.Add(link);
+                    if (depth >= maxDepth) { if (seenRec.Add(link)) pastDepth++; continue; }
+                    if (seenRec.Add(link)) next.Add((link, label));
                 }
             }
-            if (capped) { truncated = true; notes.Add($"the walk stopped entering records at {MaxWalkRecords}."); next.Clear(); }
+            if (capped)
+            {
+                truncated = true;
+                notes.Add($"{WalkCut.MaxNodes}{maxRecords} (every record entered counts, seeds included); raise walk.max_nodes to walk further.");
+                next.Clear();
+            }
             frontier = next;
         }
-        // An NPC's dialogue lines: the active order's lines whose winning copy it speaks (AssetWalkEdges.Speaks),
-        // found through the reverse index, and the lines an off-order source defines, which no index holds, read off it.
-        if (npcs.Count > 0)
-        {
-            try
-            {
-                var lines = new HashSet<FormKey>();
-                void Line(IDialogResponsesGetter line, string npcLabel)
-                {
-                    lines.Add(line.FormKey);
-                    var lineLabel = $"{RecordNaming.StripOverlay(line.GetType().Name)} [{FormIdToken.Of(line.FormKey)}], a line spoken by {npcLabel}";
-                    if (Voice() is { } vc) VoiceOf(view, source, line, lineLabel, vc, Fetch, addFile, notes);
-                }
-                index.EnsureReverseIndex();
-                // Only referencers whose winning copy is a line are read, all at once through the door; the index types them with no body read, and `read` answers null for any other key.
-                var referencers = npcs.Select(n => (n.Key, n.Label, Refs: index.ReverseIndex!.ReferencersOf(new[] { n.Key }).ToList())).ToList();
-                var candidates = referencers.SelectMany(n => n.Refs).Where(r => !seenRec.Contains(r)).Distinct()
-                                            .Where(r => index.WinnerClassOf(r) is not { } cls || typeof(IDialogResponsesGetter).IsAssignableFrom(cls)).ToList();
-                var read = BodyGather.Winners(index, session, candidates);
-                foreach (var (key, npcLabel, refs) in referencers)
-                    foreach (var r in refs)
-                        if (!lines.Contains(r) && read(r) is IDialogResponsesGetter line && AssetWalkEdges.Speaks(line, key))
-                            Line(line, npcLabel);
-                foreach (var mod in overlays.OfType<ISkyrimModGetter>())
-                    foreach (var line in mod.EnumerateMajorRecords<IDialogResponsesGetter>())
-                    {
-                        if (seenRec.Contains(line.FormKey) || lines.Contains(line.FormKey) || index.ResolveWinner(line.FormKey) is not null) continue;
-                        if (npcs.FirstOrDefault(n => AssetWalkEdges.Speaks(line, n.Key)) is { Label: { } npcLabel }) Line(line, npcLabel);
-                    }
-            }
-            catch (Exception ex) { notes.Add($"the dialogue lines naming the walked NPCs were not read — {ex.GetType().Name}: {ex.Message}"); }
-        }
         if (pastDepth > 0)
-            notes.Add($"{pastDepth} record(s) of a from_source plugin, or of a seed's own plugin when 'winner' read it, sit more than {RecordDepth} form-link hops from a seed and were not entered; seed them with records= to walk them.");
-        if (boundaries.Count > 0)
-            notes.Add("form links into other plugins were kept as boundaries, not walked (their files are that plugin's): " +
-                      string.Join(", ", boundaries.OrderByDescending(b => b.Value).Select(b => $"{b.Key} ×{b.Value}")) + ".");
+            notes.Add($"{pastDepth} record(s) sit more than walk.depth={maxDepth} {WalkCut.DepthTail}; raise walk.depth to walk them (an NPC among them is then a boundary unless walk.through names Npc).");
+        if (stopped > 0)
+            notes.Add($"{stopped} reached record(s) matched a stop exclusion and were kept as boundaries, not entered (no files, no links).");
+        if (values.Through is not null || values.Edges is not null)
+        {
+            leftOutAt = notes.Count;
+            notes.Add(WalkGrammar.LeftOutLine(leftOut));
+        }
+        if (notFollowed.Count > 0) notes.Add(NotFollowedNote(notFollowed, follow is null));
+        if (followFound is not null)
+            foreach (var p in follow!.Where(p => !followFound.Contains(p)))
+                notes.Add(followWrong!.TryGetValue(p, out var why)
+                    ? $"walk.follow '{p}' followed nothing: no record the walk entered reads it — {why}"
+                    : $"walk.follow '{p}' followed nothing: it names no field, or the walk entered no record that is not deleted (a deleted record links to nothing).");
+        if (npcBoundaries > 0) notes.Add(NpcBoundaryNote(npcBoundaries));
+
+        // Every loop over the recorded links, capped as the records walk caps its search (one cap, the shared budget's).
+        var loops = RecordReads.CycleLines(edges, k => editorIds.GetValueOrDefault(k), out var cyclesCapped);
+        return new RecordCycles(loops, cyclesCapped);
+    }
+
+    /// <summary>The form links <paramref name="body"/> holds, into <paramref name="into"/>, which is cleared first; when
+    /// <paramref name="ownOnly"/>, less those its own child records hold, which the walk enters and counts itself.
+    /// Answers the link door's lenient note; <paramref name="unread"/> its parse fault, with none collected.</summary>
+    static string? OwnLinks(IMajorRecordGetter body, bool ownOnly, HashSet<FormKey> into, List<FormKey> buffer, out string? unread)
+    {
+        into.Clear();
+        var lenient = RecordLinks.List(body, buffer, out unread);
+        into.UnionWith(buffer);
+        var fields = OwnedChildContent.Fields(body);
+        if (!ownOnly || unread is not null || fields.Count == 0 || body is not IMajorRecordGetterEnumerable nested) return lenient;
+        // Mutagen's walk of a parent hands over each child's links in turn, so a link stays the body's own only while it
+        // occurs more often in the body's walk than in its children's.
+        var count = new Dictionary<FormKey, int>();
+        foreach (var k in buffer) count[k] = count.GetValueOrDefault(k) + 1;
+        var direct = new HashSet<FormKey>();
+        foreach (var f in fields.Keys) direct.UnionWith(OwnedChildUnion.ChildKeys(body, f) ?? (IReadOnlyList<FormKey>)Array.Empty<FormKey>());
+        foreach (var child in nested.EnumerateMajorRecords())
+        {
+            if (!direct.Remove(child.FormKey) || child is not IFormLinkContainerGetter links) continue;
+            foreach (var l in links.EnumerateFormLinks()) count[l.FormKey] = count.GetValueOrDefault(l.FormKey) - 1;
+        }
+        foreach (var (k, n) in count) if (n <= 0) into.Remove(k);
+        return lenient;
+    }
+
+    /// <summary>The note on a record whose links the link door read leniently.</summary>
+    static string LenientNote(string label, FormKey fk, string lenient) => $"{label}: its links were read leniently — {RecordReads.LenientNoteBody(fk, lenient)}";
+
+    /// <summary>The note counting, per holding type, the form links the walk's follow rule left unwalked.</summary>
+    internal static string NotFollowedNote(IReadOnlyDictionary<string, int> perType, bool partFields)
+        => $"{perType.Values.Sum()} form link(s) on the records entered sit outside the {(partFields ? "part fields" : "fields walk.follow names")} and were not walked: "
+           + string.Join(", ", perType.OrderByDescending(t => t.Value).ThenBy(t => t.Key, StringComparer.Ordinal).Select(t => $"{t.Value} on {t.Key}"))
+           + "; walk.follow names the fields to follow, and walk={\"follow\": \"*\"} follows every form link.";
+
+    /// <summary>The child-bearing records among one depth's entered records, each with the union of its children across
+    /// every plugin that touches it, read together (null: one toucher); the plugin a body came from is its subject, so
+    /// the union reuses it, and an off-order file is no toucher.</summary>
+    static Dictionary<FormKey, IReadOnlyDictionary<string, ChildUnion>?> ChildUnions(LoadOrderResolver.IndexView index, LoadOrderResolver.OverlaySession session,
+                                                                                    IEnumerable<(FormKey Key, IMajorRecordGetter Body, SourceArm? Arm)> entered)
+    {
+        var items = new List<(FormKey, string, IMajorRecordGetter, IReadOnlyDictionary<string, OwnedChildShape>)>();
+        foreach (var (fk, body, arm) in entered)
+        {
+            var fields = OwnedChildContent.Fields(body);
+            if (fields.Count == 0) continue;
+            var plugin = arm is null || SourcePoles.IsWinner(arm.Spelling) ? index.ResolveWinner(fk)?.WinnerPlugin : Path.GetFileName(arm.Spelling);
+            items.Add((fk, plugin ?? "", body, fields));
+        }
+        var unions = OwnedChildUnion.ComputeMany(index, session, items);
+        var byKey = new Dictionary<FormKey, IReadOnlyDictionary<string, ChildUnion>?>();
+        for (int i = 0; i < items.Count; i++) byKey[items[i].Item1] = unions[i];
+        return byKey;
+    }
+
+    /// <summary>Adds the child records of <paramref name="body"/> (a cell's placed references, a topic's lines, a
+    /// worldspace's cells) to <paramref name="into"/>: its own, then those of every other plugin that touches it.</summary>
+    static void ChildrenOf(IMajorRecordGetter body, IReadOnlyDictionary<string, ChildUnion>? unions, string label, List<FormKey> into, List<string> notes)
+    {
+        var fields = OwnedChildContent.Fields(body);
+        if (fields.Count == 0) return;
+        var have = into.ToHashSet();
+        foreach (var f in fields.Keys)
+            foreach (var k in OwnedChildUnion.ChildKeys(body, f) ?? (IReadOnlyList<FormKey>)Array.Empty<FormKey>())
+                if (have.Add(k)) into.Add(k);
+        if (unions is null) return;
+        foreach (var u in unions.Values)
+        {
+            foreach (var k in u.Members)
+                if (have.Add(k)) into.Add(k);
+            if (u.Unreadable.Count > 0)
+                notes.Add($"{label}: its {u.Field} children in {string.Join(", ", u.Unreadable)} could not be read, so the walk does not enter them.");
+        }
     }
 
     /// <summary>Races, template members and speakers, read through the record sources, else off the active order, as the
@@ -316,18 +531,27 @@ internal sealed partial class AssetLayers
         {
             var want = keys.Where(k => !_read.ContainsKey(k)).Distinct().ToList();
             if (want.Count == 0) return;
-            var got = chain.FetchMany(want);
-            var misses = new List<FormKey>();
+            var got = Through(chain, winners)(want);
             foreach (var k in want)
-                if (got[k].Fault is { } f) _read[k] = (null, new InvalidOperationException($"'{f.Arm.Spelling}' has it but could not read it — {f.Cause}"));
-                else if (got[k].Hit is { } hit) _read[k] = (hit.Body, null);
-                else misses.Add(k);
-            if (misses.Count == 0) return;
-            var winner = winners(misses);
-            foreach (var k in misses)
-                try { _read[k] = (winner(k), null); }
+                try { _read[k] = (got(k), null); }
                 catch (Exception ex) { _read[k] = (null, ex); }
         }
+
+        /// <summary>A round read through <paramref name="chain"/>, each key it holds none of from <paramref name="winners"/>;
+        /// a key an arm has but cannot read throws with why.</summary>
+        internal static Func<IReadOnlyCollection<FormKey>, Func<FormKey, IMajorRecordGetter?>> Through(
+            SourceChain chain, Func<IReadOnlyCollection<FormKey>, Func<FormKey, IMajorRecordGetter?>> winners) => keys =>
+        {
+            var got = chain.FetchMany(keys);
+            var misses = keys.Where(k => got[k].IsMiss).ToList();
+            var winner = misses.Count > 0 ? winners(misses) : null;
+            return k => got[k] switch
+            {
+                { Fault: { } f } => throw new InvalidOperationException($"'{f.Arm.Spelling}' has it but could not read it — {f.Cause}"),
+                { Hit: { } hit } => hit.Body,
+                _ => winner!(k),
+            };
+        };
 
         /// <summary>One key's body, read as a round of one if no round has read it.</summary>
         public IMajorRecordGetter? Get(FormKey fk)
@@ -338,73 +562,27 @@ internal sealed partial class AssetLayers
             return body;
         }
 
-        /// <summary>The records AssetWalkEdges.FaceRoots asks for <paramref name="npcs"/>, with each NPC's race, read a
-        /// round per hop: FaceRoots runs over what is read so far, and every key it asks that is not read yet is the next
-        /// round, so a face root and its race are in hand before FaceGenOf asks.</summary>
+        /// <summary>The records the face door asks for <paramref name="npcs"/> (template members, races), read a round per
+        /// hop through <see cref="NpcFace.Prefetch"/>, so a face root and its race are in hand before FaceGenOf asks.</summary>
         public void Templates(IEnumerable<INpcGetter> npcs)
-        {
-            var pending = npcs.ToList();
-            while (pending.Count > 0)
-            {
-                var round = new List<FormKey>();
-                var unread = new List<INpcGetter>();
-                foreach (var npc in pending)
-                {
-                    bool asked = false;
-                    if (!npc.Race.IsNull) round.Add(npc.Race.FormKey);
-                    AssetWalkEdges.FaceRoots(npc, k =>
-                    {
-                        if (!_read.TryGetValue(k, out var r)) { round.Add(k); asked = true; return null; }
-                        if (r.Body is INpcGetter { Race.IsNull: false } n) round.Add(n.Race.FormKey);
-                        return r.Body;
-                    });
-                    if (asked) unread.Add(npc);
-                }
-                Read(round);
-                pending = unread;
-            }
-        }
+            => NpcFace.Prefetch(npcs, k => _read.TryGetValue(k, out var r) ? (true, r.Body) : (false, null), Read);
     }
 
-    /// <summary>The FaceGen pair an NPC's face is drawn from: its own, or its template root's, each member of a
-    /// leveled template marked one of N.</summary>
-    internal static void FaceGenOf(INpcGetter npc, string label, Func<FormKey, IMajorRecordGetter?> fetch,
-                                   Dictionary<FormKey, (IAssetLinkCache? Cache, string? Why)> raceCaches, FileSink addFile, List<string> notes)
+    /// <summary>An NPC's FaceGen nodes from the face door: its own pair, or its template root's, each member of a
+    /// leveled template marked one of N; a note with the reason for every root that has none.</summary>
+    internal static void FaceGenOf(INpcGetter npc, string label, NpcFace door, FileSink addFile, List<string> notes)
     {
-        var (roots, errs) = AssetWalkEdges.FaceRoots(npc, fetch);
-        foreach (var err in errs) notes.Add($"{label}: " + (roots.Count == 0 ? "no FaceGen node" : "a template member has no FaceGen node") + $" — {err}.");
-        foreach (var root in roots)
+        var face = door.Of(npc.FormKey, npc);
+        // A reason ending in an exception's message may carry its own period.
+        static string Ended(string why) => why.EndsWith('.') ? why : why + ".";
+        foreach (var err in face.Errors) notes.Add($"{label}: " + (face.Roots.Count == 0 ? "no FaceGen node" : "a template member has no FaceGen node") + $" — {Ended(err)}");
+        foreach (var root in face.Roots)
         {
-            if (root.Race.IsNull) { notes.Add($"{label}: no FaceGen node for {FormIdToken.Of(root.FormKey)} — it names no race."); continue; }
-            // One cache per race per walk: a walk of many NPCs shares a few races.
-            if (!raceCaches.TryGetValue(root.Race.FormKey, out var race))
-                raceCaches[root.Race.FormKey] = race = RaceOf(root.Race.FormKey, fetch);
-            if (race.Cache is null)
-            {
-                notes.Add($"{label}: no FaceGen node for {FormIdToken.Of(root.FormKey)} — {race.Why}");
-                continue;
-            }
-            var why = root.FormKey != npc.FormKey
-                ? $"the face of template root {FormIdToken.Of(root.FormKey)}" + (roots.Count > 1 ? $", one of {roots.Count}" : "")
-                : root.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits)
-                    ? "the Traits template flag is set with no Template, so this is read as the NPC's own face"
-                    : null;
-            foreach (var p in AssetWalkEdges.FaceGen(root, race.Cache)) addFile(p, "facegen", label, keyed: true, note: why);
+            if (root.Reason is { } why) { notes.Add($"{label}: no FaceGen node for {FormIdToken.Of(root.Root)} — {Ended(why)}"); continue; }
+            var note = face.NoteFor(root);
+            addFile(root.Tint!, WalkEdgeKind.FaceGen, label, keyed: true, note: note);
+            addFile(root.Mesh!, WalkEdgeKind.FaceGen, label, keyed: true, note: note);
         }
-    }
-
-    /// <summary>A race's FaceGen cache, or why there is none: not found, not read, or a link to a record of another type.</summary>
-    static (IAssetLinkCache? Cache, string? Why) RaceOf(FormKey fk, Func<FormKey, IMajorRecordGetter?> fetch)
-    {
-        IMajorRecordGetter? got;
-        try { got = fetch(fk); }
-        catch (Exception ex) { return (null, $"its race {FormIdToken.Of(fk)} was not read: {ex.Message}"); }
-        return got switch
-        {
-            IRaceGetter r => (AssetWalkEdges.RaceCache(r), null),
-            null => (null, $"its race {FormIdToken.Of(fk)} is in none of the record sources nor the load order."),
-            _ => (null, $"its race link {FormIdToken.Of(fk)} names a {RecordNaming.StripOverlay(got.GetType().Name)}, not a race."),
-        };
     }
 
     /// <summary>A dialogue line's voice files: the .fuz Mutagen resolves, or a same-stem .xwm / .wav with its .lip
@@ -424,10 +602,10 @@ internal sealed partial class AssetLayers
             var loose = new[] { ".xwm", ".wav" }.Select(x => stem + x).Where(Ships).ToList();
             bool hasFuz = Ships(fuz);
             if (hasFuz || loose.Count == 0)
-                addFile(fuz, "voice", label, keyed: true,
+                addFile(fuz, WalkEdgeKind.Voice, label, keyed: true,
                         note: hasFuz && loose.Count > 0 ? "a same-stem " + string.Join(" and ", loose.Select(Path.GetExtension)) + " ships too; which one plays is not claimed" : null);
-            foreach (var x in loose) addFile(x, "voice", label, keyed: true, note: hasFuz ? null : "no .fuz ships; this line plays from this file");
-            if (!hasFuz && loose.Count > 0) addFile(stem + ".lip", "lip", label, keyed: true);
+            foreach (var x in loose) addFile(x, WalkEdgeKind.Voice, label, keyed: true, note: hasFuz ? null : "no .fuz ships; this line plays from this file");
+            if (!hasFuz && loose.Count > 0) addFile(stem + ".lip", WalkEdgeKind.Lip, label, keyed: true);
         }
     }
 

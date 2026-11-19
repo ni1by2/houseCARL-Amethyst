@@ -6,7 +6,7 @@ internal static class ServerInstructionsText
         "NEVER COPY GENERATED OUTPUT or build on it; its tool re-derives it: Requiem for the Indifferent.esp, PGPatcher.esp, PG_1.esp, DynDOLOD.esm/.esp, Occlusion.esp, folders holding NPC_Token.json or ParallaxGen_Diff.json, Synthesis, TexGen and xLODGen output. Mods named only Resources or Fixes are inputs. ";
 
     static string DistributionLayers =>
-        "RUNTIME DISTRIBUTION LAYERS follow the recipient: spells, perks, items, keywords, outfits or factions onto NPCs use SPID; keywords onto item records use KID; record fields or one NPC use SkyPatcher, whose replayed layer " + ToolNames.SkypatcherLayer + " reads. ";
+        "RUNTIME DISTRIBUTION LAYERS follow the recipient: spells, perks, items, keywords, outfits or factions onto NPCs use SPID; keywords onto item records use KID; record fields or one NPC use SkyPatcher, whose replayed layer " + ToolNames.Layer + " reads. The same tool inspects SPID, KID, BOS and FLM; file tools share paths= selectors. ";
 
     internal static string Build(bool amethyst)
     {

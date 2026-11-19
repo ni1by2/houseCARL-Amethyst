@@ -30,6 +30,12 @@ internal sealed partial class RecordWrites
     /// <summary>Test seam: invoked once inside <see cref="ApplyEdits"/>'s write gate; null in the product.</summary>
     internal static Action? InsideWriteGateForGuard;
 
+    /// <summary>Test seam: invoked inside the write gate after a write committed, just before its first post-write file read; null in the product.</summary>
+    internal Action? AfterCommitForGuard;
+
+    /// <summary>Test seam: invoked inside the write gate after the apply and compact lanes' pin, before their serving-copy check; null in the product.</summary>
+    internal Action? AfterInGatePinForGuard;
+
     /// <summary>Apply one or more edits as a single patch: map each op to a core PatchEdit, resolve the output, then
     /// drive <see cref="WritePatchBuilder.Apply"/>. All-or-nothing, and a new patch unless <paramref name="into"/> extends one.</summary>
     public WritePatchBuilder.PatchOutcome ApplyEdits(IReadOnlyList<BulkOp> ops, string? patchName, string? into,
@@ -75,6 +81,7 @@ internal sealed partial class RecordWrites
             var roots = snapshot.Roots;
             var rulebook = _host.Rulebook;
             InsideWriteGateForGuard?.Invoke();                            // test seam; null in the product
+            AfterInGatePinForGuard?.Invoke();                             // test seam; null in the product
 
             if (inPlace)
             {
@@ -441,6 +448,7 @@ internal sealed partial class RecordWrites
     {
         try
         {
+            AfterCommitForGuard?.Invoke();                                 // test seam; null in the product
             var av = _host.Assets.Capture();
             var seqRel = $@"SEQ\{Path.GetFileNameWithoutExtension(targetPath)}.seq";
             var seqSource = av.ResolveForPlacement(seqRel).Sources.FirstOrDefault();

@@ -13,14 +13,14 @@ public static class AmethystSetupTools
     public static string SetAmethystConnection(LoadOrderService svc,
         [Description("Absolute native path to the schema-v1 Amethyst connection manifest.")] string manifest_path,
         [Description("Required explicit mode: 'saved-snapshot'. Confirms acceptance of unverified freshness warnings.")] string filegraph_mode)
-        => Guard.Tool(ToolNames.SetAmethystConnection, () =>
+        => Guard.Tool(ToolNames.SetAmethystConnection, call =>
         {
-            if (!OperatingSystem.IsLinux()) return "error: Amethyst saved-snapshot mode requires Linux";
-            if (filegraph_mode != "saved-snapshot") return "error: filegraph_mode must explicitly be 'saved-snapshot'";
+            if (!OperatingSystem.IsLinux()) return ToolAnswer.Refusal("error: Amethyst saved-snapshot mode requires Linux");
+            if (filegraph_mode != "saved-snapshot") return ToolAnswer.Refusal("error: filegraph_mode must explicitly be 'saved-snapshot'");
             var result = svc.SetAmethystSnapshot(manifest_path);
-            return $"Amethyst saved-snapshot mode selected: {result.Snapshot.Profile}; generation {result.Snapshot.Generation}.\n" +
+            return ToolAnswer.Served($"Amethyst saved-snapshot mode selected: {result.Snapshot.Profile}; generation {result.Snapshot.Generation}.\n" +
                 "WARNING: " + AmethystSnapshotProvenance.Warning + "\nNew record patches can be written to staging; Refresh, enable and deploy them in Amethyst. Existing-plugin edits remain unavailable.\n" +
                 (result.Persisted ? "Connection and mode saved for restart.\n" : $"Connection is active for this session, but could not be saved: {result.Error}\n") +
-                (result.Note is null ? "" : "User config recovery: " + result.Note);
+                (result.Note is null ? "" : "User config recovery: " + result.Note));
         });
 }

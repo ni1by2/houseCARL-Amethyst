@@ -1,0 +1,365 @@
+{
+"_about": "One row per runtime-layer format: where its files are found, the order they apply in, who wins a conflict and how a line is split. The server reads these values and the generator's skill-text mode, run by hand, prints the skill paragraphs from them (docs/architecture/runtime-formats.md). Each block's 'source' names the upstream text it is taken from; 'reading' marks a rule upstream does not state.",
+"formats": [
+ {
+  "format": "SkyPatcher",
+  "version": "8.0.1",
+  "discovery": {
+   "source": "Nexus 6085 General Information; 8.0.1 changelog (lower-case '.ini', upper-case plugin ending)",
+   "root": "SKSE/Plugins/SkyPatcher",
+   "typeFolder": "firstComponent",
+   "nameToken": ".ini",
+   "tokenMatch": "anywhere",
+   "endingCase": "lower",
+   "gate": { "kind": "pluginStem", "extensions": [".esp", ".esm", ".esl"], "moreText": "neverRead" },
+   "reading": { "rootFiles": "notRead", "looseOnly": true }
+  },
+  "switches": {
+   "source": "Nexus 6085; LIGH 12456 (Light runs without its key)",
+   "file": "SKSE/Plugins/SkyPatcher.ini",
+   "section": "Patcher",
+   "keyPrefix": "iEnable",
+   "keySuffix": "Patching",
+   "missing": "off",
+   "onWithoutKey": ["light"],
+   "value": "leadingInteger"
+  },
+  "order": {
+   "source": "Nexus 6085 (patcher order, breadth-first); ARR 7.0.x SkyPatcher.log (same order)",
+   "files": "breadthFirst",
+   "compare": "ordinalIgnoreCase",
+   "passes": [
+    { "folder": "raceHook", "name": "Race Hook", "runs": "early", "note": "runs earlier, while the races load" },
+    { "folder": "magicEffect", "name": "Magic Effect" },
+    { "folder": "ammo", "name": "Ammo" },
+    { "folder": "weapon", "name": "Weapon" },
+    { "folder": "armor", "name": "Armor" },
+    { "folder": "race", "name": "Race" },
+    { "folder": "npc", "name": "NPC" },
+    { "folder": "ingestible", "name": "Alchemy" },
+    { "folder": "ingredient", "name": "Ingredient" },
+    { "folder": "spell", "name": "Spell" },
+    { "folder": "enchantment", "name": "Enchantment" },
+    { "folder": "projectile", "name": "Projectile" },
+    { "folder": "light", "name": "Light" },
+    { "folder": "outfit", "name": "Outfit" },
+    { "folder": "scroll", "name": "Scroll" },
+    { "folder": "misc", "name": "Misc" },
+    { "folder": "soulGem", "name": "Soul Gem" },
+    { "folder": "faction", "name": "Faction" },
+    { "folder": "constructibleObject", "name": "Constructible Object" },
+    { "folder": "book", "name": "Book" },
+    { "folder": "movementType", "name": "Movement Type" },
+    { "folder": "leveledList", "name": "Leveled List" },
+    { "folder": "container", "name": "Container" },
+    { "folder": "formList", "name": "FormList" },
+    { "folder": "reference", "name": "Reference" },
+    { "folder": "cell", "name": "Cell" },
+    { "folder": "location", "name": "Location" },
+    { "folder": "encounterzone", "name": "Encounter Zone" },
+    { "folder": "objectModification", "name": "Object Modification", "runs": "noEffect" }
+   ]
+  },
+  "conflict": {
+   "source": "Nexus 6085",
+   "set": "lastReadWins",
+   "add": "accumulate"
+  },
+  "grammar": {
+   "source": "Nexus 6085; 8.0.1 changelog (trailing comments)",
+   "segment": ":",
+   "assign": "=",
+   "item": ",",
+   "compound": "~",
+   "address": "|",
+   "comment": ";",
+   "trailingComment": true,
+   "reading": { "commentLeads": ["#"], "labelLines": true }
+  },
+  "targets": {
+   "source": "Nexus 6085; the address character is this row's grammar.address, spelt once there",
+   "addressOrder": "pluginFirst",
+   "formId": "localObjectId",
+   "bareFormId": "notAFormId",
+   "pluginTerm": "notATerm",
+   "pluginExtensions": [],
+   "missingName": "namesNothing",
+   "editorIds": "scoped"
+  }
+ }
+],
+"_distributors_about": "The four distributor formats: discovery and target spelling, and a 'lines' block (line kinds, order, conflict and grammar) on each row whose reader has landed: SPID's, KID's, BOS's and FLM's, the only rows the loader admits one on. 'unread' is a rule this build has not read for that format, never a claim about it.",
+"distributors": [
+ {
+  "format": "Spell Perk Item Distributor",
+  "key": "spid",
+  "version": "7.3.3",
+  "folders": [
+   {
+    "source": "CLibUtil get_configs (distribution.hpp:29-47 at 5f845f3), called get_configs(R\"(Data\\)\", \"_DISTR\") in SPID/src/LookupConfigs.cpp:94 at 7.3.3",
+    "root": "",
+    "nameToken": "_DISTR",
+    "tokenCase": "ordinal",
+    "extension": ".ini",
+    "extensionCase": "ordinal",
+    "depth": "topLevelOnly",
+    "order": "sortedOrdinal"
+   }
+  ],
+  "targets": {
+   "source": "CLibUtil get_record_type/get_record (distribution.hpp:90-120 at 5f845f3); SPID 7.3.3 FormData.h:200-232; CommonLibSSE-NG bc216c91 TESDataHandler::LookupFormID (unmasked add)",
+   "addressOrder": "formIdFirst",
+   "separator": "~",
+   "manySeparators": "addressAtFirst",
+   "formId": "runtimeAdd",
+   "bareFormId": "runtimeFormId",
+   "pluginTerm": "containsExtensionText",
+   "pluginExtensions": [".es"],
+   "missingName": "byPosition",
+   "editorIds": "everyType"
+  },
+  "lines": {
+   "source": "SPID 7.3.3 a6f2177 (7.3.0 787bf12 differs in none of these files): LookupConfigs.cpp:13-53 (sanitize), :94-159 (read, SaveFile), :117 (the unnamed section), :124-145 (key kinds); LookupConfigs.h:61-74, :86 (type names, case-sensitive), :343-346 (Final), :369-397 (string modifiers); Parser.h:67-72 (sections); LookupForms.cpp:12-75 (Form lines last); Distribute.cpp:15-188 (type order, outfits in their own pass); Distribute.h (first wins); FormData.h:170-262 (created keywords), :220-227 (a FormID that names nothing drops the line), :357 and :611-616 (filter lists); Cache.h:5-19 (filter types); SimpleIni 4.25 :1259-1260 (comment leads), :1734-1746 (the value runs to the line end), its multimap keyed case-insensitively (distributor-lines research-topup X5)",
+   "reads": ["7.3.0", "7.3.3"],
+   "section": "unnamedOnly",
+   "commentLeads": [";", "#"],
+   "trailingComment": false,
+   "assign": "=",
+   "sections": "|",
+   "item": ",",
+   "all": "+",
+   "not": "-",
+   "partial": "*",
+   "unset": "NONE",
+   "lineOrder": "keyIgnoreCaseThenLine",
+   "kinds": [
+    { "kind": "exclusiveGroup", "key": "ExclusiveGroup", "fields": ["name", "members"] },
+    { "kind": "linked", "prefix": "Linked", "global": "Global", "fields": ["value", "parents", "countOrIndex", "chance"] },
+    { "kind": "death", "prefix": "Death", "fields": ["value", "strings", "forms", "level", "traits", "countOrIndex", "chance"] },
+    { "kind": "regular", "fields": ["value", "strings", "forms", "level", "traits", "countOrIndex", "chance"] }
+   ],
+   "final": { "prefix": "Final", "types": ["Outfit"] },
+   "types": [
+    { "key": "Keyword", "runs": "1", "name": "Keywords", "conflict": "everyLine", "missingValue": "createsKeyword" },
+    { "key": "Faction", "runs": "2", "name": "Factions", "conflict": "everyLine", "missingValue": "dropsLine" },
+    { "key": "Perk", "runs": "3", "name": "Perks", "conflict": "everyLine", "missingValue": "dropsLine" },
+    { "key": "Spell", "runs": "4", "name": "Spells", "conflict": "everyLine", "missingValue": "createsKeywordHandsNothing" },
+    { "key": "LevSpell", "runs": "5", "name": "Leveled spells", "conflict": "everyLine", "missingValue": "dropsLine" },
+    { "key": "Shout", "runs": "6", "name": "Shouts", "conflict": "everyLine", "missingValue": "dropsLine" },
+    { "key": "Package", "runs": "7", "name": "Packages", "conflict": "everyLine", "missingValue": "createsKeywordHandsNothing" },
+    { "key": "Item", "runs": "8", "name": "Items", "conflict": "sums", "missingValue": "dropsLine" },
+    { "key": "Skin", "runs": "9", "name": "Skins", "conflict": "firstWins", "missingValue": "dropsLine" },
+    { "key": "SleepOutfit", "runs": "10", "name": "Sleep outfits", "conflict": "firstWins", "missingValue": "dropsLine" },
+    { "key": "Outfit", "runs": "ownPass", "name": "Outfits", "conflict": "firstWins", "missingValue": "dropsLine", "record": "Outfit" },
+    { "key": "Form", "runs": "inferred", "name": "Form", "conflict": "inferred", "missingValue": "createsKeyword" }
+   ],
+   "filterTypes": ["Faction", "Class", "CombatStyle", "Race", "Outfit", "Npc", "PlacedNpc", "VoiceType", "FormList", "Spell", "Armor", "Location", "Perk"],
+   "targetTypes": ["Npc", "PlacedNpc"],
+   "stringLookups": ["Npc", "Keyword"]
+  }
+ },
+ {
+  "format": "Keyword Item Distributor",
+  "key": "kid",
+  "version": "4.1.0",
+  "folders": [
+   {
+    "source": "CLibUtil get_configs (distribution.hpp:29-47 at 789abd2: directory_iterator, extension() == \".ini\", rfind(\"_KID\") on the path, sorted), called get_configs(R\"(Data\\)\", \"_KID\") in KID src/LookupConfigs.cpp:65 and sorted again at :74, at v4.0.6 895df22 (v4.1.0 99adaaa the same)",
+    "root": "",
+    "nameToken": "_KID",
+    "tokenCase": "ordinal",
+    "extension": ".ini",
+    "extensionCase": "ordinal",
+    "depth": "topLevelOnly",
+    "order": "sortedOrdinal"
+   }
+  ],
+  "targets": {
+   "source": "KID v4.0.6 895df22 (v4.1.0 99adaaa the same) include/Data/FormData.h:25 (IsMod), src/Data/FormData.cpp:6-17 (RawForm: one '~' or none), :60-83 (the keyword, looked up as a keyword, else created), :85-108 (a filter, looked up untyped); CommonLibSSE a11cc72 TESDataHandler.cpp:28-40 (unmasked add), :56-64 (plugin name in any case)",
+   "addressOrder": "formIdFirst",
+   "separator": "~",
+   "manySeparators": "name",
+   "formId": "runtimeAdd",
+   "bareFormId": "runtimeFormId",
+   "pluginTerm": "endsWithExtension",
+   "pluginExtensions": [".esm", ".esp", ".esl"],
+   "missingName": "byPosition",
+   "editorIds": "everyType"
+  },
+  "lines": {
+   "source": "KID v4.0.6 895df22 (v4.1.0 99adaaa differs in none of these files but helper names): src/LookupConfigs.cpp:6-59 (the five '|' sections, untrimmed; a type not one of the list drops the line with no log), :81-113 (SetMultiKey, the unnamed section, a throw logged 'Failed to parse entry'); src/ExclusiveGroups.cpp:5-42 (the key, exact; name and members); include/Data/EnumDefs.h:36-56 (the type strings); include/KeywordData.h:70-96 (Magic Effect first); src/Data/BaseFilters.cpp:7-46 (',' entries trimmed, NONE, '+' groups, '-' and '*' per member, '.nif' sanitized), :48-125 (which failed terms drop the line); src/Data/FormData.cpp:85-148 (the filter whitelist); include/Data/BaseFilters.h:33-50 (a string ending '.nif' is a model path); include/Data/Traits.h:630-657 (the types that take traits); CLibUtil 789abd2 string.hpp:123-140 (stoul, stof); SimpleIni 4.25 :1259-1260 (comment leads), :1732-1746 (the value runs to the line end), its multimap keyed case-insensitively",
+   "reads": ["4.0.6", "4.1.0"],
+   "section": "unnamedOnly",
+   "commentLeads": [";", "#"],
+   "trailingComment": false,
+   "assign": "=",
+   "sections": "|",
+   "item": ",",
+   "all": "+",
+   "not": "-",
+   "partial": "*",
+   "unset": "NONE",
+   "lineOrder": "keyIgnoreCaseThenLine",
+   "groupKey": "ExclusiveGroup",
+   "fields": ["keyword", "type", "filters", "traits", "chance"],
+   "groupFields": ["name", "members"],
+   "modelEnding": ".nif",
+   "keywordRecord": "Keyword",
+   "types": [
+    { "key": "Armor", "record": "Armor", "runs": "2", "traits": true },
+    { "key": "Weapon", "record": "Weapon", "runs": "3", "traits": true },
+    { "key": "Ammo", "record": "Ammunition", "runs": "4", "traits": true },
+    { "key": "Magic Effect", "record": "MagicEffect", "runs": "1", "traits": true },
+    { "key": "Potion", "record": "Ingestible", "runs": "5", "traits": true },
+    { "key": "Scroll", "record": "Scroll", "runs": "6", "traits": true },
+    { "key": "Location", "record": "Location", "runs": "7", "traits": false },
+    { "key": "Ingredient", "record": "Ingredient", "runs": "8", "traits": true },
+    { "key": "Book", "record": "Book", "runs": "9", "traits": true },
+    { "key": "Misc Item", "record": "MiscItem", "runs": "10", "traits": false },
+    { "key": "Key", "record": "Key", "runs": "11", "traits": false },
+    { "key": "Soul Gem", "record": "SoulGem", "runs": "12", "traits": true },
+    { "key": "Spell", "record": "Spell", "runs": "13", "traits": true },
+    { "key": "Activator", "record": "Activator", "runs": "14", "traits": false },
+    { "key": "Flora", "record": "Flora", "runs": "15", "traits": false },
+    { "key": "Furniture", "record": "Furniture", "runs": "16", "traits": true },
+    { "key": "Race", "record": "Race", "runs": "17", "traits": false },
+    { "key": "Talking Activator", "record": "TalkingActivator", "runs": "18", "traits": false },
+    { "key": "Enchantment", "record": "ObjectEffect", "runs": "19", "traits": true }
+   ],
+   "filterTypes": ["Armor", "Weapon", "Ammunition", "MagicEffect", "Ingestible", "Scroll", "Location", "Ingredient", "Book", "MiscItem", "Key", "SoulGem", "Activator", "Flora", "Furniture", "Race", "TalkingActivator", "ObjectEffect", "EffectShader", "VisualEffect", "ArtObject", "MusicType", "Faction", "Keyword", "Spell", "Projectile", "EquipType", "VoiceType", "LeveledItem", "Water", "Perk", "FormList"]
+  }
+ },
+ {
+  "format": "Base Object Swapper",
+  "key": "bos",
+  "version": "3.5.0",
+  "folders": [
+   {
+    "source": "CLibUtil get_configs, called with \"_SWAP\"; BOS v3.5.0 src/Manager.cpp",
+    "root": "",
+    "nameToken": "_SWAP",
+    "tokenCase": "ordinal",
+    "extension": ".ini",
+    "extensionCase": "ordinal",
+    "depth": "topLevelOnly",
+    "order": "sortedOrdinal"
+   }
+  ],
+  "targets": {
+   "source": "BOS v3.4.0 52f6b80 (v3.5.0 c0b9c09 the same) src/Util.cpp:15-38: exactly one '~' is HEX~Plugin, stoul base 16 then LookupFormID raw (CommonLibSSE a3ca17a1 TESDataHandler.cpp:42-65: the plugin's index added unmasked, no form checked, the plugin found in any case), a term holding two or more '~' is no address (:17, splitID.size() == 2); else '0x' and all hex is a runtime FormID kept with no form (:27-33; CLibUtil a7a877a0 string.hpp:65-77); else an untyped LookupByEditorID (:34-36); no plugin-name term; a name no record holds does what its field says (SwapData.cpp, Util.cpp:40-76, ConditionalData.cpp:9-21)",
+   "addressOrder": "formIdFirst",
+   "separator": "~",
+   "manySeparators": "name",
+   "formId": "runtimeAdd",
+   "bareFormId": "runtimeFormId",
+   "pluginTerm": "notATerm",
+   "pluginExtensions": [],
+   "missingName": "byPosition",
+   "editorIds": "everyType"
+  },
+  "lines": {
+   "source": "BOS v3.4.0 52f6b80 (v3.5.0 c0b9c09 the same in these lines, research bos-lines answer 2): src/Manager.cpp:16 (get_configs), :28-30 (SetUnicode, SetMultiKey, SetAllowKeyOnly), :38-99 (every section in load order; a header holding '|': head 'Forms' conditional form swaps, any other head conditional property overrides, the conditions between the first and second '|' split on ','; 'Transforms' or 'Properties' property overrides, 'Forms' form swaps, any other name reference swaps), :204-272 (per reference: references, conditional forms, forms, each from the last line back; properties the same after the winning swap's own); src/SwapData.cpp:19-33 (base|properties|chance), :58-135 (base|swap|properties|chance, a base or swap set, BASE formID == SWAP formID), src/Util.cpp:40-76 (a set member naming nothing leaves the set); src/ConditionalData.cpp:9-21 (a leading '-' negates; a condition naming no form is kept as text), :33-70 (a form condition matches only a Location, Region, Keyword, Cell or WorldSpace); src/ObjectProperties.cpp:119-135 (a property names pos, rot, scale or flags); CLibUtil a7a877a0 distribution.hpp:76-79 (NONE or empty is no entry); SimpleIni 4.22 :1252-1253 (comment leads), :1630-1702 (a header trimmed, its tail dropped; a key to '=' trimmed; a key-only line), :2458-2483 (keys and sections merged in any case, each key once); Manager.cpp:227-233 (a form swap looked up by a reference's base), :266-273 (a property override by the reference's base or the reference itself), and a reference's base a TESBoundObject (CommonLibSSE-NG c5424463b, each class of baseTypes deriving it; propertyBaseTypes the references)",
+   "reads": ["3.4.0", "3.5.0"],
+   "section": "every",
+   "keys": "onceIgnoreCase",
+   "commentLeads": [";", "#"],
+   "assign": "=",
+   "fields": "|",
+   "item": ",",
+   "not": "-",
+   "unset": "NONE",
+   "conditional": "|",
+   "formsSection": "Forms",
+   "propertySections": ["Transforms", "Properties"],
+   "swapFields": ["base", "swap", "properties", "chance"],
+   "propertyFields": ["base", "properties", "chance"],
+   "propertyNames": ["pos", "rot", "scale", "flags"],
+   "conditionTypes": ["Location", "Region", "Keyword", "Cell", "Worldspace"],
+   "baseTypes": ["Activator", "AcousticSpace", "AddonNode", "AlchemicalApparatus", "Ammunition", "Armor", "ArtObject", "Book", "Container", "Door", "DualCastData", "Explosion", "Flora", "Furniture", "Grass", "Hazard", "IdleMarker", "Ingestible", "Ingredient", "Key", "LeveledItem", "LeveledNpc", "LeveledSpell", "Light", "MiscItem", "MoveableStatic", "Npc", "ObjectEffect", "Projectile", "Scroll", "SoulGem", "SoundMarker", "Spell", "Static", "TalkingActivator", "TextureSet", "Tree", "Weapon"],
+   "propertyBaseTypes": ["Placed"],
+   "conflict": "lastWins",
+   "swapOrder": ["references", "conditionalForms", "forms"]
+  }
+ },
+ {
+  "format": "FormList Manipulator",
+  "key": "flm",
+  "version": "1.8.1",
+  "folders": [
+   {
+    "source": "CLibUtil get_configs, called with \"_FLM\" (FLM Manipulator.hpp:357-360 at 82a694e5, tag 1.7.0; 1.8.1's findConfigs the same, read off its shipped PDB, flm-lines research-topup T2 (3))",
+    "root": "",
+    "nameToken": "_FLM",
+    "tokenCase": "ordinal",
+    "extension": ".ini",
+    "extensionCase": "ordinal",
+    "depth": "topLevelOnly",
+    "order": "sortedOrdinal"
+   },
+   {
+    "source": "FLM Manipulator.hpp:360-367 at 82a694e5: every .ini in Data\\FLM, non-recursive, appended after the sorted root list, unsorted",
+    "root": "FLM",
+    "nameToken": "",
+    "tokenCase": "ordinal",
+    "extension": ".ini",
+    "extensionCase": "ordinal",
+    "depth": "topLevelOnly",
+    "order": "filesystemOrder"
+   }
+  ],
+  "targets": {
+   "source": "FLM resolves HEX~Plugin by LookupFormID, raw, after FindForm erases two characters of an exactly ten-character hex part (FLM 1.7.0 src/Utility/Utility.hpp:58-59; distributor-lines research-topup.md X1), any '~' making the term an address, the plugin its second field (FLM 82a694e5 Utility.hpp:53-56); else '0x' is a runtime FormID (LookupByID, :77-84; FLM finds '0x' anywhere and in lower case only, a Known limit of the shared rule); else an untyped LookupByEditorID (:85-86), then As<T> per field; no form field names a plugin (a filter's plugins gate the line, flm-lines research answer 7); a name no record holds does what its field says (Manipulator.hpp:743-809, :1434-1486)",
+   "addressOrder": "formIdFirst",
+   "separator": "~",
+   "manySeparators": "addressAtFirst",
+   "formId": "runtimeAddTrimmedAtTen",
+   "bareFormId": "runtimeFormId",
+   "pluginTerm": "notATerm",
+   "pluginExtensions": [],
+   "missingName": "byPosition",
+   "editorIds": "everyType"
+  },
+  "lines": {
+   "source": "FLM 1.7.0 82a694e5 (1.8.1 read off its shipped PDB where named, flm-lines research-topup T2): src/Manipulator/Manipulator.hpp:391-433 (pass 1, every file: Filter lines, then Collection lines), :449 (collections filled after), :469-523 (pass 2, file by file: Alias and Group lines, then the rest; an unknown key logged 'Unknown key'), :407, :487 (the unnamed section only), :417-418 (keys lowercased); each pass visits a file's lines key by key (SimpleIni's multimap, keyed case-insensitively, research-topup F1); src/Utility/Types/Keywords.hpp and 1.8.1's keywords_initializer (16 keys; remove a no-op counted valid, formspair always invalid, T2 (1)); Utility.hpp:98-123 (Sanitize: spaces round '|' and ',', leading zeros, index 02/04 to Dawnguard/Dragonborn), :140-149 (a filter lowercased), :166-224 (adds gathered per list, a form already in it skipped), :231-303 (the filter split and verdict, 1.8.1 the same, T2 (2)); Manipulator.hpp:284-296 (simplified lists filled before FormList adds; spider crafting never added), :743-809 (FormList), :811-824, :1280-1379 (simplified keys), :826-967 (Alias, Group; first name wins, a '*' list read for its record's forms at parse), :969-1046 (Collection; one missing keyword drops it), :1143-1176 (Filter; first name wins), :1396-1432 (a filter: '#' a named one, else inline), :1434-1486 (an item: '#' a group or collection, '*' a list's forms, else any form); CLibUtil 191c90a8 string.hpp:225-229 (split keeps empty fields); src/Utility/Types/FormListType.hpp (the simplified keys' lists), FormType.hpp (collection types); SimpleIni (comment leads ';' and '#' at a line's start, read off 1.8.1's FindEntry, T5)",
+   "reads": ["1.8.1"],
+   "section": "unnamedOnly",
+   "commentLeads": [";", "#"],
+   "assign": "=",
+   "fields": "|",
+   "item": ",",
+   "name": "#",
+   "listForms": "*",
+   "not": "-",
+   "require": "+",
+   "filterExtensions": [".esp", ".esl", ".esm"],
+   "lineOrder": "keyIgnoreCaseThenLine",
+   "passes": "filtersCollectionsThenAliasesGroupsThenRest",
+   "conflict": "skipsDuplicates",
+   "listRecord": "FormList",
+   "keywordRecord": "Keyword",
+   "keys": [
+    { "key": "Alias", "kind": "alias" },
+    { "key": "Group", "kind": "group" },
+    { "key": "Collection", "kind": "collection" },
+    { "key": "Filter", "kind": "filter" },
+    { "key": "ModEvent", "kind": "modEvent" },
+    { "key": "ModEventRemove", "kind": "modEvent" },
+    { "key": "Remove", "kind": "remove" },
+    { "key": "FormList", "kind": "formList" },
+    { "key": "FormsPair", "kind": "formsPair" },
+    { "key": "Plant", "kind": "pair", "names": ["seed", "plant"], "lists": ["flPlanterPlantableItem", "flPlanterPlantedFlora"] },
+    { "key": "BToys", "kind": "list", "lists": ["BYOHRelationshipAdoptionPlayerGiftChildMale"] },
+    { "key": "GToys", "kind": "list", "lists": ["BYOHRelationshipAdoptionPlayerGiftChildFemale"] },
+    { "key": "HairColors", "kind": "list", "lists": ["HairColorList"] },
+    { "key": "AtronachForge", "kind": "pair", "names": ["recipe", "result"], "lists": ["AtrFrgAtronachForgeRecipeList", "AtrFrgAtronachForgeResultList"] },
+    { "key": "AtronachForgeSigil", "kind": "pair", "names": ["recipe", "result"], "lists": ["AtrFrgSigilStoneRecipeList", "AtrFrgSigilStoneResultList"] },
+    { "key": "DragonbornSpiderCrafting", "kind": "pair", "names": ["recipe", "result"], "lists": ["DLC2ExpSpiderCraftingRecipesList", "DLC2ExpSpiderCraftingResultsList"] }
+   ],
+   "addOrder": ["Plant", "BToys", "GToys", "HairColors", "AtronachForge", "AtronachForgeSigil", "FormList"],
+   "collectionTypes": ["armor", "weapon", "ammo", "magiceffect", "alchemyitem", "scroll", "location", "ingredient", "book", "misc", "key", "soulgem", "activator", "flora", "furniture", "race", "talkingactivator", "enchantment", "npc", "spell"],
+   "seedTypes": ["Ingredient", "Ingestible", "Activator"],
+   "plantTypes": ["Flora", "Tree", "Container", "Activator", "MiscItem"]
+  }
+ }
+]
+}

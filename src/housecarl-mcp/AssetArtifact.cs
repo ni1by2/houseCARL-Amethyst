@@ -65,8 +65,10 @@ internal static class AssetArtifact
         // A links= row adds its links and links_error members (JsonWire.WriteNifLinks); the schema names links only
         // then, so a plain artifact is unchanged.
         var schema = d.Results.Any(r => r.Links is not null || r.LinksError is not null) ? RowSchema.Append("links").ToArray() : RowSchema;
+        // A hidden row adds its hidden member (AbsentWords.Write), named only then for the same reason.
+        if (d.Results.Any(r => r.Hit?.Hidden is not null)) schema = schema.Append("hidden").ToArray();
         var (manifest, err) = writer.Save(target, ToolNames.AssetStatus, query, identity: "path",
-                                          schema, sort: "asset_paths= in the order given, then formids= (mesh then tint per NPC), then under= matches sorted",
+                                          schema, sort: "paths= in the order given, then formids= (mesh then tint per NPC), then under= matches sorted",
                                           total: d.Selected, epoch: order?.Epoch ?? "", notes: notes,
                                           epochUncovered: uncovered, excludedPlugins: order?.ExcludedPlugins);
         return err is not null
@@ -87,23 +89,21 @@ internal static class AssetArtifact
         BatchRender.AppendReadFailures(sb, d.BsaFailures, "an asset", room);
         BatchRender.AppendRootFailures(sb, d.RootFailures, "an asset", room);
         BatchRender.AppendDiscoveryWarnings(sb, d.Warnings, room);
-        if (d.SelectorNotes is { Count: > 0 } notes)
-        {
-            sb.Append("\n[!] under (").Append(notes.Count).Append("):\n");
-            BatchRender.AppendLines(sb, notes, "selector(s)", room);
-        }
+        AssetWire.AppendSelectorNotes(sb, d.SelectorNotes, room);
+        AssetWire.AppendNotes(sb, d.Notes, room);
         Artifacts.AppendSpillText(sb, spill);
         return sb.ToString();
     }
 
     /// <summary>One row, every column present so a consumer can index by name — except <c>error</c>, written ONLY on
-    /// a failed row, because its presence is the artifact contract's marker for a row that names no identity.</summary>
+    /// a failed row; a non-null <c>error</c> is the artifact contract's marker for a row that names no identity.</summary>
     static void Row(Utf8JsonWriter w, AssetPathResult r)
     {
         w.WriteStartObject();
         w.WriteString("path", r.RelPath);
         Str(w, "formid", r.FormId);
         Str(w, "slot", r.Slot is { } s ? FaceGenPath.Token(s) : null);
+        Str(w, "face_note", r.FaceNote);
         if (r.Error is not null)
         {
             // A per-ROW error, never the file's discriminant: the call succeeded and wrote a row that failed.
@@ -136,6 +136,8 @@ internal static class AssetArtifact
         }
         w.WriteEndArray();
         w.WriteBoolean("ambiguous", hit.Ambiguous);
+        // Only where a root holds the path hidden, so any other row is the row it always was.
+        AbsentWords.Write(w, hit.Hidden);
         Str(w, "pair_path", r.PairPath);
         if (r.PairHit is { } pair)
         {

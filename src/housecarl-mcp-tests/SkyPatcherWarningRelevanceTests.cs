@@ -20,13 +20,16 @@ sealed class SkyPatcherRelevanceWorld : IDisposable
     public readonly LoadOrderService Svc;
     public readonly string Heel, Both, Plain;
 
-    public SkyPatcherRelevanceWorld(IEnumerable<(string Name, string Text)> inis, bool otherPlugin = false)
+    public SkyPatcherRelevanceWorld(IEnumerable<(string Name, string Text)> inis, bool otherPlugin = false, bool tweaks = true,
+        string subfolder = "armor", Action<SkyrimMod>? records = null, Action<SkyrimMod>? otherRecords = null)
     {
         Root = Path.Combine(Path.GetTempPath(), "hc-skypatcher-relevance-" + Guid.NewGuid().ToString("N"));
         var instance = Path.Combine(Root, "instance");
         var profileDir = Path.Combine(instance, "profiles", "Default");
         var mods = Path.Combine(instance, "mods");
-        var iniDir = Path.Combine(mods, "HcSpRelIni", "SKSE", "Plugins", "SkyPatcher", "armor");
+        var iniDir = Path.Combine(mods, "HcSpRelIni", "SKSE", "Plugins", "SkyPatcher", subfolder);
+        SkyPatcherSwitchesFile.Write(Path.Combine(mods, "HcSpRelIni"));
+        if (tweaks) SkyPatcherSwitchesFile.WriteTweaks(Path.Combine(mods, "HcSpRelIni"));
         foreach (var d in new[] { profileDir, Path.Combine(Root, "game", "Data"), Path.Combine(mods, "HcSpRelPlugins"), iniDir })
             Directory.CreateDirectory(d);
         File.WriteAllText(Path.Combine(instance, "ModOrganizer.ini"),
@@ -54,13 +57,19 @@ sealed class SkyPatcherRelevanceWorld : IDisposable
         mod.Armors.Add(heel);
         mod.Armors.Add(plain);
         mod.Armors.Add(both);
+        records?.Invoke(mod);
         mod.BeginWrite.ToPath(Path.Combine(mods, "HcSpRelPlugins", PluginName)).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
         Heel = RecordsWorld.Fid(heel.FormKey);
         Plain = RecordsWorld.Fid(plain.FormKey);
         Both = RecordsWorld.Fid(both.FormKey);
 
         foreach (var (name, text) in inis)
-            File.WriteAllText(Path.Combine(iniDir, name), text);
+        {
+            // a name like ../formList/x.ini lands in a sibling type folder
+            var path = Path.GetFullPath(Path.Combine(iniDir, name));
+            Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+            File.WriteAllText(path, text);
+        }
 
         OtherPath = Path.Combine(mods, "HcSpRelOther", OtherName);
         if (otherPlugin)
@@ -68,6 +77,7 @@ sealed class SkyPatcherRelevanceWorld : IDisposable
             Directory.CreateDirectory(Path.GetDirectoryName(OtherPath)!);
             var other = new SkyrimMod(ModKey.FromFileName(OtherName), SkyrimRelease.SkyrimSE);
             other.Keywords.Add(new Keyword(new FormKey(other.ModKey, 0x800), SkyrimRelease.SkyrimSE) { EditorID = "HcOtherKw" });
+            otherRecords?.Invoke(other);
             other.BeginWrite.ToPath(OtherPath).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
         }
         var order = otherPlugin ? new[] { PluginName, OtherName } : new[] { PluginName };
@@ -96,7 +106,7 @@ sealed class SkyPatcherRelevanceWorld : IDisposable
 }
 
 /// <summary>An overlay read carries the SkyPatcher warnings that bear on its records; a note from a line that cannot
-/// reach them is one pointer to housecarl_skypatcher_layer filter=, which lists it under its line (#1093).</summary>
+/// reach them is one pointer to housecarl_layer filter=, which lists it under its line (#1093).</summary>
 [Trait("tier", "integration")]
 public sealed class SkyPatcherWarningRelevanceTests : IDisposable
 {
@@ -104,7 +114,7 @@ public sealed class SkyPatcherWarningRelevanceTests : IDisposable
     const string RidingIni = "HcRiding.ini";
     readonly SkyPatcherRelevanceWorld _w;
 
-    // HcRelevance :1 an Or list (a missing keyword cannot flip it), :2 a bare list (a missing keyword forces NoMatch), :3 an unknown key.
+    // HcRelevance :1 an Or list (a missing keyword cannot flip it), :2 a bare list (a missing keyword drops out), :3 an unknown key.
     // HcRiding: two Or lines sharing one missing keyword; HcBothBoots meets both, HcHeelBoots only the first.
     public SkyPatcherWarningRelevanceTests() => _w = new SkyPatcherRelevanceWorld(new[]
     {
@@ -124,7 +134,7 @@ public sealed class SkyPatcherWarningRelevanceTests : IDisposable
     {
         var text = Read(_w.Plain);
 
-        Assert.Contains($"[!] skypatcher: note(s) on lines that do not reach these records — {ToolNames.SkypatcherLayer} filter={IniName} lists them", text);
+        Assert.Contains($"[!] skypatcher: note(s) on lines that do not reach these records — {ToolNames.Layer} filter={IniName} lists them", text);
         Assert.DoesNotContain("HcNoSuchA", text);
         Assert.DoesNotContain("HcNoSuchC", text);
     }
@@ -133,9 +143,9 @@ public sealed class SkyPatcherWarningRelevanceTests : IDisposable
     public void ARecordTheOrLineMatchesGetsItsWarnings()
         => Assert.Contains("keyword 'HcNoSuchA' (in a filterByKeywordsOr) resolves to nothing", Read(_w.Heel));
 
-    // the bare list's resolved keyword is on the record, so only the missing one stops the line
+    // the bare list's missing keyword drops out and its resolved one is on the record, so the line reaches it and the warning rides
     [Fact]
-    public void AMissingKeywordThatStopsABareLineRidesTheRead()
+    public void AMissingKeywordOnABareLineThatReachesTheRecordRidesTheRead()
         => Assert.Contains("keyword 'HcNoSuchC' (in a filterByKeywords) resolves to nothing", Read(_w.Heel));
 
     [Fact]
@@ -177,7 +187,7 @@ public sealed class SkyPatcherWarningRelevanceTests : IDisposable
     [Fact]
     public void TheLayerFilterShowsTheLintUnderItsLine()
     {
-        var text = SkyPatcherTools.SkyPatcherLayer(_w.Svc, filter: IniName);
+        var text = SkyPatcherTools.Layer(_w.Svc, filter: IniName);
 
         int line1 = text.IndexOf(":1  filterByKeywordsOr", StringComparison.Ordinal);
         int lint = text.IndexOf("[!] keyword 'HcNoSuchA' (in a filterByKeywordsOr) resolves to nothing", StringComparison.Ordinal);
@@ -207,7 +217,7 @@ public sealed class SkyPatcherNotePointerRollUpTests : IDisposable
         var text = _w.Read(new[] { _w.Plain });
 
         Assert.Contains("filter=HcNote5.ini lists them", text);
-        Assert.Contains($"note(s) in 1 other INI(s) — {ToolNames.SkypatcherLayer} filter=<INI filename> lists each one's", text);
+        Assert.Contains($"note(s) in 1 other INI(s) — {ToolNames.Layer} filter=<INI filename> lists each one's", text);
         Assert.DoesNotContain("filter=HcNote6.ini", text);
     }
 
@@ -231,11 +241,11 @@ public sealed class SkyPatcherLineLevelWarningTests : IDisposable
     const string IniName = "HcLineLevel.ini";
     readonly SkyPatcherRelevanceWorld _w;
 
-    // :1 the bare list's missing keyword would decide, but the EditorID filter misses HcHeelBoots anyway; :2 the EditorID filter passes.
+    // :1 the bare list's missing keyword would decide, but its Excluded key removes HcHeelBoots anyway; :2 the Excluded key passes it.
     public SkyPatcherLineLevelWarningTests() => _w = new SkyPatcherRelevanceWorld(new[]
     {
-        (IniName, "filterByKeywords=HcHeelKw,HcNoSuchF:filterByEditorIdContains=Cuirass:keywordsToAdd=HcAddKw\r\n"
-                  + "filterByKeywords=HcHeelKw,HcNoSuchG:filterByEditorIdContains=Heel:keywordsToAdd=HcAddKw\r\n"),
+        (IniName, "filterByKeywords=HcNoSuchF:filterByArmorsExcluded=HcSpRel.esp|810:keywordsToAdd=HcAddKw\r\n"
+                  + "filterByKeywords=HcNoSuchG:filterByArmorsExcluded=HcSpRel.esp|811:keywordsToAdd=HcAddKw\r\n"),
     }, otherPlugin: true);
 
     public void Dispose() => _w.Dispose();
@@ -273,7 +283,7 @@ public sealed class SkyPatcherLineLevelWarningTests : IDisposable
         File.WriteAllBytes(_w.OtherPath, new byte[new FileInfo(_w.OtherPath).Length]);
         File.SetLastWriteTimeUtc(_w.OtherPath, stamp);
 
-        var text = SkyPatcherTools.SkyPatcherLayer(_w.Svc, filter: IniName);
+        var text = SkyPatcherTools.Layer(_w.Svc, filter: IniName);
 
         int first = text.IndexOf("EditorID table missing a plugin", StringComparison.Ordinal);
         Assert.True(first >= 0, text);

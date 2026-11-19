@@ -1,0 +1,118 @@
+---
+updated: 2026-11-15
+covers: [src/housecarl-core/SpidLines.cs, src/housecarl-core/SpidGrammar.cs, src/housecarl-core/DistributorLines.cs, src/housecarl-mcp/SpidLayer.cs, src/housecarl-mcp/SpidWire.cs, src/housecarl-mcp/DistributorLayer.cs, src/housecarl-mcp/DistributorWire.cs]
+---
+# The SPID layer
+
+## What it is
+
+SPID (Spell Perk Item Distributor) hands spells, perks, items, keywords, outfits, factions and packages to NPCs at
+runtime from `_DISTR.ini` files in `Data`. `housecarl_layer` reads those files as SPID 7.3 reads them (7.3.0 and
+7.3.3 read their files the same): which files SPID reads and in what order, how each line splits, every form a line
+names and where, and what SPID does where a name finds nothing. It does not say which NPCs a line reaches: no string,
+level, trait or chance filter is evaluated, and an outfit or leveled list is not followed to what it holds. The
+`records` reach term evaluates the filters on the same split and read, and follows no outfit or leveled list either
+([`record-reach.md`](record-reach.md)).
+
+## Contracts
+
+- **Files are the discovery door's.** `DistributorDiscovery.Scan` on SPID's row lists `Data`'s top level through the
+  asset door, keeps names with `_DISTR` anywhere and the `.ini` extension (both ordinal), resolves each to its MO2
+  winner and sorts them ordinally ([`runtime-formats.md`](runtime-formats.md)). A shadowed copy is named and never
+  read; a copy only inside an archive is listed, said not applied, and not read.
+- **A line splits as SimpleIni and SPID split it** (`SpidLines.Parse`): only the lines before the first named
+  `[section]`; a line whose first non-space character is a comment lead (`;`, `#`) is a comment; the value runs to the
+  line's end, so a `;` after a value is part of it; `sanitize()` runs first (the first ` - ` to `~` when there is no
+  `~`, spaces around `|` and `,` removed, padded hex to `0x`), and a line it changes says SPID writes it back. The key
+  takes its kind in SPID's order of tries: `ExclusiveGroup`, then `[Global]Linked[Final][Death]<Type>`, then
+  `[Final][Death]<Type>`; `<Type>` is case-sensitive; `Final` on a type the row does not list is dropped with a note;
+  `Global` without `Linked` is no key. More `|` sections than the kind takes, an unset value, or an empty filter item
+  skips the line. `NONE` (any case) or an empty section is unset only as a whole section; as one item of a list it is a
+  name.
+- **Every form a line names resolves through the one target resolver on SPID's row**, `RuntimeTargets`, with the call's
+  EditorID table: `~` addresses add the written number to the plugin's runtime base, bare `0x` hex is a runtime
+  FormID, a token holding `.es` is a plugin term, anything else an EditorID looked up among every type. One call reads
+  every form token of every line before any string token, so the table walks every type once and the string lookups
+  (NPC, keyword) read what that walk filled.
+- **Labels** (DECISIONS 2026-11-13 (13) SPID Q1, Q2): the value is `value`; an NPC or placed NPC named in a plain or
+  `+` form filter, or a plain or `+` string filter equal to an NPC's EditorID, is `target`; every other resolved
+  filter form, excluded NPCs, linked parents and group members are `filter`. A string filter that is no NPC or keyword
+  EditorID names no form; the line says SPID matches it in the running game against an NPC's name, its own and its
+  template's EditorIDs and its keywords' EditorIDs, its race's and a keyword SPID creates included. A `*` string names
+  no form; the line says it matches part of an NPC's name, of its own or its template's EditorID or of
+  one of its keywords' EditorIDs.
+- **What SPID does where a name finds nothing** (research answer 3): a value EditorID no record holds creates a keyword
+  on a `Keyword` or `Form` line, creates one and hands nothing out on a `Spell` or `Package` line, and drops the line on
+  every other type; a value FormID or plugin that names nothing drops the line. In the form filters a plain or `-`
+  token that names nothing, or a record whose type the row's `filterTypes` does not list, is skipped and the line said
+  to reach more NPCs (or exclude fewer), unless every token of that list fails, which drops the line; one `+` part
+  that names nothing drops it, and `+` parts skip the type check. A filter never creates a keyword. A linked parent or
+  group member that names nothing is said, and SPID's outcome for it is not claimed.
+- **First wins** (Q4 (a)): each `Outfit`, `SleepOutfit` and `Skin` line, and each `Form` line whose value is an
+  outfit, states its place among the lines of its type and kind (regular, death, linked) SPID keeps: files in their
+  order, each file's lines by key (case-insensitive) then line, `Form` lines after every typed line. A skipped or
+  dropped line takes no place. No conflict between first-wins lines is reported.
+- **Selecting lines** (R42, pick 2026-11-14 (4)): `formids=` and `plugins=` keep a line when a form it names passes the
+  records meaning (the same predicate SkyPatcher's selector uses), and `plugins=` also keeps a line whose plugin term
+  names a selected plugin (DECISIONS 2026-11-13 (12)(iii)); a plugin term names no form, so `formids=` never keeps it.
+  A line touches a plugin only through the forms it names, never through the items of an outfit it hands out.
+- **What is resolved when.** The overview lists files and line counts and resolves nothing; the selectors, and a
+  `filter=` (a file name or providing mod) that at least one SPID file matches, resolve every line, since a first-wins
+  place depends on which earlier lines SPID drops. A `filter=` no SPID file matches resolves nothing, so it walks no
+  EditorID table for SPID (`DistributorFileData.Matches`, the one predicate the render's listing uses). Nothing is kept between calls (R15): each call reads the files again; there is no parse cache (DECISIONS
+  2026-11-13 (15)).
+- **Two formats, one call.** With `distributor=["skypatcher","spid"]` the answer is SkyPatcher's render, then SPID's. SkyPatcher's
+  part is the `distributor=["skypatcher"]` answer's body at the whole `max_chars`, so it is never shorter than that
+  answer; SPID's part takes what is left and says where it is cut (`SPID files cut at max_chars after SkyPatcher's
+  part`, `SPID lines cut at max_chars after SkyPatcher's part`). A wider `max_chars` goes to SkyPatcher's part first, so
+  those notices name `distributor=["spid"]`, which reads SPID alone at the whole `max_chars`, not a higher cap. At a cap
+  SkyPatcher's part fills, SPID's is its header and the file cut notice, and the answer runs past `max_chars` and
+  closes on its own over-cap sentence: SkyPatcher's part came first (its length stated) and SPID's did not fit in what
+  was left, with the same `distributor=["spid"]` remedy. It names no cap to raise to, since while SkyPatcher's part is
+  cut a higher cap shows no more SPID; `RenderCap.Settle` is not used here. SPID is read after SkyPatcher's scans in the same
+  replay context, so the two share one EditorID table. SkyPatcher's part carries the build caveats; SPID's alone
+  carries them when it is the whole answer. With `distributor` omitted (or `[]`) KID's part follows SPID's in the same way, then BOS's and FLM's
+  ([`kid-layer.md`](kid-layer.md), [`bos-layer.md`](bos-layer.md), [`flm-layer.md`](flm-layer.md)): with no selector or `filter=`, SPID's, KID's,
+  BOS's and FLM's parts are one summary line each, each closed by the `distributor=` call that lists its files
+  (`distributor=["spid"] lists its files`); the over-cap sentence then names every part that came first and every part
+  that did not fit, in format order. A call naming `skypatcher` and `spid` only reads as this section says.
+
+## Known limitations
+
+- A value whose record is of a type the line does not take (`Spell = <a perk>`) is not reported; SPID throws on it and
+  drops the line.
+- An EditorID two records share is not reported. Inside one plugin the tie goes to the record first in the plugin's
+  file, as the game's map keeps it ([`skypatcher-layer.md`](skypatcher-layer.md)); SPID then checks that record's type.
+  No dev or ARR SPID name is shared (bos-lines research-topup T1).
+- Where a name lands under po3 Tweaks' absence follows the call's EditorID table; SPID's own keyword lookup reads the
+  keyword array, which the table's kept types already cover.
+- The keyword dependency re-sort of `Keyword` lines is not modelled; keyword lines have no place.
+- A plugin term matches `plugins=` by name; it is not matched by `formids=` naming an NPC its plugin defines.
+- An `ExclusiveGroup` member or `Linked` parent that names nothing is said without SPID's outcome.
+- MergeMapper remaps are not read.
+
+## Pinned by
+
+- `SpidLinesTests` — each split rule (comment leads, trailing text, the unnamed section, key case, section counts,
+  `NONE`, empty items, sanitize, `Final`, every kind), each label, each missing-name outcome by type and position, the
+  load-index note, the plugin term, linked parents and group members, and the first-wins places.
+- `SpidLayerTests` — the tool on a live order: `plugins=` by EditorID value, the target label, an outfit's item plugin
+  not touched, a display-name token touching nothing, the plugin term under `plugins=` and not `formids=`, every line
+  kind selected, the outcomes under `filter=`, first-wins places across files, the shadowed copy, an edited file read
+  anew, one EditorID walk for both formats, none for a `filter=` no SPID file matches; `SpidWireTests` — an archive-only copy said not applied.
+- `DistributorLayerHeldTests` — SPID's and KID's parts compared whole, byte for byte, to answers held from the build
+  before the two formats shared one reader and renderer: the file lists with the skipped clause and the hint, the
+  expanded lines with the order line, the first-wins rows, a skip and a drop, both selectors' zeros, the own and joined
+  file and line cuts, the plural over-cap, no files, a read error, and the unreadable-plugin notes an earlier part holds.
+- `SpidLayerTests.SkyPatcherKeepsItsWholeAnswerAndSpidTakesWhatIsLeft` and `SpidLinesAreCutWithTheirNoticeAfterSkyPatchersPart`
+  — the shared `max_chars`.
+- `LayerSelectTests.DistributorOmittedReadsSkyPatcherThenSpidThenKidThenBos`, `DistributorSpidIsRead`,
+  `ADistributorStillToComeIsNotReadYet`.
+
+## Where
+
+`src/housecarl-core/SpidLines.cs` (split, read, places), `src/housecarl-core/SpidGrammar.cs` (the row's lines block),
+`src/housecarl-core/DistributorLines.cs` (the named-form record, the line and read shapes and the token resolve SPID
+shares with KID), `src/housecarl-mcp/SpidLayer.cs` (SPID's split, read and first-wins rows given to the one reader,
+`DistributorLayer.cs`), `src/housecarl-mcp/SpidWire.cs` (SPID's own words); the render and the join are
+`DistributorWire` (`RenderLayers`), the tool front is `SkyPatcherTools.Layer`.

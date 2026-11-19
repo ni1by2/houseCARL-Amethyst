@@ -13,7 +13,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     string _modsDir;
     string _profileDir;
     string _profileName;                           // the active profile (instance mode: from selected_profile)
-    string _overwriteDir = "";                     // MO2's overwrite layer (instance mode: derived; explicit mode: none)
+    string _overwriteDir;                          // MO2's overwrite layer (instance mode: derived; explicit mode: configured, "" for none)
     bool _configured;                              // false ⇒ tools return the trained prompt instead of resolving
     string? _unavailableManagerReason;              // Linux integration builds refuse unverified Amethyst reads
     InstanceText? _text;                           // the order build's game language and string-table winners; bound to each call that reads this order
@@ -33,7 +33,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     LoadOrderResolver? _resolver;
     readonly Lazy<CorpusRulebook> _rulebook = new(() => CorpusRulebook.Load(), LazyThreadSafetyMode.PublicationOnly);   // one instance; a failed load is not kept
     readonly Lazy<TypeLookup> _typeLookup = new(() => new TypeLookup());   // one per service; construction reads nothing
-    IReadOnlyList<string> _orderWarnings = Array.Empty<string>();
+    Mo2OrderResult? _order;                                      // the last order read published: its warnings and unopened mod folders
     // The VFS-aware asset resolver, built lazily on an asset query and dropped when the active profile changes.
     AssetResolver? _assetResolver;
     IReadOnlyList<string> _assetWarnings = Array.Empty<string>();   // discovery warnings from the asset build (e.g. a Skyrim.ini we couldn't find → base BSAs unscanned)
@@ -43,18 +43,22 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     FileStamp[] _profileStamps = new FileStamp[ProfileFileNames.Length];   // per ProfileFileNames, recorded at each order build
     FileStamp _iniStamp;                                                   // ModOrganizer.ini (instance-mode profile-switch baseline)
     IReadOnlyList<string> _resolvedPaths = Array.Empty<string>();   // ordered paths the current snapshot was built from (the cheap "did the order actually change?" check)
+    // The profile read the current order was built from, which the asset build takes rather than reading the profile again; null until an order is read.
+    (Mo2Composition Composition, ArchiveDiscoveryResult Discovery)? _profileRead;
     // Set when a refresh found the profile changed but could not re-read it; the two lanes' split is in
     // docs/architecture/load-order-service.md.
     ProfileUnreadableException? _profileHeld;
+    bool _reResolvePending;                                    // a write's serving-copy check put its re-read off to the next call
 
     static readonly string[] ProfileFileNames = { "loadorder.txt", "modlist.txt", "plugins.txt" };
 
-    LoadOrderService(string? instanceDir, string dataDir, string modsDir, string profileDir, bool configured, int maxPlugins, UserConfigStore store)
+    LoadOrderService(string? instanceDir, string dataDir, string modsDir, string profileDir, string overwriteDir, bool configured, int maxPlugins, UserConfigStore store)
     {
         _instanceDir = instanceDir;
         _dataDir = dataDir;
         _modsDir = modsDir;
         _profileDir = profileDir;
+        _overwriteDir = overwriteDir;
         _profileName = profileDir.Length > 0 ? Path.GetFileName(profileDir.TrimEnd('\\', '/')) : "";
         _configured = configured;
         _maxPlugins = maxPlugins;
@@ -74,21 +78,32 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>INSTANCE mode (product default): derive the roots and active profile from ONE MO2 instance folder; a null or blank path is UNCONFIGURED.</summary>
     public static LoadOrderService WithInstance(string? instanceDir, int maxPlugins, UserConfigStore store)
         => new(string.IsNullOrWhiteSpace(instanceDir) ? null : instanceDir.Trim(),
-               "", "", "", configured: !string.IsNullOrWhiteSpace(instanceDir), maxPlugins, store);
+               dataDir: "", modsDir: "", profileDir: "", overwriteDir: "",
+               configured: !string.IsNullOrWhiteSpace(instanceDir), maxPlugins, store);
 
-    /// <summary>EXPLICIT mode (dev override): the three roots are configured directly; no ModOrganizer.ini is read.</summary>
-    public static LoadOrderService WithExplicitPaths(string dataDir, string modsDir, string profileDir, int maxPlugins, UserConfigStore store)
-        => new(null, dataDir, modsDir, profileDir, configured: true, maxPlugins, store);
+    /// <summary>EXPLICIT mode (dev override): the three roots are configured directly; no ModOrganizer.ini is read. An
+    /// overwrite folder is optional and read as MO2's overwrite layer; blank or null is no overwrite layer at all.</summary>
+    public static LoadOrderService WithExplicitPaths(string dataDir, string modsDir, string profileDir, int maxPlugins, UserConfigStore store,
+                                                     string? overwriteDir = null)
+        => new(null, dataDir, modsDir, profileDir, NormalizedRoot(overwriteDir), configured: true, maxPlugins, store);
+
+    /// <summary>Full and without a trailing separator, as instance mode's roots are (<c>Mo2Instance.Resolve</c>), so one folder is one string everywhere it is compared or printed; blank stays blank.</summary>
+    static string NormalizedRoot(string? dir)
+    {
+        var trimmed = (dir ?? "").Trim();
+        return trimmed.Length == 0 ? "" : Path.TrimEndingDirectorySeparator(Path.GetFullPath(trimmed));
+    }
 
     /// <summary>Keep manager-independent tools available while refusing unverified Linux load-order reads.</summary>
     public static LoadOrderService WithUnavailableManager(UserConfigStore store, string reason)
-        => new LoadOrderService(null, "", "", "", configured: false, maxPlugins: 0, store)
+        => new LoadOrderService(null, "", "", "", "", configured: false, maxPlugins: 0, store)
         { _unavailableManagerReason = reason };
 
     /// <summary>Test seam: drive the service-layer query logic on a prebuilt resolver with no MO2 profile on disk. Never used by the product.</summary>
     internal static LoadOrderService ForGuard(LoadOrderResolver resolver, UserConfigStore store)
     {
-        var svc = new LoadOrderService(null, "", "", "", configured: true, maxPlugins: 0, store);
+        var svc = new LoadOrderService(null, dataDir: "", modsDir: "", profileDir: "", overwriteDir: "",
+                                       configured: true, maxPlugins: 0, store);
         svc._resolver = resolver;
         svc.Counters = resolver.Counters;   // one object, so the service reads what its resolver counts
         return svc;
@@ -100,10 +115,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     }
 
     /// <summary>The order's game language and string-table winners, from the profile read the build just made; a language houseCARL cannot read throws here, before anything is published.</summary>
-    InstanceText ReadInstanceText(Mo2Roots r, Mo2OrderResult order)
+    InstanceText ReadInstanceText(Mo2Roots r, Mo2OrderResult order, out ArchiveDiscoveryResult discovery)
     {
         var ini = GameIni.For(r.ProfileDir);
-        var discovery = ArchiveDiscovery.Discover(order.Composition, ini, r.ModsDir, r.DataDir, r.OverwriteDir);
+        discovery = ArchiveDiscovery.Discover(order.Composition, ini, r.ModsDir, r.DataDir, r.OverwriteDir);
         return GameLanguage.Read(ini, order.Composition, discovery, r.ModsDir, r.DataDir, r.OverwriteDir, order.OrderedPaths);
     }
 
@@ -116,7 +131,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     TypeLookup ILoadOrderHost.Types => Types;
 
     /// <summary>One captured index build, for a <see cref="FormIdDoor"/> resolving a runtime FormID.</summary>
-    internal LoadOrderResolver.IndexView CaptureView() => Resolver.Capture();
+    internal LoadOrderResolver.IndexView CaptureView() => CapturePin().View;
 
     /// <summary>A pinned (resolver, view) pair, carried on the outcome so the render-time fills a response makes
     /// read the build the outcome's epoch names. Pure data, no handles.</summary>
@@ -136,11 +151,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         public override int GetHashCode() => HashCode.Combine(Resolver, View);
     }
 
-    /// <summary>One captured build plus the resolver it came from, for a lane that opens an overlay session against it.</summary>
+    /// <summary>One captured build plus the resolver it came from, for a lane that opens an overlay session against it; inside a call, the call's pin.</summary>
     internal ViewPin CapturePin()
     {
-        var r = Resolver;
-        return new ViewPin(r, r.Capture());
+        var r = Resolver;                                        // inside a call this pins it
+        return CallContext.Open?.Pin ?? new ViewPin(r, r.Capture());
     }
 
     /// <summary>A pinned index and <paramref name="second"/>'s capture in one <c>_gate</c> hold; <paramref name="afterPin"/> runs between them.</summary>
@@ -174,21 +189,34 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     internal FormIdDoor OpenWriteFormIdDoor() => FormIdDoor.ForWrite(this);
     FormIdDoor IWriteHost.OpenWriteFormIdDoor() => OpenWriteFormIdDoor();
 
-    /// <summary>The resolver, built on first access and kept fresh on every later one; throws if the roots yield no plugins.</summary>
+    /// <summary>The resolver, built on first access and refreshed at any read with no pin to serve (outside a call, a call's first record read, a write's first read in the gate, which takes the write's view); then the pin's frozen copy. Throws if the roots yield no plugins.</summary>
     LoadOrderResolver Resolver
     {
         get
         {
             lock (_gate)
             {
-                if (UsesSavedSnapshot) return SavedResolverLocked();
+                if (UsesSavedSnapshot)
+                {
+                    if (HeldPinLocked() is { } held) return held.Pin!.Resolver;
+                    var savedResolver = SavedResolverLocked();
+                    if (CallContext.Open is not { } savedCall) return savedResolver;
+                    PinCallLocked(savedCall);
+                    return savedCall.Pin!.Resolver;
+                }
                 if (!_configured) throw NotConfigured();          // fresh install / empty config → every tool prompts for the MO2 path
+                // A call reads one pinned build: checked once at its first record read, re-taken once inside the write gate.
+                if (HeldPinLocked() is { } pinned) return pinned.Pin!.Resolver;   // its language was bound when it was pinned
+                var call = CallContext.Open;
+                // A mods folder that stops opening after the build refuses as it does at the first build; the build is kept for its return.
+                if (_resolver is not null && Mo2LoadOrder.ModsFolderFailure(_modsDir) is not null)
+                    Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
                 if (_resolver is null)
                 {
                     EnsurePathsDerived();                         // instance mode: derive ProfileDir/ModsDir/DataDir + active profile from ModOrganizer.ini
                     var profileStamps = StatProfileFiles(_profileDir);   // stat BEFORE the read: a profile write during the build is caught next call, not missed
                     var order = Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
-                    _orderWarnings = order.Warnings;
+                    _order = order;
                     var paths = order.OrderedPaths;
                     if (_maxPlugins > 0 && paths.Count > _maxPlugins) paths = paths.Take(_maxPlugins).ToList();
                     if (paths.Count == 0)
@@ -199,15 +227,17 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                     // A kept asset build must not be stranded by advancing the baseline here;
                     // contract in docs/architecture/load-order-service.md.
                     bool assetBuildIsBehind = _profileHeld is not null || _resolvedPaths.Count == 0;
-                    var text = ReadInstanceText(RootsLocked(), order);
+                    var text = ReadInstanceText(RootsLocked(), order, out var discovery);
                     GameLanguage.Bind(text);
                     _resolver = LoadOrderResolver.Build(paths, ExplainPluginAbsence, Counters);
                     _text = text;
                     _resolvedPaths = paths;
+                    _profileRead = (order.Composition, discovery);
                     _profileStamps = profileStamps;
+                    _reResolvePending = false;                    // a full profile read: no put-off re-read is left
                     if (assetBuildIsBehind) { InvalidateAssetResolver(); _profileHeld = null; }
                 }
-                else if (Monitor.TryEnter(_writeGate))
+                else if (TryEnterRefreshLocked(call))
                 {
                     // Lazy freshness each call, deferred while a write is in flight;
                     // contract in docs/architecture/load-order-service.md.
@@ -217,20 +247,77 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                         // A profile it could not re-read is refused here rather than answered off a superseded index.
                         if (_profileHeld is { } held) throw new ProfileUnreadableException(held.ProfilePath, held);
                         _resolver.RefreshIfStale();   // plugin-CONTENT freshness: cheap stat sweep; rebuilds if a plugin's bytes changed
+                        if (UnopenedFoldersMovedLocked()) ReResolve(RootsLocked());
                     }
                     finally { Monitor.Exit(_writeGate); }
                 }
                 GameLanguage.Bind(_text);
-                return _resolver;
+                if (call is null) return _resolver;
+                PinCallLocked(call);
+                return call.Pin!.Resolver;
             }
         }
+    }
+
+    /// <summary>Whether a mod folder the order could not open now opens, or a folder it read stopped opening (it holds a
+    /// plugin the index could not reopen); either way the order is read again. Caller holds <see cref="_gate"/>.</summary>
+    bool UnopenedFoldersMovedLocked()
+    {
+        if (_order is not { } o || string.IsNullOrWhiteSpace(_modsDir)) return false;
+        if (o.UnreadableMods.Any(m => !Mo2LoadOrder.WillNotOpen(Path.Combine(_modsDir, m)))) return true;
+        var excluded = _resolver!.Capture().ExcludedPlugins;
+        if (excluded.Count == 0) return false;
+        var root = Path.TrimEndingDirectorySeparator(Path.GetFullPath(_modsDir)) + Path.DirectorySeparatorChar;
+        foreach (var path in _resolvedPaths)
+        {
+            var full = Path.GetFullPath(path);
+            if (!excluded.ContainsKey(Path.GetFileName(path)) || !full.StartsWith(root, StringComparison.OrdinalIgnoreCase)) continue;
+            var mod = full[root.Length..].Split(Path.DirectorySeparatorChar)[0];
+            if (!o.UnreadableMods.Contains(mod, StringComparer.OrdinalIgnoreCase) && Mo2LoadOrder.WillNotOpen(root + mod)) return true;
+        }
+        return false;
+    }
+
+    /// <summary>Hold the current build as the call's pin, keeping the one it holds when the build has not moved; a call
+    /// that already holds files refuses if the profile moved since. Inside the write gate this takes the write's view, and
+    /// files the pin moved past are let go. Caller holds <see cref="_gate"/>.</summary>
+    void PinCallLocked(CallContext call)
+    {
+        var build = BuildLocked(_resolver);
+        if (call.Pin is null) SameBuildOrRefuseLocked(call);
+        if (call.Pin is not { } pin || call.Build != build || pin.View.Epoch != _resolver!.Epoch)
+        {
+            var frozen = _resolver!.Frozen();
+            call.HoldPin(new ViewPin(frozen, frozen.Capture()), build);
+        }
+        if (!Monitor.IsEntered(_writeGate)) return;
+        if (call.Files is { } f && !ReferenceEquals(f.Source, _assetResolver)) call.DropFiles();
+        call.TakeWriteView();
+    }
+
+    /// <summary>The build as it stands, against <paramref name="order"/>. Caller holds <see cref="_gate"/>.</summary>
+    CallContext.CallBuild BuildLocked(LoadOrderResolver? order) => new(RootsLocked(), order, _profileRead?.Composition, _profileName, _order?.UnreadableNote);
+
+    /// <summary>True on the write's own thread once it took its view inside the gate: nothing refreshes until the call ends. Caller holds <see cref="_gate"/>.</summary>
+    bool WriteViewHeldLocked(CallContext? call) => call is { WriteViewTaken: true } && Monitor.IsEntered(_writeGate);
+
+    /// <summary>Enter the write gate for a read-path refresh, never waiting: false while another thread writes, or on a write's own thread once its view is taken. The caller exits it.</summary>
+    bool TryEnterRefreshLocked(CallContext? call) => !WriteViewHeldLocked(call) && Monitor.TryEnter(_writeGate);
+
+    /// <summary>Whether <paramref name="call"/>'s held views are served: always outside the write gate, and inside it once the write took its view.</summary>
+    bool ServesHeldLocked(CallContext call) => call.WriteViewTaken || !Monitor.IsEntered(_writeGate);
+
+    /// <summary>Refuse the call when the roots or the order moved since its first view. Caller holds <see cref="_gate"/>.</summary>
+    void SameBuildOrRefuseLocked(CallContext call)
+    {
+        if (call.Build is { } b && (b.Roots != RootsLocked() || b.Order is { } o && !ReferenceEquals(o, _resolver))) throw call.Refuse();
     }
 
     LoadOrderResolver ILoadOrderHost.Resolver => Resolver;
 
     // ---- VFS asset resolution (housecarl_asset_status) --------------------------------------------------
 
-    /// <summary>The VFS-aware asset resolver, built on first asset query and kept fresh after — the asset twin of <see cref="Resolver"/>, which it never forces. Takes <see cref="_gate"/>.</summary>
+    /// <summary>The VFS-aware asset resolver, built on first asset query and refreshed at any read with no files to serve (outside a call, a call's first file read, a write's first in-gate read when it is a file read), never once a write took its view; then the call's frozen copy — the asset twin of <see cref="Resolver"/>, which it never forces. Takes <see cref="_gate"/>.</summary>
     AssetResolver Assets
     {
         get
@@ -240,8 +327,9 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                 if (UsesSavedSnapshot) { CurrentSavedSnapshot(); return AssetsNoProfileRefreshLocked(); }
                 if (!_configured) throw NotConfigured();           // fresh install → the tool returns the prompt for the MO2 path instead
                 EnsurePathsDerived();                              // derive the roots on first use (instance mode)
+                if (HeldFilesLocked() is { } held) return held.Resolver;
                 // Profile freshness, shared with the record path and deferred behind an in-flight write the same way.
-                if (Monitor.TryEnter(_writeGate))
+                if (TryEnterRefreshLocked(CallContext.Open))
                 {
                     try { RefreshOnProfileChange(); }
                     finally { Monitor.Exit(_writeGate); }
@@ -256,17 +344,36 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>The asset resolver for the profile already resolved, with no profile re-read; caller holds <see cref="_gate"/>.</summary>
     AssetResolver AssetsNoProfileRefreshLocked()
     {
+        if (HeldFilesLocked() is { } held) return held.Resolver;
+        // A call's first file read: refused if the profile moved since its record pin, else checked once and held.
+        // A file read off an unopenable mods folder would miss every mod's files; the order read refuses it with its counts.
+        if (Mo2LoadOrder.ModsFolderFailure(_modsDir) is not null) Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
+        var call = CallContext.Open;
+        if (call is { Files: null }) SameBuildOrRefuseLocked(call);
+        // The call's loose listings: the freshness check lists into them, so what it read is what the call reads.
+        var listings = new LooseListings();
         if (_assetResolver is null)
         {
             _assetResolver = BuildAssetResolverLocked();
         }
-        else if (Monitor.TryEnter(_writeGate))
+        else
         {
-            try { _assetResolver.RefreshIfStale(); }       // BSA-byte / warmed-loose-subtree content freshness
-            finally { Monitor.Exit(_writeGate); }
+            // BSA-byte / warmed-loose-subtree content freshness, run during another call's write too: that write reads its own frozen copy.
+            Interlocked.Increment(ref Counters.FileFreshnessChecks);
+            _assetResolver.RefreshIfStale(listings);
         }
-        return _assetResolver;
+        if (call is null) return _assetResolver;
+        call.HoldFiles(FileViewLocked(listings), BuildLocked(_resolver));
+        if (Monitor.IsEntered(_writeGate)) call.TakeWriteView();
+        return call.Files!.Resolver;
     }
+
+    /// <summary>The asset build as it stands, frozen, with what was read beside it. Caller holds <see cref="_gate"/>.</summary>
+    CallContext.FileView FileViewLocked(LooseListings listings) => new(_assetResolver!.Frozen(listings), _assetResolver, _assetWarnings, _activeArchives, _enabledModsAtBuild, _profileName);
+
+    /// <summary>The call's held file view, or null outside a call, before its first file read, or inside the write gate
+    /// before the write took its view there, where a read is checked as it is outside a call. Caller holds <see cref="_gate"/>.</summary>
+    CallContext.FileView? HeldFilesLocked() => HeldBuildLocked()?.Files;
 
     AssetCapture ILoadOrderHost.CaptureAssets()
     {
@@ -284,30 +391,49 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     }
 
     /// <summary>The rest of an asset capture around a view just taken; caller holds <see cref="_gate"/>.</summary>
-    AssetCapture AssetCaptureLocked(AssetResolver.AssetView view) =>
-        new(view, AssetWarningsLocked(), _profileName, RootsLocked(), _activeArchives, _enabledModsAtBuild);
+    AssetCapture AssetCaptureLocked(AssetResolver.AssetView view)
+    {
+        var call = CallContext.Open is { Files: not null } c ? c : null;
+        var f = call?.Files;
+        return new(view, AssetWarningsLocked(f?.Warnings ?? _assetWarnings), f?.ProfileName ?? _profileName, call?.Roots ?? RootsLocked(),
+                   f?.Archives ?? _activeArchives, f?.EnabledMods ?? _enabledModsAtBuild);
+    }
 
     // Rows the areas take from one another, relayed here: the assets replay for reads.
     AssetLayers.SkyPatcherReplay? IReadHost.OpenSkyPatcherReplay(AssetCapture captured, LoadOrderResolver.IndexView view,
                                                                  LoadOrderResolver.OverlaySession session, out string? draftRefusal,
-                                                                 SkyPatcherDraft.Plan? draft, SkyPatcherOverlay.WarningSink? draftWarnings)
-        => _assetLayers.OpenSkyPatcherReplay(captured, view, session, out draftRefusal, draft, draftWarnings);
+                                                                 SkyPatcherDraft.Plan? draft, SkyPatcherOverlay.WarningSink? warnings)
+        => _assetLayers.OpenSkyPatcherReplay(captured, view, session, out draftRefusal, draft, warnings);
 
     // The assets area's tool-facing surface; the bodies are in AssetLayers.cs and SkyPatcherReplay.cs.
     public AssetStatusData AssetStatus(IReadOnlyList<string> relPaths, IReadOnlyList<string>? under = null, int limit = 0, int offset = 0,
                                        IReadOnlyList<FaceGenSeed>? seeds = null, bool wholeSelection = false,
-                                       string? provider = null, bool links = false)
-        => _assetLayers.AssetStatus(relPaths, under, limit, offset, seeds, wholeSelection, provider, links);
+                                       string? provider = null, bool links = false, FaceSources? faceSources = null,
+                                       FileExclusion? exclude = null)
+        => _assetLayers.AssetStatus(relPaths, under, limit, offset, seeds, wholeSelection, provider, links, faceSources, exclude);
+    internal ScriptSelectionData SelectScripts(IReadOnlyList<string> relPaths, IReadOnlyList<string>? under, string? provider,
+                                               FileExclusion? exclude = null)
+        => _assetLayers.SelectScripts(relPaths, under, provider, exclude);
     public AssetWalkData AssetWalk(IReadOnlyList<string> seedPaths, IReadOnlyList<FormKey> seedRecords,
                                    IReadOnlyList<string>? fromSource, string? sourceProvider,
-                                   IReadOnlySet<string>? keyedSeeds = null)
-        => _assetLayers.AssetWalk(seedPaths, seedRecords, fromSource, sourceProvider, keyedSeeds);
+                                   IReadOnlyDictionary<string, string?>? keyedSeeds = null,
+                                   WalkGrammar.Values? values = null, IReadOnlyList<(string Raw, string Error)>? badSeeds = null)
+        => _assetLayers.AssetWalk(seedPaths, seedRecords, fromSource, sourceProvider, keyedSeeds, values, badSeeds);
     public SkseInventoryData SkseInventory(string? peekFilter = null) => _assetLayers.SkseInventory(peekFilter);
     public SkseConfigAuditData SkseConfigAudit() => _assetLayers.SkseConfigAudit();
     public NativePairingAuditData NativePairingAudit() => _assetLayers.NativePairingAudit();
     public SkyPatcherLayerData SkyPatcherLayer() => _assetLayers.SkyPatcherLayer();
-    public T SkyPatcherLayer<T>(Func<SkyPatcherLayerData, T> use, CancellationToken ct = default) => _assetLayers.SkyPatcherLayer(use, ct: ct);
-    public NifInspectBatchData NifInspect(IReadOnlyList<string> relPaths, string? sourceProvider, bool slotLinks = false) => _assetLayers.NifInspect(relPaths, sourceProvider, slotLinks);
+    public T SkyPatcherLayer<T>(Func<SkyPatcherLayerData, T> use, CancellationToken ct = default, SkyPatcherLineSelect? select = null,
+                                bool skyPatcher = true, bool spid = false, string? filter = null, bool kid = false, bool bos = false, bool flm = false)
+        => _assetLayers.SkyPatcherLayer(use, ct: ct, select: select, skyPatcher: skyPatcher, spid: spid, filter: filter, kid: kid, bos: bos, flm: flm);
+    public NifInspectBatchData NifInspect(IReadOnlyList<string> relPaths, string? sourceProvider, bool links = false) => _assetLayers.NifInspect(relPaths, sourceProvider, links);
+    internal MeshSelectionData SelectMeshes(IReadOnlyList<(string Path, bool OnDisk)> entries, IReadOnlyList<string>? under, string? provider,
+                                            IReadOnlyList<FaceGenSeed>? seeds, FaceSources? faceSources, bool needView,
+                                            FileExclusion? exclude = null)
+        => _assetLayers.SelectMeshes(entries, under, provider, seeds, faceSources, needView, exclude);
+    public (IReadOnlyDictionary<FormKey, NpcFaceAnswer>? Faces, string? Error) NpcFaces(IReadOnlyCollection<FormKey> keys, FaceSources? sources = null) => _assetLayers.NpcFaces(keys, sources);
+    public FaceSources? IntoFaceSources(string? into) => _assetLayers.IntoFaceSources(into);
+    public FaceSources? ProviderFaceSources(string? provider) => _assetLayers.ProviderFaceSources(provider);
     public NifSetResult NifSet(string relPath, IReadOnlyList<NifSetOp> ops, string? sourceProvider, string? patchName, string? into, bool inPlace, bool acknowledge)
         => _assetLayers.NifSet(relPath, ops, sourceProvider, patchName, into, inPlace, acknowledge);
     public PlaceOutcome PlaceAssets(IReadOnlyList<PlaceRequest> requests, string? patchName, string? into) => _assetLayers.PlaceAssets(requests, patchName, into);
@@ -344,8 +470,9 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                                        LoadOrderResolver.OverlaySession? session = null,
                                        IMajorRecordGetter? prefetched = null,
                                        IReadOnlyCollection<string>? countFields = null,
-                                       Func<IMajorRecordGetter, FormKey, IMajorRecordGetter?>? heldParent = null)
-        => _reads.ResolveReadOn(q, fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo, containerHint, depths, session, prefetched, countFields, heldParent);
+                                       Func<IMajorRecordGetter, FormKey, IMajorRecordGetter?>? heldParent = null,
+                                       int? lineBudget = null)
+        => _reads.ResolveReadOn(q, fk, plugin, fields, conflictTree, depth, resolveNames, linkMemo, containerHint, depths, session, prefetched, countFields, heldParent, lineBudget);
     internal RecordSummary ResolveSummaryOn(CrossQueryOutcome q, FormKey fk) => _reads.ResolveSummaryOn(q, fk);
     internal (PlannedFields? Plan, string? Refusal) PlanFields(IReadOnlyList<string> paths, IReadOnlyList<string>? typeTokens) => _reads.PlanFields(paths, typeTokens);
     internal IReadOnlyList<RecordSummary>? FillSummaries(CrossQueryOutcome q, CancellationToken ct) => _reads.FillSummaries(q, ct);
@@ -363,9 +490,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                                                    IReadOnlyList<(int Depth, string[]? Tail)>? depths = null,
                                                    CancellationToken ct = default,
                                                    IReadOnlyCollection<string>? countFields = null,
-                                                   bool summary = false)
+                                                   bool summary = false,
+                                                   int? lineBudget = null)
         => _reads.ResolveBatch(formids, fields, conflictTree, depth, resolveNames, plugin, artifactDemand, out artifactRefusal, out refusalEpoch,
-                               containerHint, depths, ct, countFields, summary);
+                               containerHint, depths, ct, countFields, summary, lineBudget);
     internal IReadOnlyList<ReadOutcome> ResolveBatchFromPole(
         IReadOnlyList<string> formids, string plugin, string? mod,
         IReadOnlyList<string>? fields, int depth, bool resolveNames,
@@ -375,9 +503,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         IReadOnlyList<(int Depth, string[]? Tail)>? depths = null,
         CancellationToken ct = default,
         IReadOnlyCollection<string>? countFields = null,
-        bool summary = false)
+        bool summary = false,
+        int? lineBudget = null)
         => _reads.ResolveBatchFromPole(formids, plugin, mod, fields, depth, resolveNames, artifactDemand, out pole, out refusal, out refusalEpoch,
-                                       containerHint, depths, ct, countFields, summary);
+                                       containerHint, depths, ct, countFields, summary, lineBudget);
     internal RecordReads.PoleInfo? ProbeSourceArm(string plugin, string? mod, out string? error) => _reads.ProbeSourceArm(plugin, mod, out error);
     internal IReadOnlyList<RecordReads.DeltaRow> DeltaBatch(
         IReadOnlyList<string> formids, RecordReads.PoleSpec subject, RecordReads.PoleSpec reference, IReadOnlyList<string>? fields,
@@ -394,9 +523,10 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         CancellationToken ct = default,
         SkyPatcherDraft.Plan? draft = null,
         SkyPatcherOverlay.WarningSink? overlayWarnings = null,
-        bool summary = false)
+        bool summary = false,
+        int? lineBudget = null)
         => _reads.OverlayPostBatch(formids, fields, depth, resolveNames, demand, out refusal, out refusalEpoch, out epoch,
-                                   containerHint, depths, ct, draft, overlayWarnings, summary);
+                                   containerHint, depths, ct, draft, overlayWarnings, summary, lineBudget);
     internal IReadOnlyList<RecordReads.TreeRow> TreeBatch(
         IReadOnlyList<string> formids, RecordReads.PoleSpec reference, IReadOnlyList<string>? fields,
         ArtifactDemand? demand,
@@ -404,7 +534,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         ComparisonMeter meter, SkyPatcherOverlay.WarningSink? overlayWarnings = null)
         => _reads.TreeBatch(formids, reference, fields, demand, out referenceArm, out epochCoversAll, out refusal, out epoch, meter, overlayWarnings);
     internal IReadOnlyList<RecordReads.WalkSeedResult> WalkForwardBatch(
-        IReadOnlyList<string> seeds, IReadOnlyList<string>? seedPaths, string? follow,
+        IReadOnlyList<string> seeds, IReadOnlyList<string>? seedPaths, IReadOnlyList<string>? follow,
         int depth, int maxNodes, IReadOnlyList<(string Match, bool Refuse)> exclusions,
         ArtifactDemand? demand, out string? refusal, out OrderStamp? epoch, CancellationToken ct = default,
         bool wantCycles = false, IReadOnlySet<string>? through = null, IDictionary<FormKey, string>? leftOut = null)
@@ -500,7 +630,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     internal RecordWrites WriteArea => _writes;   // the writes area instance, for tests that reach its seams
     internal bool GateHeldByThisThread => Monitor.IsEntered(_gate);   // for a test seam that must know whether it runs inside the hold
 
-    internal int AbsenceExplanations;   // how many times the explainer has parsed the profile, for the cost tests
+    internal int AbsenceExplanations;   // how many answers the explainer has worked out (each reads a profile, the call's kept one or fresh), for the cost tests
     internal int ServingCopyReResolves;   // how many times a moved serving copy re-resolved the order, for the tests
 
     /// <summary>MO2's mods root as this service currently has it, or null when it has none yet; taken under the gate.</summary>
@@ -510,28 +640,35 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         {
             lock (_gate)
             {
-                // Instance mode derives the roots lazily, and an instance that will not resolve is not this caller's problem.
-                try { EnsurePathsDerived(); } catch { }
-                return string.IsNullOrWhiteSpace(_modsDir) ? null : _modsDir;
+                // Instance mode derives the roots lazily, and an instance that will not resolve is not this caller's
+                // problem; a refused explicit root is the one thing not swallowed, so the call says so rather than degrade.
+                try { EnsurePathsDerived(); } catch (Exception ex) when (ex is not ExplicitRootRefusedException) { }
+                var modsDir = CallBuildLocked().Roots.ModsDir;
+                return string.IsNullOrWhiteSpace(modsDir) ? null : modsDir;
             }
         }
     }
 
-    /// <summary>The injected answer to "why is this plugin filename not in the active order?": the profile and the roots
-    /// are read fresh here and cached per captured view, and the count of those reads is <see cref="AbsenceExplanations"/>,
-    /// which <c>AbsentMasterLinkTests</c> and <c>ComparisonBatchReadTests</c> hold the pinned view's per-plugin cache to.
-    /// Returns null when nothing can be said, and the refusal falls back to a did-you-mean.</summary>
+    /// <summary>The build a head read answers from: the call's inside a call, else the service's with no profile read,
+    /// so the caller reads the composition fresh. Caller holds <see cref="_gate"/>.</summary>
+    CallContext.CallBuild CallBuildLocked() => HeldBuildLocked()?.Build ?? new(RootsLocked(), _resolver, null, _profileName);
+
+    /// <summary>The injected answer to "why is this plugin filename not in the active order?": the roots and the profile
+    /// are the call's (read fresh outside a call or when it kept none) and cached per captured view, and the count of those
+    /// answers is <see cref="AbsenceExplanations"/>, which <c>AbsentMasterLinkTests</c> and <c>ComparisonBatchReadTests</c>
+    /// hold the pinned view's per-plugin cache to. Returns null when nothing can be said, and the refusal falls back to a did-you-mean.</summary>
     string? ExplainPluginAbsence(string name)
     {
-        // Snapshot the roots together under the gate so the four cannot be read across a mid-switch reassignment.
-        string profileDir, modsDir, dataDir, overwriteDir;
-        lock (_gate) { profileDir = _profileDir; modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir; }
-        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(profileDir)) return null;
+        // Take the roots together under the gate so the four cannot be read across a mid-switch reassignment.
+        CallContext.CallBuild build;
+        lock (_gate) build = CallBuildLocked();
+        var roots = build.Roots;
+        if (string.IsNullOrWhiteSpace(name) || string.IsNullOrWhiteSpace(roots.ProfileDir)) return null;
         var fn = Path.GetFileName(name.Trim());
         if (fn.Length == 0) return null;
         Interlocked.Increment(ref AbsenceExplanations);
         Mo2Composition comp;
-        try { comp = Mo2LoadOrder.ReadComposition(profileDir); }
+        try { comp = build.Composition ?? Mo2LoadOrder.ReadComposition(roots.ProfileDir); }
         catch { return null; }                       // unreadable profile → say nothing rather than guess
 
         bool ticked = comp.ActivePluginNames.Contains(fn);
@@ -548,13 +685,16 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
 
         // Ticked but absent from the index: the file itself couldn't be resolved. Locate it to say which.
         PluginFileHit[] hits;
-        try { hits = Mo2LoadOrder.LocatePlugin(comp, modsDir, dataDir, overwriteDir, fn).ToArray(); }
+        try { hits = Mo2LoadOrder.LocatePlugin(comp, roots.ModsDir, roots.DataDir, roots.OverwriteDir, fn).ToArray(); }
         catch { hits = Array.Empty<PluginFileHit>(); }
 
         if (ticked)
             // Ticked and provided by an enabled layer yet not indexed — nothing honest left to say, so say nothing.
-            return hits.Any(h => h.Enabled)
-                ? null
+            return hits.Any(h => h.Enabled) ? null
+                : Volatile.Read(ref _order) is { UnreadableMods.Count: > 0 } unread
+                ? $"'{fn}' is ticked in plugins.txt, but no enabled mod houseCARL could open, the overwrite folder, or the " +
+                  $"game Data folder provides the file; {unread.UnreadableMods.Count} enabled mod folder(s) could not be opened " +
+                  $"({unread.UnreadableModsNamed}), and it may be in one of them. Make them readable and run this again."
                 : $"'{fn}' is ticked in plugins.txt, but no enabled mod, the overwrite folder, or the game Data folder " +
                   "provides the file — the profile is stale (trigger an MO2 refresh / re-sort so it rewrites the profile files).";
 
@@ -573,7 +713,8 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
                "(source= names the version to read; the read still needs a selection).";
     }
 
-    /// <summary>Build the asset resolver from the current roots: the active BSAs and the enabled-mod priority list, off one static profile read. Caller holds <see cref="_gate"/>.</summary>
+    /// <summary>Build the asset resolver from the current roots: the active BSAs and the enabled-mod priority list, off the
+    /// profile read the order was built from, else one static profile read. Caller holds <see cref="_gate"/>.</summary>
     AssetResolver BuildAssetResolverLocked()
     {
         if (_savedSnapshot is { } saved)
@@ -585,8 +726,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
             _enabledModsAtBuild = saved.Composition.EnabledMods;
             return AssetResolver.BuildSavedSnapshot(saved);
         }
-        var comp = Mo2LoadOrder.ReadComposition(_profileDir);                       // EnabledMods (priority) — cheap text parse
-        var discovery = ArchiveDiscovery.Discover(comp, GameIni.For(_profileDir), _modsDir, _dataDir, _overwriteDir);
+        var (comp, discovery) = _profileRead ?? ReadProfileLocked();
         // Explicit mode has no ModOrganizer.ini, so MO2's default skip lists apply.
         var (skip, skipWarnings) = _instanceDir is null
             ? (Mo2SkipRules.Default, Array.Empty<string>())
@@ -597,12 +737,19 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         return AssetResolver.Build(_overwriteDir, _modsDir, _dataDir, comp.EnabledMods, discovery.Archives, skip);
     }
 
-    /// <summary>Every asset lane's warnings: the build's own, plus the kept-build sentence when a profile change could not be re-read. Caller holds <see cref="_gate"/>.</summary>
-    IReadOnlyList<string> AssetWarningsLocked()
+    /// <summary>A profile read with no order behind it, for a call whose first read is a file read. Caller holds <see cref="_gate"/>.</summary>
+    (Mo2Composition, ArchiveDiscoveryResult) ReadProfileLocked()
     {
-        if (_profileHeld is null) return _assetWarnings;
-        var said = new List<string>(_assetWarnings.Count + 1) { ProfileHeldNote(_profileHeld) };
-        said.AddRange(_assetWarnings);
+        var comp = Mo2LoadOrder.ReadComposition(_profileDir);                       // EnabledMods (priority) — cheap text parse
+        return (comp, ArchiveDiscovery.Discover(comp, GameIni.For(_profileDir), _modsDir, _dataDir, _overwriteDir));
+    }
+
+    /// <summary>Every asset lane's warnings: the build's own, plus the kept-build sentence when a profile change could not be re-read. Caller holds <see cref="_gate"/>.</summary>
+    IReadOnlyList<string> AssetWarningsLocked(IReadOnlyList<string> build)
+    {
+        if (_profileHeld is null) return build;
+        var said = new List<string>(build.Count + 1) { ProfileHeldNote(_profileHeld) };
+        said.AddRange(build);
         return said;
     }
 
@@ -621,7 +768,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         var managerName = AmethystSnapshotContext.Current is not null || UsesSavedSnapshot ? "Amethyst" : "MO2";
         IReadOnlyList<(string Name, string Dir)> roots;
         string dataDir;
-        try { lock (_gate) { roots = Assets.LooseRoots; dataDir = _dataDir; } }
+        try { lock (_gate) { roots = Assets.LooseRoots; dataDir = CallBuildLocked().Roots.DataDir; } }
         catch (Exception ex)
         {
             // Says what failed and what it costs, and nothing about vanilla — this method cannot check the vanilla sources.
@@ -695,10 +842,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         lock (_gate)
         {
             configured = _configured;
-            // Not fatal here, but the reason is carried out: it is why the top-up below cannot run.
+            // Not fatal here, but the reason is carried out: it is why the top-up below cannot run. A refused explicit
+            // root is fatal, so the decompile note cannot blame an MO2 instance explicit-paths mode does not have.
             if (configured)
                 try { EnsurePathsDerived(); }
-                catch (Exception ex) { deriveError = ex.Message; }
+                catch (Exception ex) when (ex is not ExplicitRootRefusedException) { deriveError = ex.Message; }
             modsDir = _modsDir;
             lock (_classParentsLock) gen = _classParentsGen;     // taken with modsDir: every write of _modsDir invalidates under the gate
         }
@@ -744,26 +892,29 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         }
     }
 
-    /// <summary>Diagnostic snapshot for housecarl_load_order_status: the fresh profile composition plus the resolver's count, warnings and staleness flag. Forces the lazy build.</summary>
+    /// <summary>Diagnostic snapshot for housecarl_load_order_status: the profile read the call's order was built from (read fresh only when none was kept) plus the resolver's count, warnings and staleness flag. Forces the lazy build.</summary>
     public LoadOrderStatusData StatusData()
     {
         if (UsesSavedSnapshot) return SavedStatusData();
         // The view and the per-build fields beside it are snapshotted under ONE gate hold, so no status line mixes two builds.
-        LoadOrderResolver.IndexView view; IReadOnlyList<string> warnings; bool profileChanged; string profileDir, modsDir, dataDir, overwriteDir; string profileName; string? instanceDir;
+        LoadOrderResolver.IndexView? view = null; IReadOnlyList<string> warnings; bool profileChanged; CallContext.CallBuild build; string? instanceDir;
+        ModsFolderUnreadableException? unread = null;
         lock (_gate)
         {
-            view = Resolver.Capture();                             // force build/refresh; one build for count + exclusions
-            warnings = _orderWarnings;
-            profileChanged = ProfileFilesChanged();
-            profileDir = _profileDir;
-            modsDir = _modsDir; dataDir = _dataDir; overwriteDir = _overwriteDir;
-            profileName = _profileName;                            // captured under the same gate — one snapshot, never re-derived at render
+            // Status answers off the order as far as it read, so the modder sees why every other call refuses.
+            try { view = Resolver.Capture(); }                     // force build/refresh; one build for count + exclusions
+            catch (ModsFolderUnreadableException ex) { unread = ex; }
+            warnings = unread?.Order.Warnings ?? _order?.Warnings ?? [];
+            profileChanged = unread is null && ProfileFilesChanged();
+            build = CallBuildLocked();                             // the call's roots and profile name, captured under the same gate — never re-derived at render
             instanceDir = _instanceDir;                            // the configured MO2 instance folder; null ⇒ explicit-paths / unconfigured mode
         }
-        var comp = Mo2LoadOrder.ReadComposition(profileDir);       // fresh composition (always current)
+        var r = build.Roots;
+        var comp = unread?.Order.Composition ?? build.Composition ?? Mo2LoadOrder.ReadComposition(r.ProfileDir);   // the profile read the call's order was built from, else fresh
         return new LoadOrderStatusData(
-            comp, warnings, view.PluginCount, _maxPlugins, profileChanged, profileDir, modsDir, dataDir, overwriteDir, profileName, instanceDir, view.ExcludedPlugins,
-            view.Epoch, view.ContainedRecordCount);
+            comp, warnings, view?.PluginCount ?? unread!.Order.ResolvedCount, _maxPlugins, profileChanged, r.ProfileDir, r.ModsDir, r.DataDir, r.OverwriteDir,
+            build.ProfileName, instanceDir, view?.ExcludedPlugins ?? new Dictionary<string, string>(), view?.Epoch, view?.ContainedRecordCount ?? 0,
+            unread?.Message);
     }
 
     /// <summary>Whole-order stats (forces the lazy build). A test seam: the probes warm the lazy index through it. No shipped caller.</summary>
@@ -794,27 +945,30 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         // No copy serves the name: a lone copy still has a header to read, and several leave none established.
         var from = copies.FirstOrDefault(c => c.Served == OutputLocations.ServedStanding.Serves) ?? (copies.Count == 1 ? copies[0] : null);
         string? indexed;
-        Mo2Roots roots;
-        lock (_gate) { indexed = _resolver?.Capture().PluginPath(pluginName); roots = RootsLocked(); }
+        lock (_gate) indexed = (HeldPinLocked()?.Pin!.View ?? _resolver?.Capture())?.PluginPath(pluginName);
+        var roots = new Mo2Roots(ProfileDir: d.ProfileDir, DataDir: d.DataDir, ModsDir: d.ModsDir, OverwriteDir: d.OverwriteDir);   // the roots the locate searched
         var moved = indexed is null || roots.ProfileDir.Length == 0 ? null : ServingCopyMoved(pluginName, indexed, comp, roots, hits);
-        return new PluginFacts(copies, from, from is null ? null : PluginFile.ReadHeader(from.Path), moved);
+        return new PluginFacts(copies, from, from is null ? null : PluginFile.ReadHeader(from.Path), moved)
+            { Unopened = copies.Count == 0 ? Mo2LoadOrder.UnopenedModFolders(comp, d.ModsDir) : [] };
 
         static long? SizeOf(string path) { try { return new FileInfo(path).Length; } catch { return null; } }
     }
 
-    ServingCopyMove? ILoadOrderHost.ServingCopyMoved(IEnumerable<(string Plugin, string? IndexedPath)> plugins)
+    ServingCopyMove? ILoadOrderHost.ServingCopyMoved(IEnumerable<(string Plugin, string? IndexedPath)> plugins, bool live)
     {
-        Mo2Roots roots;
-        lock (_gate) roots = RootsLocked();
+        CallContext.CallBuild build;
+        lock (_gate) build = live ? new(RootsLocked(), _resolver, null, _profileName) : CallBuildLocked();   // live: the live roots, the profile read fresh
+        var roots = build.Roots;
         if (roots.ProfileDir.Length == 0) return null;          // an order handed in, not read from a profile: no MO2 copy to compare
-        var comp = Mo2LoadOrder.ReadComposition(roots.ProfileDir);   // parsed once for every plugin checked
+        var comp = build.Composition ?? Mo2LoadOrder.ReadComposition(roots.ProfileDir);   // the call's profile read, else parsed once for every plugin checked
         return plugins.Where(p => p.IndexedPath is not null)
                       .Select(p => ServingCopyMoved(p.Plugin, p.IndexedPath!, comp, roots, null)).FirstOrDefault(m => m is not null);
     }
 
     /// <summary>The live serving-copy check (#1196): null when the first enabled copy, judged by JudgeServed, is
     /// <paramref name="indexedPath"/>, else the order is re-resolved through the profile-change path, deferred while
-    /// another thread writes, and skipped when the index already holds the live copy. <paramref name="hits"/> is a full locate the caller already ran.</summary>
+    /// another thread writes, put off to the next call on a write's own thread once it took its view, and skipped when the
+    /// index already holds the live copy. <paramref name="hits"/> is a full locate the caller already ran.</summary>
     ServingCopyMove? ServingCopyMoved(string plugin, string indexedPath, Mo2Composition comp, Mo2Roots roots, IReadOnlyList<PluginFileHit>? hits)
     {
         IReadOnlyList<PluginFileHit> located = hits
@@ -829,7 +983,12 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
             lock (_gate)
             {
                 why = "another write is running; run this again once it finishes";
-                if (Monitor.TryEnter(_writeGate))
+                if (WriteViewHeldLocked(CallContext.Open))
+                {
+                    _reResolvePending = true;                             // the next call's profile check re-reads the order
+                    why = "it is re-read at the start of the next call; run this again";
+                }
+                else if (Monitor.TryEnter(_writeGate))
                     try
                     {
                         var before = _resolvedPaths;
@@ -885,7 +1044,7 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         foreach (var dir in dirs)
         {
             var folder = Path.GetFileName(dir);
-            var metaPath = Path.Combine(dir, "meta.ini");
+            var metaPath = LooseListings.OnDisk(dir, "meta.ini");
             if (!File.Exists(metaPath)) { untracked++; continue; }     // separators / hand-installed mods carry no meta.ini
             var meta = Mo2ModMeta.Read(metaPath);
             if (meta is null || meta.ModId == 0) { untracked++; continue; }   // not a Nexus-linked mod → not update-checkable
@@ -1013,8 +1172,9 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     /// <summary>Lazy freshness, run on each tool call once the snapshot exists: a profile switch in instance mode, else the active profile's own files. Caller holds <see cref="_gate"/>.</summary>
     void RefreshOnProfileChange()
     {
-        if (RederiveIfIniChanged()) return;                      // instance mode: a profile switch was published, or held for the next call
-        if (!ProfileFilesChanged()) { _profileHeld = null; return; }   // matches its baseline again → nothing pending, nothing to say
+        Interlocked.Increment(ref Counters.ProfileFreshnessChecks);
+        if (RederiveIfIniChanged()) return;                     // instance mode: a profile switch was published, or held for the next call
+        if (!_reResolvePending && !ProfileFilesChanged()) { _profileHeld = null; return; }   // matches its baseline again → nothing pending, nothing to say
         ReResolve(new(ProfileDir: _profileDir, DataDir: _dataDir, ModsDir: _modsDir, OverwriteDir: _overwriteDir));
     }
 
@@ -1049,13 +1209,14 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         try { order = Mo2LoadOrder.Build(roots.ProfileDir, roots.ModsDir, roots.DataDir, roots.OverwriteDir); }
         catch (ProfileUnreadableException ex) { _profileHeld = ex; return false; }
         _profileHeld = null;                                     // the re-read got through — nothing is pending any more
+        _reResolvePending = false;
         var paths = order.OrderedPaths;
         if (_maxPlugins > 0 && paths.Count > _maxPlugins) paths = paths.Take(_maxPlugins).ToList();
 
         if (paths.Count > 0 && !paths.SequenceEqual(_resolvedPaths, StringComparer.OrdinalIgnoreCase))
         {
             // The set or order genuinely changed: read the language and build FIRST so the old snapshot survives a throw, then dispose and swap.
-            var text = ReadInstanceText(roots, order);
+            var text = ReadInstanceText(roots, order, out var discovery);
             InvalidateAssetResolver();   // the active mod/archive set changed → the asset resolver rebuilds lazily
             GameLanguage.Bind(text);
             if (_resolver is not null)
@@ -1069,7 +1230,8 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
             }
             _text = text;
             _resolvedPaths = paths;
-            _orderWarnings = order.Warnings;
+            _order = order;
+            _profileRead = (order.Composition, discovery);
             _profileStamps = profileStamps;
             return true;
         }
@@ -1077,10 +1239,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         {
             // The profile was touched but the resolved order is identical, so no deep re-index; the language is re-read
             // (a refusal throws before anything moves), the asset resolver drops and the baseline advances.
-            var text = ReadInstanceText(roots, order);
+            var text = ReadInstanceText(roots, order, out var discovery);
             InvalidateAssetResolver();
             GameLanguage.Bind(_text = text);
-            _orderWarnings = order.Warnings;
+            _order = order;
+            _profileRead = (order.Composition, discovery);
             _profileStamps = profileStamps;
             return true;
         }
@@ -1088,11 +1251,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         return false;
     }
 
-    /// <summary>Instance mode: on the first build, derive the roots and active profile from ModOrganizer.ini, throwing a message naming what is missing. Caller holds the gate.</summary>
+    /// <summary>Instance mode: on the first build, derive the roots and active profile from ModOrganizer.ini, throwing a message naming what is missing. Explicit mode: check the configured overwrite root. Caller holds the gate.</summary>
     void EnsurePathsDerived()
     {
         if (UsesSavedSnapshot) { if (_savedSnapshot is null) CurrentSavedSnapshot(); return; }
-        if (_instanceDir is null) return;                        // explicit mode — roots configured directly
+        if (_instanceDir is null) { CheckExplicitOverwriteRoot(); return; }   // explicit mode — roots configured directly
         if (_profileDir.Length > 0) return;                      // already derived (a prior build / SetInstance); RederiveIfIniChanged owns later updates
         var iniStamp = FileStamp.Of(Mo2Instance.IniPath(_instanceDir)); // stat BEFORE the read: an ini write during/after Resolve is caught next call
         var p = Mo2Instance.Resolve(_instanceDir);               // throws, naming the missing piece, if this is not a usable instance
@@ -1101,10 +1264,37 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         InvalidateClassParents();                                // _modsDir just gained a value — a cache built before derivation is baseline-only
     }
 
+    /// <summary>Explicit mode: a configured overwrite root that is not a folder refuses every call that reads the load order, in this sentence everywhere but
+    /// <c>nif_set</c> (docs/architecture/load-order-service.md, <i>Configuration modes</i>). Instance mode reads
+    /// a missing overwrite folder as empty because MO2 recreates it at every start; houseCARL never creates this one, so
+    /// a typo would otherwise read as no overwrite layer at all. Caller holds the gate.</summary>
+    void CheckExplicitOverwriteRoot()
+    {
+        if (_overwriteDir.Length == 0 || Directory.Exists(_overwriteDir)) return;
+        throw new ExplicitRootRefusedException(
+            $"HouseCarl:OverwriteDir is '{_overwriteDir}', which is not a folder houseCARL can see. Create one there if " +
+            "the name is free — houseCARL never creates it — point the setting at a folder that exists, or leave it " +
+            "unset to run with no overwrite layer.");
+    }
+
     Mo2Roots ILoadOrderHost.CaptureRoots()
     {
-        lock (_gate) { EnsurePathsDerived(); GameLanguage.Bind(_text); return RootsLocked(); }
+        lock (_gate)
+        {
+            EnsurePathsDerived();
+            var call = HeldBuildLocked();
+            if (call?.Pin is null) GameLanguage.Bind(_text);
+            return call?.Roots ?? RootsLocked();
+        }
     }
+
+    /// <summary>The call's context once it holds a pin, or null outside a call, before its first record read, or inside
+    /// the write gate before the write took its view there, where a read is taken as it is outside a call. Caller holds <see cref="_gate"/>.</summary>
+    CallContext? HeldPinLocked() => HeldBuildLocked() is { Pin: not null } call ? call : null;
+
+    /// <summary>The call's context once it holds either view, else null as <see cref="HeldPinLocked"/>. Caller holds <see cref="_gate"/>.</summary>
+    CallContext? HeldBuildLocked() =>
+        CallContext.Open is { Build: not null } call && ServesHeldLocked(call) ? call : null;
 
     /// <summary>One <c>_gate</c> hold: the configured check, the roots and the built plugin names; throws the unconfigured prompt when there is no instance.</summary>
     internal OutputRoots ConfiguredRoots()
@@ -1114,8 +1304,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
             if (UsesSavedSnapshot && !AmethystStagingWrite.IsActive) throw new InvalidOperationException(SnapshotWriteRefusal);
             if (!_configured) throw NotConfigured();
             EnsurePathsDerived();
+            if (HeldPinLocked() is { } call) return new OutputRoots(call.Roots, call.Pin!.Resolver.PluginNames);
+            // A write rooted in an unopenable mods folder would miss every mod; the order read refuses it with its counts.
+            if (Mo2LoadOrder.ModsFolderFailure(_modsDir) is not null) Mo2LoadOrder.Build(_profileDir, _modsDir, _dataDir, _overwriteDir);
             GameLanguage.Bind(_text);
-            return new OutputRoots(RootsLocked(), _resolver?.PluginNames);
+            return new OutputRoots(HeldBuildLocked()?.Roots ?? RootsLocked(), _resolver?.PluginNames);
         }
     }
 
@@ -1140,7 +1333,9 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         {
             if (!_configured) return null;
             try { EnsurePathsDerived(); }
-            catch { return null; }                                  // unusable instance → no hint; the caller's own config check names the real problem
+            // unusable instance → no hint; the caller's own config check names the real problem. A refused explicit root
+            // is not swallowed, so the compiler is not prompted against an install other than the configured one.
+            catch (Exception ex) when (ex is not ExplicitRootRefusedException) { return null; }
             return _dataDir.Length > 0 ? Path.GetDirectoryName(_dataDir.TrimEnd('\\', '/')) : null;
         }
     }
@@ -1193,8 +1388,8 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     string? IAssetHost.InstalledGameRuntime() => InstalledGameRuntime();
 
     SourceChain? IAssetHost.BuildWalkSources(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, Mo2Roots roots,
-                                            IReadOnlyList<string> poles, List<IDisposable> overlays, out string? error)
-        => _writes.BuildSourceChain(view, session, roots, poles, "from_source", overlays, out error);
+                                            IReadOnlyList<string> poles, List<IDisposable> overlays, out string? error, string param)
+        => _writes.BuildSourceChain(view, session, roots, poles, param, overlays, out error);
 
     /// <summary>The game dirs to search for the Creation Kit's compiler, in priority order: the load order's own, then the located real Skyrim SE install. De-duplicated, best-effort.</summary>
     public IReadOnlyList<string> CompilerGameDirHints()
@@ -1224,6 +1419,12 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
     {
         if (_unavailableManagerReason is not null) throw new InvalidOperationException(_unavailableManagerReason);
         if (OperatingSystem.IsLinux()) throw new InvalidOperationException("Linux uses Amethyst; select a connection with housecarl_set_amethyst_connection");
+        return SetInstanceForGuard(instanceDir);
+    }
+
+    /// <summary>Switch only a disposable MO2 engine fixture; the public Linux connection lane remains Amethyst-only.</summary>
+    internal (Mo2InstancePaths paths, bool persisted, string? persistError, string? persistNote) SetInstanceForGuard(string instanceDir)
+    {
         // The ini baseline is statted BEFORE Resolve reads the instance, the same discipline as every other baseline here.
         var iniStamp = FileStamp.Of(Mo2Instance.IniPath(instanceDir.Trim()));
         var paths = Mo2Instance.Resolve(instanceDir);            // throws if not a usable MO2 instance — the tool renders the reason
@@ -1239,7 +1440,8 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
             _assetResolver?.Dispose(); _assetResolver = null;    // the asset resolver rebuilds against the new instance too
             _resolvedPaths = Array.Empty<string>();
             _profileStamps = new FileStamp[ProfileFileNames.Length];   // unset — the next build records fresh baselines against the new profile
-            _orderWarnings = Array.Empty<string>();
+            _order = null;
+            _profileRead = null;                                 // the next order build reads the new profile
             InvalidateClassParents();                            // every sibling cache drops on a switch — the hierarchy too
             System.Threading.Interlocked.Increment(ref _gameRootsGen);   // a new instance may be a different game install — the runtime memo must re-probe rather than adjudicate against the old exe
         }
@@ -1258,9 +1460,13 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
         "may help locate it, but do NOT silently pick one when more than one MO2 install exists: list the candidates you " +
         "found and let the user choose. State which folder you're using, then call " + ToolNames.SetMo2Instance + " with that path.";
 
-    /// <summary>Tools call this FIRST: the unconfigured prompt as a normal result string, else null — the MCP framework rewrites a thrown exception to a generic message.</summary>
+    /// <summary>Tools call this FIRST: the unconfigured prompt as a refused result, else null — the MCP framework rewrites a thrown exception to a generic message.</summary>
     public string? ConfigPromptOrNull() { lock (_gate) { return _configured ? null : _unavailableManagerReason ?? NotConfiguredText; } }
 
     InvalidOperationException NotConfigured() => new(_unavailableManagerReason ?? NotConfiguredText);
 
 }
+
+/// <summary>A root explicit-paths mode was configured with that houseCARL cannot use: a configuration refusal the Guard
+/// renders as one sentence, not an internal failure.</summary>
+public sealed class ExplicitRootRefusedException(string sentence) : InvalidOperationException(sentence);

@@ -6,6 +6,12 @@ namespace HousecarlCore;
 /// only held to by the cost tests. The service owns one and its resolver carries it across a rebuild.</summary>
 public sealed class CostCounters
 {
+    /// <summary>Profile freshness checks (the ini and profile-file stats) the service ran.</summary>
+    public long ProfileFreshnessChecks;
+
+    /// <summary>File freshness checks (the archive and watched-folder sweep) the service's getters ran.</summary>
+    public long FileFreshnessChecks;
+
     /// <summary>Overlay opens the service's sessions have paid.</summary>
     public long SessionOverlayOpens;
 
@@ -42,6 +48,12 @@ public sealed class CostCounters
 
     /// <summary>SkyPatcher layers an overlay read opened for replay.</summary>
     public long ReplayOpens;
+
+    /// <summary>Load-order walks the SkyPatcher EditorID table made to fill itself.</summary>
+    public long EditorIdSweeps;
+
+    /// <summary>Record types those walks covered, each counted once per walk.</summary>
+    public long EditorIdTypesWalked;
 
     /// <summary>Off-order files a comparison pole swept.</summary>
     public long OffOrderSweeps;

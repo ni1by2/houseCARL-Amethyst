@@ -70,6 +70,7 @@ public sealed class RecordsWorld : IDisposable
     public FormKey SpellB { get; }
     public FormKey SpellC { get; }
     public FormKey BigList { get; }
+    public FormKey HugeList { get; }
     public FormKey Package { get; }
     public FormKey NpcParent { get; }
     public FormKey NpcChild { get; }
@@ -87,6 +88,9 @@ public sealed class RecordsWorld : IDisposable
     public IReadOnlyDictionary<FormKey, IMajorRecordGetter> MgefByKey { get; }
 
     public static string Fid(FormKey fk) => $"{fk.ID:X6}:{fk.ModKey.FileName}";
+
+    /// <summary>A record as a SkyPatcher line addresses it: <c>Plugin|FormID</c>, which needs no po3 Tweaks, unlike an EditorID.</summary>
+    public static string Sp(FormKey fk) => $"{fk.ModKey.FileName}|{fk.ID:X}";
 
     public RecordsWorld()
     {
@@ -196,6 +200,11 @@ public sealed class RecordsWorld : IDisposable
         var dropped = master.Armors.AddNew(); dropped.EditorID = DroppedEidArmorOldEid; DroppedEidArmor = dropped.FormKey;
         // Added after the pair so no earlier FormID shifts.
         var keyword = master.Keywords.AddNew(); keyword.EditorID = "HcRecKeyword"; Keyword = keyword.FormKey;
+        // One element past the to_file= line budget, added last so no earlier FormID shifts: the record a file
+        // read still cuts. Its entries are null links, so it adds no reference to any count or walk.
+        var hugeList = master.FormLists.AddNew(); hugeList.EditorID = "HcRecHugeList"; HugeList = hugeList.FormKey;
+        for (int i = 0; i < RecordsTools.ToFileLineBudget + 1; i++)
+            hugeList.Items.Add(new FormLink<ISkyrimMajorRecordGetter>(FormKey.Null));
 
         var ovMod = new SkyrimMod(ovKey, SkyrimRelease.SkyrimSE);
         WriteEngine.GenericGetOrAddAsOverride(ovMod, bigList);   // identical copy — no field changed
@@ -216,6 +225,8 @@ public sealed class RecordsWorld : IDisposable
             .BasicStats = new WeaponBasicStats { Damage = 55, Weight = 1 };
         // The off-order file carries a list too, so a read of one can be driven through the off-order arm.
         WriteEngine.GenericGetOrAddAsOverride(oldMod, spellA);
+        // And the over-budget list, so an off-order read of it can be driven under the to_file= line budget.
+        WriteEngine.GenericGetOrAddAsOverride(oldMod, bigList);
 
         var midMod = new SkyrimMod(midKey, SkyrimRelease.SkyrimSE);
         ((IWeapon)WriteEngine.GenericGetOrAddAsOverride(midMod, master.Weapons.First(w => w.FormKey == weapons[0])))
@@ -242,10 +253,9 @@ public sealed class RecordsWorld : IDisposable
         Directory.CreateDirectory(Path.Combine(spDir, "MyMod"));
         NestedSkyPatcherIniPath = Path.Combine(spDir, "MyMod", "nested.ini");
         File.WriteAllText(NestedSkyPatcherIniPath, "; placed under a mod subfolder, and patches nothing either\r\n");
-        // The [Patcher] toggles, with 'armor' switched off and no live armor folder at all: the type a draft can
-        // be folded into that the DLL would skip wholesale. 'weapon' is left at its default (on).
-        File.WriteAllText(Path.Combine(ModsDir, "MasterMod", "SKSE", "Plugins", "SkyPatcher.ini"),
-            "[Patcher]\r\niEnable" + ToggledOffSkyPatcherType + "Patching=0\r\n");
+        // The [Patcher] switches, with 'armor' switched off and no live armor folder at all: the type a draft can
+        // be folded into that the DLL would skip wholesale. Every other patcher, 'weapon' included, is on.
+        SkyPatcherSwitchesFile.Write(Path.Combine(ModsDir, "MasterMod"), ToggledOffSkyPatcherType);
 
         File.WriteAllText(Path.Combine(Instance, "ModOrganizer.ini"),
             "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("

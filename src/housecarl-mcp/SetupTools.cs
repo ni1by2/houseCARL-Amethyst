@@ -19,17 +19,17 @@ public static class SetupTools
     public static string SetMo2Instance(
         LoadOrderService svc,
         [Description("Full path to the MO2 instance folder — the one containing ModOrganizer.ini (e.g. a Wabbajack list's install folder).")]
-            string path) => Guard.Tool(ToolNames.SetMo2Instance, () =>
+            string path) => Guard.Tool(ToolNames.SetMo2Instance, call =>
     {
         if (string.IsNullOrWhiteSpace(path))
-            return "error: no path given. Pass the full path to your MO2 instance folder (the one containing ModOrganizer.ini).";
+            return ToolAnswer.Refusal("error: no path given. Pass the full path to your MO2 instance folder (the one containing ModOrganizer.ini).");
         path = path.Trim().Trim('"');   // tolerate a copy-pasted quoted path, like every sibling path-taking tool
 
         Mo2InstancePaths paths; bool persisted; string? persistError; string? persistNote;
         try { (paths, persisted, persistError, persistNote) = svc.SetInstance(path); }
-        catch (InvalidOperationException ex) { return "error: " + ex.Message; }   // not a usable instance — nothing changed
+        catch (InvalidOperationException ex) { return ToolAnswer.Refusal("error: " + ex.Message); }   // not a usable instance — nothing changed
 
-        return Render(paths, persisted, persistError, persistNote);
+        return ToolAnswer.Served(Render(paths, persisted, persistError, persistNote));
     });
 
     [McpServerTool(Name = ToolNames.SetToolPath, Title = "Tell houseCARL where an external tool is"),
@@ -46,17 +46,17 @@ public static class SetupTools
         [Description("Which tool: 'papyrus_compiler' (CK compiler), 'caprica' (native Linux compiler), 'champollion' (native Linux decompiler), 'bsarch', 'papyrus_logs', or 'crash_logs'.")]
             string tool,
         [Description("Full path to the executable for papyrus_compiler/caprica/champollion/bsarch, or the log DIRECTORY for papyrus_logs/crash_logs.")]
-            string path) => Guard.Tool(ToolNames.SetToolPath, () =>
+            string path) => Guard.Tool(ToolNames.SetToolPath, call =>
     {
         if (string.IsNullOrWhiteSpace(tool))
-            return "error: no tool named. Pass tool= one of: " + ToolBridge.WireKeys + ".";
+            return ToolAnswer.Refusal("error: no tool named. Pass tool= one of: " + ToolBridge.WireKeys + ".");
         if (!ToolBridge.TryParse(tool, out var dep))
-            return $"error: unknown tool '{tool}'. Expected one of: {ToolBridge.WireKeys}.";
+            return ToolAnswer.Refusal($"error: unknown tool '{tool}'. Expected one of: {ToolBridge.WireKeys}.");
         if (string.IsNullOrWhiteSpace(path))
-            return $"error: no path given for '{tool}'. Pass the full path to {ToolBridge.Info(dep).Display}.";
+            return ToolAnswer.Refusal($"error: no path given for '{tool}'. Pass the full path to {ToolBridge.Info(dep).Display}.");
 
         var (ok, error, persisted, persistError, persistNote, resolved) = bridge.Save(dep, path);
-        if (!ok) return "error: " + error;   // validation failed — nothing saved
+        if (!ok) return ToolAnswer.Refusal("error: " + error);   // validation failed — nothing saved
 
         var info = ToolBridge.Info(dep);
         var sb = new StringBuilder();
@@ -66,7 +66,7 @@ public static class SetupTools
             ? "saved to houseCARL.user.json — persists across restarts (coexists with your MO2 instance)."
             : $"NOTE: could not save ({persistError}) — works this session, but you'll need to set it again after a restart.");
         if (persistNote is not null) sb.Append("\nRECOVERED: ").Append(persistNote);   // corrupt prior config — never silent
-        return sb.ToString();
+        return ToolAnswer.Served(sb.ToString());
     });
 
     /// <summary>The confirmation text: the instance, the derived roots, the auto-detected profile, a cheap enabled/active summary, and whether the choice was persisted.</summary>
@@ -75,11 +75,17 @@ public static class SetupTools
         var sb = new StringBuilder();
         sb.Append("configured houseCARL -> MO2 instance '").Append(p.InstanceDir).Append("'\n");
         sb.Append("active profile: ").Append(p.ProfileName).Append("  (auto-detected from ModOrganizer.ini)\n");
+        sb.Append("  profile folder: ").Append(p.ProfileDir).Append('\n');
         sb.Append("  mods folder: ").Append(p.ModsDir).Append('\n');
+        var modsFailure = Mo2LoadOrder.ModsFolderFailure(p.ModsDir);
+        if (modsFailure is not null)
+            sb.Append("[!] houseCARL could not open the mods folder (").Append(modsFailure).Append("), so no mod's plugins or files can be read: ")
+              .Append("record, check, asset and write calls refuse until it can be opened, and ").Append(ToolNames.LoadOrderStatus)
+              .Append(" shows what was read.\n");
         sb.Append("  game Data  : ").Append(p.DataDir).Append('\n');
-        // MO2 does not create the overwrite folder until a tool writes there, so an absent one is annotated.
+        // MO2 creates the overwrite folder at every start, so an absent one means MO2 has not started since it went.
         sb.Append("  overwrite  : ").Append(p.OverwriteDir)
-          .Append(Directory.Exists(p.OverwriteDir) ? "" : "  (none yet — MO2 creates it when a tool writes here)").Append('\n');
+          .Append(Directory.Exists(p.OverwriteDir) ? "" : "  (not there — MO2 creates it when it next starts; read as empty until then)").Append('\n');
 
         // Reads the three profile text files only. A read failure here is non-fatal but is named, since this line is what tells the user the setup worked.
         try
@@ -99,7 +105,9 @@ public static class SetupTools
             ? "saved to houseCARL.user.json — persists across restarts."
             : $"NOTE: could not save the choice ({persistError}) — it works this session, but you'll need to set it again after a restart.");
         if (persistNote is not null) sb.Append("\nRECOVERED: ").Append(persistNote);   // corrupt prior config — never silent
-        sb.Append("\nthe load order resolves on the next read/write (first build ~10s).");
+        sb.Append(modsFailure is null
+            ? "\nthe load order resolves on the next read/write (first build ~10s)."
+            : "\nthe load order will not resolve until the mods folder can be opened.");
         return sb.ToString();
     }
 }

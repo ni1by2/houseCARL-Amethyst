@@ -200,6 +200,34 @@ internal static class ReadSentences
         string.Format(SharedEditorIdUnreadFormat, plugins.Count,
             string.Join(", ", plugins.Take(SharedEditorIdNameCap)) + (plugins.Count > SharedEditorIdNameCap ? ", …" : ""));
 
+    // ---- the asset walk's front door --------------------------------------------------------------
+
+    /// <summary>asset_status's refusal of links= beside a walk: the walk already follows a mesh's links as nodes.</summary>
+    [MustState("walk=", "links=", "drop links=")]
+    internal const string WalkWithLinks =
+        "error: links= lists each mesh's files on its own row, and a walk (walk=true or a walk object) already follows those " +
+        "files as nodes — drop links=.";
+
+    /// <summary>The note when a walk-only input is given with no walk: <c>{0}</c> is the knob.</summary>
+    [MustState("walk=", "not used")]
+    internal const string WalkOnlyInputFormat =
+        "{0} is read only by a walk, and this call has no walk= (true or a walk object), so it was not used — drop {0}.";
+
+    internal static string WalkOnlyInput(string knob) => string.Format(WalkOnlyInputFormat, knob);
+
+    /// <summary>The note when a walk names record sources and has no record seed to read through them.</summary>
+    [MustState("from_source=", "records=", "formids=", "is a FormID", "nothing was read")]
+    internal const string FromSourceWithoutRecordSeed =
+        "from_source= names where records are read, and this walk has no records= or formids= seed that is a FormID, so " +
+        "nothing was read through it — add a records= or formids= seed that is a FormID, or drop from_source=.";
+
+    /// <summary>The asset walk's note when walk values were passed and no records= seed is a FormID to walk them from;
+    /// through's edge kinds choose the rows of any walk, so they are not among them.</summary>
+    [MustState("records=", "not used", "walk=true")]
+    internal const string WalkValuesWithoutRecordSeed =
+        "walk={…}'s follow, depth, max_nodes, exclusions and through's record types shape the walk from records= seeds, and this call has no " +
+        "records= seed that is a FormID, so they were not used — seed the records with records=, or pass walk=true.";
+
     // ---- a count table does not page ----------------------------------------------------------------
 
     /// <summary>The one sentence every lane refuses <c>offset=</c> against a whole-selection answer with (Aaron

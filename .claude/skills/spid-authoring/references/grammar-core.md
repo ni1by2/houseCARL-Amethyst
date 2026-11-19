@@ -33,17 +33,22 @@ any SPID-based mod safe to install or uninstall at any time, leaving no trace.
 
 Because distribution targets NPCs (not records on disk), SPID is the tool for "give X to this group of
 NPCs," not for editing a record's own fields — that's SkyPatcher's job, and its own skill
-(`housecarl:skypatcher-authoring`); a keyword onto item records is `housecarl:kid-authoring`.
+(`skypatcher-authoring`); a keyword onto item records is `kid-authoring`.
 
 ---
 
 ## 2. File discovery & load order
 
-- SPID scans Skyrim's `Data/` folder for every INI whose name carries the **`_DISTR`** suffix
-  (e.g. `MyMod_DISTR.ini`).
-- Files are loaded in **alphabetical order, A → Z**.
-- Each file is read **top to bottom**. The relative order of entries *of the same form type* is
-  preserved, and that order is honored later at distribution time (see §3).
+<!-- generated:spid.discovery -->
+SPID reads every file directly in `Data/` whose name holds `_DISTR` anywhere (case-sensitive:
+`_distr` is not read, and `Foo_DISTR_old.ini` is) and whose extension is exactly `.ini`
+(case-sensitive: `.INI` is not read). A file in a subfolder is never read, nor one that is only
+inside a BSA. Files are read in the byte order of their names, not alphabetically: upper-case
+letters sort before lower-case ones and `_` sits between them, so `NPC_Trap_DISTR.ini` comes before
+`Naked_DISTR.ini`. These paragraphs model SPID 7.3.3; 7.3.0 reads its files the same.
+<!-- end generated:spid.discovery -->
+
+The order of the lines inside a file, and across files within one type, is in §3.
 
 There are no per-type subfolders (unlike SkyPatcher) — all `*_DISTR.ini` live flat in `Data/`
 (commonly shipped inside a mod managed by a mod manager, but resolved from `Data/` at runtime).
@@ -54,14 +59,13 @@ There are no per-type subfolders (unlike SkyPatcher) — all `*_DISTR.ini` live 
 `clib_util::distribution::get_configs` (`include/CLIBUtil/distribution.hpp`), and it walks a plain
 `std::filesystem::directory_iterator` over the one folder it is given — not
 `recursive_directory_iterator` — keeping entries whose extension is `.ini` and whose path contains
-the `_DISTR` suffix, then sorting them. So only `Data/` itself is read: a `_DISTR.ini` one folder
+`_DISTR`, then sorting them. So only `Data/` itself is read: a `_DISTR.ini` one folder
 down is never found, and never logged as skipped either, because the scan never sees it. **Place the
 file flat in `Data/`**, and when auditing someone else's mod, report a `_DISTR.ini` in a subfolder as
 not read at all.
 
-Comments: standard INI line comments with **`;`** are supported — SPID reads configs through the
-**CSimpleIniA** library, whose default line-comment character is `;`. **[source]** (The `=` split and
-comment stripping are CSimpleIniA's, not SPID's own code.)
+Comments, sections and the shape of a key: §4. SPID reads configs through the **CSimpleIniA**
+library; the `=` split and the comment rule are CSimpleIniA's, not SPID's own code. **[source]**
 
 ---
 
@@ -94,18 +98,21 @@ SPID guard.) **[source]** (`SPID/src/DistributeManager.cpp`, `DistributePCLevelM
 
 Practically: don't assert a SPID distribution on `Game.GetPlayer()`; sample NPCs.
 
-**Order (per-type passes):** SPID processes each form type separately, in this fixed order:
+**Order (per-type passes):**
 
-```
-Keywords → Factions → Perks → Spells → Shouts → Packages → Items → Skins → Outfits
-```
+<!-- generated:spid.order -->
+Within one file SPID takes the lines grouped by key, the keys in alphabetical order whatever their
+case, and each key's lines in file order, so a file's `FinalOutfit` lines come before its `Outfit`
+lines wherever they sit. Each line joins its type's list: the files in their read order, each with
+its lines in that order. `Form` lines join after every typed line of every file. Types are handed
+out in this order: Keywords → Factions → Perks → Spells → Leveled spells → Shouts → Packages → Items
+→ Skins → Sleep outfits, then Outfits in a pass of their own. Keyword lines are re-sorted so a
+keyword another keyword line's string filter names is handed out first. For `Skin`, `SleepOutfit`
+and `Outfit` the first line whose filters pass an NPC wins it and the rest are not tried; for every
+other type each passing line gives, and `Item` counts add up.
+<!-- end generated:spid.order -->
 
-Within a single type, forms distribute in the **order they were loaded** (file A→Z, then top→bottom
-within each file) — with one exception:
-
-- **Keywords are additionally topo-sorted** so that a keyword which depends on another keyword is
-  distributed *after* its dependency. You can freely use keywords as requirements for other keywords
-  without hand-ordering them.
+You can freely use keywords as requirements for other keywords without hand-ordering them.
 
 (This full order list is also in `value-tables.md` for quick lookup.)
 
@@ -147,6 +154,27 @@ has six pipes, so `60` lands in position 6 (`Chance`).
 > A trailing field that you don't set can simply be omitted (drop its pipe) — you only need pipes up
 > to the last field you actually use.
 
+**How SPID reads a line, and the other line kinds:**
+
+<!-- generated:spid.lines -->
+Only the unnamed section is read: the lines before the first named `[section]` header, and any after
+an empty `[]` header, which returns to it. A line whose first non-space character is `;` or `#` is a
+comment. There is no comment after a value: everything after `=` to the end of the line is the
+value, so `Spell = X ; note` names `X ; note`. A key is `<Type>`, `Final<Type>` (`Outfit` only; on
+another type SPID drops `Final`), `Death<Type>` (handed out when the NPC dies), `GlobalLinked<Type>`
+or `Linked<Type>` (optionally with `Final` and `Death` after `Linked`), or `ExclusiveGroup`.
+`<Type>` is one of `Keyword`, `Faction`, `Perk`, `Spell`, `LevSpell`, `Shout`, `Package`, `Item`,
+`Skin`, `SleepOutfit`, `Outfit`, `Form`, spelt in exactly that case; any other key is skipped. A
+regular or `Death` line is `Form | StringFilters | FormFilters | LevelFilters | TraitFilters |
+CountOrIndex | Chance`; a `Linked` line is `Form | ParentForms | CountOrIndex | Chance`; an
+`ExclusiveGroup` line is `GroupName | Forms`. A line with more `|` sections than that is skipped. An
+empty section, or `NONE` in any case, is unset, but only as the whole section: `NONE` as one item of
+a list is looked up as a name. In a filter section `,` separates the items (OR), `+` joins the parts
+of one item (AND), a leading `-` excludes, and in a string filter a leading `*` matches part of an
+NPC's name, of its own or its template's EditorID or of one of its keywords' EditorIDs (its race's
+and a keyword SPID creates included). An empty item is skipped with its whole line.
+<!-- end generated:spid.lines -->
+
 ---
 
 ## 5. Input normalization (how SPID cleans your line before parsing) **[source]**
@@ -162,6 +190,9 @@ doesn't mention. Knowing these prevents "why does my line still work / not work"
   first `" - "` is converted.
 - **Bare hex with leading zeros gets a `0x` prefix added** (`00012345` → `0x12345`), and **leading
   zeros after `0x` are stripped** (`0x00012345` → `0x12345`). FormIDs are forgiving about zero-padding.
+- **SPID writes the cleaned line back into the file when the game starts**, for a regular line it
+  changed (not a `Death`, `Linked` or `ExclusiveGroup` line). So a file you wrote with spaces or
+  padded hex reads differently after one launch; diff against the cleaned form, not your draft.
 
 ---
 
@@ -174,14 +205,39 @@ The required first field identifies the form to distribute. Two ways to write it
   **It is not stable against a winning override that renames the record**, which is ordinary on a
   heavily overhauled order (an overhaul renaming a vanilla perk is the common case). SPID resolves
   the EditorID it is given against the record the order actually carries, so a line naming the
-  pre-overhaul EditorID resolves to nothing and distributes nothing, silently. Read the winner's
+  pre-overhaul EditorID resolves to nothing, silently: what SPID then does depends on the line's type
+  (a keyword of that name created and handed out on a `Keyword` or `Form` line, a keyword of that name
+  created and nothing handed out on a `Spell` or `Package` line, the line dropped on any other type; see "A value name no record holds" below). Read the winner's
   EditorID before writing the name; where the winner has renamed the record, use the FormID.
 - **FormID** — hex with the source plugin as a **tilde suffix**: `0x12345~MyPlugin.esp`.
   *(Divergence to remember: SPID/KID/CID use suffix-tilde `0x123~Plugin.esp`; SkyPatcher uses
-  prefix-pipe `Plugin.esp|0x123` — `housecarl:skypatcher-authoring`.)*
+  prefix-pipe `Plugin.esp|0x123` — `skypatcher-authoring`.)*
 
 The form must be one of the supported types in `form-types.md`. The same EditorID/FormID syntax is used
 not just here but anywhere a form is named — including inside Form Filters (§ `filters.md`).
+
+**Every spelling SPID reads, in the order it tries them:**
+
+<!-- generated:spid.names -->
+In any form position a token holding `~` is a FormID with its plugin (`0x800~Plugin.esp`): the
+number is added to the plugin's own load index as the game numbers it, so a load index written into
+the number moves it to another plugin's record. Else a token holding `.es` is a plugin name; in the
+form filters it selects every NPC that plugin defines. Else `0x` followed by hex digits is a runtime
+FormID (`0x1CE14`, as the console prints it, so it depends on the load order). Anything else is an
+EditorID, looked up among every record type; `12345` without `0x` is an EditorID too.
+<!-- end generated:spid.names -->
+
+**When a name or FormID finds nothing:**
+
+<!-- generated:spid.missing -->
+A value name no record holds: on a `Keyword` or `Form` line SPID creates a keyword of that name and
+hands it out; on a `Spell` or `Package` line it creates the keyword and hands nothing out; on every
+other type SPID drops the line, as it does for a FormID or a plugin that names nothing. In the form
+filters a token that names nothing, or a record type SPID does not take as a filter, is skipped and
+the line reaches more NPCs (or, in the `-` list, excludes fewer), unless every token of that list
+fails: then the line is dropped. One `+` part that names nothing drops the line. A filter never
+creates a keyword.
+<!-- end generated:spid.missing -->
 
 ---
 
@@ -200,10 +256,13 @@ Worked: `Form = 0x12345|A,B|0x12,0x34` means "give `0x12345` when the NPC has (A
 To target *unions* of groups, use **multiple lines** for the same form (a TIP from the article):
 
 ```ini
-Keyword = FemaleBandits||BanditFaction||F     ; Female AND in BanditFaction
+; Female AND in BanditFaction
+Keyword = FemaleBandits||BanditFaction||F
 ; vs. — the union "Females OR Bandits":
-Keyword = FemaleOrBandits||BanditFaction       ; everyone in BanditFaction
-Keyword = FemaleOrBandits||||F                 ; plus every Female in the game
+; everyone in BanditFaction
+Keyword = FemaleOrBandits||BanditFaction
+; plus every Female in the game
+Keyword = FemaleOrBandits||||F
 ```
 
 A line with **no filters at all** matches *every* NPC of the game.
@@ -216,8 +275,10 @@ Instead of naming the exact form type, you may write **`Form`** and let SPID inf
 distributable form you give it:
 
 ```ini
-Form = SteelSword      ; inferred as Item
-Form = DefaultOutfit   ; inferred as Outfit
+; inferred as Item
+Form = SteelSword
+; inferred as Outfit
+Form = DefaultOutfit
 ```
 
 **Caveat:** `SleepOutfit` and `Skin` can **never** be inferred — they share the same underlying
@@ -234,20 +295,27 @@ This single numeric field is interpreted three different ways:
 - **Item → Count.** Number of items to add. Default `1` if blank/absent. A **range** `min-max` lets
   SPID pick a random count:
   ```ini
-  Form = ImperialBow          ; 1 bow (default)
-  Form = IronSword|||||3      ; 3 swords
-  Item = SteelArrow|||||10-20 ; between 10 and 20 arrows
+  ; 1 bow (default)
+  Form = ImperialBow
+  ; 3 swords
+  Form = IronSword|||||3
+  ; between 10 and 20 arrows
+  Item = SteelArrow|||||10-20
   ```
 - **Package → Index.** Zero-based insertion index in the NPC's package list. Default `0` (first):
   ```ini
-  Package = Patrol|||||1   ; insert Patrol as the 2nd package (index 1)
-  Package = Travel         ; index 0 (default) — first package
+  ; insert Patrol as the 2nd package (index 1)
+  Package = Patrol|||||1
+  ; index 0 (default) — first package
+  Package = Travel
   ```
 - **FormList → Package List Type.** Which package list to overwrite, `0`–`4`. Default `0`. The five
   types (DPLT/SPOR/OCOR/GWOR/ECOR) are tabulated in `value-tables.md`:
   ```ini
-  Package = DefaultPackageListLinkedPatrol|||||0   ; Default Package List
-  Package = DefaultPackageListLinkedPatrol         ; same — type 0 is default
+  ; Default Package List
+  Package = DefaultPackageListLinkedPatrol|||||0
+  ; same — type 0 is default
+  Package = DefaultPackageListLinkedPatrol
   ```
 
 ---
@@ -258,8 +326,10 @@ A percentage, **0–100 decimal**, default **100** (guaranteed) when absent. No 
 it can be (`0.01` is fine).
 
 ```ini
-Form = 0x12345||||||60     ; 60% chance
-Form = 0x12345||||||0.01   ; 0.01% chance
+; 60% chance
+Form = 0x12345||||||60
+; 0.01% chance
+Form = 0x12345||||||0.01
 ```
 
 **Deterministic chance — append `!`.** By default the roll is random every time the NPC is processed,
@@ -267,8 +337,10 @@ so the same NPC can get different results across game restarts. Appending `!` (e
 result **consistent for the same NPC + same savegame (player character) across all sessions**:
 
 ```ini
-Form = 0x12345||||||50!     ; deterministic 50% — each NPC always or never gets it, consistently
-Form = 0x12345||||||33.3!   ; decimals work too
+; deterministic 50% — each NPC always or never gets it, consistently
+Form = 0x12345||||||50!
+; decimals work too
+Form = 0x12345||||||33.3!
 ```
 
 What changes a deterministic outcome (re-rolls it): the target NPC, the player character (new

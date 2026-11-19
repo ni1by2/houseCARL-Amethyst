@@ -135,7 +135,7 @@ public sealed class AmethystAssetWalkTests
             ["HouseCarl__CorpusPath"] = TestCorpus.Path,
             ["XDG_STATE_HOME"] = Path.Combine(world.Root, "state"),
         });
-        var result = server.Call(ToolNames.AssetStatus, JsonSerializer.Serialize(new { asset_paths = new[] { Mesh }, walk = true, format = "json" }));
+        var result = server.Call(ToolNames.AssetStatus, JsonSerializer.Serialize(new { paths = new[] { Mesh }, walk = true, format = "json" }));
         Assert.False(result.IsError, result.Text);
         using var json = JsonDocument.Parse(result.Text);
         Assert.Equal("unverified", json.RootElement.GetProperty("amethyst_snapshot").GetProperty("freshness").GetString());
@@ -166,7 +166,7 @@ public sealed class AmethystAssetWalkTests
     public void AVoiceTemplateLoopIsNamedBeforeMutagenCanRecurse()
     {
         using var world = new AmethystSnapshotWorld(voiceLine: true);
-        Mutagen.Bethesda.Plugins.FormKey speaker = default;
+        Mutagen.Bethesda.Plugins.FormKey speaker = default, lineKey = default;
         world.EditPlugin("Beta", "Fixture.esp", mod =>
         {
             var npc = mod.Npcs.AddNew("LoopSpeaker");
@@ -175,12 +175,13 @@ public sealed class AmethystAssetWalkTests
             speaker = npc.FormKey;
             var line = mod.DialogTopics.First().Responses.First();
             line.Speaker.SetTo(npc);
+            lineKey = line.FormKey;
             line.Responses.Add(new DialogResponse { ResponseNumber = 1, Text = "loop" });
         });
         using var service = LoadOrderService.WithAmethystSnapshot(world.Manifest, world.Store);
         var snapshot = service.CaptureSavedSnapshot();
         using var context = AmethystSnapshotContext.Use(snapshot);
-        var walk = service.AssetWalk([], [speaker], null, null);
+        var walk = service.AssetWalk([], [lineKey], null, null);
         Assert.Contains(walk.Notes, n => n.Contains("Voice resolution refused", StringComparison.Ordinal));
         Assert.Contains(walk.Notes, n => n.Contains("template chain loops", StringComparison.Ordinal));
         snapshot.CheckUnchanged();

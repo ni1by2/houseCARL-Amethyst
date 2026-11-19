@@ -182,18 +182,12 @@ internal sealed partial class RecordWrites
                         walk: new WalkRefusal(WalkRefusalKind.SourceMiss, sourceKey, "from",
                             new[] { sourceKey }, "", Miss: chain.Miss(sourceKey, "from")), sources: consulted);
 
-                // The BOUND universe: the source record's own plugin plus every FILE arm named, never a base master.
+                // The BOUND universe: the source record's own plugin plus every plugin an arm names, never a base master.
                 var baseMasters = Mutagen.Bethesda.Plugins.Implicits.Get(Mutagen.Bethesda.GameRelease.SkyrimSE).BaseMasters;
                 var bound = new HashSet<ModKey>();
                 if (!baseMasters.Contains(sourceKey.ModKey)) bound.Add(sourceKey.ModKey);
-                // EVERY arm the caller named, whatever kind it resolved to; `winner` stays exempt, being the whole order.
-                foreach (var arm in chain.Arms)
-                {
-                    if (string.Equals(arm.Spelling, SourcePoles.Winner, StringComparison.OrdinalIgnoreCase)) continue;
-                    ModKey mk;
-                    try { mk = ModKey.FromFileName(Path.GetFileName(arm.Spelling)); } catch { continue; }
-                    if (!baseMasters.Contains(mk)) bound.Add(mk);
-                }
+                // EVERY arm the caller named, whatever kind it resolved to; `winner` names no plugin, being the whole order.
+                bound.UnionWith(chain.NamedPlugins().Where(mk => !baseMasters.Contains(mk)));
                 bool IsBound(FormKey fk) => bound.Contains(fk.ModKey);
 
                 // The transplant note belongs to the case where the donor-bound set is EMPTY.
@@ -203,7 +197,8 @@ internal sealed partial class RecordWrites
                     return ClosureCopyOutcome.Fail(walk: seedRefusal.Refusal, sources: consulted);
 
                 var scope = WalkScope.StandaloneFrom(bound, fk => view.ResolveWinner(fk) is not null);
-                var walk = ClosureWalk.Run(seeds, chain, scope, exclusions);
+                // Copy's own caps, by value, so a change to the shared engine's defaults does not move them.
+                var walk = ClosureWalk.Run(seeds, chain, scope, exclusions, nodeCap: 128, depthCap: 32);
                 if (!walk.Success) return ClosureCopyOutcome.Fail(walk: walk.Refusal, sources: consulted);
 
                 string outPath; bool extend, created;

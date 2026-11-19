@@ -34,6 +34,40 @@ public sealed class SkyPatcherOverlayFilterTests
     [Fact] // flagAnyOf: boundweapon flag matched (weight=3)
     public void AFlagAnyOfFilterMatchesIgnoringCase() => Assert.Equal(3f, Bow().BasicStats!.Weight, 3);
 
+    [Fact] // scroll filterByFlags reads the spell flag set through its valueMap: costoverride matches, noabsorb does not
+    public void AScrollFlagFilterMatchesThroughItsValueMap()
+    {
+        var s = NewMod().Scrolls.AddNew();
+        s.EditorID = "HcScroll";
+        s.Flags = SpellDataFlag.ManualCostCalc;
+        var r = Apply(s, s.FormKey, s.EditorID, "scroll", "Scroll", new StubResolver(),
+            L(1, "filterByFlags=costoverride:weight=4"),
+            L(2, "filterByFlags=noabsorb:weight=9"));
+        Assert.Equal(new[] { 1 }, AppliedLines(r, "weight"));
+    }
+
+    [Fact] // formEquals keeps the keyword filters' missing-token rule: a narrower whose tokens all miss removes nothing, an Or finder's misses do not decide, a bare finder's still do (unchanged)
+    public void AFormEqualsFiltersMissingTokensFollowTheOneRule()
+    {
+        var n = NewMod().Npcs.AddNew();
+        n.EditorID = "HcMissNpc";
+        n.Configuration.Flags |= NpcConfiguration.Flag.Female;
+        n.Race.SetTo(new FormKey(new ModKey("HcRace", ModType.Plugin), 0xC01));
+        var npc = Apply(n, n.FormKey, n.EditorID, "npc", "Npc", new StubResolver(),
+            L(1, "filterByGender=female:restrictToRaces=HcNoSuchRace:height=2"),
+            L(2, "filterByRaces=HcNoSuchRace:weight=9"));
+        Assert.Equal(2f, n.Height, 3);
+        Assert.NotEqual(9f, n.Weight, 3);
+        Assert.Contains(npc.Warnings, w => w.Contains("f.ini:2") && w.Contains("HcNoSuchRace"));
+
+        var w = NewMod().Weapons.AddNew();
+        w.EditorID = "HcMissBow";
+        var weapon = Apply(w, w.FormKey, w.EditorID, "weapon", "Weapon", new StubResolver(),
+            L(1, "filterByFirstPersonModelOr=HcNoSuchStatic:attackDamage=9"));
+        Assert.DoesNotContain(weapon.Warnings, x => x.Contains("HcNoSuchStatic"));
+        Assert.Contains(("f.ini", 1), weapon.NoteLines);
+    }
+
     static IEnumerable<int> AppliedLines(SkyPatcherOverlay.SkyPatcherOverlayResult r, string op)
         => r.Applied.Where(a => a.Op == op).Select(a => a.LineNumber);
 
@@ -108,12 +142,12 @@ public sealed class SkyPatcherOverlayFilterTests
         return new(player, r);
     }
 
-    [Fact] // player rule: only the lone bare primary applied (weight=7, not 9/3/5)
-    public void OnlyALoneBarePrimaryReachesThePlayer()
+    [Fact] // player rule: the direct list naming him applies with a narrower beside it (3, 4); the filterless and gender-only lines skip him (1, 2)
+    public void TheDirectListReachesThePlayerAndAFilterlessLineDoesNot()
     {
         var run = Player();
         Assert.Equal(7f, run.Npc.Weight, 3);
-        Assert.Equal(new[] { 4 }, AppliedLines(run.Result, "weight"));
+        Assert.Equal(new[] { 3, 4 }, AppliedLines(run.Result, "weight"));
     }
 
     [Fact] // hasPlugins on an npc line is not in the reference: unknown-key LOUD skip, player untouched

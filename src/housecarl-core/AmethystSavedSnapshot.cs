@@ -931,7 +931,7 @@ public sealed class AmethystSavedSnapshot
     public void CheckUnchanged() => CheckUnchanged(transactionOutputs: null);
 
     /// <summary>Revalidate saved inputs while excluding files the active transaction has deliberately replaced.</summary>
-    public void CheckUnchanged(IReadOnlySet<string>? transactionOutputs)
+    public void CheckUnchanged(IReadOnlySet<string>? transactionOutputs, IReadOnlySet<string>? transactionDirectories = null)
     {
         foreach (var (path, expected) in _inputs)
         {
@@ -979,6 +979,11 @@ public sealed class AmethystSavedSnapshot
         foreach (var (directory, expected) in _papyrusTreeListings)
         {
             var actual = ReadPapyrusDirectoryListing(directory);
+            // Only new entries created by this transaction may be added to an input-tree listing. An old entry
+            // disappearing, an unrelated addition, and every captured input's bytes still require an exact match.
+            actual = actual.Where(entry => expected.Contains(entry, StringComparer.Ordinal)
+                || !(entry.StartsWith("F:", StringComparison.Ordinal) && transactionOutputs?.Contains(Path.Combine(directory, entry[2..])) == true
+                    || entry.StartsWith("D:", StringComparison.Ordinal) && transactionDirectories?.Contains(Path.Combine(directory, entry[2..])) == true)).ToArray();
             if (!actual.SequenceEqual(expected, StringComparer.Ordinal))
                 throw new InvalidOperationException($"Papyrus source/PEX directory changed during the call: '{directory}'; retry");
         }

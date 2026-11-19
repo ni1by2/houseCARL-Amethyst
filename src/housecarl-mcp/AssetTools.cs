@@ -20,18 +20,17 @@ public static class AssetTools
          "among BSAs the later-loaded plugin's archive wins. The file-layer counterpart to a record's load-order " +
          "winner; answers 'why isn't my override applying'. Use this instead of searching mods/ on disk, which misses " +
          "BSAs and MO2's priority; for SKSE plugins, which load only loose at the top level, use housecarl_skse. " +
-         "Select with asset_paths=, under= (a folder, or a glob: 'meshes/**/*fur*.nif'; '**/*goldbrand*' finds a " +
+         "Select with paths=, under= (a folder, or a glob: 'meshes/**/*fur*.nif'; '**/*goldbrand*' finds a " +
          "name in every folder), formids= (NPC FaceGen pairs) and provider= (alone, every file one mod or archive " +
-         "ships; with under=, only its files beneath those; beside asset_paths= or formids= with no under=, only those rows; with under= too, both), each row marked " +
-         "wins, shadowed by the winner, or not provided. An archive that cannot be read, or a " +
+         "ships; with under=, only its files beneath those; beside paths= or formids= with no under=, only those rows; with under= too, both), each row marked " +
+         "wins, shadowed by the winner, holding it hidden by MO2, or not provided. An archive that cannot be read, or a " +
          "missing Skyrim.ini base-archive list, is reported, so an 'absent' answer is never silently trusted. A call " +
          "that would resolve more than 1,200,000 paths is refused before it resolves any; with limit=, the bound " +
-         "counts only the window, except under to_file= and counts_only=, which resolve the whole selection. A loose " +
-         "file MO2 hides (by default a .mohidden name or anything under .git; a skip list the instance sets replaces that " +
-         "default) is not in the VFS and " +
-         "answers absent. A loose root meta.ini, root readme.txt or anything in a loose root fomod folder answers " +
-         "absent too, whatever the skip lists say, as MO2's own Data tab leaves it out, though USVFS still maps it; " +
-         "one below the root, or in an archive, is a normal file. " +
+         "counts only the window, except under to_file=, counts_only= and a walk, which resolve the whole selection. A loose " +
+         "file MO2 hides (the instance's skip lists, by default a mod's .mohidden name or .git folder; never in the game's Data folder), or x " +
+         "when a mod holds only x.mohidden, provides nothing: the row says hidden by MO2 with the rule and the " +
+         "holder, absent unless another layer's copy wins. A loose root meta.ini, readme.txt or fomod folder is " +
+         "hidden too; below the root, or in an archive, it is a normal file. " +
          "Read-only.")]
     public static string AssetStatus(
         LoadOrderService svc,
@@ -41,118 +40,193 @@ public static class AssetTools
                      "[\"@<absolute path>\"] in place of the list: a plain file, one path per line, or a to_file= " +
                      "artifact from this tool (identity column 'path'). A path list is not epoch-checked, so a saved " +
                      "sweep re-enters after the order changes.")]
-            string[]? asset_paths = null,
+            ListArg? paths = null,
         [Description("Optional. Data-relative directory or glob selector(s): every file the load order provides " +
-                     "beneath it, loose and BSA, is resolved, leaving out a loose file MO2 hides (a skip-list " +
-                     "match, or a root meta.ini, readme.txt or fomod folder), e.g. " +
+                     "beneath it, loose and BSA, is resolved, leaving out a loose file MO2 hides (a root meta.ini, " +
+                     "readme.txt or fomod folder in any root, Data included, or a skip-list match in a mod or " +
+                     "overwrite), e.g. " +
                      "'meshes/actors/character/facegendata/facegeom/Skyrim.esm' for one master's facegen set. '*' " +
                      "matches within one path segment, '?' one character, '**' across separators: " +
                      "'textures/actors/character/**/*.dds'. A glob needs no folder in front: '**/*goldbrand*' finds " +
                      "every file whose name holds 'goldbrand', in any folder, while '*goldbrand*' reads the Data root " +
-                     "only. Matches come after the asset_paths and formids= rows, sorted, duplicates dropped. A " +
-                     "selector that matches nothing says so. With provider=, only that provider's files are walked.")]
-            string[]? under = null,
+                     "only. Matches come after the paths and formids= rows, sorted, duplicates dropped. A " +
+                     "selector that matches nothing says so. With provider=, only that provider's files are walked." + ListText.Paths)]
+            ListArg? under = null,
         [Description("Optional. NPC FormIDs ('XXXXXX:Plugin.esp', the defining master's filename). Each contributes " +
                      "both halves of its FaceGen pair, " +
-                     "'meshes\\actors\\character\\facegendata\\facegeom\\<master>\\00<6hex>.nif' and " +
-                     "'textures\\...\\facetint\\<master>\\00<6hex>.dds', as two rows, each naming the other half's " +
+                     "'Meshes\\actors\\character\\facegendata\\facegeom\\<master>\\00<6hex>.nif' and " +
+                     "'Textures\\...\\facetint\\<master>\\00<6hex>.dds' (Mutagen's spelling), as two rows, each naming the other half's " +
                      "winner beside its own and flagging when both win from different mods, the usual dark-face cause " +
                      "(housecarl_check findings=[\"facegen\"] separates a real split from one product spread over " +
                      "two folders). That is judged on the winning MO2 layer, so two archives of one mod are not " +
-                     "flagged, nor are two files both in the game's Data folder or both in overwrite. The path is " +
-                     "computed from the FormID, so the folder is the defining master, never the conflict winner, and " +
-                     "no record is read. One half winning nowhere is also a dark face: the row shows it ABSENT, but " +
+                     "flagged, nor are two files both in the game's Data folder or both in overwrite. The pair is " +
+                     "the one every FaceGen tool names: the NPC record is read, a Traits-templated NPC gives its " +
+                     "template root's pair (a leveled template each member's, marked one of N), and an NPC with no " +
+                     "pair (a race without FaceGenHead, ACBS flag 0x100, the Traits flag with no Template, a FormID " +
+                     "no plugin defines) is an error row with the reason, one per reason: a leveled template's " +
+                     "pairless member or broken chain entry is its own row, beside the other members' pairs. The folder is the defining master, never " +
+                     "the conflict winner. One half winning nowhere is also a dark face: the row shows it ABSENT, but " +
                      "the json's pair.differs and the to_file= pair_differs flag only two present halves with " +
                      "different owners, so a filter on that field misses it. A malformed FormID is one error row, " +
                      "not a failed call. Takes [\"@<absolute path>\"]: a " +
                      "plain list file, or a housecarl_records artifact whose 'formid' column becomes the list " +
                      "(epoch-checked against the current build); records types=[\"NPC_\"] to_file= then " +
                      "formids=[\"@<that file>\"] sweeps the whole order.")]
-            string[]? formids = null,
+            ListArg? formids = null,
         [Description("Optional. One provider, as a row's providers line spells it: an enabled mod folder (its loose " +
                      "files and the active archives it ships), 'overwrite', 'Data' (the game's Data folder: its loose " +
                      "files and the base-game archives), or one archive's filename " +
                      "('Foo - Textures.bsa'). Alone, selects every file it provides; with under= every file it provides " +
-                     "beneath those selectors; with asset_paths= or formids= those rows too, and with no under= only those rows. Marks every row with the provider's standing: wins, shadowed by " +
-                     "the winning copy, or does not provide this path. Under counts_only=true the census adds its " +
+                     "beneath those selectors; with paths= or formids= those rows too, and with no under= only those rows. Marks every row with the provider's standing: wins, shadowed by " +
+                     "the winning copy, holds it hidden by MO2 (so provides nothing), or does not provide this path. Under counts_only=true the census adds its " +
                      "provides / wins / shadowed counts. The standing matches by name, so an archive's copy is shadowed " +
                      "by its own mod's loose copy; the census tables count by MO2 layer, the mod an archive belongs to. A name " +
                      "that is not in the active order is refused.")]
             string? provider = null,
+        [Description(FileExclusion.Text + " With a walk, it narrows the selection the walk seeds from.")]
+            ListArg? exclude = null,
         [Description("Optional. On every .nif row that resolves, list the files the winning copy names, each with the " +
-                     "Data path it maps to and that path's winner: every texture-set slot, every effect-shader texture, " +
-                     "and the root node's 'HDT Skinned Mesh Physics Object' (the HDT-SMP physics XML, Data-relative) " +
-                     "and 'BODYTRI' (meshes-relative) string extra data. A string that names no Data path says why. A " +
-                     "to_file= or spilled file carries the same links on each row; refused with counts_only=.")]
+                     "Data path it maps to and that path's winner, each file once at its first site (one line per kind " +
+                     "and stored string, matched ignoring case): texture-set slots, effect-shader textures, and the root node's " +
+                     "'HDT Skinned Mesh Physics Object' (the HDT-SMP physics XML, Data-relative) and 'BODYTRI' " +
+                     "(meshes-relative) string extra data. With provider=, the links are still the winning copy's, " +
+                     "and the heading names it. A string that names no Data path says why. " + ToolNames.NifInspect +
+                     " sections=paths lists every site. A " +
+                     "to_file= or spilled file carries the same links on each row; refused with counts_only=, and " +
+                     "with a walk (walk=true or a walk object), which already follows these files as nodes.")]
             bool links = false,
         [Description("Optional. Walk from the selected paths and records= to every file they reach, returning one node " +
-                     "per file: the paths a record lists, its implicit files (an NPC's FaceGen head and tint, or its " +
+                     "per file: the paths a record lists, its implicit files (a seed NPC's FaceGen head and tint, or its " +
                      "Traits template root's, each member of a leveled template marked one of N; .pex scripts, fragment " +
                      ".pex files, a start-game-enabled quest's Seq\\<plugin>.seq; a dialogue line's voice .fuz, or the " +
-                     ".xwm/.wav and .lip it ships as; the lines an NPC speaks, as their Speaker or by a GetIsID on the Subject (not a line tied to it through a quest alias), in the active order or a from_source= plugin outside it, by their voice), then the links each file names (a mesh's textures, SMP XML and " +
+                     ".xwm/.wav and .lip it ships as, for a line that is a seed, a seeded topic's line, or one a form link reaches; no line is found off the NPC that speaks it), then the links each file names (a mesh's textures, SMP XML and " +
                      "BODYTRI, a script's parent .pex), recursively. Each node is marked from-source (source_provider= " +
                      "ships it), elsewhere (another provider wins it, named), present, or absent; keyed nodes sit at a " +
-                     "FormID-named path, so a renumbering copy carries them rather than placing them. With " +
-                     "source_provider= shipping any node, the response ends with those nodes as a housecarl_place assets= " +
-                     "array (none ships: no such line, and the count reads from_source=0). " +
-                     "Records are entered through form links only inside the from_source= plugins and, for a seed read " +
-                     "through 'winner', its own plugin; links into other plugins are counted as boundaries. A walk that " +
-                     "enters any NPC builds the active order's reverse-reference index, once its records are walked, to find its lines, which takes " +
-                     "time on a large order. Not with to_file= or counts_only=.")]
-            bool walk = false,
-        [Description("Optional, with walk=true. Record FormIDs ('XXXXXX:Plugin.esp') the walk starts from.")]
-            string[]? records = null,
-        [Description("Optional, with records=. The ordered source list each record is read from, first hit wins: " +
-                     "'winner' (default) or a plugin filename, active or a file in a disabled mod folder.")]
-            string[]? from_source = null,
-        [Description("Optional, with walk=true. The provider the walk reads files from first: a mod folder, enabled or " +
-                     "not (the donor), 'overwrite', 'Data' or an active archive's filename. Each node it ships is from-source; " +
+                     "FormID-named path, so a renumbering copy carries them rather than placing them. A formids= " +
+                     "seed, or a root, with no FaceGen pair is a note with the reason, not a node. With " +
+                     "source_provider= shipping any node, the node list is followed by those nodes as a housecarl_place assets= " +
+                     "array (counts_only=: their count only; none ships: no such line, and the count reads from_source=0). " +
+                     "From a record the walk follows the links in its part fields, into any plugin: an NPC's head parts, hair " +
+                     "colour, face texture, skin (WornArmor), outfits and far-away model; a head part's extra parts, texture set and " +
+                     "colour; an armour's addons, template and world model; an addon's skin texture, swap list, models and art " +
+                     "object; an outfit's, form list's or leveled list's items; a weapon's 1st-person model and template; a placed " +
+                     "reference's base; a dialogue line's shared response data; any model's alternate textures. It enters a " +
+                     "record's child records too (a cell's placed references, a topic's lines), read across every plugin that " +
+                     "touches it. Every other form link (a race, a quest alias, a script property, a sound, a keyword) is not " +
+                     "walked, and one note counts them per record type. A reached record no from_source= plugin holds is read off " +
+                     "the load order, and its rows say so in pulled_by. A quest's dialogue and voice are two calls: " +
+                     ToolNames.Records + " types=[\"DialogTopic\", \"Scene\"] references=[<the quest>], then this walk with " +
+                     "those records and the quest as records=. An override subset that keeps the winner's outfits drops them with " +
+                     "walk={\"exclusions\": [{\"match\": \"Outfit\", \"severity\": \"stop\"}]}. An NPC the walk reaches " +
+                     "past a seed (a placed NPC's base; under walk.follow, a quest alias's actor, a race's chargen preset, a script property, a template) is a " +
+                     "boundary, not entered (no files, no links), and counted in a note: seed it with records= to walk it, or name Npc " +
+                     "in walk.through beside every other record type to keep, since through's record types enter only those types " +
+                     "(entered so, it gets no FaceGen). A loop of records the " +
+                     "walk enters is counted in a note (recorded, not an error), a lower bound: one per link the search finds closing " +
+                     "a loop, none for a loop met again through a record already searched, and none for a loop through a record " +
+                     "not entered (past walk.depth or walk.max_nodes, a reached NPC, or past a link the walk does not follow); the format=json walk answer " +
+                     "(not counts_only=) lists the loops that fit max_chars and counts the rest, and a to_file= or spilled file " +
+                     "lists every loop found, the search stopping at 200 loops and saying so. The " +
+                     "walk always runs whole (through's edge kinds choose only the rows shown, below): limit= and offset= window only the nodes " +
+                     "listed (the header, standing counts and place set still cover every row shown, not just the window, the notes the whole walk, and a paged " +
+                     "answer ends with the [accounting] line); to_file= writes every node to the file and lists " +
+                     "none (the header, notes, counts, place set and the file it wrote still print); counts_only= returns counts per edge and per standing, no nodes. Not with links=.\n\n" +
+                     "walk=true walks at the defaults; walk={follow, depth, max_nodes, through, exclusions} takes the records " +
+                     "walk's values under the same names and refusals, except that through also takes edge kinds, and " +
+                     "a through entry that is neither is refused naming both, and an exclusions entry that is an edge kind is refused " +
+                     "pointing at through: follow replaces the part fields with the field paths it names, as one string or a " +
+                     "list (e.g. [\"HeadParts\", \"WornArmor\"]; a list also takes [\"@<absolute path>\"], a file of one path per line), " +
+                     "read on every record from the seed on, with no child records, a path no entered record reads (a field it lacks at any " +
+                     "segment, or one holding no links) said in a note (field names are case-sensitive); \"*\" follows every form link and the child records; depth (default 16, a safety cap) is the hops from a " +
+                     "seed record whose records are entered; max_nodes (default 2000) counts every record entered, seeds " +
+                     "included, one budget shared by every seed, with no upper bound (the file bound is asset_status's own); " +
+                     "through takes record types and edge kinds: its record types enter only records of those types and count " +
+                     "the rest per type; its edge kinds (listed, script, seq, inferred, fragment, facegen, voice, lip, texture, " +
+                     "smp, bodytri, parent) show only the seed rows and the rows reached by those edges, on any walk, and count the " +
+                     "rest per edge, while the walk itself still runs whole (a texture row names its mesh in pulled_by; add listed " +
+                     "to see the meshes too), and the header count, standing counts and place set follow the rows shown; exclusions " +
+                     "([{match, severity}]) keeps a 'stop' type as a boundary, not entered (no files, no links), and fails " +
+                     "the call on a 'refuse' type. Seeds are never judged. A cap note names the value to raise. " +
+                     "seed_paths and direction are the records walk's and are refused here, as is a follow path with '*parent' " +
+                     "at any segment, or \"*\" beside other paths.")]
+            JsonElement? walk = null,
+        [Description("Optional, with walk= (true or a walk object). Record FormIDs ('XXXXXX:Plugin.esp') the walk starts from." + ListText.FormIds)]
+            ListArg? records = null,
+        [Description("Optional, with walk= (true or a walk object). The ordered source list each record is read from, first hit wins: " +
+                     "'winner' (default) or a plugin filename, active or a file in a disabled mod folder. A records= " +
+                     "seed and a formids= seed's NPC, its template and race are read through it; a walk with " +
+                     "neither seed, or a call with no walk, reads nothing through it and says so in a note." + ListText.Plugins)]
+            ListArg? from_source = null,
+        [Description("Optional, with walk= (true or a walk object). The provider the walk reads files from first: a mod folder, enabled or " +
+                     "not (the donor), 'overwrite', 'Data' or an active archive's filename. Each node it ships is from-source, " +
+                     "except a loose file MO2 hides, which is absent and says so; " +
                      "one it does not is elsewhere or absent. Omitted, or '" + AssetSourceChoice.WinnerToken + "', names no " +
-                     "source: each node is present or absent.")]
+                     "source: each node is present or absent. Without a walk it is not used, and a note says so.")]
             string? source_provider = null,
         [Description("Optional. Max paths to resolve and render. 0 = no limit. to_file= ignores it and covers the " +
                      "whole selection. Under counts_only=true it caps each census table's rows instead; the census " +
-                     "still covers the whole selection.")]
+                     "still covers the whole selection. On a walk, max nodes to render; the walk still runs whole.")]
             int limit = 0,
-        [Description("Optional. Where the rendered window starts in the selection, for paging. 0 = the beginning.")]
+        [Description("Optional. Where the rendered window starts in the selection (on a walk, in the walk's " +
+                     "nodes), for paging. 0 = the beginning.")]
             int offset = 0,
         [Description("Optional. Write the complete result to this absolute .jsonl path (line 1 = manifest) and " +
                      "render only the manifest inline, as housecarl_records and housecarl_check do. One row per " +
                      "resolved path: the winner, loose or BSA (and which archive), the whole provider chain, and on " +
-                     "a formids= row the paired path, its winner, and whether the two differ. The file covers the " +
+                     "a formids= row the formid, the slot, the paired path, its winner, whether the two differ, and " +
+                     "face_note (the template root whose pair the row is, null for the NPC's own). The file covers the " +
                      "whole selection: limit= does not narrow it and row_count equals total. Re-enter it via " +
-                     "asset_paths=[\"@<path>\"]; its identity column is 'path', so it is not a formids= list.")]
+                     "paths=[\"@<path>\"], or subtract it with exclude=[\"@<path>\"]; its identity column is 'path', so it " +
+                     "is not a formids= list. Under a walk, one row per node in walk order, the same rows a spilled walk " +
+                     "writes: the files the walk reaches, which exclude= takes as the reached set.")]
             string? to_file = null,
         [Description("Optional. Return a census instead of path rows: which MO2 layers win how many paths, which " +
                      "layers provide a copy that another layer wins over, how the winners split between loose and " +
-                     "BSA, and how many are absent. It covers the whole selection; limit= caps its tables' rows.")]
+                     "BSA, and how many are absent. It covers the whole selection; limit= caps its tables' rows. " +
+                     "On a walk, the walk's header, notes and counts per edge and per standing instead.")]
             bool counts_only = false,
         [Description("Optional. 'text' (default) | 'json' (the same data, machine-readable, accounting in-band).")]
             string? format = null,
-        [Description("Optional. Character ceiling on the whole response; the path whose block would cross it is not written. What it holds back is not lost: the resolved result (under limit=, the window; under walk=true, every node) is written whole to a file in the server's results directory, and the response names it. counts_only= spills nothing: a cut census says how many layer rows it held back; raise max_chars or page the table with limit=. On a path-only sweep the first spill also builds the record index, which takes time on a large order. The alarms and the accounting line are always inside the ceiling; a cap too small for them says so and names the cap that clears it. 0 = the server default (~40k).")]
-            int max_chars = 0) => Guard.Tool(ToolNames.AssetStatus, () =>
+        [Description("Optional. Character ceiling on the whole response; the path whose block would cross it is not written. What it holds back is not lost: the resolved result (under limit=, the window; on a walk, every node, whatever the window) is written whole to a file in the server's results directory, and the response names it. counts_only= spills nothing: a cut census says how many table rows it held back (layer rows; on a walk, edge and standing rows); raise max_chars or page the table with limit=. On a path-only sweep the first spill also builds the record index, which takes time on a large order. The alarms and the accounting line are always inside the ceiling; a cap too small for them says so and names the cap that clears it. 0 = the server default (~40k).")]
+            int max_chars = 0,
+        [Description("Retired: renamed paths=, the one name for a list of file paths on every file tool. A call passing this is refused.")]
+            JsonElement? asset_paths = null) => Guard.Tool(ToolNames.AssetStatus, call =>
     {
         // format first, so the unconfigured-MO2 prompt answers a json caller as a document.
         bool json = Wire.WantsJson(format, out var ferr);
-        if (ferr is not null) return ferr;
+        if (ferr is not null) return ToolAnswer.Refusal(ferr);
+        // A JSON null is no value, as unset is.
+        if (asset_paths is { ValueKind: not (JsonValueKind.Null or JsonValueKind.Undefined) })
+            return ToolAnswer.Refusal(json, "error: asset_paths= is now paths= — pass the same list as paths=.");
         if (svc.ConfigPromptOrNull() is { } prompt)
-            return json ? JsonWire.RenderError(prompt, null) : prompt;
-        // The read/write surface's one refusal shape, through its one owner: Wire.Refuse owns the prefix the json document strips.
-        string Refuse(string message) => Wire.Refuse(json, Wire.RefusalPrefix + message);
+            return ToolAnswer.Refusal(json, prompt);
+        // The read/write surface's one refusal shape: ToolAnswer.Refusal strips the prefix on the json document.
+        ToolAnswer Refuse(string message) => ToolAnswer.Refusal(json, Wire.RefusalPrefix + message);
 
-        if (records is { Length: > 0 } && !walk)
-            return Refuse("records= seeds the walk — pass walk=true with it.");
-        if (walk) return Walk(svc, asset_paths, under, formids, provider, records, from_source, source_provider,
-                              wantFile: to_file is { Length: > 0 }, counts_only, json, Wire.Cap(max_chars));
-        if ((asset_paths is null || asset_paths.Length == 0) && (under is null || under.Length == 0)
-            && (formids is null || formids.Length == 0) && string.IsNullOrWhiteSpace(provider))
-            return Refuse("asset_paths, under, formids and provider are all empty. Pass Data-relative asset path(s) in " +
-                          "asset_paths (e.g. 'textures/armor/iron/cuirass_1.dds'), a Data-relative directory or glob " +
+        // Every list through the one door, each taking what its own entries are made of.
+        var pathsIn = paths.Read("paths", ListKind.Path);
+        var underIn = under.Read("under", ListKind.Path);
+        var idsIn = formids.Read("formids", ListKind.FormId);
+        var recordsIn = records.Read("records", ListKind.FormId);
+        var sourcesIn = from_source.Read("from_source", ListKind.Plugin);
+        foreach (var listErr in new[] { pathsIn.Error, underIn.Error, idsIn.Error, recordsIn.Error, sourcesIn.Error })
+            if (listErr is not null) return ToolAnswer.Refusal(json, listErr);
+        var underTokens = underIn.Tokens;
+        if (WalkGrammar.ReadAssetWalk(svc.Types, walk, out var walkValues) is { } walkErr) return ToolAnswer.Refusal(json, walkErr);
+        bool walking = walkValues is not null;
+
+        if (recordsIn.Tokens is { Length: > 0 } && !walking)
+            return Refuse("records= seeds the walk — pass walk=true, or a walk object, with it.");
+        if (!walking && pathsIn.Tokens is not { Length: > 0 } && underTokens is not { Length: > 0 }
+            && idsIn.Tokens is not { Length: > 0 } && string.IsNullOrWhiteSpace(provider))
+            return Refuse("paths, under, formids and provider are all empty. Pass Data-relative asset path(s) in " +
+                          "paths (e.g. 'textures/armor/iron/cuirass_1.dds'), a Data-relative directory or glob " +
                           "in under (e.g. 'meshes/actors/character/facegendata/facegeom/Skyrim.esm'), NPC " +
                           "FormID(s) in formids (e.g. '01A51A:Dawnguard.esm') for their FaceGen pairs, or a mod or " +
                           "archive name in provider for every file it ships.");
-        // The window's own refusal, from the window: this tool and housecarl_skse answer the same input class.
-        if (new RowWindow(offset, limit).Error is { } bad) return Wire.Refuse(json, bad);
+        // The one set of transport checks, both lanes. The window's own refusal, from the window: this tool and housecarl_skse answer the same input class.
+        var window = new RowWindow(offset, limit);
+        if (window.Error is { } bad) return ToolAnswer.Refusal(json, bad);
         int cap = Wire.Cap(max_chars);
 
         var toFile = to_file?.Trim();
@@ -160,40 +234,39 @@ public static class AssetTools
         if (wantFile)
         {
             // The same validator the records surface runs: absolute, .jsonl, and outside the pruned results directory.
-            if (Artifacts.ValidateToFile(toFile!, svc.ResultsDir) is { } verr) return Wire.Refuse(json, verr);
+            if (Artifacts.ValidateToFile(toFile!, svc.ResultsDir) is { } verr) return ToolAnswer.Refusal(json, verr);
             // The same pair the records lanes refuse, in the same words: one returns the census, the other writes the rows.
-            if (counts_only) return Wire.Refuse(json, Artifacts.CountsOnlyWithToFile);
+            if (counts_only) return ToolAnswer.Refusal(json, Artifacts.CountsOnlyWithToFile);
             if (offset > 0)
-                return Wire.Refuse(json, "error: to_file= captures the COMPLETE result (the artifact is never a " +
+                return ToolAnswer.Refusal(json, "error: to_file= captures the COMPLETE result (the artifact is never a " +
                                          "window), so offset= has nothing to page — drop offset=.");
         }
         if (counts_only && links)
-            return Wire.Refuse(json, "error: links= lists each mesh's files on its row, and counts_only= returns a census " +
+            return ToolAnswer.Refusal(json, "error: links= lists each mesh's files on its row, and counts_only= returns a census " +
                                      "with no rows — drop one of them.");
         // A census covers the whole selection, so there is no selection window for offset= to move.
         if (counts_only && offset > 0)
-            return Wire.Refuse(json, "error: " + ReadSentences.NoOffsetOnCountTable("counts_only="));
+            return ToolAnswer.Refusal(json, "error: " + ReadSentences.NoOffsetOnCountTable("counts_only="));
+        if (walking && links) return ToolAnswer.Refusal(json, ReadSentences.WalkWithLinks);
+        // After the cheap refusals: an '@file' with an epoch captures the view to compare it.
+        var (exclusion, exErr) = FileExclusion.Read(exclude, svc);
+        if (exErr is not null) return ToolAnswer.Refusal(json, exErr);
+        // to_file= covers the whole walk, so limit= is ignored under it, as on the row lane.
+        if (walking) return Walk(svc, walkValues!, pathsIn, underTokens, idsIn, provider, recordsIn, sourcesIn.Tokens, source_provider,
+                              wantFile ? RowWindow.All : window, wantFile ? toFile : null, counts_only, json, cap, exclusion);
 
-        // The @file convention on both list inputs, each taking the identity column its own tokens are made of.
-        var (pathTokens, pathDemand, pathEcho, perr) =
-            Artifacts.ExpandListInput(asset_paths ?? Array.Empty<string>(), "asset_paths", identity: "path");
-        if (perr is not null) return Wire.Refuse(json, perr);
-        var (idTokens, idDemand, idEcho, ferr2) =
-            Artifacts.ExpandListInput(formids ?? Array.Empty<string>(), "formids");
-        if (ferr2 is not null) return Wire.Refuse(json, ferr2);
+        // The walk's own inputs, given without it, change nothing here: said, not dropped.
+        var callNotes = new List<string>();
+        if (sourcesIn.Tokens is { Length: > 0 }) callNotes.Add(ReadSentences.WalkOnlyInput("from_source="));
+        if (!string.IsNullOrWhiteSpace(source_provider)) callNotes.Add(ReadSentences.WalkOnlyInput("source_provider="));
 
-        // The FormID door parses the plugin-qualified form without touching the index, so an ordinary sweep reads no record.
+        var (pathTokens, _, pathEcho, _) = pathsIn;
+        var (idTokens, idDemand, idEcho, _) = idsIn;
+
+        // The FormID door parses the plugin-qualified form without touching the index; AssetStatus then reads each NPC, its templates and races.
         var door = FormIdDoor.For(svc);
-        var seeds = new List<FaceGenSeed>(idTokens?.Length ?? 0);
-        foreach (var raw in idTokens ?? Array.Empty<string>())
-        {
-            // Every token that is not a FormID answers as ONE error row, whatever the door threw: a runtime FormID on an order that cannot build would otherwise escape to Guard.
-            try { seeds.Add(new FaceGenSeed(raw, door.Parse(raw), null)); }
-            catch (Exception ex)
-            {
-                seeds.Add(new FaceGenSeed(raw, null, $"not a FormID: {Guard.Flatten(ex.Message)} Expected 'XXXXXX:Plugin.esp'."));
-            }
-        }
+        // Every token that is not a FormID answers as ONE error row, whatever the door threw: a runtime FormID on an order that cannot build would otherwise escape to Guard.
+        var seeds = (idTokens ?? Array.Empty<string>()).Select(raw => FaceGenSeed.Parse(door, raw, "Expected 'XXXXXX:Plugin.esp'.")).ToList();
 
         // A FORMIDS artifact is epoch-checked against the build answering now. A PATHS artifact is not, deliberately: a
         // path is a string answered live off the VFS, and gating it would refuse the sweep-fix-re-ask loop this exists
@@ -201,46 +274,42 @@ public static class AssetTools
         // the VFS, so an order whose plugins do not resolve must not stop the call.
         OrderStamp? order = null;
         string? noEpochBecause = null;
-        if (wantFile || idDemand is not null)
-        {
-            // What READING the order can throw, and nothing else: a held profile file, a denied read, an order with no
-            // active plugins. Anything else is a bug, and the sentence below would be false of one.
-            try { order = svc.CaptureView().Stamp; }
-            catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-            { noEpochBecause = Guard.Flatten(ex.Message); }
-        }
+        if (wantFile || idDemand is not null) (order, noEpochBecause) = TryStamp(svc);
         if (idDemand is { } demand)
         {
             if (noEpochBecause is not null)
-                return Wire.Refuse(json, $"error: formids= artifact '{demand.Path}' was captured at epoch={demand.Epoch}, " +
+                return ToolAnswer.Refusal(json, $"error: formids= artifact '{demand.Path}' was captured at epoch={demand.Epoch}, " +
                                          $"and this call could not build a load order to check it against — {noEpochBecause} " +
                                          "Fix the order and retry; there is deliberately no unchecked re-entry. A list " +
-                                         "of PATHS re-enters through asset_paths= without a build, because a path " +
+                                         "of PATHS re-enters through paths= without a build, because a path " +
                                          "answers off the VFS alone.");
             if (demand.Epoch != order!.Epoch)
-                return Wire.Refuse(json, "error: " + RecordReads.ArtifactEpochMismatch(demand, order.Epoch));
+                return ToolAnswer.Refusal(json, "error: " + RecordReads.ArtifactEpochMismatch(demand, order.Epoch));
         }
 
         // counts_only= resolves the WHOLE selection, as to_file= does: a census of a window would answer about a window while the rows that need paging had no knob.
-        var data = svc.AssetStatus(pathTokens ?? Array.Empty<string>(), under, counts_only ? 0 : limit, offset, seeds,
-                                   wholeSelection: wantFile || counts_only, provider: provider, links: links);
+        var data = svc.AssetStatus(pathTokens ?? Array.Empty<string>(), underTokens, counts_only ? 0 : limit, offset, seeds,
+                                   wholeSelection: wantFile || counts_only, provider: provider, links: links, exclude: exclusion);
         // The declared-cost refusal (the selection was counted and is past the bound) or an unknown provider: nothing was resolved.
-        if (data.Refusal is { } refused) return Wire.Refuse(json, refused);
+        if (data.Refusal is { } refused) return ToolAnswer.Refusal(json, refused);
+        if (callNotes.Count > 0) data = data with { Notes = callNotes };
 
         if (counts_only)
-            return json ? JsonWire.RenderAssetCensus(data, cap, limit) : AssetCensus.Render(data, cap, limit);
+            return ToolAnswer.Served(json ? JsonWire.RenderAssetCensus(data, cap, limit) : AssetCensus.Render(data, cap, limit));
 
         KeyValuePair<string, string>[] Echo()
         {
             var e = new List<KeyValuePair<string, string>>
             {
-                new("asset_paths", pathEcho ?? $"{pathTokens?.Length ?? 0} inline path(s)"),
-                new("under", under is { Length: > 0 } ? string.Join(",", under) : "<none>"),
+                new("paths", pathEcho ?? $"{pathTokens?.Length ?? 0} inline path(s)"),
+                new("under", underIn.EchoSource ?? (underTokens is { Length: > 0 } ? string.Join(",", underTokens) : "<none>")),
                 new("formids", idEcho ?? $"{seeds.Count} inline formid(s)"),
                 new("provider", data.Provider ?? "<none>"),
                 new("read_incomplete", data.ReadIncomplete ? "true" : "false"),
                 new("discovery_warnings", data.Warnings.Count.ToString()),
             };
+            // Only when given, so a file of a call without it is main's.
+            if (exclusion is not null) e.Insert(4, new("exclude", exclusion.Echo));
             // WHICH rows the file holds, in the records lane's spelling — a re-read months later has no conversation to recover it from. Never on the to_file= arm, which is never a window.
             if (!wantFile && data.Selected != data.Results.Count)
                 e.Add(new("window", data.Results.Count == 0
@@ -256,84 +325,119 @@ public static class AssetTools
                 : AssetWire.Render(data, cap, sp, out cut);
 
             var rendered = Inline(null, out var truncated);
-            if (!truncated) return rendered;
+            if (!truncated) return ToolAnswer.Served(rendered);
             // SPEC §2.1.1: an over-ceiling read result is written whole to the results directory and the response names the
             // file. The stamp is taken only here, so an ordinary sweep still builds no record index.
-            if (order is null && noEpochBecause is null)
-                try { order = svc.CaptureView().Stamp; }
-                catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-                { noEpochBecause = Guard.Flatten(ex.Message); }
+            if (order is null && noEpochBecause is null) (order, noEpochBecause) = TryStamp(svc);
             using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.AssetStatus, order?.Epoch ?? "none");
             var (auto, autoErr) = AssetArtifact.Write(data, reservation, "ceiling", order, Echo(), noEpochBecause);
-            return Inline(autoErr is null ? SpillState.Spilled(auto!, manifestOnly: false) : SpillState.WriteFailed(autoErr), out _);
+            return ToolAnswer.Served(Inline(autoErr is null ? SpillState.Spilled(auto!, manifestOnly: false) : SpillState.WriteFailed(autoErr), out _));
         }
 
         var (spill, artErr) = AssetArtifact.Write(data, ArtifactTarget.Named(toFile!), "to_file", order, Echo(), noEpochBecause);
-        if (artErr is not null) return Wire.Refuse(json, "error: " + artErr);
+        if (artErr is not null) return ToolAnswer.Refusal(json, "error: " + artErr);
         var manifestOnly = AssetArtifact.RenderManifestOnly(data, spill!, json, cap);
         // The text lane's ceiling arm; the json document caps itself as it writes.
-        return json ? manifestOnly : RenderCap.Settle(manifestOnly, cap);
+        return ToolAnswer.Served(json ? manifestOnly : RenderCap.Settle(manifestOnly, cap));
     });
 
-    /// <summary>The walk=true lane: the selection's paths and the records= keys seed <see cref="LoadOrderService.AssetWalk"/>.</summary>
-    static string Walk(LoadOrderService svc, string[]? asset_paths, string[]? under, string[]? formids, string? provider,
-                       string[]? records, string[]? from_source, string? source_provider,
-                       bool wantFile, bool countsOnly, bool json, int cap)
+    /// <summary>The order's stamp for an artifact, or why it could not be read. What READING the order can throw, and
+    /// nothing else: a held profile file, a denied read, an order with no active plugins; anything else is a bug.</summary>
+    internal static (OrderStamp? Order, string? NoEpochBecause) TryStamp(LoadOrderService svc)
     {
-        string Refuse(string message) => Wire.Refuse(json, Wire.RefusalPrefix + message);
-        if (wantFile || countsOnly)
-            return Refuse("walk=true renders its nodes inline and spills them whole to a results file past max_chars; drop to_file= and counts_only=.");
-        // The same @file convention as the row lane, a formids= artifact epoch-checked the same way.
-        var (pathTokens, _, _, perr) = Artifacts.ExpandListInput(asset_paths ?? Array.Empty<string>(), "asset_paths", identity: "path");
-        if (perr is not null) return Wire.Refuse(json, perr);
-        var (idTokens, idDemand, _, ferr) = Artifacts.ExpandListInput(formids ?? Array.Empty<string>(), "formids");
-        if (ferr is not null) return Wire.Refuse(json, ferr);
-        if (idDemand is { } demand && svc.CaptureView().Stamp.Epoch is var epoch && demand.Epoch != epoch)
-            return Wire.Refuse(json, "error: " + RecordReads.ArtifactEpochMismatch(demand, epoch));
-        asset_paths = pathTokens; formids = idTokens;
+        try { return (svc.CaptureView().Stamp, null); }
+        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
+        { return (null, Guard.Flatten(ex.Message)); }
+    }
+
+    /// <summary>The walk=true lane: the selection's paths and the records= keys seed <see cref="LoadOrderService.AssetWalk"/>.
+    /// The tool's transport checks have run: <paramref name="window"/> is legal, <paramref name="toFile"/> validated.</summary>
+    static ToolAnswer Walk(LoadOrderService svc, WalkGrammar.Values values, ListRead pathsIn, string[]? under, ListRead idsIn, string? provider,
+                       ListRead recordsIn, string[]? from_source, string? source_provider,
+                       RowWindow window, string? toFile, bool countsOnly, bool json, int cap, FileExclusion? exclude)
+    {
+        // Each FormID artifact, formids= and records= alike, is epoch-checked the same way the row lane checks one.
+        var demands = new[] { idsIn.Demand, recordsIn.Demand }.OfType<HousecarlCore.ArtifactDemand>().ToList();
+        if (demands.Count > 0 && svc.CaptureView().Stamp.Epoch is var epoch)
+            foreach (var demand in demands)
+                if (demand.Epoch != epoch)
+                    return ToolAnswer.Refusal(json, "error: " + RecordReads.ArtifactEpochMismatch(demand, epoch));
+        var pathTokens = pathsIn.Tokens;
+        var formids = idsIn.Tokens;
         var door = FormIdDoor.For(svc);
+        // A seed token that is not a FormID is its own error node, edge 'seed'; the other seeds walk.
+        var badSeeds = new List<(string Raw, string Error)>();
+        const string Spelling = " Expected 'XXXXXX:Plugin.esp'.";
         var keys = new List<Mutagen.Bethesda.Plugins.FormKey>();
-        foreach (var raw in records ?? Array.Empty<string>())
+        foreach (var raw in recordsIn.Tokens ?? Array.Empty<string>())
         {
-            try { keys.Add(door.Parse(raw)); }
-            catch (Exception ex) { return Refuse($"records '{raw}' is not a FormID: {Guard.Flatten(ex.Message)} Expected 'XXXXXX:Plugin.esp'."); }
+            var seed = WalkGrammar.ParseSeed(raw, door.Parse);
+            if (seed.Key is { } k) keys.Add(k); else badSeeds.Add((raw, Guard.Flatten(seed.Error!) + Spelling));
         }
         var seeds = new List<FaceGenSeed>();
         foreach (var raw in formids ?? Array.Empty<string>())
         {
-            try { seeds.Add(new FaceGenSeed(raw, door.Parse(raw), null)); }
-            catch (Exception ex) { return Refuse($"formids '{raw}' is not a FormID: {Guard.Flatten(ex.Message)}"); }
+            var seed = WalkGrammar.ParseSeed(raw, door.Parse);
+            if (seed.Key is { } k) seeds.Add(new FaceGenSeed(raw, k, null)); else badSeeds.Add((raw, Guard.Flatten(seed.Error!) + Spelling));
         }
         var paths = new List<string>();
-        var keyed = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        IReadOnlyList<string>? selectorNotes = null;
-        if (asset_paths is { Length: > 0 } || under is { Length: > 0 } || seeds.Count > 0 || !string.IsNullOrWhiteSpace(provider))
+        var keyed = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase);
+        List<string>? selectorNotes = null;
+        if (pathTokens is { Length: > 0 } || under is { Length: > 0 } || seeds.Count > 0 || !string.IsNullOrWhiteSpace(provider) || exclude is not null)
         {
-            var sel = svc.AssetStatus(asset_paths ?? Array.Empty<string>(), under, 0, 0, seeds, wholeSelection: true, provider: provider);
-            if (sel.Refusal is { } refused) return Wire.Refuse(json, refused);
-            selectorNotes = sel.SelectorNotes;
-            // A bad explicit path stays a seed, so the walk answers it as its own error node.
+            // formids= seeds read their face through from_source=, as records= seeds do.
+            var sel = svc.AssetStatus(pathTokens ?? Array.Empty<string>(), under, 0, 0, seeds, wholeSelection: true, provider: provider,
+                                      faceSources: from_source is { Length: > 0 } ? new FaceSources(from_source, "from_source", AssetLayers.RecordSourcesUnset) : null,
+                                      exclude: exclude);
+            if (sel.Refusal is { } refused) return ToolAnswer.Refusal(json, refused);
+            selectorNotes = sel.SelectorNotes?.ToList() ?? new List<string>();
             foreach (var r in sel.Results)
             {
+                // A formids= NPC with no FaceGen pair is a note with its reason, not a seed path.
+                if (r.FormId is not null && r.Error is not null) { selectorNotes.Add($"formids '{r.FormId}': {r.Error}"); continue; }
+                // A bad explicit path stays a seed, so the walk answers it as its own error node.
                 paths.Add(r.RelPath);
-                // A formids= row's path is named by the NPC's id, so a renumbering copy carries it.
-                if (r.Slot is not null) keyed.Add(r.RelPath);
+                // A formids= row's path is named by the root NPC's id, so a renumbering copy carries it.
+                if (r.Slot is not null) keyed[r.RelPath] = r.FaceNote;
             }
         }
-        var w = svc.AssetWalk(paths, keys, from_source, source_provider, keyed);
-        if (w.Refusal is { } wr) return Wire.Refuse(json, wr);
-        var rendered = AssetWalkWire.Render(w, selectorNotes, cap, json, null, out var cut);
-        if (!cut) return rendered;
+        var w = svc.AssetWalk(paths, keys, from_source, source_provider, keyed, values, badSeeds);
+        if (w.Refusal is { } wr) return ToolAnswer.Refusal(json, wr);
+        // from_source= is read only by a record seed that parses; with none it is said, not dropped.
+        if (from_source is { Length: > 0 } && keys.Count == 0 && seeds.Count == 0)
+            w = w with { Notes = w.Notes.Prepend(ReadSentences.FromSourceWithoutRecordSeed).ToList() };
+        // Walk values move only the walk from records= seeds; with none they are said unused. The defaults are walk=true's.
+        // through's edge kinds choose the rows of a path-only walk too, so they are not counted here.
+        if (keys.Count == 0 && (values.Depth != WalkGrammar.AssetDefaultDepth || values.MaxNodes != WalkGrammar.DefaultMaxNodes
+                                || values.Through is not null || values.Exclusions.Count > 0 || values.Follow is not null))
+            w = w with { Notes = w.Notes.Prepend(ReadSentences.WalkValuesWithoutRecordSeed).ToList() };
+        // counts_only= refuses offset= and to_file= at the front door, so the window is limit= alone, capping the tables.
+        if (countsOnly) return ToolAnswer.Served(AssetWalkWire.RenderCounts(w, selectorNotes, cap, json, window.Limit));
+
+        // The seeds given, so a file re-read later says what was walked: paths= and formids= by their list's source, else counted; under= as its tokens; provider= trimmed; records= by its list's source, else its tokens.
+        var seedEcho = new List<KeyValuePair<string, string>>();
+        if (pathTokens is { Length: > 0 }) seedEcho.Add(new("paths", pathsIn.EchoSource ?? $"{pathTokens.Length} inline path(s)"));
+        if (under is { Length: > 0 }) seedEcho.Add(new("under", string.Join(",", under)));
+        if (formids is { Length: > 0 }) seedEcho.Add(new("formids", idsIn.EchoSource ?? $"{formids.Length} inline formid(s)"));
+        if (!string.IsNullOrWhiteSpace(provider)) seedEcho.Add(new("provider", provider.Trim()));
+        if (exclude is not null) seedEcho.Add(new("exclude", exclude.Echo));
+        if (recordsIn.Tokens is { Length: > 0 } recs) seedEcho.Add(new("records", recordsIn.EchoSource ?? string.Join(",", recs)));
+
+        if (toFile is not null)
+        {
+            var (fOrder, fNoEpoch) = TryStamp(svc);
+            var (file, fileErr) = AssetWalkWire.Write(w, ArtifactTarget.Named(toFile), "to_file", fOrder, fNoEpoch, seedEcho);
+            if (fileErr is not null) return ToolAnswer.Refusal(json, "error: " + fileErr);
+            return ToolAnswer.Served(AssetWalkWire.Render(w, selectorNotes, cap, json, SpillState.Spilled(file!, manifestOnly: true), window, out _));
+        }
+        var rendered = AssetWalkWire.Render(w, selectorNotes, cap, json, null, window, out var cut);
+        if (!cut) return ToolAnswer.Served(rendered);
         // SPEC §2.1.1, as the row lane does: the whole walk to the results directory, the response naming it.
-        OrderStamp? order = null;
-        string? noEpochBecause = null;
-        try { order = svc.CaptureView().Stamp; }
-        catch (Exception ex) when (ex is IOException or UnauthorizedAccessException or InvalidOperationException)
-        { noEpochBecause = Guard.Flatten(ex.Message); }
+        var (order, noEpochBecause) = TryStamp(svc);
         using var reservation = ResultsStore.Reserve(svc.ResultsDir, ToolNames.AssetStatus, order?.Epoch ?? "none");
-        var (spill, spillErr) = AssetWalkWire.Write(w, reservation, order, noEpochBecause);
-        return AssetWalkWire.Render(w, selectorNotes, cap, json,
-                                    spillErr is null ? SpillState.Spilled(spill!, manifestOnly: false) : SpillState.WriteFailed(spillErr), out _);
+        var (spill, spillErr) = AssetWalkWire.Write(w, reservation, "ceiling", order, noEpochBecause, seedEcho);
+        return ToolAnswer.Served(AssetWalkWire.Render(w, selectorNotes, cap, json,
+                                    spillErr is null ? SpillState.Spilled(spill!, manifestOnly: false) : SpillState.WriteFailed(spillErr), window, out _));
     }
 }
 
@@ -365,6 +469,7 @@ static class AssetWire
                 BatchRender.AppendRootFailures(sb, d.RootFailures, "an asset", room);
                 BatchRender.AppendDiscoveryWarnings(sb, d.Warnings, room);
                 AppendSelectorNotes(sb, d.SelectorNotes, room);
+                AppendNotes(sb, d.Notes, room);
             },
             (sb, r, _) => AppendPath(sb, r, d),
             out int rendered,
@@ -389,20 +494,25 @@ static class AssetWire
         BatchRender.AppendLines(sb, notes, "selector(s)", cap);
     }
 
+    /// <summary>The call's own notes, beside the selector notes and not under their heading; nothing when there are none.</summary>
+    internal static void AppendNotes(StringBuilder sb, IReadOnlyList<string>? notes, RenderCap cap)
+    {
+        if (notes is not { Count: > 0 }) return;
+        sb.Append("\n[!] notes (").Append(notes.Count).Append("):\n");
+        BatchRender.AppendLines(sb, notes, "note(s)", cap);
+    }
+
     /// <summary>What this response actually did, in the shared TRANSPORT vocabulary: the selection total, the window rendered, and the four distinct omissions.</summary>
     internal static TransportCounts Tally(AssetStatusData d, int rendered) =>
-        TransportAccounting.Tally(d.Selected, d.Results.Count, rendered, new RowWindow(d.Offset, d.Limit),
-                                  d.SelectorNotes?.Count ?? 0);
+        TransportAccounting.Tally(d.Selected, d.Results.Count, rendered, new RowWindow(d.Offset, d.Limit), d.NoteCount);
 
     /// <summary>The widest counts this response could state — what the json lane's tail reserve measures.</summary>
     internal static TransportCounts Widest(AssetStatusData d) =>
-        TransportAccounting.Widest(d.Selected, d.Results.Count, new RowWindow(d.Offset, d.Limit),
-                                   d.SelectorNotes?.Count ?? 0);
+        TransportAccounting.Widest(d.Selected, d.Results.Count, new RowWindow(d.Offset, d.Limit), d.NoteCount);
 
     /// <summary>The chars held back from max_chars so the accounting block is always affordable.</summary>
     internal static int AccountingReserve(AssetStatusData d) =>
-        TransportAccounting.Reserve(d.Selected, d.Results.Count, new RowWindow(d.Offset, d.Limit),
-                                    d.SelectorNotes?.Count ?? 0, RowNoun);
+        TransportAccounting.Reserve(d.Selected, d.Results.Count, new RowWindow(d.Offset, d.Limit), d.NoteCount, RowNoun);
 
     static void AppendPath(StringBuilder sb, AssetPathResult r, AssetStatusData d)
     {
@@ -415,8 +525,9 @@ static class AssetWire
             sb.Append(')');
         }
         sb.Append('\n');
+        if (r.FaceNote is { } face) sb.Append("  face: ").Append(face).Append('\n');
 
-        if (r.Error is not null)                                  // a rejected path: drive-rooted, or escaping with '..'
+        if (r.Error is not null)                                // a rejected path: drive-rooted, or escaping with '..'
         {
             sb.Append("  error: ").Append(r.Error).Append('\n');
             return;
@@ -425,10 +536,7 @@ static class AssetWire
         var hit = r.Hit!;
         if (!hit.Exists)
         {
-            var hiddenRoot = AssetResolver.NamesHiddenRoot(r.RelPath);
-            sb.Append(hiddenRoot
-                ? "  ABSENT — " + Mo2SkipRules.HiddenRootSentence + "\n"
-                : "  ABSENT — no active mod or BSA provides this path\n");
+            sb.Append("  ABSENT — ").Append(AbsentWords.Why(hit.Hidden)).Append('\n');
             // Each suggestion was verified by re-resolving its Data form (root added or data\ dropped). Backticks, not single quotes — an asset path can carry the author's own apostrophes.
             if (r.PrefixSuggestions is { Count: > 0 } sug)
                 sb.Append("  did you mean ").Append(string.Join(" or ", sug.Select(s => "`" + s + "`")))
@@ -445,12 +553,11 @@ static class AssetWire
             if (d.RootFailures.Count > 0)
                 sb.Append("  [!] but a loose root failed to read this build (see the root note above), so " +
                           "\"absent\" may be incomplete — the asset could live in the root that was not read.\n");
-            // A hidden root name is absent for every provider, so the line above already says why.
-            if (!hiddenRoot) AppendStanding(sb, d, r);
+            AppendStanding(sb, d, r);
             AppendPair(sb, r);
             return;
         }
-        AppendLinks(sb, r);
+        AppendLinks(sb, r, d.Provider is null ? null : hit.Winner);
 
         // The provider token is spelled by the one formatter the asset surface uses, so the name printed here is
         // the name a source selector accepts. The owning mod rides the WINS: line only on a formids= row.
@@ -466,23 +573,40 @@ static class AssetWire
         if (hit.Ambiguous)
             sb.Append("  note: more than one source provides this — the winner above is the precedence call (loose " +
                       "beats BSA; among BSAs the latest-loaded plugin wins). Verify only if that's unexpected.\n");
+        // A loose copy MO2 hides provides nothing, so the winner above stands; said, so the hidden copy is not a surprise.
+        if (hit.Hidden is { } hidden)
+            sb.Append("  note: another loose copy is ").Append(hidden.Sentence()).Append(", so it provides nothing.\n");
         AppendStanding(sb, d, r);
         AppendPair(sb, r);
     }
 
-    /// <summary>The files a mesh names, on a links= call only: where in the mesh, the string as stored, and the Data path with its winner.</summary>
-    static void AppendLinks(StringBuilder sb, AssetPathResult r)
+    /// <summary>The files a mesh names, on a links= call only: where in the mesh, the string as stored, and the Data path
+    /// with its winner. On a provider= call the heading names the copy read, the winner's, whatever provider= names.</summary>
+    static void AppendLinks(StringBuilder sb, AssetPathResult r, AssetProvider? copy)
     {
-        if (r.LinksError is { } err) { sb.Append("  links: not read — ").Append(err).Append('\n'); return; }
+        if (r.LinksError is { } err) { AppendLinksNotRead(sb, err); return; }
         if (r.Links is not { } links) return;
-        sb.Append("  links (").Append(links.Count).Append("):\n");
-        foreach (var l in links)
-        {
-            sb.Append("    ").Append(l.Link.Kind.Token()).Append(" — ").Append(l.Link.Where).Append(": `").Append(l.Link.Raw).Append("`\n");
-            if (l.Link.Error is { } le) { sb.Append("      data path: none — ").Append(le).Append('\n'); continue; }
-            sb.Append("      data path: ").Append(l.Link.DataPath).Append("  ")
-              .Append(l.Hit is { Exists: true, Winner: { } w } ? "WINS: " + Provider(w) : "ABSENT").Append('\n');
-        }
+        sb.Append("  links (").Append(links.Count).Append(')');
+        if (copy is not null) sb.Append(", of the winning copy ").Append(Provider(copy));
+        sb.Append(":\n");
+        foreach (var l in links) AppendLink(sb, l, slotName: false);
+    }
+
+    /// <summary>Why a mesh's links could not be read, as both surfaces that list them print it.</summary>
+    internal static void AppendLinksNotRead(StringBuilder sb, string err) => sb.Append("  links: not read — ").Append(err).Append('\n');
+
+    /// <summary>One file a mesh names, as both asset_status links= and nif_inspect's paths section print it: the kind,
+    /// where in the mesh (with the slot's name when asked and known), the string as stored, then the Data path with its
+    /// winner, ABSENT with the reason a hidden copy gives, or why the string names no Data path.</summary>
+    internal static void AppendLink(StringBuilder sb, ResolvedNifLink l, bool slotName)
+    {
+        sb.Append("    ").Append(l.Link.Kind.Token()).Append(" — ").Append(l.Link.Where);
+        if (slotName && l.Link.SlotName is { } name) sb.Append(" (").Append(name).Append(')');
+        sb.Append(": `").Append(l.Link.Raw).Append("`\n");
+        if (l.Link.Error is { } le) { sb.Append("      data path: none — ").Append(le).Append('\n'); return; }
+        sb.Append("      data path: ").Append(l.Link.DataPath).Append("  ")
+          .Append(l.Hit is { Exists: true, Winner: { } w } ? "WINS: " + Provider(w)
+                  : l.Hit?.Hidden is { } h ? "ABSENT — " + h.Sentence() : "ABSENT").Append('\n');
     }
 
     /// <summary>The named provider's standing on this path, on a provider= call only.</summary>
@@ -494,6 +618,7 @@ static class AssetWire
         {
             ProviderStanding.Wins => "wins",
             ProviderStanding.Shadowed => "shadowed by " + Provider(hit.Winner!) + Mod(hit.Winner!),
+            ProviderStanding.Hidden => "holds it, " + hit.Hidden!.Unnamed() + ", so provides nothing",
             _ => "does not provide this path",
         }).Append('\n');
     }
@@ -507,7 +632,7 @@ static class AssetWire
         sb.Append(": ").Append(r.PairPath).Append('\n');
         sb.Append("    ").Append(r.PairHit is { Exists: true, Winner: { } w }
                                     ? "WINS: " + Provider(w) + Mod(w)
-                                    : "ABSENT — no active mod or BSA provides this path").Append('\n');
+                                    : "ABSENT — " + AbsentWords.Why(r.PairHit?.Hidden)).Append('\n');
         if (r.PairDiffers)
             sb.Append("    [!] the two halves win from DIFFERENT mods — the head geometry and the face tint come from " +
                       "different products, which is the dark-face split.\n");
@@ -613,6 +738,7 @@ static class AssetCensus
         BatchRender.AppendRootFailures(sb, d.RootFailures, "an asset", room);
         BatchRender.AppendDiscoveryWarnings(sb, d.Warnings, room);
         AssetWire.AppendSelectorNotes(sb, d.SelectorNotes, room);
+        AssetWire.AppendNotes(sb, d.Notes, room);
 
         sb.Append(Counters(c));
 

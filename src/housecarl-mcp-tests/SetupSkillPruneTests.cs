@@ -40,7 +40,7 @@ public sealed class SetupSkillPruneTests
         Assert.True(Directory.Exists(Path.Combine(ClaudeSkills(box), "kept-two")));
     }
 
-    // T3: the shared Codex root loses the dropped skill and nothing else: the umbrella and a foreign skill stay.
+    // T3: the shared Codex root loses the dropped skill and nothing else: a foreign skill stays.
     [Fact]
     public void AnUpgradePrunesOnlyTheRecordedDroppedSkillFromTheSharedCodexRoot()
     {
@@ -50,7 +50,6 @@ public sealed class SetupSkillPruneTests
         Assert.False(Directory.Exists(Path.Combine(CodexSkills(box), "dropped-skill")));
         Assert.True(Directory.Exists(Path.Combine(CodexSkills(box), "kept-one")));
         Assert.True(Directory.Exists(Path.Combine(CodexSkills(box), "kept-two")));
-        Assert.True(Directory.Exists(Path.Combine(CodexSkills(box), "housecarl")));
         Assert.True(Directory.Exists(Path.Combine(CodexSkills(box), "someone-elses-skill")));
     }
 
@@ -88,18 +87,18 @@ public sealed class SetupSkillPruneTests
         Assert.True(Directory.Exists(Path.Combine(ClaudeSkills(box), "kept-two")));
         Assert.True(Directory.Exists(Path.Combine(CodexSkills(box), "kept-one")));
         Assert.True(Directory.Exists(Path.Combine(CodexSkills(box), "kept-two")));
-        Assert.True(Directory.Exists(Path.Combine(CodexSkills(box), "housecarl")));
         Assert.Contains("kept-one", File.ReadAllLines(Record(box)));
         Assert.Contains("no skills folder", said);
     }
 
-    // T7: the umbrella is on the record, and goes when a later package stops shipping it.
+    // T7: an umbrella a v2.0.0-v2.1.2 install put on the record goes on the next upgrade, since no package ships
+    // it now.
     [Fact]
-    public void TheUmbrellaGoesWhenThePackageStopsShippingIt()
+    public void ARecordedUmbrellaGoesOnUpgrade()
     {
         using var box = new SetupInstallerSandbox();
         UpgradeDroppingOne(box);
-        Directory.Delete(box.UmbrellaPackageDir, recursive: true);
+        box.SeedRecordedUmbrella();
 
         string said = SetupInstallerSandbox.Capture(() => box.Install(SetupProgram.Target.Both));
 

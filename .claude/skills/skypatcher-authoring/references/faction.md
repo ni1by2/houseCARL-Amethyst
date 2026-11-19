@@ -33,3 +33,8 @@ vendor                 canbeowner               ignorescrimes_werewolf
 setFlags=ignorescrimes_murder, vendor
 removeFlags=donotreportcrimesagainstmembers, vendor
 ```
+
+## Keys from the 8.0.1 articles
+
+- Filters: `filterByFactionsExcluded`.
+- Operations: `relationshipToAdd`, `relationshipToChange`, `relationshipToRemove` (6.4.2).

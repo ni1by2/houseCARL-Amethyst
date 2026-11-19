@@ -258,6 +258,7 @@ public sealed class FieldPredicateSet
     public const int UnmatchedShown = 20;
 
     IReadOnlyList<string>? _unmatched;
+    bool _mark = true;   // whether the record Matches is judging marks the identity members it carries
 
     /// <summary>The members of the identity 'in' lists that matched no record this set judged, in list order, each once as typed; built on the first read, after the scan.</summary>
     public IReadOnlyList<string> Unmatched => _unmatched ??= BuildUnmatched();
@@ -573,6 +574,9 @@ public sealed class FieldPredicateSet
     /// <summary>The token a fold is spelled with, for a message.</summary>
     static string FoldToken(Fold f) => PathFoldGrammar.Token(f);
 
+    /// <summary>How the list door's refusals name an <c>in @&lt;file&gt;</c> operand.</summary>
+    static string OperandLabel(string raw) => $"predicate '{raw}': the 'in' operand";
+
     /// <summary>Parse a generalized (non-formid) membership list; an all-FormKey list rides along pre-parsed, and a bare runtime FormID entry is resolved here.</summary>
     static (IReadOnlyList<string>? Members, HashSet<FormKey>? Keys, ArtifactDemand? Artifact, HashSet<FormKey>? Runtime, string? Error) ParseValueList(string raw, string operand, Func<string?, FormKey>? parseFormId, bool resolveRuntime)
     {
@@ -580,20 +584,14 @@ public sealed class FieldPredicateSet
         ArtifactDemand? artifact = null;
         if (operand[0] == '@')
         {
-            var path = operand.Substring(1).Trim().Trim('"', '\'');
-            if (path.Length == 0)
-                return (null, null, null, null, $"predicate '{raw}': '@' names a value-list file but no path follows it.");
-            if (PathArguments.NotAbsolute(path, $"predicate '{raw}': value-list file", "the file the values are in", "C:\\work\\values.txt") is { } notAbsolute)
-                return (null, null, null, null, notAbsolute);
-            try { content = File.ReadAllText(path); }
-            catch (Exception ex) { return (null, null, null, null, $"predicate '{raw}': could not read value-list file '{path}' — {ex.GetType().Name}: {ex.Message}"); }
+            var (path, text, rerr) = ListFile.Read(operand, OperandLabel(raw), "'in @<absolute path>'", "C:\\work\\values.txt");
+            if (rerr is not null) return (null, null, null, null, rerr);
+            content = text!;
             if (ResultArtifact.LooksLikeArtifact(content))
             {
-                var (manifest, tokens, aerr) = ResultArtifact.ReadIdentity(path, content);
+                var (tokens, demand, aerr) = ListFile.ReadArtifact(path!, content, "formid", "the 'in' operand");
                 if (aerr is not null) return (null, null, null, null, $"predicate '{raw}': {aerr}");
-                if (!manifest!.Identity!.Equals("formid", StringComparison.OrdinalIgnoreCase))
-                    return (null, null, null, null, $"predicate '{raw}': artifact '{path}' (from {manifest.Tool}) carries '{manifest.Identity}' identities, not FormIDs — nothing in it to test a value against.");
-                artifact = new ArtifactDemand(path, manifest.Epoch);
+                artifact = demand;
                 content = string.Join("\n", tokens!);
             }
         }
@@ -601,7 +599,7 @@ public sealed class FieldPredicateSet
 
         var members = new List<string>();
         HashSet<FormKey>? runtime = null;
-        foreach (var tok in ListMembers(content))
+        foreach (var tok in ListFile.SplitCommaList(content))
         {
             // Same door as the scalar operand.
             if (HybridRefusal(raw, tok) is { } hybrid) return (null, null, null, null, hybrid);
@@ -641,21 +639,14 @@ public sealed class FieldPredicateSet
         bool fromFile = operand[0] == '@';
         if (fromFile)
         {
-            var path = operand.Substring(1).Trim().Trim('"', '\'');   // both quote kinds, matching the inline token trim
-            if (path.Length == 0)
-                return (null, null, null, $"predicate '{raw}': '@' names a formid-list file but no path follows it.");
-            if (PathArguments.NotAbsolute(path, $"predicate '{raw}': formid-list file", "the file the FormIDs are in", "C:\\work\\formids.txt") is { } notAbsolute)
-                return (null, null, null, notAbsolute);
-            try { content = File.ReadAllText(path); }
-            catch (Exception ex) { return (null, null, null, $"predicate '{raw}': could not read formid-list file '{path}' — {ex.GetType().Name}: {ex.Message}"); }
+            var (path, text, rerr) = ListFile.Read(operand, OperandLabel(raw), "'in @<absolute path>'", "C:\\work\\formids.txt");
+            if (rerr is not null) return (null, null, null, rerr);
+            content = text!;
 
             if (ResultArtifact.LooksLikeArtifact(content))
             {
-                var (manifest, tokens, aerr) = ResultArtifact.ReadIdentity(path, content);
+                var (tokens, demand, aerr) = ListFile.ReadArtifact(path!, content, "formid", "the 'in' operand");
                 if (aerr is not null) return (null, null, null, $"predicate '{raw}': {aerr}");
-                if (!manifest!.Identity!.Equals("formid", StringComparison.OrdinalIgnoreCase))
-                    return (null, null, null, $"predicate '{raw}': artifact '{path}' (from {manifest.Tool}) carries '{manifest.Identity}' " +
-                                        $"identities, not FormIDs — there is no formid list in it to test membership against.");
                 var aset = new HashSet<FormKey>();
                 var aorder = new List<(FormKey Key, string Raw)>();
                 foreach (var tok in tokens!)
@@ -668,14 +659,14 @@ public sealed class FieldPredicateSet
                                             "the file does not match its own manifest (was it edited?). Regenerate it from the producing query.");
                     }
                 }
-                return (aset, aorder, new ArtifactDemand(path, manifest.Epoch), null);
+                return (aset, aorder, demand, null);
             }
         }
         else content = operand;
 
         var set = new HashSet<FormKey>();
         var order = new List<(FormKey Key, string Raw)>();   // the caller's order and spelling, for naming the unmatched members
-        foreach (var tok in ListMembers(content))
+        foreach (var tok in ListFile.SplitCommaList(content))
         {
             // Named before the door runs, so the sentence is the same with or without a load order in hand.
             if (HybridRefusal(raw, tok) is { } hybrid) return (null, null, null, hybrid);
@@ -696,19 +687,6 @@ public sealed class FieldPredicateSet
         return (set, order, null, null);
     }
 
-    /// <summary>Commas and newlines ONLY — a bare space is legal inside a plugin filename.</summary>
-    static readonly char[] ListSeparators = { ',', '\r', '\n' };
-
-    /// <summary>A list operand's entries: split on <see cref="ListSeparators"/>, one trim of brackets, quotes and whitespace, empties dropped.</summary>
-    static IEnumerable<string> ListMembers(string content)
-    {
-        foreach (var t in content.Split(ListSeparators, StringSplitOptions.RemoveEmptyEntries))
-        {
-            var tok = t.Trim('[', ']', '"', '\'', ' ', '\t');
-            if (tok.Length > 0) yield return tok;
-        }
-    }
-
     static bool IsOpChar(char c) => c is '=' or '!' or '<' or '>';
     static bool IsNumericOp(Op op) => op is Op.Gt or Op.Ge or Op.Lt or Op.Le;
     static bool StartsWith(string s, int i, string op)
@@ -717,11 +695,15 @@ public sealed class FieldPredicateSet
     // EVALUATE — test one in-hand body against ALL predicates (ANDed).
 
     /// <summary>Test one candidate body against every predicate (ANDed), updating the per-predicate accounting; every predicate is read for its accounting even after the AND is lost.</summary>
-    public bool Matches(IMajorRecordGetter body)
+    public bool Matches(IMajorRecordGetter body) => Matches(body, true);
+
+    /// <summary>As <see cref="Matches(IMajorRecordGetter)"/>; with <paramref name="noteMembers"/> false the identity members the body carries stay unmarked.</summary>
+    public bool Matches(IMajorRecordGetter body, bool noteMembers)
     {
         if (_fatal is not null) return false;
+        _mark = noteMembers;
         // A record whose type cannot carry a path is no match, and was said once for its type.
-        if (_walk is not null && !CanMatch(body.GetType())) { NoteMembers(body); return false; }
+        if (_walk is not null && !CanMatch(body.GetType())) { if (noteMembers) NoteMembers(body); return false; }
         _scanned++;
         bool all = true;
         for (int k = 0; k < _predicates.Count; k++)
@@ -812,7 +794,7 @@ public sealed class FieldPredicateSet
             };
             // A leading 'not' flips the string op's verdict, putting a record with no EditorID on the matching side.
             if (p.Negate) ok = !ok;
-            if (ok && _eidHits[_evalIndex] is { } eidHits) eidHits[at] = true;
+            if (ok && _mark && _eidHits[_evalIndex] is { } eidHits) eidHits[at] = true;
             return (ok, EvalKind.Definite);
         }
 
@@ -820,7 +802,7 @@ public sealed class FieldPredicateSet
         if (p.Pseudo == PseudoPath.FormId)
         {
             bool member = p.FormIds!.Contains(body.FormKey);
-            if (member && _fkHits[_evalIndex] is { } fkHits) fkHits.Add(body.FormKey);
+            if (member && _mark && _fkHits[_evalIndex] is { } fkHits) fkHits.Add(body.FormKey);
             return (p.Op == Op.In ? member : !member, EvalKind.Definite);
         }
 
@@ -1297,7 +1279,7 @@ public sealed class FieldPredicateSet
     static readonly ConcurrentDictionary<(Type Enum, Type? Fallback, string Operand), (ulong Bits, string? Bad, string? Refusal)> FlagOperands = new();
 
     /// <summary>A has-family operand's members: the <c>in</c> list split, with the flags decode's <c>|</c> read as a separator too.</summary>
-    static IEnumerable<string> HasOperandMembers(string operand) => ListMembers(operand.Replace('|', ','));
+    static IEnumerable<string> HasOperandMembers(string operand) => ListFile.SplitCommaList(operand.Replace('|', ','));
 
     /// <summary>The flags decode's unnamed-bit token (<c>slotNN</c> on a biped field, <c>bitN</c> elsewhere) as its bit, or the refusal naming the range.</summary>
     static bool TryDecodeToken(string name, Type enumType, out ulong bits, out string? refusal)

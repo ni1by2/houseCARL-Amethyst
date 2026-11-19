@@ -274,6 +274,7 @@ internal static class DialogueSweepRender
             w.WriteNumber("response", l.ResponseNumber);
             w.WriteString("fuz_path", l.FuzPath);
             w.WriteBoolean("lip_present", l.LipPresent);
+            AbsentWords.Write(w, l.FuzHidden, "fuz_hidden");
             w.WriteEndObject();
         }
         w.WriteEndArray();

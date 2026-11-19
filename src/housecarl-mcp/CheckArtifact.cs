@@ -43,6 +43,9 @@ internal static class CheckArtifact
                                                        ? AmethystSnapshotContext.Current is not null
                                                            ? "Installed but not active in Amethyst's selected profile — activate it, then Refresh and Deploy."
                                                            : "Installed but not active — enable it in MO2."
+                                                       : p.UnopenedFolders.Count > 0
+                                                       ? $"Not in any folder houseCARL could open; {p.UnopenedFolders.Count} folder(s) could not be " +
+                                                         $"opened ({Mo2LoadOrder.Named(p.UnopenedFolders)}) and it may be there — make them readable."
                                                        : "Not in the active order — install it, or remove the plugin that declares it."));
                 }
                 if (p.ScanError is { } se)

@@ -34,6 +34,10 @@ internal static class AliasTable
         ("housecarl_skse_config_audit",
          "absorbed into " + ToolNames.Skse + ": findings=\"config\". filter= and max_chars= are unchanged; peek= belongs to findings=\"inventory\" and is refused here."),
 
+        // The runtime layers: one tool with a format selector, SkyPatcher the first format it reads.
+        ("housecarl_skypatcher_layer",
+         "absorbed into " + ToolNames.Layer + ": distributor=\"skypatcher\" names the format, and omitted it reads every format houseCARL reads. filter= and max_chars= are unchanged; formids= and plugins= select the lines naming a record."),
+
         // The write side; each redirect names the parameter migration too.
         ("housecarl_set_field",
          "absorbed into " + ToolNames.Apply + ": one op is a set of one — ops=[{formid, field_path, value}] (verb= is op=). patch_name= is patch=, full_readback= is readback=, and the target=+in_place=true pair is in_place=\"X.esp\" (the file being overwritten)."),
@@ -63,7 +67,7 @@ internal static class AliasTable
 
         // The standalone NPC copy spanned two substrates, so its successor is two calls and the row names both.
         ("housecarl_copy_npc_appearance",
-         "split in two. The records are " + ToolNames.Copy + ": source_formid= is from=, seed_paths=[\"HeadParts\", \"HairColor\", \"HeadTexture\", \"WornArmor\"] walks the appearance, exclude_types=[\"Race:refuse\"] keeps the walk out of the race, and new_editorid=/target= are the same two destinations (source_plugin=+source_mod= is from_source=, an ORDERED list — name the override then the defining plugin; patch_name= is patch=). new_name= has no parameter: a clone carries the DONOR's display name, and renaming it is an op on Name in the " + ToolNames.Apply + " call that copies the tint bundle. The FaceGen and textures are " + ToolNames.Place + ": the copy lists the asset paths and, for a source that resolved into an MO2 MOD FOLDER, names that folder — pass it as source_provider= and the files come out of it even when MO2 does not load that mod. A source with no such folder says so rather than naming one."),
+         "split in two. The records are " + ToolNames.Copy + ": source_formid= is from=, seed_paths=[\"HeadParts\", \"HairColor\", \"HeadTexture\", \"WornArmor\"] walks the appearance, exclusions=[{\"match\": \"Race\", \"severity\": \"refuse\"}] keeps the walk out of the race, and new_editorid=/target= are the same two destinations (source_plugin=+source_mod= is from_source=, an ORDERED list — name the override then the defining plugin; patch_name= is patch=). new_name= has no parameter: a clone carries the DONOR's display name, and renaming it is an op on Name in the " + ToolNames.Apply + " call that copies the tint bundle. The FaceGen and textures are " + ToolNames.Place + ": the copy lists the asset paths and, for a source that resolved into an MO2 MOD FOLDER, names that folder — pass it as source_provider= and the files come out of it even when MO2 does not load that mod. A source with no such folder says so rather than naming one."),
 
         ("housecarl_forward_record",
          "absorbed into " + ToolNames.Forward + ": from_plugin= is source= (an ACTIVE plugin — whose version to copy). patch_name= is patch=, full_readback= is readback=, and the target=+in_place=true pair is in_place=\"X.esp\". formids=, dry_run= and the into= replace-on-collision semantics are unchanged."),

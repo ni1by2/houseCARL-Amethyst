@@ -9,7 +9,7 @@ internal static class AmethystSnapshotFilter
 {
     /// <summary>Tools whose results depend on the selected load order or VFS.</summary>
     static readonly HashSet<string> Reads = [ToolNames.Records, ToolNames.LoadOrderStatus, ToolNames.AssetStatus,
-        ToolNames.Check, ToolNames.NifInspect, ToolNames.Skse, ToolNames.SkypatcherLayer, ToolNames.DecompileScript, ToolNames.UpdateStatus];
+        ToolNames.Check, ToolNames.NifInspect, ToolNames.Skse, ToolNames.Layer, ToolNames.DecompileScript, ToolNames.UpdateStatus];
     /// <summary>Managed mutations and previews; refused before any tool body or consent side effect runs.</summary>
     static readonly HashSet<string> Writes = [ToolNames.Apply, ToolNames.Create, ToolNames.CreatePlugin, ToolNames.Forward,
         ToolNames.Remove, ToolNames.Copy, ToolNames.CompactPlugin, ToolNames.MergePlugins, ToolNames.NifSet,
@@ -55,8 +55,7 @@ internal static class AmethystSnapshotFilter
         {
             if (name == ToolNames.SetAmethystConnection || !service.UsesSavedSnapshot)
             {
-                var unscoped = await next(request, cancellationToken);
-                MarkErrors(unscoped);
+                var unscoped = await Invoke(next, request, cancellationToken);
                 return unscoped;
             }
             snapshot = service.CaptureSavedSnapshot();
@@ -111,8 +110,7 @@ internal static class AmethystSnapshotFilter
                     externalOutput ? "external-output" : managedAssetWrite ? "managed-output" : "owner-metadata",
                     externalRoot);
             }
-            var result = await next(request, cancellationToken);
-            MarkErrors(result);
+            var result = await Invoke(next, request, cancellationToken);
             if (result.IsError == true && staging is not null) staging.FinalizeFailure(result);
             else if (staging is null) snapshot.CheckUnchanged();
             else staging.ValidateSnapshotInputs();
@@ -215,7 +213,6 @@ internal static class AmethystSnapshotFilter
     /// <summary>Attach provenance to each text/JSON result and MCP structured content without changing the result rows.</summary>
     internal static void Decorate(CallToolResult result, AmethystSnapshotProvenance provenance)
     {
-        MarkErrors(result);
         foreach (var block in result.Content.OfType<TextContentBlock>())
         {
             block.Text = AddMetadata(block.Text, provenance);
@@ -230,20 +227,14 @@ internal static class AmethystSnapshotFilter
         else result.StructuredContent = metadata;
     }
 
-    /// <summary>Translate named text/JSON refusals into MCP's error flag without mistaking per-row failures for a whole-call refusal.</summary>
-    static void MarkErrors(CallToolResult result)
+    /// <summary>Read the body's typed verdict before deciding whether staged output can commit.</summary>
+    static async ValueTask<CallToolResult> Invoke(McpRequestHandler<CallToolRequestParams, CallToolResult> next,
+        RequestContext<CallToolRequestParams> request, CancellationToken cancellationToken)
     {
-        foreach (var block in result.Content.OfType<TextContentBlock>())
-        {
-            if (block.Text.TrimStart().StartsWith("error:", StringComparison.OrdinalIgnoreCase)) result.IsError = true;
-            try
-            {
-                using var json = JsonDocument.Parse(block.Text);
-                if (json.RootElement.ValueKind == JsonValueKind.Object && json.RootElement.TryGetProperty("error", out var error) && error.ValueKind != JsonValueKind.Null)
-                    result.IsError = true;
-            }
-            catch (JsonException) { /* Plain text is handled by its named error prefix above. */ }
-        }
+        var verdict = CallVerdict.Begin();
+        var result = await next(request, cancellationToken);
+        if (verdict.Refused) result.IsError = true;
+        return result;
     }
 
     /// <summary>Keep JSON results machine-readable; text results carry a visible warning and generation header.</summary>

@@ -230,7 +230,7 @@ public static class AssetRenameService
             return new SeqRegenOutcome(built.Quests.Count, false, null,
                 new[] { $"'{Path.GetFileName(pPrimePath)}' has {built.Quests.Count} start-game-enabled quest(s) but no .seq — they likely weren't starting even before compaction; run {ToolNames.WriteSeq} on the compacted plugin to add one." });
 
-        var dest = Path.Combine(outDir, "SEQ", Path.GetFileNameWithoutExtension(pPrimePath) + ".seq");
+        var dest = LooseListings.OnDisk(outDir, "SEQ", Path.GetFileNameWithoutExtension(pPrimePath) + ".seq");
         try
         {
             Directory.CreateDirectory(Path.GetDirectoryName(dest)!);       // AtomicFile.WriteAllBytes does NOT create the dir
@@ -265,10 +265,10 @@ public static class AssetRenameService
             var res = assets.ResolveForPlacement(it.OldPath);
             if (res.Sources.Count == 0) continue;                          // not on disk — the caller decides if that's normal
 
-            var (bytes, err) = ReadWinner(res.Sources[0]);                 // the copy that currently displays/plays in-game
+            var (bytes, err) = assets.ReadSource(res.Sources[0]);          // the copy that currently displays/plays in-game
             if (err is not null) { failures.Add($"{it.Label}: {err}"); continue; }
 
-            var final = BethesdaPath.Under(outDir, it.NewPath);
+            var final = LooseListings.OnDisk(outDir, it.NewPath);
             var staged = final + ".houseCARL-tmp";                         // sibling temp — distinct from every old read path
             try
             {
@@ -309,7 +309,4 @@ public static class AssetRenameService
     /// <summary>Matches a voice file's '_&lt;8hex&gt;_&lt;response&gt;.&lt;ext&gt;' tail, anchored to the end so an EditorID segment cannot confuse it. Group 1 is the FormID.</summary>
     static readonly System.Text.RegularExpressions.Regex VoiceIdRx =
         new(@"_([0-9A-Fa-f]{8})_\d+\.[A-Za-z0-9]+$", System.Text.RegularExpressions.RegexOptions.Compiled);
-
-    /// <summary>Read the bytes of a resolved WINNING provider — the one shared loose-vs-BSA read.</summary>
-    static (byte[]? bytes, string? error) ReadWinner(PlacementSource s) => AssetResolver.ReadPlacementSource(s);
 }

@@ -31,6 +31,15 @@ internal static class RenderBudget
     /// RecordsRenderCostTests.TheAccountingLineIsReservedFromTheRowBudget.</summary>
     internal const int AccountingReserve = 64;
 
+    /// <summary>The chars a render holds back for the statement over the records a deep read cut, from the first cut
+    /// row on, so an answer with no cut row renders as before.</summary>
+    internal const int CutReserve = 600;
+
+    /// <summary>The chars a render holds back for the cut statement before rendering <paramref name="o"/>:
+    /// <see cref="CutReserve"/> once any row, this one included, was cut by its read, else 0.</summary>
+    internal static int CutHold(RecordCuts cuts, ReadOutcome o) =>
+        cuts.Count > 0 || (o.Error is null && o.Record?.CutAt is not null) ? CutReserve : 0;
+
     internal static string AccountingLine(int rows, long ms) =>
         $"rendered {rows}{(rows == 1 ? " row in " : " rows in ")}{ms} ms\n";
 
@@ -193,8 +202,8 @@ internal static class RenderBudget
                    ? "this call resolves the COMPLETE selection — to_file= and counts_only= both do — so limit= " +
                      "does not lower what it resolves: narrow the " +
                      "selection itself — a tighter under= selector (anchor it at the folder you mean, not at " +
-                     "'meshes/**'), or fewer asset_paths=/formids= entries — and ask for it in one call."
-                   : "Narrow the selection with a tighter under= selector, pass fewer asset_paths=/formids= entries, " +
+                     "'meshes/**'), or fewer paths=/formids= entries — and ask for it in one call."
+                   : "Narrow the selection with a tighter under= selector, pass fewer paths=/formids= entries, " +
                      "or take it in windows with limit= and offset=.");
     }
 }

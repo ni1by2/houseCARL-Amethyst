@@ -1,0 +1,95 @@
+{
+  "_comment": "The framework versions houseCARL's skills and readers were written against. This fork does not enable an upstream watcher from this file. pinned is read from the dependent skill, or from pinned_from where the skill's own files do not record it; null means nothing depends on it yet, or what depends on it records no version, so the watch only logs the current version.",
+  "pins": [
+    {
+      "name": "SPID",
+      "pinned": "7.3.0",
+      "source": { "type": "github", "repo": "powerof3/Spell-Perk-Item-Distributor" },
+      "depends": [".claude/skills/spid-authoring"]
+    },
+    {
+      "name": "KID",
+      "pinned": "4.1.0",
+      "source": { "type": "github", "repo": "powerof3/Keyword-Item-Distributor" },
+      "depends": [".claude/skills/kid-authoring"]
+    },
+    {
+      "name": "SkyPatcher",
+      "pinned": "8.0.1",
+      "source": { "type": "nexus", "game_id": 1704, "game": "skyrimspecialedition", "mod_id": 106659 },
+      "depends": [".claude/skills/skypatcher-authoring", "src/housecarl-mcp/SkyPatcherReplay.cs"]
+    },
+    {
+      "name": "Open Animation Replacer",
+      "pinned": "3.0.0",
+      "source": { "type": "nexus", "game_id": 1704, "game": "skyrimspecialedition", "mod_id": 92109 },
+      "depends": [".claude/skills/open-animation-replacer"]
+    },
+    {
+      "name": "CommonLibSSE-NG",
+      "pinned": "4.x",
+      "source": { "type": "github", "repo": "alandtse/CommonLibSSE-NG" },
+      "depends": [".claude/skills/skse-plugin-authoring"]
+    },
+    {
+      "name": "Base Object Swapper",
+      "pinned": null,
+      "source": { "type": "github", "repo": "powerof3/BaseObjectSwapper" },
+      "depends": []
+    },
+    {
+      "name": "Form List Manipulator",
+      "pinned": null,
+      "source": { "type": "nexus", "game_id": 1704, "game": "skyrimspecialedition", "mod_id": 74037 },
+      "depends": []
+    },
+    {
+      "name": "SKSE64",
+      "pinned": "2.2.6",
+      "source": { "type": "github", "repo": "ianpatt/skse64", "tags": true },
+      "depends": [".claude/skills/papyrus-reference"],
+      "pinned_from": "indexedVersion in BellCubeDev/papyrus-index data/SkyrimSE/<source>/meta.yaml, the snapshot the papyrus-reference corpus was generated from on 2026-06-04"
+    },
+    {
+      "name": "PapyrusUtil SE",
+      "pinned": "4.6",
+      "source": { "type": "nexus", "game_id": 1704, "game": "skyrimspecialedition", "mod_id": 13048 },
+      "depends": [".claude/skills/papyrus-reference"],
+      "pinned_from": "indexedVersion in BellCubeDev/papyrus-index data/SkyrimSE/<source>/meta.yaml, the snapshot the papyrus-reference corpus was generated from on 2026-06-04"
+    },
+    {
+      "name": "JContainers",
+      "pinned": "4.1.13",
+      "source": { "type": "github", "repo": "ryobg/JContainers" },
+      "depends": [".claude/skills/papyrus-reference"],
+      "pinned_from": "indexedVersion in BellCubeDev/papyrus-index data/SkyrimSE/<source>/meta.yaml, the snapshot the papyrus-reference corpus was generated from on 2026-06-04"
+    },
+    {
+      "name": "MCM Helper",
+      "pinned": "1.3.0",
+      "source": { "type": "github", "repo": "Exit-9B/MCM-Helper" },
+      "depends": [".claude/skills/papyrus-reference"],
+      "pinned_from": "indexedVersion in BellCubeDev/papyrus-index data/SkyrimSE/<source>/meta.yaml, the snapshot the papyrus-reference corpus was generated from on 2026-06-04"
+    },
+    {
+      "name": "powerofthree's Papyrus Extender",
+      "pinned": "6.1.0",
+      "source": { "type": "github", "repo": "powerof3/PapyrusExtenderSSE" },
+      "depends": [".claude/skills/papyrus-reference"],
+      "pinned_from": "indexedVersion in BellCubeDev/papyrus-index data/SkyrimSE/<source>/meta.yaml, the snapshot the papyrus-reference corpus was generated from on 2026-06-04"
+    },
+    {
+      "name": "SkyUI",
+      "pinned": "5.1",
+      "source": { "type": "nexus", "game_id": 1704, "game": "skyrimspecialedition", "mod_id": 12604 },
+      "depends": [".claude/skills/papyrus-reference"],
+      "pinned_from": "indexedVersion in BellCubeDev/papyrus-index data/SkyrimSE/<source>/meta.yaml, the snapshot the papyrus-reference corpus was generated from on 2026-06-04"
+    },
+    {
+      "name": "Mod Organizer 2",
+      "pinned": null,
+      "source": { "type": "github", "repo": "ModOrganizer2/modorganizer" },
+      "depends": ["docs/architecture/mo2-instance.md"]
+    }
+  ]
+}

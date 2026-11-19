@@ -33,7 +33,36 @@ public sealed class FaceGenFamilyTests : IClassFixture<FaceGenClassFixture>
         Assert.Contains("[MESH_ABSENT]", RowFor(text, "HcFgMeshAbsent"));
         Assert.Contains("[BAKE_ABSENT]", RowFor(text, "HcFgBakeAbsent"));
         Assert.Contains("[SPLIT_BAKE]", RowFor(text, "HcFgSplit"));
+        // A missing half a mod holds only hidden says so (#1281).
+        foreach (var npc in new[] { "HcFgTintAbsent", "HcFgMeshAbsent", "HcFgBakeAbsent" })
+            Assert.Contains("hidden by MO2 (skipped by MO2's VFS, by the '.mohidden' suffix) in '" + FaceGenWorld.OtherMod + "', as",
+                            RowFor(text, npc));
         Assert.Contains("[STALE_BAKE]", RowFor(text, "HcFgStale"));
+    }
+
+    /// <summary>A mesh half nothing holds, hidden or not, carries no detail line.</summary>
+    [Fact]
+    public void AMeshAbsentRowWithNothingHiddenCarriesNoDetail()
+    {
+        var json = CheckTools.CheckTool(_w.Svc, findings: new[] { "facegen" }, format: "json", max_chars: 60000);
+        var row = System.Text.Json.JsonDocument.Parse(json).RootElement.EnumerateObject()
+            .SelectMany(Rows).Single(r => r.TryGetProperty("editorid", out var e) && e.GetString() == "HcFgMeshAbsentPlain");
+        Assert.Equal("mesh_absent", row.GetProperty("class").GetString());
+        Assert.Equal(System.Text.Json.JsonValueKind.Null, row.GetProperty("detail").ValueKind);
+    }
+
+    /// <summary>Every object in the document that carries a 'class' member.</summary>
+    static IEnumerable<System.Text.Json.JsonElement> Rows(System.Text.Json.JsonProperty p) => Rows(p.Value);
+
+    static IEnumerable<System.Text.Json.JsonElement> Rows(System.Text.Json.JsonElement e)
+    {
+        if (e.ValueKind == System.Text.Json.JsonValueKind.Object)
+        {
+            if (e.TryGetProperty("class", out _)) yield return e;
+            foreach (var c in e.EnumerateObject().SelectMany(Rows)) yield return c;
+        }
+        else if (e.ValueKind == System.Text.Json.JsonValueKind.Array)
+            foreach (var c in e.EnumerateArray().SelectMany(Rows)) yield return c;
     }
 
     [Fact]
@@ -68,7 +97,7 @@ public sealed class FaceGenFamilyTests : IClassFixture<FaceGenClassFixture>
         Assert.Contains("(1 CharGen face preset(s), 1 Player)", text, StringComparison.Ordinal);
         Assert.Contains("findings=[\"never_baked\"]", text, StringComparison.Ordinal);
         // HcFgBakeAbsent, HcFgTemplateSource, HcFgNoHeadParts and HcFgNoHeadPartsFaceData.
-        Assert.Contains("bake_absent=4", text, StringComparison.Ordinal);
+        Assert.True(text.Contains("bake_absent=4", StringComparison.Ordinal), text);
         Assert.Contains("usually a voice or dummy actor", RowFor(text, "HcFgNoHeadParts"));
         Assert.Contains("[BAKE_ABSENT]", RowFor(text, "HcFgNoHeadParts"));
         Assert.DoesNotContain("dummy actor", RowFor(text, "HcFgNoHeadPartsFaceData"));
@@ -302,7 +331,7 @@ public sealed class FaceGenFamilyTests : IClassFixture<FaceGenClassFixture>
 
         var text = Sweep("facegen");
         Assert.Contains(BatchRender.RootFailureLead + FaceGenWorld.UnlistedMod + ":", text, StringComparison.Ordinal);
-        Assert.Contains("2 clean pair(s) could NOT be tested", text, StringComparison.Ordinal);
+        Assert.True(text.Contains("2 clean pair(s) could NOT be tested", StringComparison.Ordinal), text);
         Assert.DoesNotContain("'HcFgUnlisted'", text, StringComparison.Ordinal);
 
         using var doc = JsonDocument.Parse(CheckTools.CheckTool(
@@ -418,11 +447,13 @@ public sealed class FaceGenFamilyTests : IClassFixture<FaceGenClassFixture>
     {
         using var ran = JsonDocument.Parse(CheckTools.CheckTool(
             _w.Svc, findings: new[] { "facegen" }, format: "json", max_chars: 60000));
-        foreach (var list in new[] { "warnings", "archive_read_failures" })
-        {
-            Assert.Equal(0, ran.RootElement.GetProperty(list).GetArrayLength());
-            Assert.Equal(0, ran.RootElement.GetProperty(list + "_omitted").GetInt32());
-        }
+        Assert.Equal(0, ran.RootElement.GetProperty("archive_read_failures").GetArrayLength());
+        Assert.Equal(0, ran.RootElement.GetProperty("archive_read_failures_omitted").GetInt32());
+        // The one warning is the unlistable enabled mod folder's BSAs going unscanned.
+        var warnings = ran.RootElement.GetProperty("warnings").EnumerateArray().Select(e => e.GetString()!).ToList();
+        Assert.Equal(_w.UnlistedStaged ? 1 : 0, warnings.Count);
+        if (_w.UnlistedStaged) Assert.Contains(FaceGenWorld.UnlistedMod, warnings[0]);
+        Assert.Equal(0, ran.RootElement.GetProperty("warnings_omitted").GetInt32());
         // The base world stages an unlistable mod folder, so its roots were computed and need not be empty.
         Assert.Equal(JsonValueKind.Array, ran.RootElement.GetProperty("root_read_failures").ValueKind);
         Assert.Equal(JsonValueKind.Number, ran.RootElement.GetProperty("root_read_failures_omitted").ValueKind);

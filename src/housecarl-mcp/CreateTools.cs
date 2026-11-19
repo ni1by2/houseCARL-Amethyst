@@ -46,16 +46,16 @@ public static class CreateTools
         [Description("Required for into= or in_place=: acknowledge that the transaction may require Amethyst redeployment.")]
             bool confirm_amethyst_redeploy = false,
         [Description("Required for into= or in_place=: acknowledge that an enabled deployed target may be visible to the game immediately.")]
-            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.Create, () =>
+            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.Create, call =>
     {
         // ---- TRANSPORT: format --------------------------------------------------------------------------
         // Resolved BEFORE the unconfigured-MO2 prompt; contract in docs/architecture/write-path.md.
         bool json = Wire.WantsJson(format, out var ferr);
-        if (ferr is not null) return ferr;   // the format value itself is unparsed — there is no known render to answer in
+        if (ferr is not null) return ToolAnswer.Refusal(ferr);   // the format value itself is unparsed — there is no known render to answer in
         if (svc.ConfigPromptOrNull() is { } prompt)
-            return json ? JsonWire.RenderError(prompt, null) : prompt;
+            return ToolAnswer.Refusal(json, prompt);
 
-        string Refuse(string message) => json ? JsonWire.RenderError(message, null) : "error: " + message;
+        ToolAnswer Refuse(string message) => ToolAnswer.Refusal(json, Wire.RefusalPrefix + message);
 
         // ---- LANE: the three destinations are mutually exclusive, and a dropped one is named ------------
         // A lane is honoured or refused BY NAME; contract in docs/architecture/write-path.md.
@@ -113,9 +113,9 @@ public static class CreateTools
 
         var outcome = svc.CreateRecordsBatch(wire, patchName, into, readback, in_place, hasInPlace, acknowledge, replace);
         // The lane the CALL named; contract in docs/architecture/write-path.md.
-        return json
+        return ToolAnswer.Outcome(outcome.Success || outcome.NeedsAcknowledge, json
             ? JsonWire.RenderCreateOutcome(outcome, max_chars, readback, hasInPlace ? "in_place" : hasInto ? "into" : "patch")
-            : WriteTools.RenderCreate(outcome, max_chars, readback);
+            : WriteTools.RenderCreate(outcome, max_chars, readback));
     });
 }
 

@@ -338,7 +338,11 @@ internal sealed class AmethystStagingWrite : IDisposable
         var outputs = _transaction.PublishedPlugins.Select(p => Path.GetFullPath(p.Path))
             .Concat(_transaction.Journal.Artifacts.Where(a => a.State == "committed").Select(a => Path.GetFullPath(a.Destination)))
             .ToHashSet(StringComparer.Ordinal);
-        _snapshot.CheckUnchanged(outputs);
+        var directories = new HashSet<string>(_folders, StringComparer.Ordinal);
+        foreach (var artifact in _transaction.Journal.Artifacts.Where(a => a.State is "prepared" or "committed"))
+            for (var parent = Path.GetDirectoryName(Path.GetFullPath(artifact.Destination)); parent is not null; parent = Path.GetDirectoryName(parent))
+                directories.Add(parent);
+        _snapshot.CheckUnchanged(outputs, directories);
     }
 
     /// <summary>Restore the enclosing call's permission; files are committed or rolled back explicitly.</summary>

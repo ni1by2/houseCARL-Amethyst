@@ -172,7 +172,7 @@ public sealed class RecordsScopeAtFileTests : RecordsTestBase, IClassFixture<Sco
     {
         var text = RecordsTools.Records(Svc, plugins: Scope("@" + TempPath(".txt")), types: new[] { "WEAP" });
 
-        Refused(text, "could not read plugins.names= list file");
+        Refused(text, "plugins.names= list file", "could not be read");
     }
 
     /// <summary>A relative list path is refused with a plain-text list as the example, not a result artifact.</summary>
@@ -242,7 +242,7 @@ public sealed class RecordsScopeAtFileTests : RecordsTestBase, IClassFixture<Sco
     {
         var doc = Je(RecordsTools.Records(Svc, plugins: Scope("@" + TempPath(".txt")), types: new[] { "WEAP" }, format: "json"));
 
-        Assert.Contains("could not read", doc.GetProperty("error").GetString());
+        Assert.Contains("could not be read", doc.GetProperty("error").GetString());
     }
 
     /// <summary>'@file' stands in place of the whole list on plugins.names as on formids=, so a name beside it is

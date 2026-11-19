@@ -16,7 +16,8 @@ namespace HousecarlMcpTests;
 /// <list type="bullet">
 /// <item><c>Clean</c> — both halves in <c>FgBase</c>, which also ships the defining master, so the record and the
 ///   files agree and NOTHING is reported.</item>
-/// <item><c>TintAbsent</c> / <c>MeshAbsent</c> — one half present in <c>FgBase</c>, the other nowhere.</item>
+/// <item><c>TintAbsent</c> / <c>MeshAbsent</c> — one half present in <c>FgBase</c>, the other held only hidden in
+///   <c>FgOther</c>; <c>MeshAbsentPlain</c> — the tint in <c>FgBase</c>, the mesh nowhere.</item>
 /// <item><c>BakeAbsent</c> — neither half anywhere.</item>
 /// <item><c>Split</c> — mesh from <c>FgBase</c>, tint from <c>FgOther</c>: two unrelated products.</item>
 /// <item><c>Family</c> — mesh from <c>FgBase</c>, tint from <c>FgBase - Update</c>: one product's two folders.</item>
@@ -121,6 +122,7 @@ public class FaceGenWorld : IDisposable
             Add("HcFgClean", manRace);
             Add("HcFgTintAbsent", manRace);
             Add("HcFgMeshAbsent", manRace);
+            Add("HcFgMeshAbsentPlain", manRace);
             Add("HcFgBakeAbsent", manRace);
             Add("HcFgSplit", manRace);
             Add("HcFgFamily", manRace);
@@ -171,6 +173,11 @@ public class FaceGenWorld : IDisposable
             Loose(baseDir, Tint(keys["HcFgClean"]));
             Loose(baseDir, Mesh(keys["HcFgTintAbsent"]));
             Loose(baseDir, Tint(keys["HcFgMeshAbsent"]));
+            Loose(baseDir, Tint(keys["HcFgMeshAbsentPlain"]));
+            // The missing half of each absent shape, held only hidden, so each row says MO2 hides it.
+            Loose(otherDir, Tint(keys["HcFgTintAbsent"]) + ".mohidden");
+            Loose(otherDir, Mesh(keys["HcFgMeshAbsent"]) + ".mohidden");
+            Loose(otherDir, Mesh(keys["HcFgBakeAbsent"]) + ".mohidden");
             Loose(baseDir, Mesh(keys["HcFgSplit"]));
             Loose(otherDir, Tint(keys["HcFgSplit"]));
             Loose(baseDir, Mesh(keys["HcFgFamily"]));
@@ -179,8 +186,8 @@ public class FaceGenWorld : IDisposable
             Loose(baseDir, Tint(keys["HcFgStale"]));
             Loose(bakesOnlyDir, Mesh(keys["HcFgNoPlugin"]));
             Loose(bakesOnlyDir, Tint(keys["HcFgNoPlugin"]));
-            Loose(_unlistedDir, Mesh(keys["HcFgUnlisted"]));
-            Loose(_unlistedDir, Tint(keys["HcFgUnlisted"]));
+            Loose(_unlistedDir, "M" + Mesh(keys["HcFgUnlisted"])[1..]);
+            Loose(_unlistedDir, "T" + Tint(keys["HcFgUnlisted"])[1..]);
             Loose(baseDir, Mesh(keys["HcFgCharGenPresetBaked"]));
             Loose(baseDir, Mesh(keys["HcFgNoHeadPartsBaked"]));
             if (playerBaked) Loose(vanillaDir, Mesh(keys["Player"]));
