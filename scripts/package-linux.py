@@ -142,6 +142,8 @@ def build(repo: Path, output: Path, native_tools: Path) -> None:
         "THIRD-PARTY-NOTICES.txt": repo / "THIRD-PARTY-NOTICES.txt",
         "docs/amethyst-saved-snapshot.md": repo / "docs/architecture/amethyst-saved-snapshot.md",
         "docs/linux-install.md": repo / "docs/linux-install.md",
+        "docs/upstream-220-linux-integration.md": repo / "docs/upstream-220-linux-integration.md",
+        "docs/asset-walk.md": repo / "docs/asset-walk.md",
     }
     plugin = json.loads((repo / "plugin/.claude-plugin/plugin.json").read_text(encoding="utf-8"))
     version = plugin.get("version")

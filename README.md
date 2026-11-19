@@ -6,6 +6,8 @@ houseCARL-Amethyst is an MCP server for Skyrim Special Edition load orders manag
 
 **IMPORTANT NOTICE 2:** both upstream projects are being heavily developed. This tool may not always have caught up. If you face any issues using houseCARL-Amethyst, _**DO NOT BOTHER THE ORIGNAL DEVS**_
 
+This development branch integrates upstream houseCARL 2.2.0. The published Linux download remains 2.1.5 until the next release is approved. The [2.2 migration guide](docs/upstream-220-linux-integration.md) covers the changed tool names and parameters. Upstream houseCARL supports Windows; this fork maintains the Linux execution, path handling and Amethyst adapter.
+
 ## Requirements
 
 ### Linux / Amethyst preview
@@ -143,7 +145,7 @@ All tools carry the `housecarl_` prefix.
 | NIF | `nif_inspect` `nif_set` |
 | Papyrus | `compile_script` `decompile_script` |
 | BSA | `bsa_list` `bsa_extract` `bsa_repack` |
-| SkyPatcher | `skypatcher_layer` |
+| SkyPatcher, SPID, KID, BOS, FLM | `layer` |
 | SKSE | `skse` |
 | Nexus | `nexus_search` `nexus_mod` `nexus_graphql` `nexus_check_updates` `nexus_identify` |
 | Session | `set_amethyst_connection` `set_tool_path` `load_order_status` `update_status` |
@@ -207,16 +209,9 @@ Record identity is not writable. `FormKey` on a record, and `ModKey` and `Master
 
 ## Runtime layers
 
-Four layers below the plugin plane affect what the game runs. houseCARL reads each of them.
+The Amethyst saved graph supplies loose-file and archive providers. `housecarl_layer` reads the SkyPatcher, SPID, KID, BOS and FLM configuration layers from that view, including shadows, skipped lines and unresolved forms. SkyPatcher can replay supported changes over records; a draft can be inspected before installation. SPID and KID reach queries identify relevant distribution lines without claiming which random or conditional assignments a running game applied.
 
-- **Amethyst's saved asset view.** Which loose or archived file wins for a Data-relative path, with its saved source and conflict chain. Managed asset writes go to Amethyst staging and remain pending until refresh and deployment.
-- **NIF internals.** Shape names, embedded skin and FaceTint texture paths, flags, alpha, partitions, read from the winning copy. A whitelisted subset is written back with readback verification.
-- **The SKSE plugin layer.** houseCARL finds each DLL and configuration file under `Data\SKSE\Plugins` and resolves its winning source. It reads declared DLL version metadata without loading the DLL. It also checks that DLLs implement native Papyrus functions declared by scripts and that SKSE configuration files reference plugins in the load order.
-- **The SkyPatcher INI layer.** houseCARL reads INIs in apply order, including VFS shadows and conflicts between INIs. It can also replay the layer over a record or include a draft INI that is not yet in a mod folder.
-
-The SKSE and SkyPatcher tools report what a file declares. They do not observe the running game.
-
-Two precedence orders determine an NPC's face: the file view selects the baked files, and the load order selects the record. `check findings=["facegen"]` compares them. See [docs/facegen.md](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.5/docs/facegen.md) for causes and fixes.
+`housecarl_skse` inspects winning DLL metadata and configuration references without loading the DLLs. `housecarl_nif_inspect` reads mesh contents and links. Each result retains the saved generation and freshness warning. Manager file exclusions and routing come from Amethyst; MO2 hiding rules do not replace its saved providers.
 
 ## Writing
 
@@ -248,9 +243,9 @@ The plugin ships seven skills, invoked as `/housecarl:<name>` in Claude Code or 
 |---|---|
 | `mutagen-reference` | The schema of every modelled record type: fields, types, cardinality, writability, enum values. Emitted by the same generator pass as the server's rulebook. |
 | `papyrus-reference` | Papyrus, SKSE and shipped SKSE-plugin API signatures (PapyrusUtil, JContainers, MCMHelper, po3, SkyUI), 7,345 entries, from [papyrus-index](https://github.com/BellCubeDev/papyrus-index). A function the corpus does not carry is reported as absent. |
-| `skypatcher-authoring` | SkyPatcher 6.4.1 INI grammar and the offline check of a draft INI through the overlay. |
+| `skypatcher-authoring` | SkyPatcher 8.0.1 INI grammar and the offline check of a draft INI through the overlay. |
 | `spid-authoring` | SPID 7.3.0 `_DISTR.ini` grammar. |
-| `kid-authoring` | KID 3.5.0 `_KID.ini` grammar. |
+| `kid-authoring` | KID 4.1.0 `_KID.ini` grammar. |
 | `open-animation-replacer` | OAR 3.0.0 `config.json` / `user.json` conditions, submod priorities, DAR `_conditions.txt` conversion. |
 | `skse-plugin-authoring` | Native SKSE plugin DLLs on CommonLibSSE-NG: lifecycle, event sinks, trampoline and Address Library hooks, native Papyrus functions, SE + AE + VR from one DLL. |
 
@@ -296,7 +291,7 @@ You can run the program and make private changes without publishing your source.
 
 ## Asset dependency walks
 
-Asset traversal, introduced in 2.1.2, uses Amethyst's saved providers. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [Asset Walk guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.5/docs/asset-walk.md). The Linux preview package includes these additions.
+Asset traversal, introduced in 2.1.2, uses Amethyst's saved providers. `housecarl_asset_status` can follow a record to its meshes, textures, scripts, FaceGen and voice files, report providers and missing dependencies, and inspect a named disabled donor from saved inventory. See the [current Asset Walk guide](docs/asset-walk.md). The Linux preview package includes these additions.
 
 Version 2.1.5 fixes connection failures caused by disabled plugins retained only in Amethyst's `loadorder.txt`. Ordinary activation follows starred `plugins.txt` entries; forced masters and installed Creation Club entries remain loaded. Plugin-bound archives follow the same activation, with explicit INI loading retained. Upgrade the server without deleting historical plugin entries or enabling disabled mods. See the [activation contract](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.5/docs/architecture/amethyst-plugin-activation.md).
 
@@ -306,4 +301,4 @@ Version 2.1.5 retains Amethyst 2.6.3/rules-18 and 2.6.4-beta.1/rules-19 support 
 
 To evaluate a later Amethyst release, use the [compatibility test guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.5/docs/amethyst-compatibility-testing.md). It explains the GitHub Actions workflow, local runs with an extracted release, and how to interpret native-reader comparisons separately from runtime acceptance. These tests use synthetic profiles and do not touch your installed modlist. They do not automatically enable an unsupported revision or prove live deployment/gameplay compatibility.
 
-Maintainers should use the [current branch's test guide](docs/amethyst-compatibility-testing.md) for the latest suite, including automatic filegraph-refresh checks and the Amethyst 2.6.4-beta.4 verification record.
+Maintainers should use the [current branch's test guide](docs/amethyst-compatibility-testing.md) for the latest suite, including automatic filegraph-refresh checks. Stable Amethyst 2.6.4 uses the same API-13/schema-10/engine-1/rules-19 contract and native tree as the tested betas; see the [current integration record](docs/upstream-220-linux-integration.md).

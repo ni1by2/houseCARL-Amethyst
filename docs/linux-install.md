@@ -12,6 +12,10 @@ Download these three assets from **the same release** into a new directory:
 - [housecarl-amethyst-linux-x64.tar.gz.sha256](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.5/housecarl-amethyst-linux-x64.tar.gz.sha256)
 - [install-linux.py](https://github.com/ni1by2/houseCARL-Amethyst/releases/download/v2.1.5/install-linux.py)
 
+## Development version 2.2.0
+
+The 2.2.0 source branch integrates upstream's expanded tool API while retaining this fork's Linux and Amethyst support. It is not yet a published download. Use the 2.1.5 assets below for the published package; source testers should read the [2.2 migration guide](upstream-220-linux-integration.md). The install command, bundled .NET 10 runtime, selected connection and transaction recovery workflow are unchanged.
+
 ## Quick start
 
 Install the [runtime prerequisites](#runtime-requirements) first. Quit Claude Code, Codex and any other MCP host running houseCARL. Keep a separate terminal open for installation. From the directory containing all three downloads, verify the archive and then install it:

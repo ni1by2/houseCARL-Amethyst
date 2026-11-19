@@ -80,6 +80,8 @@ class LinuxPackageTests(unittest.TestCase):
                 "THIRD-PARTY-NOTICES.txt": b"notices",
                 "docs/architecture/amethyst-saved-snapshot.md": b"snapshot",
                 "docs/linux-install.md": b"install",
+                "docs/upstream-220-linux-integration.md": b"migration",
+                "docs/asset-walk.md": b"walk",
                 ".claude/skills/example/SKILL.md": b"skill",
                 ".claude/skills/example/references/data.jsonl": b"data",
                 ".claude/skills/example/evals/evals.json": b"exclude",
