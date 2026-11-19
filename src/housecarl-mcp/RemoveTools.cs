@@ -26,7 +26,7 @@ public static class RemoveTools
     public static string Remove(
         LoadOrderService svc,
         [Description("The records to drop, each 'XXXXXX:Plugin.esp'. Only a record the lane's file itself defines or overrides can be named, in any group (cells, placed references, dialogue, navmesh). Removing a record also drops every record nested under it (a cell's placed references, a topic's lines), and the reply lists only the records you named. A record in a parent's single-child slot (a cell's Landscape, a worldspace's TopCell) is refused unless the records under it are named too. Also takes [\"@<absolute path>\"], a plain list file with one FormID per line, not a result artifact.")]
-            string[]? formids = null,
+            ListArg? formids = null,
         [Description("Filename of the houseCARL patch to remove the records from, e.g. 'MyMerge.esp'; it must be a patch houseCARL created, and carry them. " + LaneSentences.IntoFound)]
             string? into = null,
         [Description("Opt-in: the filename of an active plugin to drop the records straight out of" + LaneSentences.InPlaceAnyPlugin + LaneSentences.InPlaceRewrite + "Every record you drop is checked gone on the re-opened file.")]
@@ -40,14 +40,14 @@ public static class RemoveTools
         [Description("Required for into= or in_place=: acknowledge that the transaction may require Amethyst redeployment.")]
             bool confirm_amethyst_redeploy = false,
         [Description("Required for into= or in_place=: acknowledge that an enabled deployed target may be visible to the game immediately.")]
-            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.Remove, () =>
+            bool confirm_live_deployment_change = false) => Guard.Tool(ToolNames.Remove, call =>
     {
         // format first, ahead of the unconfigured-MO2 prompt; contract in docs/architecture/write-path.md.
         bool json = Wire.WantsJson(format, out var ferr);
-        if (ferr is not null) return ferr;
+        if (ferr is not null) return ToolAnswer.Refusal(ferr);
         if (svc.ConfigPromptOrNull() is { } prompt)
-            return json ? JsonWire.RenderError(prompt, null) : prompt;
-        string Refuse(string message) => json ? JsonWire.RenderError(message, null) : "error: " + message;
+            return ToolAnswer.Refusal(json, prompt);
+        ToolAnswer Refuse(string message) => ToolAnswer.Refusal(json, Wire.RefusalPrefix + message);
 
         // ---- LANE: exactly one destination, named when dropped; contract in docs/architecture/write-path.md ----
         bool hasInto = !string.IsNullOrWhiteSpace(into);
@@ -60,10 +60,10 @@ public static class RemoveTools
             return Refuse("acknowledge= confirms the in-place trade-off and is meaningless without in_place=<plugin filename>. Drop it, or name the file to rewrite.");
 
         // ---- formids= (set-valued; the @file spelling shared with every other list input) ---------------
-        if (formids is null || formids.Length == 0)
-            return Refuse("formids= is empty — pass the FormID(s) to drop, e.g. formids=[\"0012AB:CoolMod.esp\"] (one is a set of one), or [\"@<absolute path>\"] to read the list from a file.");
-        var (tokens, demand, _, xerr) = Artifacts.ExpandListInput(formids, "formids");
+        var (tokens, demand, _, xerr) = formids.Read("formids", ListKind.FormId);
         if (xerr is not null) return Refuse(xerr.StartsWith("error: ", StringComparison.Ordinal) ? xerr[7..] : xerr);
+        if (tokens is not { Length: > 0 })
+            return Refuse("formids= is empty — pass the FormID(s) to drop, e.g. formids=[\"0012AB:CoolMod.esp\"] (one is a set of one), or [\"@<absolute path>\"] to read the list from a file.");
         if (demand is not null)
             // An artifact's identity column is only valid at the epoch it was captured at, and the write lanes
             // capture inside the engine, so nothing here can re-check it: refuse rather than honour it unverified.
@@ -74,8 +74,8 @@ public static class RemoveTools
 
         var outcome = svc.RemoveRecords(targets, hasInto ? into : null, in_place, hasInPlace, acknowledge);
         // The lane the CALL named; contract in docs/architecture/write-path.md.
-        return json
+        return ToolAnswer.Outcome(outcome.Success || outcome.NeedsAcknowledge, json
             ? JsonWire.RenderRemovalOutcome(outcome, max_chars, hasInPlace ? "in_place" : "into")
-            : WriteTools.RenderRemoval(outcome, max_chars);
+            : WriteTools.RenderRemoval(outcome, max_chars));
     });
 }

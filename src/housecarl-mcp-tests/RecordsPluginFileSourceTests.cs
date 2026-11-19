@@ -209,6 +209,16 @@ public sealed class ShadowedCopyWorld : IDisposable
     public string SubjectFid { get; }
     /// <summary>A second record both copies override, so a batch has more than one row to refuse.</summary>
     public string SecondFid { get; }
+    /// <summary>A weapon only the shadowed copy holds, defined in it, so no active plugin touches it.</summary>
+    public string LoserOnlyFid { get; }
+    /// <summary>A master weapon only the served copy overrides.</summary>
+    public string WinnerOnlyFid { get; }
+    public string MasterName { get; }
+    /// <summary>Records in each copy.</summary>
+    public const int LoserCount = 3, WinnerCount = 3;
+    /// <summary>A plugin in a switched-off mod: one master override the active master touches, one record of its own.</summary>
+    public string OffName { get; }
+    public const int OffCount = 2;
     /// <summary>The full path to one mod folder's copy.</summary>
     public string PathIn(string mod) => Path.Combine(Root, "instance", "mods", mod, FileName);
 
@@ -243,6 +253,10 @@ public sealed class ShadowedCopyWorld : IDisposable
         second.EditorID = "SSecond";
         second.BasicStats = new WeaponBasicStats { Damage = 10 };
         SecondFid = $"{second.FormKey.ID:X6}:{mKey.FileName}";
+        var third = m.Weapons.AddNew();
+        third.EditorID = "SThird";
+        WinnerOnlyFid = $"{third.FormKey.ID:X6}:{mKey.FileName}";
+        MasterName = mKey.FileName.String;
         m.BeginWrite.ToPath(P("SMaster", mKey)).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
 
         foreach (var (folder, damage) in new[] { (WinnerMod, WinnerDamage), (LoserMod, LoserDamage) })
@@ -250,15 +264,29 @@ public sealed class ShadowedCopyWorld : IDisposable
             var r = new SkyrimMod(rKey, SkyrimRelease.SkyrimSE);
             foreach (var src in new[] { subject, second })
                 ((IWeapon)WriteEngine.GenericGetOrAddAsOverride(r, src)).BasicStats = new WeaponBasicStats { Damage = (ushort)damage };
+            if (folder == WinnerMod) WriteEngine.GenericGetOrAddAsOverride(r, third);
+            else
+            {
+                var own = r.Weapons.AddNew();
+                own.EditorID = "SLoserOnly";
+                LoserOnlyFid = $"{own.FormKey.ID:X6}:{rKey.FileName}";
+            }
             r.BeginWrite.ToPath(P(folder, rKey)).WithLoadOrder(new ISkyrimModGetter[] { m }).Write();
         }
+
+        var offKey = new ModKey("HcSOff", ModType.Plugin);
+        OffName = offKey.FileName.String;
+        var off = new SkyrimMod(offKey, SkyrimRelease.SkyrimSE);
+        WriteEngine.GenericGetOrAddAsOverride(off, subject);
+        off.Weapons.AddNew().EditorID = "SOffOwn";
+        off.BeginWrite.ToPath(P("SOff", offKey)).WithLoadOrder(new ISkyrimModGetter[] { m }).Write();
 
         File.WriteAllText(Path.Combine(profiles, "loadorder.txt"),
             "# header\r\n" + mKey.FileName + "\r\n" + rKey.FileName + "\r\n");
         File.WriteAllText(Path.Combine(profiles, "plugins.txt"),
             "*" + mKey.FileName + "\r\n*" + rKey.FileName + "\r\n");
         // modlist.txt is TOP = highest priority, so SWinner provides the copy MO2 serves.
-        File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n+SWinner\r\n+SLoser\r\n+SMaster\r\n");
+        File.WriteAllText(Path.Combine(profiles, "modlist.txt"), "# header\r\n-SOff\r\n+SWinner\r\n+SLoser\r\n+SMaster\r\n");
 
         Svc = LoadOrderService.WithInstance(instance, 0, new UserConfigStore(Path.Combine(Root, "houseCARL.user.json")));
         Svc.Stats();

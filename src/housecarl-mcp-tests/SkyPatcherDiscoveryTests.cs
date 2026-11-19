@@ -1,4 +1,5 @@
 using HousecarlCore;
+using HousecarlMcp;
 using Xunit;
 
 namespace HousecarlMcpTests;
@@ -32,6 +33,13 @@ public sealed class SkyPatcherDiscoveryTests : IDisposable
         Write(modB, $"{W}/same.ini", "attackDamage=999");
         Write(modA, $"{W}/zzz.ini", "attackDamage=4");
         Write(modA, $"{W}/org/bbb.ini", "attackDamage=5");
+        Write(modA, $"{W}/org/deep/ccc.ini", "attackDamage=5");
+        Write(modA, $"{W}/Aaa/zz.ini", "attackDamage=5");
+        Write(modA, $"{W}/Gated.esp.ini.bak", "attackDamage=6");
+        Write(modA, $"{W}/LOUD.INI", "attackDamage=6");
+        Write(modA, $"{W}/Gated.esp-extra.ini", "attackDamage=6");
+        Write(modA, "SKSE/Plugins/SkyPatcher/armor/noKey.ini", "weight=1");
+        Write(modA, "SKSE/Plugins/SkyPatcher/light/l.ini", "radius=1");
         Write(modA, $"{W}/Gated.esp.ini", "attackDamage=6");
         Write(modA, $"{W}/Absent.esp.ini", "attackDamage=7");
         Write(modA, "SKSE/Plugins/SkyPatcher/stray.ini", "attackDamage=8");
@@ -90,14 +98,134 @@ public sealed class SkyPatcherDiscoveryTests : IDisposable
         Assert.Contains("ModB", same.ShadowedProviders);
         Assert.Contains(same.Lines, l => l.Segments.Any(s => s.RawValue == "3"));
         Assert.DoesNotContain(same.Lines, l => l.Segments.Any(s => s.RawValue == "999"));
-        Assert.Contains(scan.Notes, n => n.Contains("same.ini") && n.Contains("SHADOWED"));
+        // The note counts the mods shipping the name, the winner among them.
+        Assert.Contains(scan.Notes, n => n.Contains("same.ini") && n.Contains("is shipped by 2 mods") && n.Contains("SHADOWED"));
     }
 
-    // files sort 0→z by folder-relative path (a, Absent…, b, Gated…, org\bbb, same, zzz)
+    // files are read breadth-first: the folder's own files A to Z, then each depth of subfolders, A to Z by path component
     [Fact]
-    public void FilesSortByFolderRelativePath() =>
-        Assert.Equal(new[] { "a.ini", "Absent.esp.ini", "b.ini", "Gated.esp.ini", "org\\bbb.ini", "same.ini", "zzz.ini" },
+    public void FilesAreReadBreadthFirst() =>
+        Assert.Equal(new[] { "a.ini", "Absent.esp.ini", "b.ini", "Gated.esp-extra.ini", "Gated.esp.ini", "Gated.esp.ini.bak", "LOUD.INI",
+                             "same.ini", "zzz.ini", "Aaa\\zz.ini", "org\\bbb.ini", "org\\deep\\ccc.ini" },
             Folder(Scan(), "weapon").Files.Select(f => f.SortKey));
+
+    // a name with '.ini' inside is read and gated on the plugin before it; an '.ini' ending not all lower case and a plugin name with more text are not read
+    [Fact]
+    public void TheFileNameRulesReadIniAnywhereAndRefuseTheRest()
+    {
+        var files = Folder(Scan(), "weapon").Files;
+        var bak = Assert.Single(files, f => f.SortKey == "Gated.esp.ini.bak");
+        Assert.Null(bak.NotApplied);
+        Assert.Equal("Gated.esp", bak.GatePlugin);
+        Assert.Contains("lower-case", Assert.Single(files, f => f.SortKey == "LOUD.INI").NotApplied);
+        Assert.Contains("exactly the plugin", Assert.Single(files, f => f.SortKey == "Gated.esp-extra.ini").NotApplied);
+    }
+
+    // a patcher whose switch is missing is off, except Light; folders are listed in patcher order (weapon before armor before light)
+    [Fact]
+    public void AMissingSwitchIsOffButLightRuns()
+    {
+        var scan = Scan();
+        Assert.False(Folder(scan, "armor").PatchingEnabled);
+        Assert.Contains(scan.Notes, n => n.Contains("no iEnable…Patching key for 'armor'"));
+        Assert.True(Folder(scan, "light").PatchingEnabled);
+        var order = scan.Folders.Select(f => f.Subfolder).Where(f => f is "weapon" or "armor" or "light").ToList();
+        Assert.Equal(new[] { "weapon", "armor", "light" }, order);
+    }
+
+    // a switch value reads as its leading integer (atoi): 2 and 1x are on, x1 and -0 are off
+    [Fact]
+    public void ASwitchReadsAsItsLeadingInteger()
+    {
+        Write(Path.Combine(_mods, "ModA"), "SKSE/Plugins/SkyPatcher.ini",
+            "[Patcher]\niEnableWeaponPatching=2\niEnableArmorPatching=1x\niEnableNpcPatching=x1\niEnableLightPatching=-0\n");
+        var scan = Scan();
+        Assert.True(Folder(scan, "weapon").PatchingEnabled);
+        Assert.True(Folder(scan, "armor").PatchingEnabled);
+        Assert.False(Folder(scan, "npc").PatchingEnabled);
+        Assert.False(Folder(scan, "light").PatchingEnabled);
+    }
+
+    // with no SkyPatcher.ini every patcher but Light is off, said once
+    [Fact]
+    public void NoSwitchFileLeavesEveryPatcherButLightOff()
+    {
+        File.Delete(Path.Combine(_mods, "ModA", "SKSE", "Plugins", "SkyPatcher.ini"));
+        var scan = Scan();
+        Assert.False(Folder(scan, "weapon").PatchingEnabled);
+        Assert.True(Folder(scan, "light").PatchingEnabled);
+        Assert.Contains("every patcher but Light is off", Assert.Single(scan.Notes, n => n.Contains("no loose SkyPatcher.ini")));
+        Assert.Contains(scan.Notes, n => n.Contains("is not loose in this order, which leaves 'weapon' patching off"));
+        Assert.DoesNotContain(scan.Notes, n => n.Contains("iEnable…Patching"));
+    }
+
+    // an unreadable SkyPatcher.ini is said and every folder marked; its patchers are replayed as running
+    [Fact]
+    public void AnUnreadableSwitchFileIsSaidAndMarksEveryFolder()
+    {
+        using var locked = new FileStream(Path.Combine(_mods, "ModA", "SKSE", "Plugins", "SkyPatcher.ini"), FileMode.Open, FileAccess.Read, FileShare.None);
+        var scan = Scan();
+        Assert.Contains(scan.Notes, n => n.Contains("SkyPatcher.ini could not be read") && n.Contains("UNKNOWN"));
+        Assert.All(scan.Folders, f => Assert.True(f.SwitchUnknown, f.Subfolder));
+        Assert.DoesNotContain(scan.Notes, n => n.Contains("assumed"));
+    }
+
+    // an unreadable SkyPatcher.ini replays every folder, as its note says: none reads off, the counts hold every line, and a draft into a new folder replays
+    [Fact]
+    public void AnUnreadableSwitchFileReplaysEveryFolder()
+    {
+        using var locked = new FileStream(Path.Combine(_mods, "ModA", "SKSE", "Plugins", "SkyPatcher.ini"), FileMode.Open, FileAccess.Read, FileShare.None);
+        var scan = Scan();
+        Assert.All(scan.Folders, f => Assert.True(f.PatchingEnabled, f.Subfolder));
+        Assert.NotEmpty(SkyPatcherDiscovery.OrderedLines(Folder(scan, "npc")));
+        Assert.NotEmpty(SkyPatcherDiscovery.OrderedLines(Folder(scan, "armor")));
+        Assert.DoesNotContain(scan.Notes, n => n.Contains("iEnable…Patching"));
+
+        var text = SkyPatcherWire.RenderLayer(new SkyPatcherLayerData(scan,
+            Array.Empty<SkyPatcherConflicts.SkyPatcherConflict>(), Array.Empty<SkyPatcherConflicts.SkyPatcherItm>(),
+            Array.Empty<SkyPatcherConflicts.SkyPatcherDuplicate>(), Array.Empty<SkyPatcherNoOpWrite>(),
+            Array.Empty<string>(), Array.Empty<string>(), false, Array.Empty<string>(), "Default"), null, 40_000);
+        Assert.DoesNotContain("the DLL skips this whole folder", text);
+        Assert.Contains($"({scan.Folders.Sum(f => f.Files.Count(x => x.NotApplied is null))} applied)", text);
+
+        var path = Path.Combine(_root, "drafts", "ammo", "d.ini");
+        Directory.CreateDirectory(Path.GetDirectoryName(path)!);
+        File.WriteAllText(path, "damage=9");
+        Assert.Null(SkyPatcherDraft.Prepare(path, "ammo", SkyPatcherCatalog.Load(), out var plan));
+        var warnings = new SkyPatcherOverlay.WarningSink();
+        var folded = plan!.Fold(scan, SkyPatcherCatalog.Load(), _ => true, out var refusal, warnings);
+        Assert.Null(refusal);
+        Assert.True(Folder(folded, "ammo").PatchingEnabled);
+        Assert.NotEmpty(SkyPatcherDiscovery.OrderedLines(Folder(folded, "ammo")));
+        Assert.DoesNotContain(warnings.Kept, w => w.Contains("iEnable…Patching"));
+    }
+
+    // a draft folds in with the same order, gate and switch answers a placed file of its name gets
+    [Fact]
+    public void ADraftFoldsInWithThePlacedFileRules()
+    {
+        var live = Scan();
+        var dir = Path.Combine(_root, "drafts", "weapon");
+        Directory.CreateDirectory(dir);
+        string Fold(string name, string sub, out SkyPatcherDiscovery.LayerScan folded)
+        {
+            var path = Path.Combine(dir, name);
+            File.WriteAllText(path, "attackDamage=9");
+            Assert.Null(SkyPatcherDraft.Prepare(path, sub, SkyPatcherCatalog.Load(), out var plan));
+            folded = plan!.Fold(live, SkyPatcherCatalog.Load(), p => p.Equals("Gated.esp", StringComparison.OrdinalIgnoreCase), out var refusal);
+            Assert.Null(refusal);
+            return path;
+        }
+        Fold("m.ini", "weapon", out var withM);
+        Assert.Equal(new[] { "Gated.esp.ini.bak", "LOUD.INI", "m.ini", "same.ini" },
+            Folder(withM, "weapon").Files.Select(f => f.SortKey).SkipWhile(k => k != "Gated.esp.ini.bak").Take(4));
+        Fold("Absent.esp.ini.bak", "weapon", out var withGate);
+        Assert.Contains("Absent.esp", Assert.Single(Folder(withGate, "weapon").Files, f => f.SortKey == "Absent.esp.ini.bak").NotApplied);
+        Fold("d.ini", "ammo", out var withAmmo);
+        Assert.False(Folder(withAmmo, "ammo").PatchingEnabled);
+        Assert.True(withAmmo.Folders.Select(f => f.Subfolder).ToList().IndexOf("ammo")
+                    < withAmmo.Folders.Select(f => f.Subfolder).ToList().IndexOf("weapon"));
+    }
 
     // Gated.esp.ini applies (its plugin is active)
     [Fact]

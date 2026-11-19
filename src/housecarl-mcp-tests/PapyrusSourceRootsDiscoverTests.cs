@@ -30,7 +30,7 @@ public sealed class PapyrusSourceRootsDiscoverTests : IDisposable
 
     string Mk(string mod, string layout, params string[] files)
     {
-        var d = Path.Combine(_root, mod, layout);
+        var d = BethesdaPath.Under(Path.Combine(_root, mod), layout);
         Directory.CreateDirectory(d);
         foreach (var f in files) File.WriteAllText(Path.Combine(d, f), "Scriptname X\n");
         return d;

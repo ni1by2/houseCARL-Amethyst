@@ -46,8 +46,7 @@ public static class FaceGenCheck
         var byClass = new Dictionary<string, int>(StringComparer.Ordinal);
         var byMod = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         int totalFound = 0, npcsScanned = 0, templated = 0, noPole = 0, noPoleUnreadable = 0, noFaceGenRace = 0, raceUnresolved = 0;
-        int excludedFromScope = 0, charGenPreset = 0, player = 0;
-        var raceMemo = new Dictionary<FormKey, bool?>();
+        int excludedFromScope = 0, charGenPreset = 0, player = 0, useTemplateFlag = 0, traitsNoTemplate = 0;
         bool listFamilySplit = classes != FaceGenFindingClass.All && classes.HasFlag(FaceGenFindingClass.FamilySplit);
         bool listNeverBaked = classes != FaceGenFindingClass.All && classes.HasFlag(FaceGenFindingClass.NeverBaked);
 
@@ -108,6 +107,9 @@ public static class FaceGenCheck
         var poleWait = new List<(int Order, FaceGenFinding Row, FormKey Fk, string Pole, string WinnerPlugin, RecordFields Winner, string? OffOrder)>();
 
         using var session = resolver.OpenSession();
+        // The face door over the winners, so the check's gate and pair are every lane's (docs/facegen.md).
+        var reads = new RoundReads(keys => BodyGather.Winners(view, session, keys));
+        var faces = new NpcFace(reads.Get);
 
         // One plugin's bodies for many NPCs; an open fault surfaces raw, as the one-record read this replaced surfaced it.
         void Collect(string plugin, IReadOnlyCollection<FormKey> keys, Dictionary<FormKey, IMajorRecordGetter> sink)
@@ -123,15 +125,20 @@ public static class FaceGenCheck
             if (!judged.Add(fk)) return;
             npcsScanned++;
             if (body is not INpcGetter npc) return;
-            if (InheritsAppearance(npc)) { templated++; return; }
-            // A race without the FaceGenHead flag has no baked head at all. The flag is Mutagen's own, so this is
-            // not a hand-kept race list.
-            switch (RaceBakes(npc.Race.FormKey))
+            // A face drawn from a template root is that root's bake, not this NPC's: excluded, as is an NPC Mutagen
+            // names no pair for, counted by the reason.
+            // The flag alone says the face is a template root's, so the chain is not walked for an answer thrown away.
+            if (NpcFace.DrawsFromTemplate(npc)) { templated++; return; }
+            // With no Traits template the NPC is its own one root.
+            var own = faces.Of(fk, npc).Roots.Single();
+            switch (own.Gap)
             {
-                case false: noFaceGenRace++; return;
-                case null: raceUnresolved++; return;
+                case FaceGap.None: Classify(fk, body, winnerPlugin, offOrderFile, order, own.Mesh!, own.Tint!); return;
+                case FaceGap.NoFaceGenHead: noFaceGenRace++; return;
+                case FaceGap.TraitsNoTemplate: traitsNoTemplate++; return;
+                case FaceGap.UseTemplate: useTemplateFlag++; return;
+                default: raceUnresolved++; return;
             }
-            Classify(fk, body, winnerPlugin, offOrderFile, order);
         }
 
         // exclude= narrows the SELECTION, not the judgement, so an NPC is out only when EVERY plugin touching it is
@@ -141,18 +148,6 @@ public static class FaceGenCheck
             if (dropped.Count == 0 || !dropped.Contains(winner)) return false;
             var touching = view.TouchingPlugins(fk);
             return touching is null || touching.All(dropped.Contains);
-        }
-
-        // Does this race bake a head? Memoized per race. null is "could not be read", which is NOT "does not bake":
-        // the NPC is left out and counted.
-        bool? RaceBakes(FormKey raceKey)
-        {
-            if (raceMemo.TryGetValue(raceKey, out var had)) return had;
-            bool? answer = null;
-            if (view.ResolveWinner(raceKey) is { } rw
-                && BodyGather.Winners(view, session, new[] { raceKey })(raceKey) is IRaceGetter race)
-                answer = race.Flags.HasFlag(Race.Flag.FaceGenHead);
-            return raceMemo[raceKey] = answer;
         }
 
         try
@@ -316,15 +311,14 @@ public static class FaceGenCheck
                                       assets.ReadIncomplete, wholeOrder, noFaceGenRace, raceUnresolved, withheld,
                                       assets.RootFailures, NoComparisonPoleUnreadable: noPoleUnreadable,
                                       ArchiveFailures: assets.BsaFailures,
-                                      NeverBakedCharGenPreset: charGenPreset, NeverBakedPlayer: player);
+                                      NeverBakedCharGenPreset: charGenPreset, NeverBakedPlayer: player,
+                                      NpcsUseTemplateFlag: useTemplateFlag, NpcsTraitsNoTemplate: traitsNoTemplate);
 
         // ---- the per-NPC join ---------------------------------------------------------------------
-        void Classify(FormKey fk, IMajorRecordGetter body, string winnerPlugin, bool offOrderFile, int order)
+        void Classify(FormKey fk, IMajorRecordGetter body, string winnerPlugin, bool offOrderFile, int order, string meshPath, string tintPath)
         {
-            var meshPath = FaceGenPath.For(fk, FaceGenSlot.Mesh);
-            var tintPath = FaceGenPath.For(fk, FaceGenSlot.Tint);
-            var mesh = Half(meshPath);
-            var tint = Half(tintPath);
+            var mesh = Half(meshPath, out var meshHidden);
+            var tint = Half(tintPath, out var tintHidden);
             string master = fk.ModKey.FileName.String;
 
             FaceGenFindingClass cls;
@@ -347,8 +341,8 @@ public static class FaceGenCheck
                 else cls = OneProduct(mw.Layer, tw.Layer) ? FaceGenFindingClass.FamilySplit
                                                          : FaceGenFindingClass.SplitBake;
             }
-            else if (mesh is not null) cls = FaceGenFindingClass.TintAbsent;
-            else if (tint is not null) cls = FaceGenFindingClass.MeshAbsent;
+            else if (mesh is not null) { cls = FaceGenFindingClass.TintAbsent; detail = tintHidden?.Sentence(); }
+            else if (tint is not null) { cls = FaceGenFindingClass.MeshAbsent; detail = meshHidden?.Sentence(); }
             else if (NeverBakedKind(fk, body) is { } kind)
             {
                 // No bake is expected for this NPC: its own class, withheld by default like family_split.
@@ -363,7 +357,9 @@ public static class FaceGenCheck
             else
             {
                 cls = FaceGenFindingClass.BakeAbsent;
-                if (body is INpcGetter n && NoHeadOrFaceData(n)) detail = NoHeadHint;
+                // A bake MO2 hides is the answer before any guess about the record.
+                detail = meshHidden?.Sentence() ?? tintHidden?.Sentence();
+                if (detail is null && body is INpcGetter n && NoHeadOrFaceData(n)) detail = NoHeadHint;
             }
 
             if (!classes.HasFlag(cls)) return;                              // Add would drop it
@@ -383,9 +379,10 @@ public static class FaceGenCheck
 
         // One half of the pair: the winning provider plus the MO2 LAYER it lives in. A BSA carries its layer down
         // from the source the resolver picked, so a layer can never belong to an archive that shares the filename.
-        FaceGenHalf? Half(string relPath)
+        FaceGenHalf? Half(string relPath, out HiddenCopies? hidden)
         {
             var hit = assets.Resolve(relPath);
+            hidden = hit.Hidden;
             if (hit is not { Exists: true, Winner: { } w }) return null;
             return new FaceGenHalf(w.Source, w.Kind, w.OwningMod is { Length: > 0 } mod ? mod : w.Source);
         }
@@ -497,10 +494,6 @@ public static class FaceGenCheck
     /// <summary>No head parts and none of FaceMorph, FaceParts, TintLayers: the shape of a voice or dummy actor, though the CK bakes most such NPCs.</summary>
     static bool NoHeadOrFaceData(INpcGetter n)
         => n.HeadParts.Count == 0 && n.FaceMorph is null && n.FaceParts is null && n.TintLayers.Count == 0;
-
-    /// <summary>Does this NPC inherit its appearance rather than carry a bake of its own? Excluded from the population, never reported as a missing bake.</summary>
-    public static bool InheritsAppearance(INpcGetter npc)
-        => !npc.Template.IsNull && npc.Configuration.TemplateFlags.HasFlag(NpcConfiguration.TemplateFlag.Traits);
 
     /// <summary>A record's catalog type name, read the same way <see cref="ReadEngine"/> reads it so the two cannot spell one type differently.</summary>
     static string TypeNameOf(Type recordClass)
@@ -637,7 +630,9 @@ public sealed record FaceGenCheckResult(
     IReadOnlyList<string>? AssetWarnings = null,  // the asset build's own warnings (an archive list not found, a kept profile), set by the host on a sweep that ran; null or empty when it had none
     IReadOnlyList<string>? ArchiveFailures = null, // the archives this build could not open, each named with the reason, set on a sweep that ran; null or empty when every archive read
     int NeverBakedCharGenPreset = 0,   // the 'never_baked' rows by kind
-    int NeverBakedPlayer = 0)
+    int NeverBakedPlayer = 0,
+    int NpcsUseTemplateFlag = 0,       // excluded: ACBS 0x100, for which Mutagen names no face
+    int NpcsTraitsNoTemplate = 0)      // excluded: the Traits flag with no Template, for which Mutagen names no face
 {
     public bool Success => Error is null;
 

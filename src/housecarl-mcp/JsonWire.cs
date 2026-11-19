@@ -21,7 +21,7 @@ static class JsonWire
 
     static string Finish(MemoryStream ms) => Encoding.UTF8.GetString(ms.ToArray());
 
-    static void WriteNullable(Utf8JsonWriter w, string name, string? v)
+    internal static void WriteNullable(Utf8JsonWriter w, string name, string? v)
     {
         if (v is null) w.WriteNull(name); else w.WriteString(name, v);
     }
@@ -174,7 +174,7 @@ static class JsonWire
         w.WriteNumber(name + "_omitted", cut.Omitted);
     }
 
-    static void WriteStringArray(Utf8JsonWriter w, string name, IReadOnlyList<string> items)
+    internal static void WriteStringArray(Utf8JsonWriter w, string name, IReadOnlyList<string> items)
     {
         w.WriteStartArray(name);
         foreach (var s in items) w.WriteStringValue(s);
@@ -202,6 +202,16 @@ static class JsonWire
         return omitted;
     }
 
+    /// <summary>The answer's count of rows its reads cut, beside the row counts, and the statement naming them; nothing when none was.</summary>
+    /// <param name="counted">The caller's counts already carry <c>records_cut</c>.</param>
+    internal static void WriteCuts(Utf8JsonWriter w, RecordCuts? cuts, bool counted = false)
+    {
+        if (cuts?.Sentence() is not { } cut) return;
+        if (!counted) w.WriteNumber("records_cut", cuts.Count);
+        w.WriteNumber("cut_budget", cuts.Budget);
+        w.WriteString("cut_note", cut);
+    }
+
     // ---- shared record + field writers --------------------------------------------------------------
     /// <summary>Write the fields array: one flat <c>{path, value}</c> or <c>{path, note}</c> per leaf, then any cut sentinel.</summary>
     /// <param name="emitted">Collects the annotated paths this array ACTUALLY carried.</param>
@@ -211,7 +221,7 @@ static class JsonWire
     {
         var lv = levers ?? LeverNames.Legacy;
         // The read's own expansion cut rides as the one '…' entry, last, where a max_chars cut joins it.
-        var expansion = r.Fields.FirstOrDefault(f => f.Path == "…");
+        var expansion = r.Fields.FirstOrDefault(r.IsCutLine);
         string? cut = null;
         w.WriteStartArray("fields");
         for (int i = 0; i < r.Fields.Count; i++)
@@ -380,15 +390,17 @@ static class JsonWire
             w.WriteStartArray("records");
             int rendered = 0; bool rowsTruncated = false;
             var childFields = new SortedDictionary<string, bool>(StringComparer.Ordinal);   // the annotated fields the rows RENDERED carried, per tier
+            var cuts = new RecordCuts();   // over the rows rendered, as `rendered` counts them
             for (int i = 0; i < outcomes.Count; i++)
             {
                 if (manifestOnly) break;   // to_file: the rows are the FILE
-                w.Flush();
-                if (Chars(ms) >= cap) { rowsTruncated = true; break; }
                 var o = outcomes[i];
+                int rowCap = cap - RenderBudget.CutHold(cuts, o);
+                w.Flush();
+                if (Chars(ms) >= rowCap) { rowsTruncated = true; break; }
                 string? hit = matches is { } mt && i < mt.Count ? mt[i] : null;   // multi-target references= un-merge
                 if (o.Error is not null) { w.WriteStartObject(); w.WriteString("formid", FormIdToken.Of(o.FormKey)); w.WriteString("error", o.Error); if (hit is not null) w.WriteString("matches", hit); w.WriteEndObject(); }
-                else WriteReadRecord(w, o, ms, cap, hit, childFields: childFields, levers: levers);
+                else { WriteReadRecord(w, o, ms, rowCap, hit, childFields: childFields, levers: levers); cuts.Add(o.Record); }
                 rendered++;
             }
             w.WriteEndArray();
@@ -396,6 +408,7 @@ static class JsonWire
             // What the bodies this batch renders cost to read, when the caller clocked them (#582).
             if (bodyCost is { } bc) { w.WriteNumber("rows_read", bc.RowsRead); w.WriteNumber("render_ms", bc.Millis); }
             w.WriteBoolean("truncated", rowsTruncated);
+            WriteCuts(w, cuts);
             // Over the annotated fields this document actually carries, never the input list.
             WriteOwnedChildNote(w, childFields);
             truncated = rowsTruncated;
@@ -626,7 +639,7 @@ static class JsonWire
     public static string RenderDelta(IReadOnlyList<RecordReads.DeltaRow> rows, int maxChars, OrderStamp? epoch,
                                      IReadOnlyList<EnvelopePair> envelope,
                                      IReadOnlyList<KeyValuePair<string, int>> counts,
-                                     SpillState? spill, out bool truncated)
+                                     SpillState? spill, out bool truncated, RecordCuts? cuts = null)
     {
         truncated = false;
         int cap = Wire.Cap(maxChars);
@@ -638,6 +651,7 @@ static class JsonWire
             WriteEnvelope(w, envelope);
             // The census covers the COMPLETE list: rows may be a WINDOW, so the caller hands the counters in.
             foreach (var (k, v) in counts.Select(c => (c.Key, c.Value))) w.WriteNumber(k, v);
+            WriteCuts(w, cuts, counted: true);
             WriteEpoch(w, epoch);
             w.WriteStartArray("rows");
             int rendered = 0; bool rowsTruncated = false;
@@ -752,7 +766,7 @@ static class JsonWire
     public static string RenderTree(IReadOnlyList<RecordReads.TreeRow> rows, int maxChars, OrderStamp? epoch,
                                     IReadOnlyList<EnvelopePair> envelope,
                                     IReadOnlyList<KeyValuePair<string, int>> counts,
-                                    SpillState? spill, out bool truncated, LeverNames? levers = null)
+                                    SpillState? spill, out bool truncated, LeverNames? levers = null, RecordCuts? cuts = null)
     {
         truncated = false;
         int cap = Wire.Cap(maxChars);
@@ -763,6 +777,7 @@ static class JsonWire
             w.WriteStartObject();
             WriteEnvelope(w, envelope);
             foreach (var (k, v) in counts.Select(c => (c.Key, c.Value))) w.WriteNumber(k, v);   // the counters cover the complete list, not this window
+            WriteCuts(w, cuts, counted: true);
             WriteEpoch(w, epoch);
             w.WriteStartArray("rows");
             int rendered = 0; bool rowsTruncated = false; bool anyDeclarers = false;
@@ -848,6 +863,7 @@ static class JsonWire
         }
         if (row.CyclesCapped) w.WriteBoolean("cycles_capped", true);
         WriteNullable(w, "truncation", row.TruncationNote);
+        if (row.Note is not null) w.WriteString("note", row.Note);
         if (row.TemplateReport is { } tr)
         {
             w.WriteStartArray("template_inheritance");
@@ -1143,6 +1159,7 @@ static class JsonWire
                 int rendered = 0; bool rowsTruncated = false;
                 var renderClock = System.Diagnostics.Stopwatch.StartNew();
                 var childFields = new SortedDictionary<string, bool>(StringComparer.Ordinal);   // the clause per tier, over the fields the rows carried
+                var cuts = new RecordCuts();   // over the rows rendered
                 for (int i = 0; i < q.Keys.Count && !manifestOnly; i++)      // to_file: the rows are the FILE
                 {
                     w.Flush();
@@ -1153,8 +1170,10 @@ static class JsonWire
                     {
                         // winner_fields=: the WINNER's body whatever the scan scope; pinned to the scan's build.
                         var o = reader!.Row(i);   // a collapsed cell names the caller's own expansion knob
+                        int rowCap = cap - RenderBudget.CutHold(cuts, o);
+                        if (Chars(ms) >= rowCap) { rowsTruncated = true; break; }
                         if (o.Error is not null) { w.WriteStartObject(); w.WriteString("formid", FormIdToken.Of(fk)); w.WriteString("error", o.Error); if (matches is not null) w.WriteString("matches", matches); w.WriteEndObject(); }
-                        else WriteReadRecord(w, o, ms, cap, matches, childFields: childFields, levers: levers);
+                        else { WriteReadRecord(w, o, ms, rowCap, matches, childFields: childFields, levers: levers); cuts.Add(o.Record); }
                     }
                     else
                     {
@@ -1171,6 +1190,7 @@ static class JsonWire
                 { w.WriteNumber("rendered_to_file", a.Manifest.RowCount); w.WriteNumber("render_ms", artifactMs); }
                 else if (detail && !manifestOnly) w.WriteNumber("render_ms", renderClock.ElapsedMilliseconds);
                 w.WriteBoolean("truncated", rowsTruncated);
+                WriteCuts(w, cuts);
                 WriteOwnedChildNote(w, childFields);
                 truncated = rowsTruncated;
             }
@@ -1325,6 +1345,7 @@ static class JsonWire
         var childFields = new SortedDictionary<string, bool>(StringComparer.Ordinal);   // the clause per tier, over the cells the rows carried
         var foldNotes = new SortedSet<string>(StringComparer.Ordinal);   // what the read said that no column carries — the truncation note above all
         int foldRows = 0;            // rows, which a fold makes ELEMENTS; `rendered` stays records
+        var cuts = new RecordCuts();   // over the records rendered
         w.WriteStartArray("rows");
         for (int i = 0; i < rowKeys.Count && !manifestOnly; i++)      // to_file: the rows are the FILE
         {
@@ -1394,6 +1415,7 @@ static class JsonWire
                     if (cut) break;                                   // a half-written record is not a rendered one
                     if (sharedNote is not null) AddNote(FormIdToken.Of(fk), sharedNote);
                     if (Wire.ExcludedNote(o.Pin, fk) is { } foldExcluded) AddNote(FormIdToken.Of(fk), foldExcluded, "excluded_note");
+                    cuts.Add(r);
                     rendered++;
                     continue;
                 }
@@ -1459,6 +1481,7 @@ static class JsonWire
         if (fold is not null) w.WriteNumber("rows_rendered", foldRows);
         writeCost(renderClock.ElapsedMilliseconds);
         w.WriteBoolean("truncated", rowsTruncated);
+        WriteCuts(w, cuts);
         WriteOwnedChildNote(w, childFields);
         // The read's own note — a truncated expansion above all — belongs to this document.
         if (foldNotes.Count > 0) w.WriteString("read_note", string.Join(" ", foldNotes));
@@ -2840,8 +2863,7 @@ static class JsonWire
             int caveatsOmitted = WriteCappedStringArray(w, ms, "bsa_failures", d.BsaFailures, budget)
                                + RootFailuresJson(w, ms, d, budget)
                                + WriteCappedStringArray(w, ms, "warnings", d.Warnings, budget);
-            if (d.SelectorNotes is null) { w.WriteNull("selector_notes"); w.WriteNumber("selector_notes_omitted", 0); }
-            else caveatsOmitted += WriteCappedStringArray(w, ms, "selector_notes", d.SelectorNotes, budget);
+            caveatsOmitted += AssetNotesJson(w, ms, d, budget);
 
             w.WriteStartArray("results");
             int rendered = 0;
@@ -2887,8 +2909,7 @@ static class JsonWire
             int omitted = WriteCappedStringArray(w, ms, "bsa_failures", d.BsaFailures, caveatBudget)
                         + RootFailuresJson(w, ms, d, caveatBudget)
                         + WriteCappedStringArray(w, ms, "warnings", d.Warnings, caveatBudget);
-            if (d.SelectorNotes is null) { w.WriteNull("selector_notes"); w.WriteNumber("selector_notes_omitted", 0); }
-            else omitted += WriteCappedStringArray(w, ms, "selector_notes", d.SelectorNotes, caveatBudget);
+            omitted += AssetNotesJson(w, ms, d, caveatBudget);
 
             WriteCensusCounters(w, c);
             // The layer tables through the shared axes: each frame is reserved before its rows are offered to it.
@@ -2935,7 +2956,7 @@ static class JsonWire
             w.WriteNumber("bsa_failures_omitted", d.BsaFailures.Count);
             if (d.RootFailures.Count > 0) w.WriteNumber("root_failures_omitted", d.RootFailures.Count);
             w.WriteNumber("warnings_omitted", d.Warnings.Count);
-            w.WriteNumber("selector_notes_omitted", d.SelectorNotes?.Count ?? 0);
+            AssetNotesOmittedJson(w, d);
             WriteCensusCounters(w, c);
             // Read at the same depth the render writes the axis at, so the two measure one object.
             var depths = new JsonUnitDepths(w.CurrentDepth);
@@ -2978,8 +2999,7 @@ static class JsonWire
             int omitted = WriteCappedStringArray(w, ms, "bsa_failures", d.BsaFailures, cap)
                         + RootFailuresJson(w, ms, d, cap)
                         + WriteCappedStringArray(w, ms, "warnings", d.Warnings, cap);
-            if (d.SelectorNotes is null) { w.WriteNull("selector_notes"); w.WriteNumber("selector_notes_omitted", 0); }
-            else omitted += WriteCappedStringArray(w, ms, "selector_notes", d.SelectorNotes, cap);
+            omitted += AssetNotesJson(w, ms, d, cap);
             w.WriteBoolean("truncated", omitted > 0);
             Artifacts.WriteSpillJson(w, spill);
             WriteCapOverrun(w, ms, cap);
@@ -2994,13 +3014,7 @@ static class JsonWire
     static void WriteAssetAdvice(Utf8JsonWriter w, TransportCounts c, int cap, bool caveatsCut,
                                  bool everySentence = false)
     {
-        if (everySentence || c.Remaining > 0)
-        {
-            w.WriteNumber("next_limit", c.NextLimit);
-            w.WriteNumber("next_offset", c.Offset + c.Rendered);
-        }
-        if (everySentence || (c.Remaining == 0 && c.Total > 0 && c.Offset >= c.Total))
-            w.WriteString("offset_note", $"offset={c.Offset} is past the end of the selection ({c.Total} path(s)) — the last page starts before it.");
+        TransportAccounting.WritePageAdviceJson(w, c, "path(s)", everySentence);
         if (everySentence || c.Truncated > 0 || caveatsCut)
             w.WriteString("truncated_note",
                 $"max_chars={cap} cut content from this document — accounting.truncated names the resolved path(s) " +
@@ -3021,7 +3035,7 @@ static class JsonWire
             w.WriteNumber("bsa_failures_omitted", d.BsaFailures.Count);
             if (d.RootFailures.Count > 0) w.WriteNumber("root_failures_omitted", d.RootFailures.Count);
             w.WriteNumber("warnings_omitted", d.Warnings.Count);
-            w.WriteNumber("selector_notes_omitted", d.SelectorNotes?.Count ?? 0);
+            AssetNotesOmittedJson(w, d);
             TransportAccounting.WriteJson(w, widest);
             w.WriteBoolean("truncated", true);
             WriteAssetAdvice(w, widest, cap, caveatsCut: true, everySentence: true);
@@ -3030,6 +3044,23 @@ static class JsonWire
             w.WriteEndObject();
         }
         return Chars(ms);
+    }
+
+    /// <summary>The selector notes, then the call's own notes only when there are some; the entries the budget omitted.</summary>
+    static int AssetNotesJson(Utf8JsonWriter w, CharCountedStream ms, AssetStatusData d, int budget)
+    {
+        int omitted = 0;
+        if (d.SelectorNotes is null) { w.WriteNull("selector_notes"); w.WriteNumber("selector_notes_omitted", 0); }
+        else omitted += WriteCappedStringArray(w, ms, "selector_notes", d.SelectorNotes, budget);
+        if (d.Notes is { Count: > 0 }) omitted += WriteCappedStringArray(w, ms, "notes", d.Notes, budget);
+        return omitted;
+    }
+
+    /// <summary>The widest omitted counters <see cref="AssetNotesJson"/> can write, for a reserve.</summary>
+    static void AssetNotesOmittedJson(Utf8JsonWriter w, AssetStatusData d)
+    {
+        w.WriteNumber("selector_notes_omitted", d.SelectorNotes?.Count ?? 0);
+        if (d.Notes is { Count: > 0 }) w.WriteNumber("notes_omitted", d.Notes.Count);
     }
 
     /// <summary>The loose roots that could not be walked, written ONLY when there are some: a build where every
@@ -3045,6 +3076,7 @@ static class JsonWire
         // Only on a row the formids= SELECT derived, so a plain path row is byte-for-byte the document it always was.
         if (r.FormId is not null) w.WriteString("formid", r.FormId);
         if (r.Slot is { } slot) w.WriteString("slot", FaceGenPath.Token(slot));
+        if (r.FaceNote is { } face) w.WriteString("face_note", face);
         if (r.Error is not null)                                  // a rejected path: drive-rooted, or escaping with '..'
         {
             // A per-ROW error, never the document's discriminant: the call succeeded and rendered a row that failed.
@@ -3060,6 +3092,8 @@ static class JsonWire
         foreach (var p in hit.Providers) WriteAssetProvider(w, null, p);
         w.WriteEndArray();
         w.WriteBoolean("ambiguous", hit.Ambiguous);
+        // Only where a root holds the path hidden, so any other row is the document it always was.
+        AbsentWords.Write(w, hit.Hidden);
         // On a provider= call only, so a plain row is byte-for-byte the document it always was.
         if (r.Standing is { } st) w.WriteString("provider_standing", st.Token());
         WriteNifLinks(w, r);
@@ -3088,6 +3122,7 @@ static class JsonWire
                 if (pair.Winner is { } pw) WriteAssetProvider(w, "winner", pw); else w.WriteNull("winner");
                 // The OWNER `differs` below is decided on, not the archive name and not the bare OwningMod.
                 WriteNullable(w, "winner_mod", pair.Winner is { } pw2 ? AssetPathResult.Owner(pw2) : null);
+                AbsentWords.Write(w, pair.Hidden);
             }
             else { w.WriteNull("exists"); w.WriteNull("winner"); w.WriteNull("winner_mod"); }
             w.WriteBoolean("differs", r.PairDiffers);
@@ -3115,6 +3150,7 @@ static class JsonWire
             {
                 w.WriteBoolean("exists", lh.Exists);
                 if (lh.Winner is { } lw) WriteAssetProvider(w, "winner", lw); else w.WriteNull("winner");
+                AbsentWords.Write(w, lh.Hidden);
             }
             w.WriteEndObject();
         }
@@ -3133,7 +3169,8 @@ static class JsonWire
     // ---- housecarl_place (S2 write) -----------------------------------------------------------------
     /// <summary>The machine-readable twin of <see cref="PlaceWire"/>'s render, on the write surface's contract, with
     /// the "this does not win until you enable the mod" instruction in-band as <c>next_step</c>.</summary>
-    public static string RenderPlaceOutcome(PlaceOutcome o, int maxChars, IReadOnlySet<string>? poleWithheld = null)
+    public static string RenderPlaceOutcome(PlaceOutcome o, int maxChars, IReadOnlySet<string>? poleWithheld = null,
+                                            IReadOnlyDictionary<string, string>? faceNotes = null)
     {
         int cap = Wire.Cap(maxChars);
         using var ms = new CharCountedStream();
@@ -3166,7 +3203,8 @@ static class JsonWire
             {
                 // rendered > 0: the FIRST row always renders — the only place current_winner is stated.
                 if (rendered > 0 && Over(w, ms, cap)) { truncated = true; break; }
-                WritePlaceRow(w, r, modFolder, o.FreshFolder, poleWithheld?.Contains(r.AssetPath) == true);
+                WritePlaceRow(w, r, modFolder, o.FreshFolder, poleWithheld?.Contains(r.AssetPath) == true,
+                              faceNotes?.GetValueOrDefault(r.AssetPath));
                 rendered++;
             }
             w.WriteEndArray();
@@ -3192,10 +3230,12 @@ static class JsonWire
         return Finish(ms);
     }
 
-    static void WritePlaceRow(Utf8JsonWriter w, PlaceResult r, string? modFolder, bool freshFolder, bool poleWithheld)
+    static void WritePlaceRow(Utf8JsonWriter w, PlaceResult r, string? modFolder, bool freshFolder, bool poleWithheld,
+                              string? faceNote = null)
     {
         w.WriteStartObject();
         w.WriteString("path", r.AssetPath);
+        if (faceNote is not null) w.WriteString("face_note", faceNote);
         w.WriteBoolean("placed", r.Placed);
         WriteNullable(w, "error", r.Error);
         if (r.Placed)
@@ -3210,7 +3250,7 @@ static class JsonWire
             w.WriteBoolean("winner_loses_on_enable", r.WinnerLosesOnEnable);
             // Bytes served out of a mod MO2 does not load are a fact of the SOURCE.
             if (r.SourceOffOrderProvider is { } offOrder)
-                w.WriteString("source_off_order_note", WriteSentences.PlaceSourceOffOrder(offOrder, r.SourceOffOrderOwnerEnabled));
+                w.WriteString("source_off_order_note", WriteSentences.PlaceSourceOffOrder(offOrder, r.SourceOffOrderOwnerEnabled, r.SourceOffOrderKind));
             WriteNullable(w, "source_off_order_provider", r.SourceOffOrderProvider);
         }
         // An input the call carried but this destination could not use is SAID on both lanes, not dropped.
@@ -3236,6 +3276,7 @@ static class JsonWire
             w.WriteNumber("response", l.ResponseNumber);
             w.WriteBoolean("fuz_present", l.FuzPresent);
             w.WriteBoolean("lip_present", l.LipPresent);
+            AbsentWords.Write(w, l.FuzHidden, "fuz_hidden");
             WriteNullable(w, "fuz_path", l.FuzPath);
             WriteNullable(w, "lip_path", l.LipPath);
             WriteNullable(w, "fuz_winner", l.FuzWinner);
@@ -3374,6 +3415,8 @@ static class JsonWire
         SweepSubject.FaceGenModRows => "facegen_by_owning_mod",
         SweepSubject.AssetWinnerRows => "winners_by_layer",
         SweepSubject.AssetShadowedRows => "shadowed_by_layer",
+        SweepSubject.AssetWalkEdgeRows => "nodes_by_edge",
+        SweepSubject.AssetWalkStandingRows => "nodes_by_standing",
         _ => s.ToString(),
     };
 }

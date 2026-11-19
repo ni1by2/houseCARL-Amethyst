@@ -1,5 +1,5 @@
 ---
-updated: 2026-10-09
+updated: 2026-11-17
 covers: [src/housecarl-core/SksePluginReader.cs, src/housecarl-core/SksePeek.cs, src/housecarl-core/SkseConfigReferenceExtractor.cs, src/housecarl-core/NativePairing.cs, src/housecarl-mcp/SkseTools.cs, src/housecarl-mcp/SkseInventoryWire.cs, src/housecarl-mcp/SkseConfigAuditWire.cs, src/housecarl-mcp/NativePairingWire.cs, src/housecarl-mcp/SkseRenderParts.cs, src/housecarl-mcp/SkseJsonDoc.cs]
 ---
 # The SKSE layer: what a DLL declares, and the static-load rule
@@ -142,6 +142,27 @@ residual edges, all of them false-flag or missed-flag modes of the audit:
 
 ### Config references
 
+The audit reads every config under `SKSE\Plugins` but SkyPatcher's INIs: a name holding `.ini` under its root (the
+layer scan's own name rule), the root matched in any letter case (`SkyPatcher\` or `skypatcher\`), and its switches
+file `SKSE\Plugins\SkyPatcher.ini`, both taken from SkyPatcher's row of the runtime-format source
+(`SkyPatcherDiscovery.IsSkyPatcherIni`). They are `housecarl_layer`'s, which parses line by line only the loose
+winner of an INI in a type subfolder: it lists a packed one as not applied and one sitting directly in the root as
+applied to nothing, and reads from `SkyPatcher.ini` only its `[Patcher]` section's `iEnable…Patching` switches. The
+audit leaves every one of them out all the same, loose or packed, in the root or not (spec R44, top-up T2), so a form
+reference in a packed or root-level INI, or in another value of `SkyPatcher.ini`, is checked by no tool. Any other
+file under that root, and a folder whose name only starts with `SkyPatcher`, stays. The layer's overview has no count
+of SkyPatcher targets naming nothing, so the audit's headline counted them and no one call does now; `layer filter=`
+shows each on its line. The text render says the INIs are left out, in one line naming `housecarl_layer`, after the
+whole audit's scope note and in a `filter=` answer that matches nothing; the json does not.
+
+A config whose winner is a BSA (a loose copy always outranks one) is said to be only inside a BSA, with one sentence
+for every framework: most SKSE plugins read loose files only, so it may never be read. Its references are verdicted
+as for a loose one. The sentence does not name the framework's own read, because two (Inventory Injector, Dynamic
+Armor Variants) open their config through the game's archive stream and most are not sourced (DECISIONS 2026-11-17
+(1), Q5 (c)). The text render says it on the file's block under `filter=` and in its own section of the whole audit;
+the json row carries it as `note`, which no other row has, and the json totals count those files as `archive_only`
+over the answer's whole population, not its window, as `read_errors` does.
+
 `SkseConfigReferenceExtractor` is catalog-free and framework-agnostic: it finds the three things checkable against the
 load order without knowing what any framework MEANS. A form token is a hex FormID paired with a plugin filename by `|`
 or `~` in either order, normalized through the one shared home `FormIdRange.LocalObjectId`; a path-segment gate is a
@@ -259,6 +280,13 @@ number describes a wider set than the rows beside it.
   and `SkseConfigRenderFramingTests` pins the BROKEN / INERT headline. `SkseConfigFormObjectTests` pins the form
   object: its verdicts and paths, the id-0 skip, the raw of a non-number id, the line beside the path, and the break;
   `SkseConfigEngineImplicitTests` pins PlayerRef as OK while another absent Skyrim.esm form stays DANGLING.
+- *Config references*, the SkyPatcher split and the BSA-only sentence: `SkseConfigSkyPatcherSplitTests` — both folder
+  spellings, `SkyPatcher.ini` in another case and one only in a BSA, a packed SkyPatcher INI, one in the root and a
+  name holding `.ini` mid-name leave; a non-INI under the root, a look-alike folder and every other config stay with
+  their references; a config only in a BSA carries the sentence in both renders and json and is counted in the json
+  totals, and one with a loose copy does not; the whole audit and a filter matching nothing name `housecarl_layer`, the caveats one newline after it.
+  `SkseConfigFileSectionTests` pins the read-errors and BSA-only sections: heading, rows, cut notice, a heading that
+  does not fit, and the window.
 - *Transport*: `SkseTransportTests.EachFamilysTextRenderFilledPastItsCapAnswersInsideIt` and
   `TheJsonTailIsPaidForInsideMaxCharsRatherThanAppendedPastIt` — the tail is charged before a row is laid, and a row
   that crossed is taken back out; `ACapTooSmallForTheFixedPartSaysSoInsteadOfOverrunningSilently` — the one arm that

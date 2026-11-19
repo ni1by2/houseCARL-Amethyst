@@ -1,6 +1,6 @@
 ---
-updated: 2026-10-09
-covers: [src/housecarl-core/SkyPatcherParse.cs, src/housecarl-core/SkyPatcherCatalog.cs, src/housecarl-core/SkyPatcherFieldMap.cs, src/housecarl-core/SkyPatcherDiscovery.cs, src/housecarl-core/SkyPatcherOverlay.cs, src/housecarl-core/SkyPatcherConflicts.cs, src/housecarl-core/SkyPatcherDraft.cs, src/housecarl-mcp/SkyPatcherTools.cs, src/housecarl-mcp/SkyPatcherReplay.cs]
+updated: 2026-11-17
+covers: [src/housecarl-core/SkyPatcherParse.cs, src/housecarl-core/SkyPatcherCatalog.cs, src/housecarl-core/SkyPatcherFieldMap.cs, src/housecarl-core/SkyPatcherDiscovery.cs, src/housecarl-core/SkyPatcherReach.cs, src/housecarl-core/SkyPatcherOverlay.cs, src/housecarl-core/SkyPatcherConflicts.cs, src/housecarl-core/SkyPatcherDraft.cs, src/housecarl-core/SkyPatcherEditorIds.cs, src/housecarl-mcp/SkyPatcherTools.cs, src/housecarl-mcp/SkyPatcherReplay.cs]
 ---
 # The SkyPatcher layer
 
@@ -14,11 +14,19 @@ hand-modeled catalog.
 ## Contracts
 
 **The catalog is transcribed, never invented.** It is the full enumeration of every documented
-filter and operation per record type, taken from the bundled `skypatcher-authoring` reference, and
-a key resolving to no entry is reported as Unknown rather than assumed. Its record dimension (name,
-sig, subfolder, primaryFilter) is cross-checked in CI against the router table in that skill's
-`SKILL.md` — `SkyPatcherCatalogTests.TheCatalogMatchesTheSkillRouterTable` requires the row count to equal the
-loaded record count and matches recordType and signature per subfolder. That is the one contract
+filter and operation per record type, taken from the bundled `skypatcher-authoring` reference at the
+SkyPatcher version it names (`version`, 8.0.1; the layer header and the overlay's source line print
+it), and a key resolving to no entry is reported as Unknown rather than assumed. Each filter row
+carries its **role** on a line (direct, finder, narrower, gate, all; an `Excluded`/`Exclude`
+connective always narrows), and each record row the patcher's differences from the filters
+article: a filterless line that patches nothing, keys it does not read, keys that also narrow the
+direct list, which finders can find the player and which narrowers never remove him, and other
+records whose keywords its keyword filters read. The patcher run order, the file rules and the delimiters are not
+the catalog's: they come from SkyPatcher's row of the runtime-format source ([`runtime-formats.md`](runtime-formats.md)),
+which the generator also prints into the skill. The catalog's record dimension (name, sig, subfolder, primaryFilter) is
+cross-checked in CI against the router table in that skill's `SKILL.md` —
+`SkyPatcherCatalogTests.TheCatalogMatchesTheSkillRouterTable` requires the row count to equal the loaded record count
+and matches recordType, signature and primaryFilter per subfolder. That is the one contract
 here the code cannot express at all: it couples `src/housecarl-core/` to a file in
 `.claude/skills/`, so adding a record type on one side without the other fails
 that test.
@@ -32,8 +40,8 @@ enum member cannot survive CI; only a semantically-wrong-but-existing field can.
 ### The grammar
 
 ```
-line         := (';' | '#') comment | blank | patch | '[' label ']'   (houseCARL reads '#' as a comment: no key starts with '#')
-patch        := segment ( ':' segment )*
+line         := (';' | '#') comment | blank | patch [ ';' comment ] | '[' label ']'   (houseCARL reads '#' as a comment: no key starts with '#')
+patch        := segment ( ':' segment )*      (a key's second copy on one line is noted and dropped, as SkyPatcher ignores it)
 segment      := key '=' value
 value        := item ( ',' item )*
 item         := address | name-literal | scalar | compound
@@ -60,32 +68,93 @@ houseCARL's reading, not a rule SkyPatcher documents.
 
 ### Addressing: `Plugin.esp|FormID`
 
-The tokenizer resolves only the unambiguous `Plugin.esp|FormID` form. A bare identifier is left
+A token holding `|` is `Plugin.esp|FormID` and never an EditorID, as in SkyPatcher's own resolver
+(`GetFormFromIdentifier`, `utility.cpp`, SkyPatcher `48d17799`). A bare identifier is left
 un-addressed, because an EditorID (`filterByWeapons=IronSword`) and an enum scalar
 (`armorType=heavy`) are lexically identical — telling them apart needs the catalog's knowledge of
 whether the key is form-valued, so EditorID resolution belongs to the overlay. The catalog
 classifies keys; it does not resolve values.
 
-The FormID side is hex with trimmable leading zeros. A full load-indexed ESL FormID (`FExxxYYY`)
-keeps only its 12-bit local id; anything else keeps the low 24 bits. That normalization lives in
-`FormIdRange`, shared with the SKSE config audit, because getting it wrong inverts every verdict.
+The FormID side is read like SkyPatcher's base-16 `stoul`: leading whitespace, an optional
+`0x`, then hex up to the first non-hex character, but no `+` or `-` sign, which `stoul` takes
+(see Known limitations) (`Skyrim.esm|0x013261` is `013261`;
+`Skyrim.esm|1BE1B=5` reads `1BE1B`). No hex digit, or a value past 32 bits, is a malformed address:
+it names nothing, and is still never read as an EditorID. The plugin name is taken untrimmed, as
+SkyPatcher's mod lookup takes it, so `Skyrim.esm |123` names no loaded plugin. Each comma item and
+each `~` sub-arg is trimmed, as SkyPatcher's list split trims them (`parsetable.h` `pushCommaList`,
+`applyArr2D`). A full load-indexed ESL FormID (`FExxxYYY`) keeps only its 12-bit local id; anything
+else keeps the low 24 bits. That normalization lives in `FormIdRange`, shared with the SKSE config
+audit, because getting it wrong inverts every verdict.
+
+### One target resolver
+
+Every site that turns a target token into a record (the direct lists and their Excluded spelling,
+filter values, op values and sub-args, the conflict detector's target grouping, the no-op scan)
+goes through `RuntimeTargets`, the one resolver every runtime-layer format reads a target through;
+SkyPatcher's spelling — the plugin written before the FormID, the written number masked to the
+record's local object id, no bare FormID and no plugin-name term, a scoped name lookup — is its own
+row of the runtime-format source ([`runtime-formats.md`](runtime-formats.md)), not a rule in the
+code. A FormID resolves by `FormIdRange`; an EditorID through the
+call's one EditorID table (`SkyPatcherEditorIdTable`), case-insensitive, where the first record
+loaded under a name keeps it, as the game's map does (po3 Tweaks inserts with `emplace`, so a later
+record never replaces a name; a renaming override leaves the master's name in the map). The table
+walks every instance of a type, plugin by plugin in load order, not only winners, so a name a later
+override drops still names the record. A walk reads each plugin once for all its types: each group
+holding one of them is read once, so a cell and every reference, navmesh and landscape in it share
+one read, and a walk over every type costs one pass over the order. A lookup scoped to a type takes the first loaded record of
+that scope. A direct-list EditorID names that one record, as SkyPatcher resolves it before comparing
+FormIDs, never every record whose own EditorID matches.
+
+The table lives on the call context and is dropped with the call: nothing is kept between calls.
+Its first lookup walks once over every scope the call's lines can look an EditorID up among
+(`SkyPatcherOverlay.EditorIdScopes`), so later lookups and the call's other replay contexts walk
+nothing; a scope the first walk missed is walked once more, its types only, and a record it finds
+that loaded first still comes first. The one scope of every record type (form-list items) is left
+out of the first walk unless the first lookup is one, and is otherwise walked at its own first
+lookup, so a call that looks up no form-list item never walks the whole order. A post read of a form
+list with an EditorID item does look one up, as does the layer listing under any `filter=` whose
+match expands a form-list INI's lines, by its folder, mod or path (its line notes), and any `formids=` or `plugins=`
+call whose kept files hold such a line, since the selector reads every line of them; the listing otherwise does not, since its no-op scan compares only
+set-class ops and leaves form-list items unresolved. Without po3 Tweaks a walk covers
+only the types the game keeps names of. `CostCounters.EditorIdSweeps` counts the walks,
+`EditorIdTypesWalked` the types they covered.
+An op with no form type looks its EditorIDs up among the field map's `editorIdScope` (`Item` for
+leveled item entries and recipe ingredients, `NpcSpawn` for leveled NPC entries, `OutfitTarget` for
+outfit items, every record type for form-list items).
+
+A direct or Excluded target that names nothing says why on its line in the layer listing, which
+expands a file's lines only under `filter=`: a malformed address, a
+plugin not in the order (or one with a space SkyPatcher keeps), a FormID no plugin defines, an
+EditorID found nowhere, or hidden by the po3 Tweaks gap. The no-op scan's count of unresolved
+EditorID targets also counts a `~name~` literal, which no line names. A target whose EditorID names several
+records of its scope says so, and which one the replay takes (the first loaded; see Known
+limitations for the game's map across types).
 
 ### The per-type subfolder rule and the filename gate
 
 INIs live under `Data/SKSE/Plugins/SkyPatcher/<type>/`. The first path component under the root is
 the record type; deeper nesting is organisation only. An INI sitting directly in the root is listed
 with a note and applied to nothing — the DLL reads type subfolders only. An unrecognized subfolder
-name is listed but not interpreted, never guessed.
+name is listed but not interpreted, never guessed. These INIs and `SkyPatcher.ini` are this layer's
+to read: the SKSE config audit leaves them out ([`skse-layer.md`](skse-layer.md), Config references),
+though `housecarl_skse`'s inventory still lists them among the configs.
 
-Within a type folder, files apply `0`→`z` by their folder-relative path (ordinal, case-insensitive).
-DECLARED ASSUMPTION: the grammar reference documents filename sort for a flat folder; the DLL's
-order across nested subfolders is unverified, and relative-path sort matches flat-folder sort
-exactly.
+Within a type folder, files apply breadth-first: the folder's own files, then each depth of
+subfolders, A to Z case-insensitive by path component within a level (8.0.1's General Information
+article; ARR's 7.0.x log shows the same apply order). Folders are listed in the patcher run order
+the runtime-format source holds. One rule set in `SkyPatcherDiscovery` decides this for the scan and the draft
+fold alike.
 
-A file named `<Plugin>.esp.ini` loads only when that plugin is in the active load order. A
-gated-off file keeps its parsed content (an inactive patch is still inspectable) and carries
-`NotApplied` naming the gate. `SkyPatcher.ini`'s `[Patcher]` `iEnable<Type>Patching=0` switches a
-whole type folder off the same way. Both are flags, never a silent drop.
+A file is read when `.ini` appears anywhere in its name (`x.ini.bak` too), except a name whose
+`.ini` ending is not all lower case (`.INI`, `.Ini`). When the name before the first `.ini` ends in a plugin extension the file is
+gated on that plugin and loads only while it is active; a name with more text after a plugin name
+(`SomeMod.esp-extra.ini`) is never read. A file not read keeps its parsed content — an inactive
+patch is still inspectable — and carries `NotApplied` naming why. `SkyPatcher.ini`'s `[Patcher]`
+switches turn a whole type folder on or off: a missing key is **off**, except Light, which runs
+without one; no loose `SkyPatcher.ini` leaves every patcher but Light off, said once; an
+unreadable one is named, and every folder is marked as unknown (its lines replayed as if its
+patcher runs, and said so). A switch value reads as its leading integer, 0 when there is none.
+Each is a flag, never a silent drop.
 
 Two further discovery contracts: the layer is **loose-only** (an INI resolving only into a BSA is
 `NotApplied` for that reason), and it is a **union, not a filename winner** — every distinct loose
@@ -98,13 +167,24 @@ path, which is surfaced per file as `ShadowedProviders`.
 it onto a deep **mutable copy** of the record's load-order winner:
 
 1. Classify every key of the line against the type's catalog. An unknown key poisons the **whole
-   line** (if it was an unrecognized filter, evaluating the rest would mis-scope the line, worst
-   case applying its ops to every record of the type) so the line skips loud as unresolved.
-2. Evaluate the filters against this record. Built-in families (primary, `noFilter…`, `hasPlugins`,
-   keyword / EditorID / name contains, mod-name and override-aware tokens, attached mgefs,
-   alternate textures) need no per-record path; the rest come from the field map's `FilterSpec`s. A
-   filter that is neither, or is explicitly unmapped-with-reason, makes the line skip loud rather
-   than be guessed either way. The player matches only a lone bare primary filter naming it.
+   line** — if it was an unrecognized filter, evaluating the rest would mis-scope the line, worst
+   case applying its ops to every record of the type — so the line skips loud as unresolved.
+2. Evaluate the line's reach against this record. `SkyPatcherLineShape` sorts the line's filters
+   by role, and every consumer that asks which records a line can touch reads that shape: the
+   replay, the conflict and ITM report, the no-op scan and the line index. In SkyPatcher's order of
+   checks: a failed gate stops the line; a record the direct list names is patched, past every
+   narrower but the patcher's own direct-list narrowers; otherwise some finder group must find it
+   (one group per filter family, its AND and Or keys together), or, with no finder and no direct
+   list, every record passes unless the patcher patches nothing then; then every narrower must
+   leave it in. The player is found only by the finders the catalog names, by the direct list, and
+   never by a filterless line, and some Excluded keys never remove him. The answer is three-valued:
+   a filter the overlay cannot evaluate (explicitly unmapped-with-reason, or neither built-in nor
+   mapped) leaves the line UNRESOLVED only when the other filters leave it open, and the line then
+   skips loud. One value of one filter is evaluated as before: built-in families (primary,
+   `noFilter…`, `hasPlugins`, keyword / EditorID / name contains, mod-name and override-aware
+   tokens, attached mgefs, alternate textures) need no per-record path, the rest come from the
+   field map's `FilterSpec`s. A keyword filter also reads the keywords of the records the catalog
+   names (an NPC's race, a spell's effects). `filterByModNames` compares names case-exactly.
 3. Apply each op, in segment order, onto the running copy. Because the copy carries state,
    `…Mult`/`…ToAdd` accumulate exactly as the DLL does and a later `set` of the same field
    overwrites an earlier one — apply-order replay, not last-write-wins bookkeeping.
@@ -120,12 +200,15 @@ mapping or an explicit `Unmapped` with a reason; HARD ops have none, and CI reje
 acquires a mapping.
 
 A warning rides an overlay read when its line bears on a record read: the line's verdict is Match
-or Unresolved for some record, or its NoMatch rests on the warned value (today only the bare-list
-guard, where a token that resolves to nothing forces NoMatch while the resolved ones are present and no other filter on the line misses).
+or Unresolved for some record, or its NoMatch rests on the warned value. Inside a finder a token
+that resolves to nothing drops out and the rest still find; a bare (AND) finder whose tokens all
+miss finds nothing, and those warnings decide the line when it would otherwise reach the record
+(the line's verdict is recomputed with that finder passing). A narrower's missing token removes
+nothing.
 An unknown-key line always rides, and so does every warning from a draft INI, which no layer listing holds. Any other warning is a note, and the read prints one line per INI
-naming it, `note(s) on lines that do not reach these records — housecarl_skypatcher_layer
+naming it, `note(s) on lines that do not reach these records — housecarl_layer
 filter=<INI> lists them`; in json the same lines join the `skypatcher_warnings` member. Each line's
-lint lives under that line in `housecarl_skypatcher_layer filter=`: unknown keys and the filter form
+lint lives under that line in `housecarl_layer filter=`: unknown keys and the filter form
 tokens that resolve to nothing, resolved once per line, in the words a read uses.
 
 **On a records scan.** `housecarl_records` with the post-state overlay over a scan replays only the rows its
@@ -139,7 +222,22 @@ note says that. A walk or `to_file=` with the post state on a scan is refused, b
 every record reached (a walk would replay its whole reached set, not the window), as is `fields_source='winner'`, a
 second display pole. The pre state on a scan is the winner scan, said in its source statement, so it serves a walk
 and `to_file=`. A comparison form over a scan takes neither state: the post refusal names the replay, the pre one
-says pre is the winner and to pass `"winner"`.
+says pre is the winner and to pass `"winner"`. Each post refusal of a comparison, a walk or `to_file=` names the
+list-lane route that serves the same call, built from the call's own scan terms: a plain scan of those terms (keeping a
+named `source=`) with `to_file=`, then the call re-run with `formids=["@<file>"]` in their place. A `formids=` beside
+them intersects them, so the plain scan carries it with them and the re-run replaces it too: a listed id that fails a
+term stays out. A tree's route carries the overlay on `versus=` with no `source=`,
+since the list lane refuses `source=` on a tree. `where_source=` rides with `where=`: the plain scan keeps it, so it
+matches what the refused call matched, and the re-run drops it with `where=`. The route is named from the call's terms
+as written: with no named `source=`, a term the plain scan itself refuses (an unknown type, a `where=` field or value,
+an unknown `where_source=` value, a `references=` or `formids=` entry, `defined_in` without names) answers on that
+plain scan, by its own sentence. What answers ahead of the route, in order: before the scan lane, `fields_source=` on
+a walk, a bad `to_file=` path or `to_file=` with `offset=`, the aggregate form or `counts_only`, and `where_source=`
+without `where=`; then a `where=` nothing bounds; then, with no named `source=`, the comparison refusals, then
+`fields_source='winner'` (the two display poles), then the `to_file=` and walk refusals. A named `source=` meets only
+the comparison refusal on `versus=`, and later: after `defined_in` without names, a bad or empty `formids=` and the
+source probe, on an in-order file straight after the probe, on an off-order file after that file's own refusals
+(`conflicts_only=`, the info_order form, a walk, a `where_source=` of `winner` or an unknown value).
 
 ### Reports and drafts
 
@@ -153,12 +251,123 @@ caveat block leaves of `max_chars`, never more than the header and owed notices 
 before the body so the sections cannot spend it. A list that fits is shown whole; a cut one names
 only the notes that fit, none if the first does not, and is counted with the caveat block's marker.
 
+A filter or selector that matches nothing answers its zero count, what it was matched against and the scan notes (shadowed
+copies, undocumented folders: often why), never the overview. The no-op notes are about the whole layer's replay, so a
+zero answer leaves them out (#1286).
+
+### Selecting lines: `housecarl_layer`
+
+The tool is `housecarl_layer`, one tool for the runtime layers with a format selector (spec R3, R38). `distributor=`
+takes `skypatcher`, `spid`, `kid`, `bos` and `flm`, the formats read; omitted, every format read is read, SkyPatcher's
+answer first, then SPID's, KID's, BOS's and FLM's, sharing `max_chars`, each later part taking the room the earlier ones
+leave; with no selector and no `filter=` SPID, KID, BOS and FLM answer one summary line each, closed by the
+`distributor=` call that lists its files ([`spid-layer.md`](spid-layer.md), [`kid-layer.md`](kid-layer.md),
+[`bos-layer.md`](bos-layer.md), [`flm-layer.md`](flm-layer.md)). `oar`, `ied`, `desc` and `dsd` are refused as not read,
+by name; `lid` as not read yet. The old name `housecarl_skypatcher_layer` is
+refused by its `AliasTable` row, naming `housecarl_layer`.
+
+`formids=` and `plugins=` select lines with the records meaning (R42, R47): `formids=` takes the FormID door's two
+spellings and `@file`; `plugins=` keeps a form a named plugin defines or overrides (`IndexView.Touches`), and
+`defined_in: true` only a form it defines and holds (a FormID its plugin lacks is kept by neither). Both given, a form must pass both. A line is selected when any form it names
+is: every `Plugin|FormID` sub-arg anywhere on the line, and each leading EditorID sub-arg of a segment the replay looks
+one up in, through the one target resolver and the call's EditorID table (`SkyPatcherOverlay.LineForms`, sharing
+`SegmentScopes` with the table's own scope list). Each match is labelled where it sits: `target` (a direct list),
+`filter` (any other filter, Excluded spellings included), `value` (an op), or `unknown key` (a key the catalog does not
+know, and every key of an undocumented folder, where only `|` forms are read). A `~name~` literal names no record, and
+a bare token in a segment with no lookup scope is not read as a form (#1334). `filter=` still selects files by folder,
+mod and path; beside a selector, a file must pass both, and only its selected lines expand. A cut listing under a
+selector says to narrow `formids=`/`plugins=`. A zero answer, from `filter=` or a selector, drops the whole-layer
+no-op notes but keeps the scan notes and the note naming a plugin an EditorID sweep could not open. That note may be
+why a selector matched nothing; a `filter=` zero matches folder, mod and path names only, so it is not the cause there.
+
 `SkyPatcherDraft` folds an INI that is not yet placed in a mod into the live scan, so a record can
 be read as the game would see it once placed. A draft that is already one of the layer's live
 files, or whose filename would collide at the same relative path, is refused: which copy wins would
 then depend on mod order, not on the draft.
 
-### Known limitation
+### EditorIDs and po3 Tweaks
+
+Without powerofthree's Tweaks the game keeps EditorIDs only for keywords, globals, races, quests,
+voice types, head parts, cells, worldspaces, idles and music types. Once per replay context
+`SkyPatcherEditorIds.Read` checks the pinned asset view: `SKSE\Plugins\po3_Tweaks.dll` must be a
+loose winner, and a winning `po3_Tweaks.ini` must not set `[Fixes] bLoadEditorIDs` (old name `Load
+EditorIDs`) off. When it is missing, an EditorID value of any other type resolves to nothing, the
+record's own EditorID matches no direct-list name or `filterByEditorIdContains`, and the warning
+names po3 Tweaks. Every op miss words it the same way: an EditorID value or entry key of a typed op
+is not applied and its warning names po3 Tweaks, and an op with a donor type (npc `skin`) names the
+donor type too. An op with no form type looks its EditorIDs up among its `editorIdScope`, so its
+miss names Tweaks the same way; a group scope holding a kept type (form-list items) still finds
+names of its kept types, only those types walked, and its miss names the kept types. One with neither
+(`addOnceToLLs`, `removeFromLLs`, `objectMultCount`, `formsToReplace`, `formsToRemove`) never resolves an EditorID,
+Tweaks or not (#1334), so its miss does not name Tweaks. The ten kept types answer as before. A `po3_Tweaks.ini`
+that cannot be read is replayed as the DLL's default (EditorIDs load), and the read and the layer
+say the state is unknown.
+
+### Known limitations
+
+- Cross-patcher effects: the replay is per record type and reads donors and keyword sources at
+  their plugin winner, so a filter that would see another record's SkyPatcher change (a COBJ's
+  created item patched by the Weapon patcher, an NPC's race patched by the Race patcher) answers
+  from the pre-SkyPatcher record.
+- A FormID that names a record absent from the order still counts as resolved in the replay. As a
+  direct or Excluded target the layer listing says on its line that it names nothing; as a filter
+  or op value it resolves to its FormKey and nothing reports it.
+- The game's map is one name space across every type, so a record of another type that loaded a
+  name first can hide a typed lookup in game. houseCARL does not model that hiding: a scoped lookup
+  takes the first loaded record of its scope, whatever other types share the name, so one line's
+  answer does not depend on which other lines the layer holds.
+  For the ten types the engine keeps
+  names of itself, the first-loaded rule is po3 Tweaks', not read from the game executable.
+- `Plugin|+hex` and `Plugin|-hex` are read as malformed; SkyPatcher's `stoul` takes the sign.
+  Main read them the same way.
+- A `|` FormID over 32 bits is reported as naming nothing; SkyPatcher builds older than 2026-09-24
+  throw there instead of skipping.
+- An element sub-arg `Plugin|zz` (malformed) is written raw, not reported.
+- In conflicts, a malformed `|` target is grouped by its raw text, and the section does not say when
+  an EditorID lookup missed a plugin; the layer's unreadable-plugin note does.
+- An EditorID that starts with `_` or a digit costs one more walk in the call.
+- In the shared leveledList folder a line's lint runs once per field map, so under `filter=` a
+  direct target named by an LVLI EditorID is also reported as finding no LeveledNpc record, and one
+  named by an LVLN EditorID as finding no LeveledItem record, though the line applies. FormID targets
+  are unaffected.
+- Two records of one scope and of two types that share a name in one plugin tie by their place in
+  that plugin's file, read off its record headers once per plugin and key in the call, a tie a later
+  walk adds reading the file again (the game's map keeps the one named
+  first, bos-lines Q1 (a)), whatever the call walked first; records of one type keep their walk
+  order, which is the file's. That the engine names a plugin's records front to back is an
+  inference (bos-lines research-topup T2); a file that cannot be read falls back to the walk's type
+  order. SkyPatcher's own lookup is not read (no source), so on a SkyPatcher line this is the
+  game's map, not shown to be SkyPatcher's.
+- A post read of a form list with an EditorID item walks every record type once in its call (one
+  pass over every plugin; without po3 Tweaks only the types the game keeps names of), as
+  does the layer listing under any `filter=` whose match expands a form-list INI with one (its
+  folder, mod or path), and any `formids=` or `plugins=` call whose kept files hold one; the listing
+  otherwise does not.
+- An unknown key still skips its line loud; the game drops the key silently and the line can widen
+  to every record of its type. houseCARL keeps refusing to guess.
+- `noFilterLL` and `noFilterLLNPC` ignore their value and find every list of their class; the
+  120-entry limit they and the EditorID filters share is not modelled. A filter value that is not a number
+  still leaves the line UNRESOLVED (8.0.1 skips only that key).
+- The line selector reads op values by their `~` sub-args, as the tokenizer splits them, so an eq-packed or pair op
+  can miss a form it names, and non-form op text can match one. On such a line a selector zero can be wrong.
+- The unreadable-plugin note is taken after the conflict detector and the no-op scan, on the call's one resolver,
+  so it names a plugin either met; a plugin first met by the selector's or lint's own lookups at render is not
+  named, and a selection does not say its own EditorID lookup was incomplete.
+- A selector zero on a read-incomplete layer has no sentence of its own; the caveat line hedges it.
+- The selector's header counts lines in NOT-applied INIs too, as `filter=`'s header does; each file row carries
+  its flag.
+- `plugins=` selects lines by the forms they name. A mod-name filter (`filterByModNames=X.esp`) or an `X.esp.ini`
+  filename gate does not select a line for X.
+- When `filter=` matches no file the answer is that zero, and the selectors are not evaluated.
+- In a folder holding two record types, an EditorID naming a record under each is two forms: its line is listed
+  once, with one `↳` label per form the selector keeps, as the replay applies it per type.
+- An `@artifact` list in `plugins.names` is not epoch-checked, as on `housecarl_records`.
+- The conflict detector takes a direct EditorID's first resolving type; the selector takes every type the folder
+  holds.
+- With `filter=` and a selector both given, a cut listing says to narrow `formids=`/`plugins=` and does not name
+  `filter=`, which narrows it too.
+
+### Delimiters
 
 Line splitting on `:`, item splitting on `,` and compound splitting on `~` are naive, matching the
 documented "`:` separates every segment". A rename literal containing `:` or `,`
@@ -176,19 +385,48 @@ hardened.
   stateful; that is not the paragraph's leaf-type check, and the stateful-numeric-on-a-non-numeric-leaf, flags-on-a-non-enum
   and dict-on-a-non-dict checks have no self-test arm.
 - *The grammar*: `SkyPatcherParseTests` — a segment with no `=` or an empty key is noted
-  and still surfaced, and a doubled `,` is noted and skipped.
-- *Addressing*: `SkyPatcherParseTests` — a bare EditorID is left un-addressed, and the FormID side trims leading
-  zeros; `SkyPatcherOverlayWeaponReplayTests.AFullEslFormIdWithANonZeroSlotKeepsOnlyTheLocalId` (`FE001800`) — a
+  and still surfaced, a doubled `,` is noted and skipped, a comment after a rule is not part of the value
+  (`ATrailingCommentIsNotPartOfTheValue`), and a duplicate key's second copy is ignored and noted
+  (`ADuplicateKeysSecondCopyIsIgnored`).
+- *Addressing*: `SkyPatcherParseTests` — a bare EditorID is left un-addressed, the FormID side trims leading
+  zeros, a `|` token reads `0x` and stops at the first non-hex character with its plugin untrimmed
+  (`APipeTokenReadsItsFormIdAsSkyPatcherDoes`), and one with no hex digit is malformed
+  (`APipeTokenSkyPatcherCannotReadIsMalformed`); `SkyPatcherLineIndexTests.ALineNamingByEditorIdOrA0xValueStillApplies`
+  — a `0x` target applies; `SkyPatcherOverlayWeaponReplayTests.AFullEslFormIdWithANonZeroSlotKeepsOnlyTheLocalId` (`FE001800`) — a
   full ESL FormID keeps its 12-bit local id.
+- *One target resolver*: `SkyPatcherTargetResolverTests` — a duplicated EditorID patches only the first loaded
+  record and says so on its line, a name a renaming override drops still names the record, a later walk puts the
+  record loaded first first, a name another type shares still names the scoped record, each kind of miss is reported on its line, a `0x` target is no miss, an
+  untyped op finds its EditorID, an op with no scope misses beside one that walks every type
+  (`AnUnscopedOpEditorIdMissesBesideAScopedOne`), one call walks once (`EditorIdsAreWalkedOncePerCall`), a walk over
+  every type reads each group of each plugin once and puts the first loaded holder first
+  (`AnEveryTypeWalkReadsEachGroupOfEachPluginOnce`, `AnEveryTypeWalkPutsTheFirstLoadedHolderFirst`), a same-plugin
+  tie goes by file order (`ASamePluginTieGoesByFileOrderNotTypeOrder`; `BosLayerTests.TheTieFollowsTheFilesOwnGroupOrder`), a call
+  that looks up no form-list item walks only its own scopes (`ACallThatLooksUpNoFormListItemWalksOnlyItsScopes`), and
+  without Tweaks a form-list item of a kept type resolves (`WithoutTweaksAFormListItemEditorIdOfAKeptTypeResolves`);
+  holders sort by load position alone, each view in a call gets its own table, a digit-first name resolves, the
+  Excluded spelling leaves out only the first loaded record, and the conflict detector resolves EditorID targets
+  (`ARecordNamedByEditorIdAndByFormIdConflictsWithItself`); `SkyPatcherOpEditorIdGapTests.AMalformedOpAddressSaysItIsNoFormId`
+  — a malformed op address says so.
 - *The per-type subfolder rule and the filename gate*: `SkyPatcherDiscoveryTests` —
-  the `0`→`z` relative-path order, `<Plugin>.esp.ini` gated and still inspectable, the `[Patcher]` toggle, a
-  root-level INI and an undocumented subfolder each noted, loose-only, and the union with `ShadowedProviders`.
+  the breadth-first order (`FilesAreReadBreadthFirst`), the name rules (`TheFileNameRulesReadIniAnywhereAndRefuseTheRest`),
+  `<Plugin>.esp.ini` gated and still inspectable, the `[Patcher]` toggle, a missing switch off and Light on, no
+  `SkyPatcher.ini`, an unreadable one, patcher order, the draft fold on the same rules
+  (`ADraftFoldsInWithThePlacedFileRules`), a root-level INI and an undocumented subfolder each noted, loose-only,
+  and the union with `ShadowedProviders`.
+- *How the overlay replays onto a record*, the reach: `SkyPatcherReachTests` — finders and the direct list add up,
+  only a gate stops the direct list, case-exact mod names, a missing finder token drops out, the Leveled List, Cell,
+  FormList and Race Hook differences, race and effect keywords, the player rule, and the keys the earlier catalog lacked
+  classifying; `SkyPatcherConflictsTests` — a direct list beside an Excluded key kills an earlier write, a finder's
+  reach collides with a broad line.
+- *EditorIDs and po3 Tweaks*: `SkyPatcherEditorIdTests` — without Tweaks an armor EditorID finds nothing and the
+  warning says why while a keyword EditorID resolves; with Tweaks both apply; the header and source line name 8.0.1.
 - *How the overlay replays onto a record*: `SkyPatcherOverlayWeaponReplayTests` — the stateful apply-order replay,
   an unknown key poisoning the whole line, an unmapped filter skipping the line loud, and a HARD op coming back as a
   directive; `SkyPatcherOverlayFilterTests`, `SkyPatcherOverlayEntryOpsTests` and `SkyPatcherOverlayOpClosureTests`
   — the filter kinds, the entry and list ops, and the op closures.
 - *Tiered honesty*, which warnings ride a read: `SkyPatcherWarningRelevanceTests` — a record no line reaches gets the
-  pointer and no warning text, a matched Or line and a bare line stopped by a missing keyword ride, an unknown key
+  pointer and no warning text, a matched Or line and a bare line that reaches the record past a missing keyword ride, an unknown key
   always rides, a draft's line rides whatever its verdict, and `filter=` lists the lint under its line.
 - *How the overlay replays onto a record*: `SkyPatcherFieldMapGuardTests.AMappedHardOpIsCaught` — CI rejects a
   HARD op that acquires a mapping.
@@ -196,7 +434,14 @@ hardened.
   over a scan in text, json and dense; `limit=1` opens one replay context and reads one body; `where=` drops a record
   its winner fails though the draft would pass it, and says so, as `references=` does; a count opens no replay and
   carries the note, as does an empty window; a walk, `to_file=` and `fields_source='winner'` with the post state are
-  refused and served with pre; a summary keeps `matches=` and is bounded.
+  refused and served with pre; a summary keeps `matches=` and is bounded. The route each post refusal names is run as
+  served in `OverlayScanDelta_NamesTheFileRouteAndItRuns`, `OverlayScanTree_NamesTheVersusRouteAndItRuns`,
+  `OverlayScanBesideFormids_NamesTheFileRouteAndItAnswersTheIntersection`, `OverlayScanToFile_NamesTheFileRouteAndItRuns`,
+  `OverlayScanDeltaWithWhereSource_NamesARouteThatKeepsItOnTheScanAndRuns`, `OverlayScanWalk_NamesTheFileRouteAndItRuns`
+  and `OffOrderScanDeltaVersusOverlay_NamesTheFileRouteOnTheSameSource`; the call's own fault answering ahead of it in
+  `OverlayScanWinnerFieldsToFile_NamesTheTwoDisplayPolesAndTheWinnerCallRuns`,
+  `OverlayScanDeltaOverWhereAlone_IsTheBoundRefusalNotARoute` and
+  `OffOrderConflictsOnlyVersusOverlay_IsTheOffOrderRefusalNotARoute`.
 - *Reports and drafts*: `SkyPatcherConflictsTests` — SET collisions with the later
   file winning, accumulating ops not conflicts, and the ITM classes.
 - *Reports and drafts*: `RecordsSkyPatcherDraftTests.ADraftThatSetsALeafIsReadInThePostState` — a draft is folded into
@@ -214,6 +459,6 @@ the field map; `SkyPatcherDiscovery.cs` the discovery and apply order; `SkyPatch
 one call's context (asset capture, catalog, field map, scan, draft fold) and `Replay` runs one record's winner through
 it, for both the layer tool and the overlay source. Both open it over an asset build taken in the same `_gate` hold as
 the index pin their answer is stamped with (`CapturePinAndAssets`), so a profile switch mid-call cannot replay one
-profile's INI layer onto another's winners. `src/housecarl-mcp/SkyPatcherTools.cs` is the tool front. Tool: `housecarl_skypatcher_layer`; the overlay and the
+profile's INI layer onto another's winners. `src/housecarl-mcp/SkyPatcherTools.cs` is the tool front. Tool: `housecarl_layer`; the overlay and the
 draft are also read through `housecarl_records`'s SkyPatcher overlay source.
 The result records are in `src/housecarl-mcp/AssetResults.cs` ([`assets.md`](assets.md)).

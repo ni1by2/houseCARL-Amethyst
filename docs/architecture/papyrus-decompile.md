@@ -1,6 +1,6 @@
 ---
-updated: 2026-09-29
-covers: [src/housecarl-core/PapyrusDecompiler.cs, src/housecarl-mcp/DecompileTools.cs]
+updated: 2026-11-11
+covers: [src/housecarl-core/PapyrusDecompiler.cs, src/housecarl-mcp/DecompileTools.cs, src/housecarl-mcp/DecompileBatch.cs, src/housecarl-mcp/ScriptSelection.cs]
 ---
 # Papyrus: decompile
 
@@ -44,8 +44,94 @@ and the adjacent compile workflow.
   disk (#783). Writes go through `FileMode.CreateNew`, so an existing source file is never
   overwritten.
 
+### Selecting the scripts (#1287)
+- `paths=`, `under=` and `provider=` are `asset_status`'s selectors, through `FileSelection.Select` over one
+  captured view (`AssetLayers.SelectScripts`, assets.md "Selecting a set of paths"): explicit paths in the order
+  given, then the selectors' matches. A match that is not a `.pex` is dropped and counted in one note; an explicit
+  path that is not one is its row's error. The path bound and the unknown-provider refusal are the selection's own.
+- A `paths=` entry that is a full path (`Path.IsPathFullyQualified`) is a file on disk, read as itself, with no
+  instance needed under `out_path=`; one with no separator is a bare name, refused naming `scripts/<name>.pex` and
+  the `under=` search (DECISIONS 2026-11-10 (4), Q1 (a), Q4 (b)). Everything else is a Data path.
+- One file on disk with no selector, no `source_provider=` and default transport answers as the one-file tool did,
+  except that its no-such-file refusal names the Data-path form (`scripts/<name>.pex`) where it named
+  `bsa_extract`; everything else is the
+  many-script lane (`DecompileBatch`).
+- `provider=` picks which scripts; each is read from its winning copy, and a note counts the ones another provider
+  wins. `source_provider=` picks whose copy, through `AssetSourceSelection` as `nif_inspect` does, so it reaches a
+  disabled mod's loose files and archives; a script it does not ship is that row's error.
+- Bytes come through the view's `ReadSource`, a loose file or one archive entry, so each archive's table is read
+  once per call and nothing is extracted. A many-script call parses each script twice (hierarchy, then write) and
+  keeps no parsed file, so memory does not grow with the selection.
+- The class hierarchy adds every script in the window and the `.pex` files beside each file on disk; when the call
+  has a Data-path selection (`paths=` Data paths, `under=` or `provider=`), it also climbs each script's parent chain
+  off the load order. It follows an edge it already has and keeps climbing; only a class with no edge is read, from
+  `scripts\<class>.pex` (the winner, loose or archived), and never one of the window's own scripts, which were read
+  already. The climb stops at a root class of the vanilla baseline (Form, Alias, ActiveMagicEffect, ...), which is not
+  read; at a parent the order does not ship (an MCM script with SkyUI disabled); at a path the view refuses; or at a
+  read that fails. So a mod class that only mods-tree `.psc` headers name as a parent (MCM Helper's `MCM_ConfigBase`,
+  SkyUI's `SKI_ConfigBase`) is read from its `.pex`. Only a failed read is named in the hierarchy note: a parent the
+  order does not ship ends the climb unnamed, and its children keep explicit casts.
+- `limit=`/`offset=` window what is decompiled, not only what is listed (SPEC §2.1's list-driven offset). So
+  `remaining` counts the scripts after the window, not after the rows listed, and while any remain the next-page
+  advice names `limit=`, the `offset=` after the window and the knob that lands the page in this call's folder:
+  `out_path=` or `into=` as given, else `into=` the stem of the patch this call wrote into, else `patch=` as given.
+  With none of the three given and nothing landed it names no knob: the fresh folder was removed, so the next page
+  cuts its own. Json carries it as `next_limit`, `next_offset` and `next_out_path`, `next_into` or `next_patch` (none
+  of the three when no knob is named). An existing target
+  `.psc` is that script's row error and the rest still land. `max_chars=` cuts the listing only: the counts include
+  the rows cut, a row counted OK or PARTIAL was written, one not decompiled wrote nothing or only part of its `.psc`
+  files, and no page is advised over the window. `counts_only=` gives the totals, the notes and the next page,
+  with no `[accounting]` line (json: `total`, no accounting object). `to_file=` is refused: decompile writes `.psc`
+  files, and its output is the folder.
+- The retired `pex=` is refused in one sentence naming `paths=`.
+
+## Linux and Amethyst
+
+The Linux fork keeps the `builtin` and native `champollion` backends for single files and batches. External execution receives captured PEX bytes in private scratch, with the script basename preserved. Champollion results include its version and an explicit reconstruction warning. The selected backend is validated once before output allocation; failures do not select another backend.
+
+Amethyst batches reconstruct into private scratch and publish successful outputs through one recoverable artifact group. Sources, sibling PEX listings and compiler/decompiler inputs retain snapshot provenance. Freshness checks allow only transaction-owned new files and their prepared parent directories to appear in a captured Papyrus tree; unrelated additions, removed entries and changed captured inputs still refuse. Existing PSC files are never replaced.
+
+`Amethyst220IntegrationTests` covers actual MCP refusal flags, managed batch publication, the packaged native Champollion binary and unrelated-source refusal. Public write schemas expose the redeployment and immediate-visibility consent flags consumed by the Amethyst filter.
+
 ## Pinned by
-- `DecompileGuardTests`: the golden source for a canonical `.pex`, zero optimizer hints on
+- `DecompileSelectionTests` — a provider's loose and archived scripts in one call
+  (`AProviderDecompilesItsLooseAndArchivedScriptsInOneCall`); `under=` across both
+  (`UnderSelectsScriptsAcrossLooseAndArchives`); `source_provider=` reading the shadowed copy
+  (`SourceProviderReadsTheCopyThatDoesNotWin`) and a disabled mod's (`SourceProviderReachesADisabledModsScript`), and
+  turning off the won-elsewhere note (`ProviderWithASourceProviderCountsNoneWonElsewhere`); a file on disk beside the
+  selection, rows in the order given (`AFileOnDiskDecompilesBesideTheSelection`); each its own row: a missing file on
+  disk (`AMissingFileOnDiskIsItsOwnRow`), an absent and an invalid Data path
+  (`ADataPathNoProviderShipsAndAnInvalidOneAreEachTheirOwnRow`), a non-script path
+  (`AnExplicitPathThatIsNotAScriptIsItsOwnRow`), a second object's existing target with what was already written
+  (`AScriptWhoseSecondObjectsTargetExistsSaysWhatWasAlreadyWritten`) and an existing target while the rest land
+  (`AnExistingSourceIsThatScriptsRowAndTheRestLand`); `paths=` from a file (`PathsTakesAFileOfPaths`); the instance
+  needed for a selection under `out_path=` (`SelectingWithOutPathStillNeedsTheInstance`); a bad `out_path=` beside
+  `patch=` (`ABadOutPathBesidePatchSaysPatchWasIgnored`); the refusals of a bare name
+  (`ABareScriptNameIsRefusedNamingItsDataPathAndTheSearch`, `ABareNameWithItsExtensionIsRefusedNamingItsDataPathOnce`),
+  the retired names (`TheRetiredPexParameterIsRefusedInOneSentence`, `TheRetiredAssetPathsParameterIsRefusedInOneSentence`,
+  with `AssetStatusTakesPaths`), no script given (`NoSelectorIsRefused`) and `to_file=`
+  (`ToFileIsRefusedNamingTheOutputFolder`); the window choosing what is decompiled
+  (`LimitAndOffsetChooseWhichScriptsAreDecompiled`); the parent climb: an unreadable parent named in the many-script
+  wording (`AnArchivedScriptsParentIsReadOffTheLoadOrderAndAnUnreadableOneIsNamed`), a mod parent only a `.psc` header
+  names read loose and archived up to the vanilla root
+  (`AModParentOnlyAPscHeaderNamesIsReadLooseAndArchivedToTheVanillaRoot`), a vanilla root not read
+  (`AParentTheBaselineAlreadyNamesIsNotRead`), a window script that declares no parent not read again
+  (`AWindowScriptThatDeclaresNoParentIsNotReadAgainAsOne`) and one table read per archive per call
+  (`ACallReadsEachArchiveOnce`); the hierarchy note claiming only the sources the call read
+  (`TheHierarchyNoteClaimsOnlyTheSourcesThisCallRead`, and for a Data path alone
+  `ADataPathCallsHierarchyNoteNamesTheParentsReadAndNoFileOnDisk`); one file on disk alone answering as the one-file tool did,
+  whole (`AFileOnDiskAloneAnswersAsTheOneFileToolDid`); `source_provider=` beside a file on disk saying the file is
+  read as itself (`SourceProviderBesideAFileOnDiskSaysTheFileIsReadAsItself`); `counts_only=`
+  (`CountsOnlyListsNoRowsAndStillWritesEveryScript`) and its next page, text and json
+  (`CountsOnlyAdvisesTheNextPageIntoTheSameFolder`); a `max_chars=` cut writing every script
+  (`MaxCharsCutsTheListingAndEveryScriptIsStillWritten`) and advising no page over them, text and json
+  (`AMaxCharsCutAdvisesNoPageOverScriptsAlreadyWritten`); the next page landing in the same folder: `into=` the stem
+  of the patch written (`TheNextPageAdviceLandsInThePatchThisWindowWrote`, `TheJsonNextPageNamesTheFreshPatchByItsStem`),
+  the lane as given while nothing landed (`TheNextPageAdviceKeepsTheLaneAsGivenWhenNothingLanded`) and `out_path=`
+  (`TheNextPageAdviceUnderOutPathNamesTheSameFolder`); json rows cut at the first that does not fit, under a measured
+  reserve (`JsonListsRowsInOrderUpToTheFirstThatDoesNotFit`); a fresh folder nothing landed in removed
+  (`AFreshPatchFolderNothingLandedInIsRemoved`); json (`JsonCarriesTheRowsAndTheAccounting`).
+- `DecompileGuardTests` — the golden source for a canonical `.pex`, zero optimizer hints on
   canonical output, the hint firing on a statement-level `JMPT`, the refusal on an existing target
   leaving it byte-untouched, the Hidden flag kept on both objects of a two-object `.pex`, and the upcast
   suppression with and without a class map.
@@ -69,4 +155,6 @@ and the adjacent compile workflow.
 
 ## Where
 - Core: `PapyrusDecompiler` (`DecompileFile`, the `Body` structurer).
-- Tools: `DecompileTools` (`housecarl_decompile_script`, `WriteObjects`, `HierarchySentence`).
+- Tools: `DecompileTools` (`housecarl_decompile_script`, the one-file lane, `WriteObjects`, `HierarchySentence`);
+  `DecompileBatch` (the many-script lane and its renders); `ScriptSelection.cs` (`AssetLayers.SelectScripts`,
+  `PickScript`).

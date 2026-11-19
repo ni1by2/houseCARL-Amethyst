@@ -6,19 +6,28 @@ namespace HousecarlMcp;
 
 static partial class RecordsTools
 {
+    /// <summary>The header count of rows a deep read cut at its line budget, which no other count holds alone.</summary>
+    const string CutRowsCount = " cut by the deep read's line budget (each such row says TRUNCATED or INCOMPLETE), ";
+
+    /// <summary>The statement naming the cut rows, under the header counts; nothing when none was cut.</summary>
+    static void AppendCuts(StringBuilder sb, RecordCuts? cuts)
+    {
+        if (cuts?.Sentence() is { } cut) sb.Append("cut: ").Append(cut).Append('\n');
+    }
+
     /// <summary>The delta form's text render: header counts, then per record the two pole lines, the stack-above fact stated neutrally, and the delta-line grammar, where a truncated deep read is never 'identical'; max_chars is a CEILING, per docs/architecture/render-budget.md.</summary>
     /// <remarks>Internal so a test can drive a row shape no fixture produces — an incomplete deep read with enough delta lines to be cut.</remarks>
     internal static string RenderRecordsDelta(IReadOnlyList<RecordReads.DeltaRow> rows, int total, int differing, int identical,
                                      int noVerdict, int errors,
                                      string headerLine, OrderStamp? epoch, int maxChars, SpillState? spill, out bool truncated,
-                                     bool unreserved = false, int noField = 0, int notCompared = 0)
+                                     bool unreserved = false, int noField = 0, int notCompared = 0, RecordCuts? cuts = null)
     {
         truncated = false;
         int cap = Wire.Cap(maxChars);
         if (!unreserved)
         {
             var whole = RenderRecordsDelta(rows, total, differing, identical, noVerdict, errors, headerLine, epoch,
-                                           maxChars, spill, out _, unreserved: true, noField: noField, notCompared: notCompared);
+                                           maxChars, spill, out _, unreserved: true, noField: noField, notCompared: notCompared, cuts: cuts);
             if (whole.Length <= cap) return whole;
         }
         bool manifestOnly = spill?.ManifestOnly ?? false;
@@ -30,9 +39,11 @@ static partial class RecordsTools
         if (noVerdict - noField > 0) sb.Append(noVerdict - noField).Append(" with a field that could not be read, ");
         if (noField > 0) sb.Append(noField).Append(" with a path that names no field, ");
         if (notCompared > 0) sb.Append(notCompared).Append(" with no path read on its type (nothing compared), ");
+        if (cuts is { Count: > 0 }) sb.Append(cuts.Count).Append(CutRowsCount);
         sb.Append(errors).Append(" error(s)");
         if (epoch is not null) sb.Append(Wire.EpochInline(epoch));
         sb.Append('\n');
+        AppendCuts(sb, cuts);
         int rendered = 0;
         string Notice(int r) =>
             "... [rendered " + r + " of " + rows.Count + " rows at max_chars=" + cap + "]\n";
@@ -157,22 +168,25 @@ static partial class RecordsTools
     /// <remarks>Internal so a test can drive a node shape no fixture produces — an incomplete comparison on a record only one in-order plugin touches.</remarks>
     internal static string RenderRecordsTree(IReadOnlyList<RecordReads.TreeRow> rows, int total, int contested, int errors,
                                     bool fieldsNarrow, string headerLine, OrderStamp? epoch, int maxChars,
-                                    SpillState? spill, out bool truncated, bool unreserved = false)
+                                    SpillState? spill, out bool truncated, bool unreserved = false, RecordCuts? cuts = null)
     {
         truncated = false;
         int cap = Wire.Cap(maxChars);
         if (!unreserved)
         {
             var whole = RenderRecordsTree(rows, total, contested, errors, fieldsNarrow, headerLine, epoch, maxChars,
-                                          spill, out _, unreserved: true);
+                                          spill, out _, unreserved: true, cuts: cuts);
             if (whole.Length <= cap) return whole;
         }
         bool manifestOnly = spill?.ManifestOnly ?? false;
         var sb = new StringBuilder();
         sb.Append(headerLine).Append('\n');
-        sb.Append(total).Append(" record(s): ").Append(contested).Append(" contested, ").Append(errors).Append(" error(s)");
+        sb.Append(total).Append(" record(s): ").Append(contested).Append(" contested, ");
+        if (cuts is { Count: > 0 }) sb.Append(cuts.Count).Append(CutRowsCount);
+        sb.Append(errors).Append(" error(s)");
         if (epoch is not null) sb.Append(Wire.EpochInline(epoch));
         sb.Append('\n');
+        AppendCuts(sb, cuts);
         int rendered = 0;
         bool declarersLeadWritten = false;
         string Notice(int r) =>
@@ -382,6 +396,7 @@ static partial class RecordsTools
                 rendered++; continue;
             }
             sb.Append("  ").Append(row.Type ?? "?").Append("  ").Append(row.EditorId ?? "<no editorid>").Append('\n');
+            if (row.Note is not null) sb.Append("  note: the seed's ").Append(row.Note).Append('\n');
             if (row.Nodes.Count == 0)
                 sb.Append("  no links to follow from this seed").Append(row.TruncationNote is null ? ".\n" : " before the cap.\n");
             // What the seed says about its WALK is a different loss from the nodes max_chars held back, so the tail
@@ -631,14 +646,14 @@ static partial class RecordsTools
     /// <param name="requestedTypes">The display names of the types the call NAMED, or null when it named none; under group_by=type each one gets a row, so a requested type with no records reads as 0.</param>
     /// <param name="rowLimit">the caller's limit= as the TABLE's row cap (0 = uncapped): a count table caps with
     /// limit= and does not page (#810), and the counts above it stay the whole tally.</param>
-    static string RenderListAggregate(IReadOnlyList<ReadOutcome> outcomes, string groupBy, bool json, OrderStamp? epoch,
+    static ToolAnswer RenderListAggregate(IReadOnlyList<ReadOutcome> outcomes, string groupBy, bool json, OrderStamp? epoch,
                                       string headerLine, List<EnvelopePair> envelope,
                                       (int RowsRead, long Millis) bodyCost, int maxChars,
                                       IReadOnlyList<string>? requestedTypes = null, int rowLimit = 0)
     {
         var gb = groupBy.Trim().ToLowerInvariant();
         if (gb is not ("winner" or "type" or "defined_in"))
-            return Wire.Refuse(json, $"error: project.group_by='{groupBy}' is not a count key — use 'winner', 'type', or 'defined_in'.");
+            return ToolAnswer.Refusal(json, $"error: project.group_by='{groupBy}' is not a count key — use 'winner', 'type', or 'defined_in'.");
         int cap = Wire.Cap(maxChars);
         var groups = new Dictionary<string, int>(StringComparer.OrdinalIgnoreCase);
         // A type the call asked for is in the census whether or not it has records.
@@ -662,7 +677,7 @@ static partial class RecordsTools
         var empties = all.Where(g => g.Value == 0).Select(g => g.Key).ToList();
         var rows = empties.Count == 0 ? all : all.Where(g => g.Value > 0).ToList();
         if (json)
-            return JsonWire.RenderListAggregate(gb, rows, outcomes.Count, errors, epoch, bodyCost, cap, envelope, empties, rowLimit);
+            return ToolAnswer.Served(JsonWire.RenderListAggregate(gb, rows, outcomes.Count, errors, epoch, bodyCost, cap, envelope, empties, rowLimit));
         var sb = new StringBuilder();
         sb.Append(headerLine).Append("  group_by=").Append(gb).Append('\n');
         sb.Append(outcomes.Count).Append(" record(s)");
@@ -700,6 +715,6 @@ static partial class RecordsTools
         sb.Append(emptyLine);
         // What reading the bodies this table counted cost, stated on text as it is on json.
         sb.Append(RenderBudget.BodiesLine(bodyCost.RowsRead, bodyCost.Millis));
-        return RenderCap.Settle(sb.ToString(), cap);
+        return ToolAnswer.Served(RenderCap.Settle(sb.ToString(), cap));
     }
 }

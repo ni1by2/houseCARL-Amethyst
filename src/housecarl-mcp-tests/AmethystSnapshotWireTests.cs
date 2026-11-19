@@ -59,7 +59,7 @@ public sealed class AmethystSnapshotWireTests
         Assert.False(text.IsError, text.Text);
         Assert.Contains("Amethyst saved-snapshot mode", text.Text);
         Assert.Contains(AmethystSnapshotProvenance.Warning, text.Text);
-        var asset = server.Call(ToolNames.AssetStatus, "{\"asset_paths\":[\"Meshes/example.nif\"],\"format\":\"json\"}");
+        var asset = server.Call(ToolNames.AssetStatus, "{\"paths\":[\"Meshes/example.nif\"],\"format\":\"json\"}");
         Assert.False(asset.IsError, asset.Text);
         using var assetJson = JsonDocument.Parse(asset.Text);
         Assert.Contains("Beta", asset.Text);

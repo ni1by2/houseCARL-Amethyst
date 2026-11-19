@@ -12,14 +12,45 @@ public sealed class NifSetRefusalTests
 
     string? Refusal(params NifSetOp[] ops) => NifService.Set(_guard, ops).Error;
 
+    // #1359: a mesh that will not open gets nif_inspect's sentence from Inspect, and that sentence then " Nothing was written." from Set.
+    static void RefusesWithInspectsSentence(byte[] bytes, string sentence)
+    {
+        Assert.Equal(sentence, NifService.Inspect(bytes).Error);
+        Assert.Equal(sentence + " Nothing was written.",
+            NifService.Set(bytes, new[] { new NifSetOp(NifSetOpKind.SetFlags, "X", Flags: 1) }).Error);
+    }
+
     // probe: "empty bytes → named refusal"
     [Fact]
-    public void EmptyBytesRefuse() =>
-        Assert.Contains("empty", NifService.Set(Array.Empty<byte>(), new[] { new NifSetOp(NifSetOpKind.SetFlags, "X", Flags: 1) }).Error);
+    public void EmptyBytesRefuseWithInspectsEmptySentence() =>
+        RefusesWithInspectsSentence(Array.Empty<byte>(), "the mesh is empty (0 bytes) — nothing to read.");
+
+    // #1359: the return-code sentence keeps "(Load returned 1)" and the NifSkope sentence.
+    [Fact]
+    public void NonNifGarbageRefusesWithInspectsReturnCodeSentence() =>
+        RefusesWithInspectsSentence(
+            System.Text.Encoding.ASCII.GetBytes("this is plainly not a NIF file, just ASCII text padding padding padding."),
+            ReturnCodeOneSentence);
+
+    /// <summary>NifService.Load's whole sentence for bytes it returns 1 on.</summary>
+    internal const string ReturnCodeOneSentence =
+        "NiflySharp could not parse this mesh (Load returned 1) — it may be truncated, not a NIF, or a format the library " +
+        "rejects. If NifSkope opens it, it is a valid-but-nonstandard file houseCARL will not guess at.";
+
+    // #1359: the structure-read sentence, not Load's exception sentence, with one full stop, never "..".
+    [Fact]
+    public void AMeshWhoseStructureReadThrowsRefusesWithOneFullStop() =>
+        RefusesWithInspectsSentence(NifInspectFixtures.BuildMeshWhoseStructureReadThrows(),
+            "the mesh parsed but reading its structure failed — NullReferenceException: Object reference not set to an instance of an object.");
 
     // probe: "no ops → named refusal"
     [Fact]
     public void NoOpsRefuse() => Assert.NotNull(NifService.Set(_guard, Array.Empty<NifSetOp>()).Error);
+
+    // #1359: no ops answers before the parse, so a mesh that will not open still gets the no-ops sentence.
+    [Fact]
+    public void NoOpsOnAMeshThatWillNotOpenRefusesBeforeTheParse() =>
+        Assert.Equal("no write op was given.", NifService.Set(NifInspectFixtures.BuildMeshWhoseStructureReadThrows(), Array.Empty<NifSetOp>()).Error);
 
     // probe: "target not found → named refusal"
     [Fact]

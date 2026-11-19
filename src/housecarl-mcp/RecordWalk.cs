@@ -24,6 +24,8 @@ internal sealed partial class RecordReads
         /// <summary>Set when Mutagen could not parse the node's content, so its links never read — the same fact the
         /// scan lanes account as an unscannable record.</summary>
         public string? Unscannable;
+        /// <summary>Set when the node's links were read only leniently: the walk follows them and its row says so.</summary>
+        public string? Lenient;
     }
 
     static readonly List<FormKey> EmptyKeys = new();
@@ -31,6 +33,16 @@ internal sealed partial class RecordReads
     /// <summary>How a walk reports a record whose content would not parse — the scan lanes' own account.</summary>
     static string WalkUnscannableNote(string fault)
         => $"could not be scanned (Mutagen could not parse its content) and was not entered — {fault}";
+
+    /// <summary>How a walk reports a record whose links were read leniently — the scans' own lenient read.</summary>
+    static string WalkLenientNote(FormKey fk, string lenient) => $"links read leniently — {LenientNoteBody(fk, lenient)}";
+
+    /// <summary>The door's lenient note without its leading FormID, for a sentence that already names the record.</summary>
+    internal static string LenientNoteBody(FormKey fk, string note)
+    {
+        var lead = FormIdToken.Of(fk) + " — ";
+        return note.StartsWith(lead, StringComparison.Ordinal) ? note[lead.Length..] : note;
+    }
 
     static string WalkFaultOf(Exception ex) => $"{ex.GetType().Name}: {ex.Message}";
 
@@ -57,7 +69,11 @@ internal sealed partial class RecordReads
     public sealed record WalkSeedResult(string Seed, string? Type, string? EditorId,
                                         IReadOnlyList<WalkNodeRow> Nodes, IReadOnlyList<string> Cycles,
                                         string? TruncationNote, IReadOnlyList<NpcTemplateCategory>? TemplateReport,
-                                        string? Error, bool CyclesCapped = false);
+                                        string? Error, bool CyclesCapped = false, string? Note = null)
+    {
+        /// <summary>The seed token is not a FormID, so a reading form carries it to the list lane as its own error row.</summary>
+        public bool Malformed { get; init; }
+    }
 
     /// <summary>How many loops one seed's cycle search collects.</summary>
     public const int WalkCycleCap = 200;
@@ -70,6 +86,8 @@ internal sealed partial class RecordReads
         public string? EditorId;
         public string Type = "";
         public string Label = "";
+        /// <summary>Set when the seed's own links were read only leniently.</summary>
+        public string? Note;
         public List<WalkNodeRow> Nodes = new();
         /// <summary>The walked graph as edges, parent to target, per node this seed entered — one entry per link
         /// CROSSED, which is why it goes at <see cref="Settle"/> rather than at return.</summary>
@@ -106,27 +124,29 @@ internal sealed partial class RecordReads
         /// <summary>This seed's cycles, each stated as its loop of records — the last hop closes it.</summary>
         IReadOnlyList<string> CyclesFound()
         {
-            var found = GraphCycles.Find(Edges, WalkCycleCap, out var capped);
-            CyclesCapped = capped;
-            if (found.Count == 0) return Array.Empty<string>();
             var editorIds = new Dictionary<string, string?>(StringComparer.OrdinalIgnoreCase)
             {
                 [FormIdToken.Of(Key)] = EditorId,
             };
             foreach (var n in Nodes) editorIds[n.Key] = n.EditorId;
-            string Label(FormKey k)
-            {
-                var token = FormIdToken.Of(k);
-                var editorId = editorIds.TryGetValue(token, out var e) ? e : null;
-                return $"{token} ({editorId ?? "<no editorid>"})";
-            }
-            return found.Select(path => string.Join(" -> ", path.Select(Label)) + " -> " + Label(path[0])).ToList();
+            var lines = CycleLines(Edges, k => editorIds.TryGetValue(FormIdToken.Of(k), out var e) ? e : null, out var capped);
+            CyclesCapped = capped;
+            return lines;
         }
+    }
+
+    /// <summary>The loops over a walk's recorded <paramref name="edges"/>, each stated as its records in order, the last
+    /// hop closing back to the first, searched to <see cref="WalkCycleCap"/>; the one wording every walk's cycles use.</summary>
+    internal static IReadOnlyList<string> CycleLines(IReadOnlyDictionary<FormKey, List<FormKey>> edges, Func<FormKey, string?> editorId, out bool capped)
+    {
+        var found = GraphCycles.Find(edges, WalkCycleCap, out capped);
+        string Label(FormKey k) => $"{FormIdToken.Of(k)} ({editorId(k) ?? "<no editorid>"})";
+        return found.Select(path => string.Join(" -> ", path.Select(Label)) + " -> " + Label(path[0])).ToList();
     }
 
     /// <summary>The forward walk over the winner link graph, per seed off ONE captured build.</summary>
     public IReadOnlyList<WalkSeedResult> WalkForwardBatch(
-        IReadOnlyList<string> seeds, IReadOnlyList<string>? seedPaths, string? follow,
+        IReadOnlyList<string> seeds, IReadOnlyList<string>? seedPaths, IReadOnlyList<string>? follow,
         int depth, int maxNodes, IReadOnlyList<(string Match, bool Refuse)> exclusions,
         ArtifactDemand? demand, out string? refusal, out OrderStamp? epoch, CancellationToken ct,
         bool wantCycles, IReadOnlySet<string>? through = null, IDictionary<FormKey, string>? leftOut = null)
@@ -145,14 +165,20 @@ internal sealed partial class RecordReads
         }
         using var session = resolver.OpenSession();
 
-        string[]? followSegs = null;
-        bool closure = string.IsNullOrWhiteSpace(follow) || follow!.Trim() == "*";
+        // Each followed path's segments; null for the closure, a list holding "*" included.
+        List<string[]>? followSegs = null;
+        bool closure = follow is null || WalkGrammar.FollowsEveryLink(follow);
         if (!closure)
         {
-            followSegs = follow!.Trim().Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
-            if (followSegs.Length == 0) { refusal = $"walk.follow '{follow}' is not a usable field path."; return Array.Empty<WalkSeedResult>(); }
+            followSegs = new();
+            foreach (var path in follow!)
+            {
+                var segs = path.Trim().Split('.', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries);
+                if (segs.Length == 0) { refusal = $"walk.follow '{path}' is not a usable field path."; return Array.Empty<WalkSeedResult>(); }
+                followSegs.Add(segs);
+            }
         }
-        bool templateFollow = followSegs is { Length: 1 } && followSegs[0].Equals("Template", StringComparison.OrdinalIgnoreCase);
+        bool templateFollow = followSegs is [{ Length: 1 } only] && only[0].Equals("Template", StringComparison.OrdinalIgnoreCase);
 
         var bodyCache = new Dictionary<FormKey, IMajorRecordGetter?>();
         IMajorRecordGetter? Fetch(FormKey k)
@@ -221,11 +247,15 @@ internal sealed partial class RecordReads
             note = null;
             if (segs is null)
             {
+                // Through the one link door: a deleted record links to nothing, a perk read leniently says so, and a
+                // parse fault goes on up to the node's own catch, which keeps it as unscannable.
+                var all = new List<FormKey>();
+                var lister = new RecordLinks.Lister(all);
+                note = RecordLinks.Walk(body, ref lister) is { } lenient ? WalkLenientNote(body.FormKey, lenient) : null;
                 var seen = new HashSet<FormKey>();
                 var list = new List<FormKey>();
-                if (body is Mutagen.Bethesda.Plugins.Records.IFormLinkContainerGetter flc)
-                    foreach (var link in flc.EnumerateFormLinks())
-                        if (!link.FormKey.IsNull && seen.Add(link.FormKey)) list.Add(link.FormKey);
+                foreach (var k in all)
+                    if (!k.IsNull && seen.Add(k)) list.Add(k);
                 return list;
             }
             // The '*parent' containment step: hop to the record that CONTAINS this one, then read the rest of the
@@ -250,9 +280,23 @@ internal sealed partial class RecordReads
                 body = up;
             }
 
+            // A deleted record links to nothing, as the one link door says (RecordLinks).
+            if (DeletedRecordRule.HasNoLiveBody(body)) return new List<FormKey>();
             var (links, n) = ReadEngine.CollectLinksAt(body, hops == 0 ? segs : segs[hops..]);
             note = n;
             return links ?? new List<FormKey>();
+        }
+        // The followed paths' links together, each once in path order; one path reads as LinksOf does.
+        List<FormKey> FollowedLinks(IMajorRecordGetter body, out string? note)
+        {
+            if (followSegs is not { Count: > 1 }) return LinksOf(body, followSegs?[0], out note);
+            note = null;
+            var seen = new HashSet<FormKey>();
+            var all = new List<FormKey>();
+            foreach (var segs in followSegs)
+                foreach (var k in LinksOf(body, segs, out _))
+                    if (seen.Add(k)) all.Add(k);
+            return all;
         }
 
         // What each reached key yielded, by value, so a key two seeds both reach is READ once per call.
@@ -282,7 +326,11 @@ internal sealed partial class RecordReads
             // PER-RECORD FAULT ISOLATION, the twin of the scan lanes': reading a node's links parses its content
             // lazily, so one record Mutagen cannot parse is a boundary and the walk goes on.
             if (body is not null && !atCap && !NotEntered(fact.Type) && fact.Unscannable is null)
-                try { fact.Links = LinksOf(body, followSegs, out _); }
+                try
+                {
+                    fact.Links = FollowedLinks(body, out var linkNote);
+                    if (followSegs is null) fact.Lenient = linkNote;
+                }
                 catch (Exception ex) when (RecordParseFault.Is(ex)) { fact.Unscannable = WalkFaultOf(ex); }
             if (nodeFacts is not null) nodeFacts[k] = fact;
             return fact;
@@ -309,8 +357,9 @@ internal sealed partial class RecordReads
         var seedGather = new List<FormKey>(s1 - s0);
         for (int i = s0; i < s1; i++)
         {
-            try { seedKeys[i] = view.ParseFormId(seeds[i]); seedGather.Add(seedKeys[i]); }
-            catch (Exception ex) { rows[i] = new WalkSeedResult(seeds[i]?.Trim() ?? "", null, null, Array.Empty<WalkNodeRow>(), Array.Empty<string>(), null, null, $"bad FormID '{seeds[i]}': {ex.Message}"); }
+            var seed = WalkGrammar.ParseSeed(seeds[i], view.ParseFormId);
+            if (seed.Key is { } sk) { seedKeys[i] = sk; seedGather.Add(sk); }
+            else rows[i] = new WalkSeedResult(seeds[i]?.Trim() ?? "", null, null, Array.Empty<WalkNodeRow>(), Array.Empty<string>(), null, null, seed.Error) { Malformed = true };
         }
         ThroughDoor(seedGather, (bodies, _) => { foreach (var (k, b) in bodies) bodyCache[k] = b; });
 
@@ -380,7 +429,9 @@ internal sealed partial class RecordReads
             }
             else
             {
-                foreach (var l in SeedLinks(null, out _)) { st.Edge(seedFk, l); st.Frontier.Enqueue((l, 1, st.Label)); }
+                var seedLinks = SeedLinks(null, out var seedNote);
+                st.Note = seedNote;
+                foreach (var l in seedLinks) { st.Edge(seedFk, l); st.Frontier.Enqueue((l, 1, st.Label)); }
             }
             // The seed itself would not parse.
             if (seedFault is { } fault)
@@ -515,7 +566,7 @@ internal sealed partial class RecordReads
                     }
                     st.Nodes.Add(new WalkNodeRow(FormIdToken.Of(key), type, fact.EditorId, hop, pulledBy,
                                                  atCap ? "kept" : "expanded",
-                                                 atCap ? $"at the walk.depth cap ({depth}) — not entered" : null));
+                                                 atCap ? $"at the walk.depth cap ({depth}) — not entered" : fact.Lenient));
                     if (atCap)
                     {
                         st.Truncation ??= $"walk reached its depth cap ({depth}) on at least one chain — nodes at the cap are recorded, not entered; raise walk.depth to walk deeper.";
@@ -542,7 +593,7 @@ internal sealed partial class RecordReads
             if (st.SeedTemplateFact is { } seedFact) templateReport = NpcTemplateReport(TemplateFactOf, seedFact, st.Key);
             // A seed that never ran a pass — no links off it at all — has not settled yet; one that did settled there.
             st.Settle();
-            results.Add(new WalkSeedResult(FormIdToken.Of(st.Key), st.Type, st.EditorId, st.Nodes, st.Cycles!, st.Truncation, templateReport, st.Error, st.CyclesCapped));
+            results.Add(new WalkSeedResult(FormIdToken.Of(st.Key), st.Type, st.EditorId, st.Nodes, st.Cycles!, st.Truncation, templateReport, st.Error, st.CyclesCapped, st.Note));
         }
         // A seed another seed reached is in the selection, so it is never counted as left out.
         if (leftOut is not null) foreach (var k in seedKeys) leftOut.Remove(k);

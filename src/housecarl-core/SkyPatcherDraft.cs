@@ -16,7 +16,7 @@ public static class SkyPatcherDraft
                                                   SkyPatcherOverlay.WarningSink? warnings = null)
         {
             refusal = null;
-            var name = Path.GetFileName(IniPath);
+            var name = Path.GetFileName(IniPath.Replace('\\', '/'));
             int at = -1;
             for (int i = 0; i < live.Folders.Count; i++)
                 if (live.Folders[i].Subfolder.Equals(Subfolder, StringComparison.OrdinalIgnoreCase)) { at = i; break; }
@@ -51,44 +51,43 @@ public static class SkyPatcherDraft
                 return live;
             }
 
-            // The filename gate applies to the draft as to any file.
+            // The file rules apply to the draft as to any placed file.
             var gate = SkyPatcherDiscovery.GatePluginOf(name);
-            string? notApplied = null;
-            if (gate is not null && !pluginPresent(gate))
-            {
-                notApplied = $"filename-gated on plugin '{gate}', which is not in the active load order";
-                warnings?.Add($"{IniPath}: the draft is {notApplied} — SkyPatcher would not read it once placed, so this post state is the plain winner.");
-            }
+            var notApplied = SkyPatcherDiscovery.NotReadReason(name, pluginPresent);
+            if (notApplied is not null)
+                warnings?.Add($"{IniPath}: the draft is not read once placed ({notApplied}), so this post state is the plain winner.");
 
             var draft = new SkyPatcherDiscovery.IniFile(IniPath, Subfolder, name, DraftProvider, IniPath,
                                                         Array.Empty<string>(), gate, notApplied, lines);
 
-            // The [Patcher] toggle for this type; a folder invented here has no scan to carry it, so it is read off the layer's toggle map.
+            // The [Patcher] switch for this type; a folder invented here has no scan to carry it, so it is read off the layer's switches.
+            var cat = catalog.ForSubfolder(Subfolder);
             bool folderEnabled = at >= 0
                 ? live.Folders[at].PatchingEnabled
-                : SkyPatcherDiscovery.ToggleEnabled(live.PatcherToggles, Subfolder);
+                : SkyPatcherDiscovery.PatcherRuns(live.PatcherSwitches, Subfolder);
             if (!folderEnabled)
-                warnings?.Add($"{IniPath}: SkyPatcher.ini disables '{Subfolder}' patching (iEnable…Patching=0) — the DLL skips the whole folder, " +
-                              "so the draft would apply nothing once placed and this post state is the plain winner.");
+                warnings?.Add($"{IniPath}: {SkyPatcherDiscovery.SwitchesName()} {SkyPatcherDiscovery.SwitchOffReason(live.PatcherSwitches, Subfolder)}"
+                              + " — the DLL skips the whole folder, so the draft would apply nothing once placed and this post state is the plain winner.");
 
             var folders = new List<SkyPatcherDiscovery.FolderScan>(live.Folders);
             if (at < 0)
             {
-                folders.Add(new SkyPatcherDiscovery.FolderScan(Subfolder, catalog.ForSubfolder(Subfolder), folderEnabled,
-                                                               new List<SkyPatcherDiscovery.IniFile> { draft }));
-                folders = folders.OrderBy(f => f.Subfolder, StringComparer.OrdinalIgnoreCase).ToList();
+                folders.Add(new SkyPatcherDiscovery.FolderScan(Subfolder, cat, folderEnabled,
+                                                               new List<SkyPatcherDiscovery.IniFile> { draft },
+                                                               SwitchUnknown: live.PatcherSwitches.Unreadable is not null));
+                folders = folders.OrderBy(f => f.Subfolder, SkyPatcherDiscovery.FolderOrder()).ToList();
             }
             else
             {
                 var files = folders[at].Files.Append(draft)
-                                             .OrderBy(f => f.SortKey, StringComparer.OrdinalIgnoreCase).ToList();
+                                             .OrderBy(f => f.SortKey, SkyPatcherDiscovery.FileOrder).ToList();
                 folders[at] = folders[at] with { Files = files };
             }
 
             var notes = live.Notes.Append(
                 $"the draft INI '{IniPath}' was folded into the '{Subfolder}' folder as '{name}' — it is NOT on disk in a mod, " +
                 "so this reads what the game would see once it is placed there.").ToList();
-            return new SkyPatcherDiscovery.LayerScan(folders, notes, live.ReadIncomplete, live.PatcherToggles);
+            return new SkyPatcherDiscovery.LayerScan(folders, notes, live.ReadIncomplete, live.PatcherSwitches);
         }
     }
 
@@ -103,19 +102,21 @@ public static class SkyPatcherDraft
     public const string DraftProvider = "the draft (not placed in a mod)";
 
     /// <summary>Validate a draft pole expression into a <see cref="Plan"/>, returning the refusal sentence or null; a null <paramref name="subfolder"/> falls back to the file's parent directory name when that is a documented type folder.</summary>
-    public static string? Prepare(string? iniPath, string? subfolder, SkyPatcherCatalog catalog, out Plan? plan)
+    public static string? Prepare(string? iniPath, string? subfolder, SkyPatcherCatalog catalog, out Plan? plan, SkyPatcherFormat? format = null)
     {
         plan = null;
         var path = (iniPath ?? "").Trim();
+        var f = format ?? RuntimeFormats.SkyPatcher;
+        var token = f.NameToken;
         if (path.Length == 0)
-            return "the draft INI path is empty — give the absolute path to the .ini file the draft would be placed as.";
-        if (PathArguments.NotAbsolute(path, "the draft INI path", "the .ini file the draft would be placed as",
-                                      "C:\\MO2\\mods\\MyPatch\\SkyPatcher\\weapon\\MyPatch.ini") is { } notAbsolute)
+            return $"the draft INI path is empty — give the absolute path to the {token} file the draft would be placed as.";
+        if (PathArguments.NotAbsolute(path, "the draft INI path", $"the {token} file the draft would be placed as",
+                                      $"C:\\MO2\\mods\\MyPatch\\SkyPatcher\\weapon\\MyPatch{token}") is { } notAbsolute)
             return notAbsolute;
         try { path = Path.GetFullPath(path); }
         catch (Exception ex) { return $"the draft INI path '{path}' is not a usable path: {ex.Message}"; }
-        if (!path.EndsWith(".ini", StringComparison.OrdinalIgnoreCase))
-            return $"the draft '{path}' is not a .ini file — SkyPatcher reads only .ini files from its type folders.";
+        if (!SkyPatcherDiscovery.HasIniName(Path.GetFileName(path), f))
+            return $"the draft '{path}' has no '{token}' in its name — SkyPatcher reads only files with '{token}' in the name from its type folders.";
         if (!File.Exists(path))
             return $"there is no file at '{path}' — the draft is read from disk, so it has to exist before it can be checked.";
 

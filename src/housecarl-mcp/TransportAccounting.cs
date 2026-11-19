@@ -9,6 +9,9 @@ internal readonly record struct RowWindow(int Offset, int Limit, bool Spent = fa
 {
     internal static readonly RowWindow All = new(0, 0);
 
+    /// <summary>Whether the caller asked for a window at all.</summary>
+    internal bool IsPaged => Offset > 0 || Limit > 0;
+
     internal IReadOnlyList<T> Apply<T>(IReadOnlyList<T> rows)
     {
         if (Spent) return Array.Empty<T>();
@@ -103,13 +106,31 @@ internal static class TransportAccounting
               .Append(c.Offset).Append(", or skip it with offset=").Append(c.Offset + 1)
               .Append(" to reach the rest of the selection.");
         // An offset past the end would otherwise be told to re-call at the offset it already used.
-        if (everySentence || (c.Remaining == 0 && c.Total > 0 && c.Offset >= c.Total))
-            sb.Append("\noffset=").Append(c.Offset).Append(" is past the end of the selection (")
-              .Append(c.Total).Append(' ').Append(rowNoun).Append(") — the last page starts before it.");
+        if (everySentence || PastEnd(c))
+            sb.Append('\n').Append(PastEndSentence(c, rowNoun));
         if (everySentence || c.Truncated > 0)
             sb.Append("\nmax_chars cut ").Append(c.Truncated).Append(' ').Append(rowNoun)
               .Append(" from the render: raise max_chars, or page with limit=/offset=.");
         return sb.ToString();
+    }
+
+    /// <summary>Whether the window starts past the end of a non-empty selection.</summary>
+    internal static bool PastEnd(TransportCounts c) => c.Remaining == 0 && c.Total > 0 && c.Offset >= c.Total;
+
+    /// <summary>The one past-the-end sentence, both transports.</summary>
+    internal static string PastEndSentence(TransportCounts c, string rowNoun) =>
+        $"offset={c.Offset} is past the end of the selection ({c.Total} {rowNoun}) — the last page starts before it.";
+
+    /// <summary>The json paging advice beside the accounting object: the next page while rows remain, and the
+    /// past-the-end sentence. <paramref name="everySentence"/> writes both, the widest case a reserve measures.</summary>
+    internal static void WritePageAdviceJson(Utf8JsonWriter w, TransportCounts c, string rowNoun, bool everySentence = false)
+    {
+        if (everySentence || c.Remaining > 0)
+        {
+            w.WriteNumber("next_limit", c.NextLimit);
+            w.WriteNumber("next_offset", c.Offset + c.Rendered);
+        }
+        if (everySentence || PastEnd(c)) w.WriteString("offset_note", PastEndSentence(c, rowNoun));
     }
 
     /// <summary>The JSON twin of <see cref="Compose"/>, field names matching the text spelling exactly.</summary>

@@ -5,8 +5,14 @@ namespace HousecarlCore;
 /// <summary>Structural tokenizer for one SkyPatcher patch line — grammar only, no key semantics; the productions, the address boundary and the delimiter limitation are in docs/architecture/skypatcher-layer.md.</summary>
 public static class SkyPatcherParse
 {
-    /// <summary>Parse one physical line. Never throws — a no-'=' or empty-key segment is still surfaced carrying a loud Note, while an empty ':'-segment is noted and skipped.</summary>
-    public static SkyPatcherLine ParseLine(string raw)
+    /// <summary>The shipped delimiters, from SkyPatcher's row of the runtime-format source; a parse given another row's grammar uses that.</summary>
+    static readonly SkyPatcherGrammar G = RuntimeFormats.SkyPatcher.Grammar;
+
+    /// <summary>Parse one physical line with the shipped delimiters.</summary>
+    public static SkyPatcherLine ParseLine(string raw) => ParseLine(raw, G);
+
+    /// <summary>Parse one physical line with <paramref name="g"/>'s delimiters. Never throws — a no-'=' or empty-key segment is still surfaced carrying a loud Note, while an empty ':'-segment is noted and skipped.</summary>
+    public static SkyPatcherLine ParseLine(string raw, SkyPatcherGrammar g)
     {
         raw ??= "";
         // A stray U+FEFF is whitespace anywhere in the line; it is never a legal key/value character.
@@ -15,28 +21,32 @@ public static class SkyPatcherParse
         if (trimmed.Length == 0)
             return new SkyPatcherLine(raw, SkyPatcherLineKind.Blank, Array.Empty<SkyPatcherSegment>(), null);
 
-        if (trimmed[0] is ';' or '#')
+        if (trimmed[0] == g.Comment || g.CommentLeads.Contains(trimmed[0]))
             return new SkyPatcherLine(raw, SkyPatcherLineKind.Comment, Array.Empty<SkyPatcherSegment>(), null);
 
-        if (trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']')
+        if (g.LabelLines && trimmed.Length >= 2 && trimmed[0] == '[' && trimmed[^1] == ']')
             return new SkyPatcherLine(raw, SkyPatcherLineKind.Label, Array.Empty<SkyPatcherSegment>(), null);
 
+        // Since 8.0.1 a comment may follow a rule: the text from the first ';' outside a ~name~ literal is dropped.
+        if (g.TrailingComment) trimmed = StripTrailingComment(trimmed, g);
+
         var segments = new List<SkyPatcherSegment>();
+        var keys = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
         string? note = null;
 
-        foreach (var rawSeg in trimmed.Split(':'))
+        foreach (var rawSeg in trimmed.Split(g.Segment))
         {
             var seg = rawSeg.Trim();
             if (seg.Length == 0)
             {
-                note = Append(note, "empty ':'-segment (stray or doubled ':')");
+                note = Append(note, $"empty '{g.Segment}'-segment (stray or doubled '{g.Segment}')");
                 continue;
             }
 
-            int eq = seg.IndexOf('=');
+            int eq = seg.IndexOf(g.Assign);
             if (eq < 0)
             {
-                note = Append(note, $"segment '{seg}' has no '=' (not key=value)");
+                note = Append(note, $"segment '{seg}' has no '{g.Assign}' (not key{g.Assign}value)");
                 segments.Add(new SkyPatcherSegment(seg, null, Array.Empty<SkyPatcherValue>()));
                 continue;
             }
@@ -50,14 +60,36 @@ public static class SkyPatcherParse
                 continue;
             }
 
-            segments.Add(new SkyPatcherSegment(key, rawValue, ParseValueList(rawValue, ref note)));
+            // SkyPatcher ignores a second copy of a key on one line.
+            if (!keys.Add(key))
+            {
+                note = Append(note, $"key '{key}' appears twice; SkyPatcher ignores the second copy ('{seg}')");
+                continue;
+            }
+            segments.Add(new SkyPatcherSegment(key, rawValue, ParseValueList(rawValue, g, ref note)));
         }
 
         return new SkyPatcherLine(raw, SkyPatcherLineKind.Patch, segments, note);
     }
 
+    /// <summary>The line up to its first ';' that is not inside a <c>=~…~</c> name literal, trimmed; a compound's '~' never opens one.</summary>
+    static string StripTrailingComment(string line, SkyPatcherGrammar g)
+    {
+        bool inName = false;
+        for (int i = 0; i < line.Length; i++)
+        {
+            if (line[i] == g.Compound)
+            {
+                if (inName) inName = false;
+                else if (line[..i].TrimEnd() is { Length: > 0 } before && before[^1] == g.Assign) inName = true;
+            }
+            else if (line[i] == g.Comment && !inName) return line[..i].TrimEnd();
+        }
+        return line;
+    }
+
     /// <summary>Parse a whole INI file's text into its lines (blank/comment/patch), in order.</summary>
-    public static IReadOnlyList<SkyPatcherLine> ParseFile(string text)
+    public static IReadOnlyList<SkyPatcherLine> ParseFile(string text, SkyPatcherGrammar? grammar = null)
     {
         var lines = new List<SkyPatcherLine>();
         if (string.IsNullOrEmpty(text)) return lines;
@@ -65,59 +97,52 @@ public static class SkyPatcherParse
         if (text[0] == '\uFEFF') text = text[1..];
         // Empties are kept so line indices track the source file.
         foreach (var raw in text.Replace("\r\n", "\n").Replace('\r', '\n').Split('\n'))
-            lines.Add(ParseLine(raw));
+            lines.Add(ParseLine(raw, grammar ?? G));
         return lines;
     }
 
     /// <summary>Comma-split a segment's raw value into items; an empty item is skipped with a loud note.</summary>
-    static IReadOnlyList<SkyPatcherValue> ParseValueList(string rawValue, ref string? note)
+    static IReadOnlyList<SkyPatcherValue> ParseValueList(string rawValue, SkyPatcherGrammar g, ref string? note)
     {
         if (rawValue.Length == 0) return Array.Empty<SkyPatcherValue>();
         var items = new List<SkyPatcherValue>();
-        foreach (var rawItem in rawValue.Split(','))
+        foreach (var rawItem in rawValue.Split(g.Item))
         {
             var item = rawItem.Trim();
             if (item.Length == 0)
             {
-                note = Append(note, $"empty ','-item in '{rawValue}' (stray or doubled ',')");
+                note = Append(note, $"empty '{g.Item}'-item in '{rawValue}' (stray or doubled '{g.Item}')");
                 continue;
             }
-            items.Add(ParseValue(item));
+            items.Add(ParseValue(item, g));
         }
         return items;
     }
 
     /// <summary>Parse one comma-item: a <c>~…~</c> rename name-literal, or a <c>~</c>-packed compound whose first sub-arg is address-parsed.</summary>
-    static SkyPatcherValue ParseValue(string item)
+    static SkyPatcherValue ParseValue(string item, SkyPatcherGrammar g)
     {
-        if (item.Length >= 2 && item[0] == '~' && item[^1] == '~')
+        if (item.Length >= 2 && item[0] == g.Compound && item[^1] == g.Compound)
         {
             var name = item[1..^1];
             return new SkyPatcherValue(item, IsNameLiteral: true, NameText: name,
                 SubArgs: new[] { item }, Address: null);
         }
 
-        var subArgs = item.Split('~');
-        var address = TryParseAddress(subArgs[0]);
+        var subArgs = item.Split(g.Compound);
+        var address = TryParseAddress(subArgs[0], g);
         return new SkyPatcherValue(item, IsNameLiteral: false, NameText: null, SubArgs: subArgs, Address: address);
     }
 
-    /// <summary>Resolve the unambiguous <c>Plugin.esp|FormID</c> address form; null for anything else, including a bare EditorID.</summary>
-    public static FormAddress? TryParseAddress(string token)
+    /// <summary>A token holding the grammar's address separator as SkyPatcher reads it: <c>Plugin|FormID</c>, never an EditorID; null for a token without one. Read through the one runtime-layer resolver, on SkyPatcher's own spelling with this grammar's address character.</summary>
+    public static FormAddress? TryParseAddress(string token, SkyPatcherGrammar? grammar = null)
+        => RuntimeTargets.TryParseAddress(token, Spelling(grammar));
+
+    /// <summary>SkyPatcher's target spelling, with the address character a test grammar overrides; the shipped row already carries the shipped character, so the common path allocates nothing.</summary>
+    static TargetSpelling Spelling(SkyPatcherGrammar? grammar)
     {
-        if (string.IsNullOrEmpty(token)) return null;
-        int bar = token.IndexOf('|');
-        if (bar <= 0 || bar == token.Length - 1) return null;
-
-        var plugin = token[..bar].Trim();
-        var hex = token[(bar + 1)..].Trim();
-        if (plugin.Length == 0 || hex.Length == 0) return null;
-
-        // FormID is hex with trimmable leading zeros; a right side that is not clean hex is not this form.
-        if (!uint.TryParse(hex, NumberStyles.HexNumber, CultureInfo.InvariantCulture, out var formId))
-            return null;
-
-        return new FormAddress(plugin, formId, EditorId: null);
+        var s = RuntimeFormats.SkyPatcher.Targets;
+        return grammar is null || grammar.Address == s.Separator ? s : s with { Separator = grammar.Address };
     }
 
     static string Append(string? note, string add) => note is null ? add : note + "; " + add;
@@ -157,11 +182,14 @@ public sealed record SkyPatcherValue(
     IReadOnlyList<string> SubArgs,
     FormAddress? Address);
 
-/// <summary>A resolved form address; the tokenizer produces only the FormID form, and <see cref="EditorId"/> is the overlay engine's to fill.</summary>
+/// <summary>A resolved form address, built under each format's own spelling — SkyPatcher's <c>Plugin|FormID</c> and the
+/// distributor rows' <c>FormID~Plugin</c> alike; <see cref="EditorId"/> is the overlay engine's to fill.</summary>
 public sealed record FormAddress(string? Plugin, uint? FormId, string? EditorId)
 {
     /// <summary>True when this is the <c>Plugin.esp|FormID</c> form.</summary>
     public bool IsFormId => Plugin is not null && FormId is not null;
+    /// <summary>True for a '|' token whose FormID side SkyPatcher cannot read: it names nothing, and is never an EditorID.</summary>
+    public bool IsMalformed => Plugin is not null && FormId is null;
     /// <summary>True when this addresses a form by EditorID.</summary>
     public bool IsEditorId => EditorId is not null;
 }

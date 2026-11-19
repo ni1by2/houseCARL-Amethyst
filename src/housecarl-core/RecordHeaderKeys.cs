@@ -17,14 +17,52 @@ public static class RecordHeaderKeys
         ReadOnlyMemorySlice<byte> all = File.ReadAllBytes(path);
         var self = ModKey.FromFileName(Path.GetFileName(path));
         var header = new MajorRecordFrame(meta, all);
-        var masters = new List<ModKey>();
-        foreach (var sub in RecordSpanExtensions.EnumerateSubrecords(header.Content, meta, 0))
-            if (sub.RecordType.Type == "MAST")
-                masters.Add(ModKey.FromFileName(Encoding.Latin1.GetString(sub.Content.Span).TrimEnd('\0')));
+        var masters = Masters(header, meta);
         var keys = new List<FormKey>();
         for (long pos = header.TotalLength; pos < all.Length;)
             pos += Group(meta, all.Slice(checked((int)pos)), masters, self, keys);
         return keys;
+    }
+
+    /// <summary>The place of each of <paramref name="wanted"/> among the major records of the file at <paramref name="path"/>,
+    /// counted in file order through every group, read header by header with each record's body skipped; a key the file
+    /// does not hold is absent. Stops once every key is placed.</summary>
+    public static Dictionary<FormKey, int> Places(string path, IReadOnlySet<FormKey> wanted)
+    {
+        var meta = GameConstants.SkyrimSE;
+        var places = new Dictionary<FormKey, int>();
+        using var fs = new FileStream(path, FileMode.Open, FileAccess.Read, FileShare.Read, 1 << 16);
+        int len = meta.MajorConstants.HeaderLength;
+        var head = new byte[len];
+        if (fs.Read(head, 0, len) < len) return places;
+        var tes4 = new byte[len + BitConverter.ToUInt32(head, 4)];
+        head.CopyTo(tes4, 0);
+        fs.ReadExactly(tes4, len, tes4.Length - len);
+        var self = ModKey.FromFileName(Path.GetFileName(path));
+        var masters = Masters(new MajorRecordFrame(meta, tes4), meta);
+        int place = 0;
+        // A group's header is followed by its contents, so the walk steps into it; a record's body is skipped.
+        while (places.Count < wanted.Count && fs.Read(head, 0, len) == len)
+        {
+            if (head.AsSpan(0, 4).SequenceEqual("GRUP"u8)) continue;
+            uint raw = BitConverter.ToUInt32(head, 12);
+            int index = (int)(raw >> 24);
+            var fk = new FormKey(index < masters.Count ? masters[index] : self, raw & 0xFFFFFF);
+            if (wanted.Contains(fk)) places.TryAdd(fk, place);
+            place++;
+            fs.Seek(BitConverter.ToUInt32(head, 4), SeekOrigin.Current);
+        }
+        return places;
+    }
+
+    /// <summary>The master list a plugin's header declares, in order, as its FormIDs' load indexes number them.</summary>
+    static List<ModKey> Masters(MajorRecordFrame header, GameConstants meta)
+    {
+        var masters = new List<ModKey>();
+        foreach (var sub in RecordSpanExtensions.EnumerateSubrecords(header.Content, meta, 0))
+            if (sub.RecordType.Type == "MAST")
+                masters.Add(ModKey.FromFileName(Encoding.Latin1.GetString(sub.Content.Span).TrimEnd('\0')));
+        return masters;
     }
 
     static long Group(GameConstants meta, ReadOnlyMemorySlice<byte> at, List<ModKey> masters, ModKey self, List<FormKey> keys)

@@ -33,6 +33,8 @@ public sealed class PlaceInstance : IDisposable
     public string Mods { get; }
     public string Data { get; }
     public string Prof { get; }
+    /// <summary>Where instance mode derives its overwrite root; not created, since a missing one is a real case.</summary>
+    public string Overwrite { get; }
 
     readonly List<LoadOrderService> _services = new();
 
@@ -43,6 +45,7 @@ public sealed class PlaceInstance : IDisposable
         Mods = Path.Combine(Inst, "mods");
         Data = Path.Combine(Inst, "game", "Data");
         Prof = Path.Combine(Inst, "profiles", "Default");
+        Overwrite = Path.Combine(Inst, "overwrite");
         foreach (var d in new[] { Mods, Data, Prof }) Directory.CreateDirectory(d);
         File.WriteAllText(Path.Combine(Inst, "ModOrganizer.ini"),
             "[General]\r\ngameName=Skyrim Special Edition\r\nselected_profile=@ByteArray(Default)\r\ngamePath=@ByteArray("
@@ -59,11 +62,14 @@ public sealed class PlaceInstance : IDisposable
         File.WriteAllText(Path.Combine(Prof, "Skyrim.ini"), "[Archive]\r\nsResourceArchiveList=" + archiveList + "\r\n");
     }
 
-    /// <summary>One active placeholder plugin, Dummy.esp, shipped by <paramref name="host"/>, and the given mod list.</summary>
+    /// <summary>One active placeholder plugin, Dummy.esp, shipped by <paramref name="host"/> and defining an NPC at
+    /// 000800, after Dawnguard.esm in the game's Data folder defining <see cref="FacegenFormId"/>'s NPC, and the given
+    /// mod list.</summary>
     public void ProfileWithDummy(string host, params string[] modlist)
     {
-        File.WriteAllText(Path.Combine(Mod(host), "Dummy.esp"), "x");
-        Profile(new[] { "Dummy.esp" }, new[] { "*Dummy.esp" }, modlist);
+        FaceNpcPlugin.Write(Data, "Dawnguard.esm", 0x01A51A);
+        FaceNpcPlugin.Write(Mod(host), "Dummy.esp", 0x800);
+        Profile(new[] { "Dawnguard.esm", "Dummy.esp" }, new[] { "*Dawnguard.esm", "*Dummy.esp" }, modlist);
     }
 
     /// <summary>A mod folder under mods\, created if absent.</summary>
@@ -85,6 +91,15 @@ public sealed class PlaceInstance : IDisposable
         return svc;
     }
 
+    /// <summary>The same tree opened in EXPLICIT-paths mode, with an optional overwrite root.</summary>
+    public LoadOrderService OpenExplicit(string? overwriteDir = null)
+    {
+        var svc = LoadOrderService.WithExplicitPaths(Data, Mods, Prof, 0,
+            new UserConfigStore(Path.Combine(Root, "user-" + _services.Count + ".json")), overwriteDir);
+        _services.Add(svc);
+        return svc;
+    }
+
     public string Scratch(string name, byte[] bytes)
     {
         var p = Path.Combine(Root, name);
@@ -94,7 +109,7 @@ public sealed class PlaceInstance : IDisposable
 
     public static void Loose(string baseDir, string rel, byte[] bytes)
     {
-        var p = BethesdaPath.Under(baseDir, rel);
+        var p = LooseListings.OnDisk(baseDir, rel);
         Directory.CreateDirectory(Path.GetDirectoryName(p)!);
         File.WriteAllBytes(p, bytes);
     }
@@ -114,7 +129,7 @@ public sealed class PlaceInstance : IDisposable
             var name = t["mod folder:".Length..].Trim();
             var cut = name.IndexOf("  —", StringComparison.Ordinal);
             if (cut >= 0) name = name[..cut].Trim();
-            var p = BethesdaPath.Under(Path.Combine(Mods, name), rel);
+            var p = LooseListings.OnDisk(Path.Combine(Mods, name), rel);
             return File.Exists(p) ? p : null;
         }
         return null;

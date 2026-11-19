@@ -48,7 +48,7 @@ public static class SkyPatcherOverlay
     /// <summary>Everything the overlay needs from the load order, behind an interface so the engine stays testable off fixtures.</summary>
     public interface IFormResolver
     {
-        /// <summary>Resolve a bare EditorID to its winning FormKey, scoped to the Mutagen type when given; null means not found.</summary>
+        /// <summary>Resolve a bare EditorID to the first record loaded under it within the Mutagen type's scope; null when not found or no type is given (contract in docs/architecture/skypatcher-layer.md).</summary>
         FormKey? ResolveEditorId(string editorId, string? mutagenType);
 
         /// <summary>Read one leaf token off the load-order winner of another record; null means unresolvable.</summary>
@@ -60,11 +60,26 @@ public static class SkyPatcherOverlay
         /// <summary>Whether a plugin (filename incl. extension) is in the active load order (hasPlugins).</summary>
         bool PluginPresent(string pluginName);
 
+        /// <summary>The record a runtime FormID names in the active order, or the sentence saying why none does; for a format whose address is a number added to a plugin's runtime base.</summary>
+        (FormKey? Record, string? Why) FromRuntimeFormId(uint value);
+
+        /// <summary>The runtime FormID a plugin's records are numbered from — its load index, plus its light index where it is light; null when the plugin is not in the active order.</summary>
+        uint? RuntimeBaseOf(string pluginName);
+
         /// <summary>The plugin whose override of a record wins the load order; null means the record is not present, surfaced loud.</summary>
         string? WinnerPluginOf(FormKey record);
 
         /// <summary>The EditorID of a record's load-order winner, for filterByArmorAddons' EditorID-substring match; null means unresolvable.</summary>
         string? EditorIdOf(FormKey record);
+
+        /// <summary>Why the game cannot see EditorIDs of this Mutagen type (po3 Tweaks missing), or null when it can; <see cref="ResolveEditorId"/> then finds nothing for the type.</summary>
+        string? EditorIdGap(string? mutagenType) => null;
+
+        /// <summary>What the call's EditorID table says of a name beyond hit or miss: that it names several records and the first loaded keeps it; null when there is nothing to add.</summary>
+        string? EditorIdNote(string editorId, string? mutagenType) => null;
+
+        /// <summary>Why this caller runs no lookup at all among these records, so a miss of it is no claim about the order; null when the lookup runs.</summary>
+        string? EditorIdNotLookedUp(string? mutagenType) => null;
     }
 
     /// <summary>One parsed line in its apply-order context: the Data-relative file, the physical line, and the parsed form; <see cref="Listed"/> is false for a draft's line, which no layer listing holds.</summary>
@@ -109,22 +124,11 @@ public static class SkyPatcherOverlay
             if (line.Parsed.Note is { } parseNote)
                 warn.Add($"pn:{line.LineNumber}", ParseNoteText(parseNote));
 
-            // ---- split the line into filters and ops, classifying every key (unknowns are loud). ----
-            var filters = new List<(SkyPatcherSegment seg, SkyPatcherKeyClass cls)>();
-            var ops = new List<(SkyPatcherSegment seg, SkyPatcherKeyClass cls)>();
-            bool unknownKey = false;
-            foreach (var seg in line.Parsed.Segments)
-            {
-                var cls = catalog.Classify(recordCatalog, seg.Key);
-                switch (cls.Role)
-                {
-                    case SkyPatcherKeyRole.Filter: filters.Add((seg, cls)); break;
-                    case SkyPatcherKeyRole.Operation: ops.Add((seg, cls)); break;
-                    default: unknownKey = true; break;
-                }
-            }
+            // ---- the line's filters and ops, every key classified once per line (unknowns are loud). ----
+            var classified = SkyPatcherClassifiedLine.Of(line.Parsed, catalog, recordCatalog);
+            var (filters, ops) = (classified.Filters, classified.Ops);
             // An unknown key poisons the WHOLE line: an unrecognized filter would mis-scope it, so the line skips loud.
-            if (unknownKey)
+            if (classified.UnknownKey)
             {
                 unresolvedSkips++;
                 warn.Flush(rides: true);
@@ -134,7 +138,7 @@ public static class SkyPatcherOverlay
             if (ops.Count == 0) { warn.Flush(rides: false); continue; }   // a line with no operation does nothing
 
             // ---- evaluate the filters against THIS record (unsupported ⇒ loud skip). ----
-            var verdict = EvaluateFilters(mutableRecord, fk, editorId, recordCatalog, fieldMap, filters, resolver, warn);
+            var verdict = EvaluateFilters(mutableRecord, fk, editorId, recordCatalog, fieldMap, classified.Shape, resolver, warn);
             warn.Flush(rides: verdict != FilterVerdict.NoMatch);
             if (verdict == FilterVerdict.Unresolved)
             {
@@ -195,18 +199,26 @@ public static class SkyPatcherOverlay
     {
         var lint = new List<string>();
         if (line.Parsed.Kind != SkyPatcherLineKind.Patch) return lint;
-        var classes = line.Parsed.Segments.Select(s => (seg: s, cls: catalog.Classify(recordCatalog, s.Key))).ToList();
-        if (classes.Any(c => c.cls.Role == SkyPatcherKeyRole.Unknown))
+        var classified = SkyPatcherClassifiedLine.Of(line.Parsed, catalog, recordCatalog);
+        if (classified.UnknownKey)
         {
             lint.Add(UnknownKeyText(line, catalog, recordCatalog));
             return lint;
         }
-        foreach (var (seg, cls) in classes)
+        foreach (var (seg, cls) in classified.Filters)
         {
-            if (cls.Role != SkyPatcherKeyRole.Filter || FormTokens(cls, fieldMap) is not { } ft) continue;
+            // A direct list or its Excluded spelling names records: each target that names none, or names several, says so.
+            if (cls.Filter!.Kind == SkyPatcherFilterKind.Primary)
+            {
+                foreach (var v in seg.Values)
+                    if (RuntimeTargets.Report(v, fieldMap?.RecordType, resolver) is { } why)
+                        lint.Add($"target '{v.Raw}' (in a {seg.Key}) {why}.");
+                continue;
+            }
+            if (FormTokens(cls, fieldMap) is not { } ft) continue;
             foreach (var v in seg.Values)
                 if (ResolveFormValue(v, ft.FormType, resolver) is null)
-                    lint.Add(ft.UnresolvedText(v, seg));
+                    lint.Add(UnresolvedText(ft, v, seg, resolver));
         }
         return lint;
     }
@@ -215,11 +227,88 @@ public static class SkyPatcherOverlay
     sealed record FormTokenKind(string? FormType, bool IsEquality, string Noun)
     {
         public string UnresolvedText(SkyPatcherValue v, SkyPatcherSegment seg) => IsEquality
-            ? $"form '{v.Raw}' (in a {seg.Key}) resolves to nothing in the active order{(FormType is null ? "" : $" among {FormType} winners")} — treated as matching no record."
+            ? $"form '{v.Raw}' (in a {seg.Key}) resolves to nothing in the active order{(FormType is null ? "" : $" among records of the {FormType} type or group")} — treated as matching no record."
             : $"{Noun} '{v.Raw}' (in a {seg.Key}) resolves to nothing in the active order — treated as attached to no record.";
     }
 
     static readonly FormTokenKind KeywordTokens = new("Keyword", false, "keyword");
+
+    /// <summary>A value that resolves to nothing, worded with the EditorID gap when that is why.</summary>
+    static string UnresolvedText(FormTokenKind tokens, SkyPatcherValue v, SkyPatcherSegment seg, IFormResolver resolver)
+        => RuntimeTargets.ByEditorId(v) && resolver.EditorIdGap(tokens.FormType) is { } gap
+            ? HiddenEditorIdText(v, seg, gap)
+            : tokens.UnresolvedText(v, seg);
+
+    /// <summary>The scopes a line's EditorID tokens are looked up among, so the call's EditorID table covers them in one walk; null is an untyped lookup.</summary>
+    public static IEnumerable<string?> EditorIdScopes(SkyPatcherLine line, SkyPatcherCatalog catalog,
+        SkyPatcherRecordCatalog recordCatalog, RecordMap? fieldMap)
+    {
+        if (line.Kind != SkyPatcherLineKind.Patch) yield break;
+        var classified = SkyPatcherClassifiedLine.Of(line, catalog, recordCatalog);
+        foreach (var (seg, cls) in classified.Filters.Concat(classified.Ops))
+            if (HoldsName(seg))
+                foreach (var s in SegmentScopes(cls, fieldMap)) yield return s;
+    }
+
+    /// <summary>The scopes one classified segment's EditorID tokens are looked up among; none for a segment that names no forms by EditorID.</summary>
+    static IEnumerable<string?> SegmentScopes(SkyPatcherKeyClass cls, RecordMap? fieldMap)
+    {
+        if (cls.Role == SkyPatcherKeyRole.Filter)
+        {
+            if (cls.Filter!.Kind == SkyPatcherFilterKind.Primary) yield return fieldMap?.RecordType;
+            else if (FormTokens(cls, fieldMap) is { } ft) yield return ft.FormType;
+            yield break;
+        }
+        if (cls.Role != SkyPatcherKeyRole.Operation || fieldMap?.Ops.GetValueOrDefault(cls.Operation!.Name) is not { IsUnmapped: false } map) yield break;
+        yield return map.Semantic == SkyPatcherOpSemantic.RemoveByKeyword ? "Keyword" : map.LookupScope;
+        if (map.DonorType is { } donor) yield return donor;
+    }
+
+    /// <summary>Where on its line a form is named: a direct target, another filter, an operation's value, or a key the catalog does not know.</summary>
+    public enum FormPlace { Target, Filter, Value, UnknownKey }
+
+    /// <summary>One form a line names: where, under which key, the token as written, and the record it resolves to.</summary>
+    public sealed record LineForm(FormPlace Place, string Key, string Token, FormKey Form, bool ByEditorId);
+
+    /// <summary>Every form a patch line names that resolves to a record: each <c>Plugin|FormID</c> sub-arg anywhere on
+    /// the line, and each leading EditorID sub-arg where the replay looks one up, by the one target resolver. A
+    /// <c>~name~</c> literal resolves to no loaded record (its '~' stays on the plugin name); an undocumented folder's
+    /// line (<paramref name="recordCatalog"/> null) gives its '|' forms only.</summary>
+    public static IEnumerable<LineForm> LineForms(SkyPatcherLine line, SkyPatcherCatalog catalog,
+        SkyPatcherRecordCatalog? recordCatalog, RecordMap? fieldMap, IFormResolver resolver)
+    {
+        if (line.Kind != SkyPatcherLineKind.Patch) yield break;
+        foreach (var seg in line.Segments)
+        {
+            var cls = recordCatalog is null ? null : catalog.Classify(recordCatalog, seg.Key);
+            var place = cls?.Role switch
+            {
+                SkyPatcherKeyRole.Filter => cls.FilterRole == SkyPatcherFilterRole.Direct ? FormPlace.Target : FormPlace.Filter,
+                SkyPatcherKeyRole.Operation => FormPlace.Value,
+                _ => FormPlace.UnknownKey,
+            };
+            var scopes = cls is null ? Array.Empty<string?>() : SegmentScopes(cls, fieldMap).Where(s => s is not null).ToArray();
+            foreach (var v in seg.Values)
+            {
+                for (int k = 0; k < v.SubArgs.Count; k++)
+                {
+                    var a = v.SubArgs[k];   // untrimmed: SkyPatcher keeps a space around '|', and so names nothing
+                    var addr = SkyPatcherParse.TryParseAddress(a);
+                    var fk = addr is not null ? RuntimeTargets.FormKeyOf(addr)
+                        : k == 0 ? RuntimeTargets.Resolve(a, scopes, resolver)   // the replay looks up only the leading sub-arg
+                        : null;
+                    if (fk is { } f) yield return new LineForm(place, seg.Key, a, f, ByEditorId: addr is null);
+                }
+            }
+        }
+    }
+
+    /// <summary>Whether a segment holds a token that could be an EditorID: a sub-arg with no '|' that starts with a letter.</summary>
+    static bool HoldsName(SkyPatcherSegment seg)
+        => seg.Values.Any(v => !v.IsNameLiteral && v.SubArgs.Any(a => a.Length > 0 && char.IsLetter(a[0]) && SkyPatcherParse.TryParseAddress(a) is null));
+
+    static string HiddenEditorIdText(SkyPatcherValue v, SkyPatcherSegment seg, string gap)
+        => $"EditorID '{v.Raw}' (in a {seg.Key}) finds nothing: {gap}.";
 
     /// <summary>The one table of which filters resolve their values as forms, in the evaluator's dispatch order; null for a filter that resolves none.</summary>
     static FormTokenKind? FormTokens(SkyPatcherKeyClass cls, RecordMap? fieldMap)
@@ -230,7 +319,7 @@ public static class SkyPatcherOverlay
             return spec.IsUnmapped ? null : spec.Eval switch
             {
                 SkyPatcherFilterEval.FormEquals => new(spec.FormType, true, "form"),
-                SkyPatcherFilterEval.FormInList when !spec.EidSubstring => new(spec.FormType, false, "form"),
+                SkyPatcherFilterEval.FormInList when !spec.EidSubstring => new(spec.LookupScope, false, "form"),
                 SkyPatcherFilterEval.DonorKeywords => KeywordTokens,
                 _ => null,
             };
@@ -317,85 +406,123 @@ public static class SkyPatcherOverlay
         }
     }
 
+    /// <summary>One line against one record, in SkyPatcher's order of checks: gate, direct list, finders (any group), narrowers (all), with the player rule and the patcher's differences from the catalog; three-valued, so an unevaluable filter decides only when the others leave it open.</summary>
     static FilterVerdict EvaluateFilters(object record, FormKey fk, string? editorId,
         SkyPatcherRecordCatalog recordCatalog, RecordMap? fieldMap,
-        IReadOnlyList<(SkyPatcherSegment seg, SkyPatcherKeyClass cls)> filters, IFormResolver resolver,
-        FilterWarnings warn)
+        SkyPatcherLineShape shape, IFormResolver resolver, FilterWarnings warn)
     {
-        var mutagenRecordType = fieldMap?.RecordType;
-
-        // The player is excluded from every line except a lone bare primary filter naming it; hasPlugins gates the LINE, not the record, so it does not count as a record filter.
-        if (fk == PlayerFormKey)
+        bool player = fk == PlayerFormKey;
+        // Without po3 Tweaks the game keeps no EditorID for most types, so a name in the direct list finds nothing.
+        bool directByHiddenName = false;
+        if (editorId is not null && resolver.EditorIdGap(fieldMap?.RecordType) is { } gap)
         {
-            var gates = filters.Where(f2 => f2.cls.Filter!.Kind == SkyPatcherFilterKind.HasPlugins).ToList();
-            var recordFilters = filters.Where(f2 => f2.cls.Filter!.Kind != SkyPatcherFilterKind.HasPlugins).ToList();
-            bool lonePrimary = recordFilters.Count == 1
-                && recordFilters[0].cls.Filter!.Kind == SkyPatcherFilterKind.Primary
-                && (recordFilters[0].cls.Connective ?? "") == ""
-                && recordFilters[0].seg.Values.Any(v => MatchesIdentity(v, fk, editorId));
-            if (!lonePrimary) return FilterVerdict.NoMatch;
-            foreach (var (gSeg, gCls) in gates)
+            directByHiddenName = shape.Direct.Any(d => d.seg.Values.Any(v => MatchesIdentity(v, fk, editorId)));
+            foreach (var (seg, _) in shape.Direct)
+                foreach (var v in seg.Values.Where(RuntimeTargets.ByEditorId))
+                    warn.Add($"eg:{seg.Key}:{v.Raw}", HiddenEditorIdText(v, seg, gap),
+                        decides: v.Raw.Equals(editorId, StringComparison.OrdinalIgnoreCase));
+            editorId = null;
+        }
+        foreach (var (seg, cls) in shape.Ignored)
+            warn.Add($"ig:{cls.Filter!.Name}", $"'{seg.Key}' is not read by the {recordCatalog.RecordType} patcher, so the line applies as if it were absent.");
+
+        // A gate stops the whole line, its direct list included.
+        foreach (var (seg, cls) in shape.Gates)
+            if (!GatePasses(seg, cls, resolver)) return FilterVerdict.NoMatch;
+
+        // Each segment is evaluated once; a NoMatch resting on a deciding warning is marked, so the warning decides only when the line would otherwise reach the record.
+        var seen = new Dictionary<SkyPatcherSegment, (FilterVerdict V, bool Rests)>(ReferenceEqualityComparer.Instance);
+        FilterVerdict Reach(bool restsMatch)
+        {
+            FilterVerdict V((SkyPatcherSegment seg, SkyPatcherKeyClass cls) f)
             {
-                var plugins = gSeg.Values.Select(v => v.Raw).ToList();
-                bool okGate = (gCls.Connective ?? "") == "Or" ? plugins.Any(resolver.PluginPresent) : plugins.All(resolver.PluginPresent);
-                if (!okGate) return FilterVerdict.NoMatch;
+                if (!seen.TryGetValue(f.seg, out var got))
+                {
+                    int mark = warn.Mark;
+                    var v = EvaluateSegment(record, fk, editorId, recordCatalog, fieldMap, f.seg, f.cls, resolver, warn);
+                    seen[f.seg] = got = (v, v == FilterVerdict.NoMatch && warn.DecidesSince(mark));
+                }
+                return restsMatch && got.Rests ? FilterVerdict.Match : got.V;
             }
-            return FilterVerdict.Match;
+
+            // The direct list: a named record is patched, past every check but the patcher's own direct-list narrowers.
+            if ((restsMatch && directByHiddenName) || shape.Direct.Any(d => d.seg.Values.Any(v => Names(v, fk, fieldMap, resolver))))
+                return AllOf(shape.DirectNarrowers.Select(V));
+
+            // Some finder group must find the record; with none, every record passes unless only a direct list is
+            // named, the patcher patches nothing then, or the record is the player.
+            FilterVerdict found = shape.HasFinderReach
+                ? AnyOf(shape.FinderGroups
+                    .Where(g => !player || recordCatalog.PlayerFoundBy.Contains(g[0].cls.Filter!.Name, StringComparer.OrdinalIgnoreCase))
+                    .Select(g => AllOf(g.Select(V))))
+                : shape.Direct.Count > 0 || shape.FilterlessPatchesNothing || player ? FilterVerdict.NoMatch : FilterVerdict.Match;
+            if (found == FilterVerdict.NoMatch) return found;
+
+            // Narrowers only remove; some never remove the player.
+            var narrow = AllOf(shape.Narrowers
+                .Where(n => !player || !recordCatalog.PlayerNeverRemovedBy.Contains(n.cls.CatalogKey, StringComparer.OrdinalIgnoreCase))
+                .Select(V));
+            return AllOf(new[] { found, narrow });
         }
 
-        // No filter set → every record of the type is patched.
-        if (filters.Count == 0) return FilterVerdict.Match;
+        // The second pass, with every resting filter passing, can differ only when something rests.
+        var verdict = Reach(restsMatch: false);
+        if (verdict == FilterVerdict.NoMatch
+            && (!(directByHiddenName || seen.Values.Any(x => x.Rests)) || Reach(restsMatch: true) == FilterVerdict.NoMatch))
+            warn.Undecide();
+        return verdict;
+    }
 
-        // A NoMatch resting only on a deciding warning keeps evaluating, so the warning decides the line only if no other filter misses.
-        bool any = false, resting = false;
-        FilterVerdict Miss() { if (resting) warn.Undecide(); return FilterVerdict.NoMatch; }
-        foreach (var (seg, cls) in filters)
+    /// <summary>Three-valued AND over every verdict (each one evaluated, so each one's warnings are held): a NoMatch decides, then an Unresolved; empty is a Match.</summary>
+    static FilterVerdict AllOf(IEnumerable<FilterVerdict> verdicts)
+    {
+        var all = verdicts.ToList();
+        return all.Contains(FilterVerdict.NoMatch) ? FilterVerdict.NoMatch
+            : all.Contains(FilterVerdict.Unresolved) ? FilterVerdict.Unresolved : FilterVerdict.Match;
+    }
+
+    /// <summary>Three-valued OR over every verdict: a Match decides, then an Unresolved; empty is a NoMatch.</summary>
+    static FilterVerdict AnyOf(IEnumerable<FilterVerdict> verdicts)
+    {
+        var all = verdicts.ToList();
+        return all.Contains(FilterVerdict.Match) ? FilterVerdict.Match
+            : all.Contains(FilterVerdict.Unresolved) ? FilterVerdict.Unresolved : FilterVerdict.NoMatch;
+    }
+
+    /// <summary>hasPlugins: every listed plugin active; hasPluginsOr: one of them.</summary>
+    static bool GatePasses(SkyPatcherSegment seg, SkyPatcherKeyClass cls, IFormResolver resolver)
+    {
+        var plugins = seg.Values.Select(v => v.Raw).ToList();
+        return (cls.Connective ?? "") == "Or" ? plugins.Any(resolver.PluginPresent) : plugins.All(resolver.PluginPresent);
+    }
+
+    /// <summary>One finder or narrower segment: whether it finds the record (a finder) or leaves it in (a narrower).</summary>
+    static FilterVerdict EvaluateSegment(object record, FormKey fk, string? editorId,
+        SkyPatcherRecordCatalog recordCatalog, RecordMap? fieldMap,
+        SkyPatcherSegment seg, SkyPatcherKeyClass cls, IFormResolver resolver, FilterWarnings warn)
+    {
+        var f = cls.Filter!;
+        var conn = cls.Connective ?? "";
+        if (f.Kind == SkyPatcherFilterKind.NoFilter)
         {
-            var f = cls.Filter!;
-            var conn = cls.Connective ?? "";
-
-            if (f.Kind == SkyPatcherFilterKind.NoFilter)
-            {
-                // The apply-all tokens are record-class scoped in the shared leveledList folder: noFilterLL means every item list, noFilterLLNPC every character list.
-                var required = f.Name.EndsWith("LLNPC", StringComparison.Ordinal) ? "LeveledNpc"
-                    : f.Name.EndsWith("LL", StringComparison.Ordinal) ? "LeveledItem"
-                    : null;
-                if (required is not null && !required.Equals(mutagenRecordType, StringComparison.OrdinalIgnoreCase))
-                    return Miss();
-                any = true; continue;
-            }
-
-            if (f.Kind == SkyPatcherFilterKind.HasPlugins)
-            {
-                var plugins = seg.Values.Select(v => v.Raw).ToList();
-                bool ok = conn == "Or" ? plugins.Any(resolver.PluginPresent) : plugins.All(resolver.PluginPresent);
-                if (!ok) return Miss();
-                any = true; continue;
-            }
-
-            if (f.Kind == SkyPatcherFilterKind.Primary)
-            {
-                bool inSet = seg.Values.Any(v => MatchesIdentity(v, fk, editorId));
-                bool ok = conn is "Excluded" or "Exclude" ? !inSet : inSet;
-                if (!ok) return Miss();
-                any = true; continue;
-            }
-
-            int mark = warn.Mark;
-            var verdict = EvaluateOneFilter(record, fk, editorId, cls, seg, conn, fieldMap, resolver, warn);
-            if (verdict == FilterVerdict.NoMatch && warn.DecidesSince(mark)) { resting = true; continue; }
-            if (verdict == FilterVerdict.NoMatch) return Miss();
-            if (verdict == FilterVerdict.Unresolved) return resting ? FilterVerdict.NoMatch : verdict;
-            any = true;
+            // The apply-all tokens are record-class scoped in the shared leveledList folder: noFilterLL means every item list, noFilterLLNPC every character list.
+            var required = f.Name.EndsWith("LLNPC", StringComparison.Ordinal) ? "LeveledNpc"
+                : f.Name.EndsWith("LL", StringComparison.Ordinal) ? "LeveledItem"
+                : null;
+            return required is null || required.Equals(fieldMap?.RecordType, StringComparison.OrdinalIgnoreCase)
+                ? FilterVerdict.Match : FilterVerdict.NoMatch;
         }
-        return resting || !any ? FilterVerdict.NoMatch : FilterVerdict.Match;
+        if (f.Kind == SkyPatcherFilterKind.Primary)   // the Excluded spelling: a narrower over the record's identity
+            return seg.Values.Any(v => Names(v, fk, fieldMap, resolver)) ? FilterVerdict.NoMatch : FilterVerdict.Match;
+        return EvaluateOneFilter(record, fk, editorId, recordCatalog, cls, seg, conn, fieldMap, resolver, warn);
     }
 
     /// <summary>One non-primary, non-gate filter segment: the built-in families first, then the field map's per-record <see cref="FilterSpec"/>, which overrides a built-in of the same name; anything else is Unresolved.</summary>
     static FilterVerdict EvaluateOneFilter(object record, FormKey fk, string? editorId,
-        SkyPatcherKeyClass cls, SkyPatcherSegment seg, string conn, RecordMap? fieldMap,
+        SkyPatcherRecordCatalog recordCatalog, SkyPatcherKeyClass cls, SkyPatcherSegment seg, string conn, RecordMap? fieldMap,
         IFormResolver resolver, FilterWarnings warn)
     {
+        bool finder = cls.FilterRole != SkyPatcherFilterRole.Narrower;
         var spec = fieldMap?.Filters.GetValueOrDefault(cls.Filter!.Name);
         var tokens = FormTokens(cls, fieldMap);
         if (spec is { IsUnmapped: true })
@@ -404,15 +531,27 @@ public static class SkyPatcherOverlay
             return FilterVerdict.Unresolved;
         }
         if (spec is not null)
-            return EvaluateSpec(record, cls, seg, conn, spec, fieldMap!, tokens, resolver, warn);
+            return EvaluateSpec(record, cls, seg, conn, spec, fieldMap!, tokens, resolver, warn, finder);
 
         switch (cls.Filter!.Name)
         {
             case "filterByKeywords":
-            case "restrictToKeywords":   // post-match narrowing; for ONE record that's the same verdict
-                return KeywordVerdict(ReadEngine.KeywordKeys(record), seg, cls.Filter!.Name, conn, tokens!, resolver, warn);
+            case "restrictToKeywords":
+            {
+                var mine = KeywordsWithSources(record, recordCatalog, resolver, out var unread);
+                var v = KeywordVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn, finder);
+                // Keywords that could not be read can only add hits: they leave a found Match standing, and nothing changes when no token resolves.
+                if (unread.Count == 0 || (v == FilterVerdict.Match && conn is not ("Excluded" or "Exclude"))
+                    || !seg.Values.Any(t => ResolveFormValue(t, tokens!.FormType, resolver) is not null))
+                    return v;
+                foreach (var (link, path) in unread)
+                    warn.Add($"ks:{FormIdToken.Of(link)}", $"filter '{seg.Key}' also reads the keywords of {FormIdToken.Of(link)} ({path}), which could not be read; whether the line applies is UNRESOLVED.");
+                return FilterVerdict.Unresolved;
+            }
 
             case "filterByEditorIdContains":
+                if (resolver.EditorIdGap(fieldMap?.RecordType) is { } gap)
+                    warn.Add($"eg:{seg.Key}", $"filter '{seg.Key}' reads the record's EditorID, and {gap}, so it {(conn is "Excluded" or "Exclude" ? "removes nothing" : "finds nothing")}.");
                 return ContainsVerdict(seg, conn, editorId ?? "") ? FilterVerdict.Match : FilterVerdict.NoMatch;
 
             case "filterByNameContains":
@@ -420,11 +559,11 @@ public static class SkyPatcherOverlay
 
             case "filterByModNames":
             {
-                // Read as the record's DEFINING master (FormKey.ModKey) — an assumption; the verdict is Unresolved when the winning-override reading would disagree.
+                // Read as the record's DEFINING master (FormKey.ModKey) — an assumption; the verdict is Unresolved when the winning-override reading would disagree. The names are case-exact, as the DLL reads them.
                 var origin = fk.ModKey.FileName.String;
-                bool inSet = seg.Values.Any(v => v.Raw.Equals(origin, StringComparison.OrdinalIgnoreCase));
+                bool inSet = seg.Values.Any(v => v.Raw.Equals(origin, StringComparison.Ordinal));
                 if (resolver.WinnerPluginOf(fk) is { } winner
-                    && seg.Values.Any(v => v.Raw.Equals(winner, StringComparison.OrdinalIgnoreCase)) != inSet)
+                    && seg.Values.Any(v => v.Raw.Equals(winner, StringComparison.Ordinal)) != inSet)
                 {
                     warn.Add($"mn:{FormIdToken.Of(fk)}", $"filterByModNames{conn}: the record's defining master ('{origin}') and winning override ('{winner}') disagree on membership — which one the DLL tests is unverified, so whether the line applies is UNRESOLVED.");
                     return FilterVerdict.Unresolved;
@@ -460,13 +599,13 @@ public static class SkyPatcherOverlay
             {
                 // Crosscutting attached-effect match: the Effects array's BaseEffect links.
                 var mine = EntryKeys(record, new[] { "Effects" }, "BaseEffect");
-                return FormSetVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn);
+                return FormSetVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn, finder);
             }
             case "filterByAlternateTextures":
             {
                 // Items carrying a given texture set: the model's alternate-texture entries' NewTexture.
                 var mine = EntryKeys(record, new[] { "Model", "AlternateTextures" }, "NewTexture");
-                return FormSetVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn);
+                return FormSetVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn, finder);
             }
             default:
                 // Neither built-in nor mapped — a coverage gap the filtermap guard should have caught, named here too.
@@ -479,23 +618,29 @@ public static class SkyPatcherOverlay
 
     static FilterVerdict EvaluateSpec(object record, SkyPatcherKeyClass cls, SkyPatcherSegment seg,
         string conn, FilterSpec spec, RecordMap fieldMap, FormTokenKind? tokens, IFormResolver resolver,
-        FilterWarnings warn)
+        FilterWarnings warn, bool finder)
     {
         bool excluded = conn is "Excluded" or "Exclude";
         switch (spec.Eval)
         {
             case SkyPatcherFilterEval.FormEquals:
             {
-                // Single-valued form field against a value list: any-of, with no early break so every unresolvable token still warns once.
+                // Single-valued form field against a value list: any-of, every unresolvable token warning once; the missing-token rule is MissingTokens'.
                 var current = spec.Paths.Select(p => TryLeafToken(record, p)).Where(t => t is not null).ToList();
                 bool matched = false;
+                int resolved = 0;
+                var missing = new List<SkyPatcherValue>();
                 foreach (var v in seg.Values)
                 {
                     var k = ResolveFormValue(v, tokens!.FormType, resolver);
-                    if (k is null) { warn.Add($"fe:{cls.Filter!.Name}:{v.Raw}", tokens.UnresolvedText(v, seg)); continue; }
+                    if (k is null) { missing.Add(v); continue; }
+                    resolved++;
                     matched |= current.Any(t => string.Equals(t, k.Value.ToString(), StringComparison.OrdinalIgnoreCase));
                 }
-                return (excluded ? !matched : matched) ? FilterVerdict.Match : FilterVerdict.NoMatch;
+                var (allMissed, decides) = MissingTokens(finder, conn, resolved, missing.Count);
+                foreach (var v in missing)
+                    warn.Add($"fe:{cls.Filter!.Name}:{v.Raw}", UnresolvedText(tokens!, v, seg, resolver), decides);
+                return allMissed ?? ((excluded ? !matched : matched) ? FilterVerdict.Match : FilterVerdict.NoMatch);
             }
             case SkyPatcherFilterEval.FormInList:
             {
@@ -503,7 +648,7 @@ public static class SkyPatcherOverlay
                 var mine = spec.KeyPath is null ? TryFormLinkKeys(record, segs) : EntryKeys(record, segs, spec.KeyPath);
                 if (spec.EidSubstring)
                     return EidAwareListVerdict(mine, seg, cls.Filter!.Name, conn, spec, resolver, warn);
-                return FormSetVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn);
+                return FormSetVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn, finder);
             }
             case SkyPatcherFilterEval.EnumEquals:
             {
@@ -621,7 +766,7 @@ public static class SkyPatcherOverlay
                     warn.Add($"dk:{cls.Filter!.Name}:{donor}", $"filter '{seg.Key}' — could not read the keywords of {FormIdToken.Of(donor.Value)}'s winner; whether the line applies is UNRESOLVED.");
                     return FilterVerdict.Unresolved;
                 }
-                return KeywordVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn);
+                return KeywordVerdict(mine, seg, cls.Filter!.Name, conn, tokens!, resolver, warn, finder);
             }
             case SkyPatcherFilterEval.NumericLess:
             {
@@ -670,24 +815,44 @@ public static class SkyPatcherOverlay
 
     // ---- filter helpers ------------------------------------------------------------------------------
 
-    /// <summary>THE connective rule — bare = AND (gated by <paramref name="bareGuard"/>), Or = any, Excluded/Exclude = none; the one copy every list-membership evaluator rides.</summary>
-    static bool ConnectiveVerdict(string conn, IReadOnlyList<bool> hits, bool bareGuard = true) => conn switch
+    /// <summary>THE connective rule — bare = AND, Or = any, Excluded/Exclude = none; the one copy every list-membership evaluator rides.</summary>
+    static bool ConnectiveVerdict(string conn, IReadOnlyList<bool> hits) => conn switch
     {
         "Or" => hits.Any(h => h),
         "Excluded" or "Exclude" => !hits.Any(h => h),
-        _ => bareGuard && hits.All(h => h),
+        _ => hits.All(h => h),
     };
 
     /// <summary>The keyword-family verdict — <see cref="FormSetVerdict"/> scoped to Keyword; a null set means the type has no readable keyword list.</summary>
     static FilterVerdict KeywordVerdict(IReadOnlyList<FormKey>? mine, SkyPatcherSegment seg,
-        string name, string conn, FormTokenKind tokens, IFormResolver resolver, FilterWarnings warn)
+        string name, string conn, FormTokenKind tokens, IFormResolver resolver, FilterWarnings warn, bool finder)
         => mine is null ? FilterVerdict.Unresolved
-            : FormSetVerdict(mine, seg, name, conn, tokens, resolver, warn);
+            : FormSetVerdict(mine, seg, name, conn, tokens, resolver, warn, finder);
 
-    /// <summary>List-membership verdict over the record's own attached forms — bare = all listed present, Or = any, Excluded = none; a listed form resolving to nothing in the active order counts as not-attached and is surfaced once per token.</summary>
+    /// <summary>The record's own keywords plus those of the records the patcher's keyword filters also read (NPC race, spell effects); <paramref name="unread"/> names the ones that could not be read.</summary>
+    static IReadOnlyList<FormKey>? KeywordsWithSources(object record, SkyPatcherRecordCatalog recordCatalog, IFormResolver resolver,
+        out List<(FormKey Link, string Path)> unread)
+    {
+        unread = new();
+        var own = ReadEngine.KeywordKeys(record);
+        if (own is null || recordCatalog.KeywordsAlsoFrom.Count == 0) return own;
+        var all = new List<FormKey>(own);
+        foreach (var src in recordCatalog.KeywordsAlsoFrom)
+        {
+            var links = src.KeyPath is null
+                ? (LinkedFormKey(record, src.Path) is { IsNull: false } one ? new[] { one } : Array.Empty<FormKey>())
+                : EntryKeys(record, SplitPath(src.Path), src.KeyPath);
+            foreach (var link in links)
+                if (resolver.KeywordsOf(link) is { } theirs) all.AddRange(theirs);
+                else unread.Add((link, src.Path));
+        }
+        return all;
+    }
+
+    /// <summary>List-membership verdict over the record's attached forms — bare = all listed present, Or = any, Excluded = none. A listed form resolving to nothing drops out and is surfaced once per token; when every token misses, MissingTokens decides.</summary>
     static FilterVerdict FormSetVerdict(IReadOnlyList<FormKey> mine, SkyPatcherSegment seg,
         string name, string conn, FormTokenKind tokens, IFormResolver resolver,
-        FilterWarnings warn)
+        FilterWarnings warn, bool finder)
     {
         var hits = new List<bool>();
         var missing = new List<SkyPatcherValue>();
@@ -697,13 +862,17 @@ public static class SkyPatcherOverlay
             if (k is null) missing.Add(v);
             else hits.Add(mine.Contains(k.Value));
         }
-        // Under the bare guard a missing token forces NoMatch, so its warning decides the verdict when the resolved tokens alone would match.
-        bool decides = conn is not ("Or" or "Excluded" or "Exclude") && hits.All(h => h);
+        var (allMissed, decides) = MissingTokens(finder, conn, hits.Count, missing.Count);
         foreach (var v in missing)
-            warn.Add($"fs:{name}:{v.Raw}", tokens.UnresolvedText(v, seg), decides);
-        return ConnectiveVerdict(conn, hits, bareGuard: missing.Count == 0)
-            ? FilterVerdict.Match : FilterVerdict.NoMatch;
+            warn.Add($"fs:{name}:{v.Raw}", UnresolvedText(tokens, v, seg, resolver), decides);
+        return allMissed ?? (ConnectiveVerdict(conn, hits) ? FilterVerdict.Match : FilterVerdict.NoMatch);
     }
+
+    /// <summary>THE missing-token rule (docs/architecture/skypatcher-layer.md), for a filter whose every token missed: a finder finds nothing, its warnings deciding a bare one; a narrower removes nothing. Null verdict while any token resolved.</summary>
+    static (FilterVerdict? Verdict, bool Decides) MissingTokens(bool finder, string conn, int resolved, int missing)
+        => resolved > 0 || missing == 0 ? (null, false)
+            : finder ? (FilterVerdict.NoMatch, conn == "")
+            : (FilterVerdict.Match, false);
 
     /// <summary>filterByArmorAddons' documented "EditorID substring ok": a value resolving to a form matches by key, one that does not is a substring against each attached form's winner EditorID.</summary>
     static FilterVerdict EidAwareListVerdict(IReadOnlyList<FormKey> mine, SkyPatcherSegment seg,
@@ -814,12 +983,16 @@ public static class SkyPatcherOverlay
         };
     }
 
+    /// <summary>Whether a direct-list value would name the record by its own EditorID were the name visible: the hidden-name case only.</summary>
     static bool MatchesIdentity(SkyPatcherValue v, FormKey fk, string? editorId)
     {
-        if (v.Address is { IsFormId: true } a)
-            return TryFormKey(a, out var key) && key == fk;
+        if (v.Address is { } a) return RuntimeTargets.FormKeyOf(a) == fk;
         return editorId is not null && string.Equals(v.Raw, editorId, StringComparison.OrdinalIgnoreCase);
     }
+
+    /// <summary>Whether a direct-list value names this record: one record per value, an EditorID through the call's table, as SkyPatcher resolves it.</summary>
+    static bool Names(SkyPatcherValue v, FormKey fk, RecordMap? fieldMap, IFormResolver resolver)
+        => RuntimeTargets.Resolve(v, fieldMap?.RecordType, resolver) == fk;
 
     /// <summary>SkyPatcher <c>Plugin|FormID</c> to a Mutagen FormKey: a full load-indexed ESL FormID keeps only its 12-bit local id, anything else the low 24 bits.</summary>
     public static bool TryFormKey(FormAddress a, out FormKey fk)
@@ -909,11 +1082,16 @@ public static class SkyPatcherOverlay
                 string? pathToken;
                 string? note = null;
                 bool looksLikePath = v.Raw.Contains('.') || v.Raw.Contains('\\') || v.Raw.Contains('/');
-                if (v.Address is { IsFormId: true } || !looksLikePath)
+                if (v.Address is not null || !looksLikePath)
                 {
                     // A dot-less token can never be a valid .nif path, so an unresolvable donor fails LOUD rather than being written verbatim as a model path.
-                    var donor = ResolveFormValue(v, map.FormType, resolver);
-                    if (donor is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — donor form not resolvable (and '{v.Raw}' is not a model path); skipped."); return; }
+                    var donor = ResolveFormValue(v, map.LookupScope, resolver);
+                    if (donor is null)
+                    {
+                        warnings.Add(HiddenOpValue(where, seg.Key, v, map.LookupScope, resolver)
+                            ?? $"{where}: '{seg.Key}={v.Raw}' — donor form not resolvable (and '{v.Raw}' is not a model path); skipped.");
+                        return;
+                    }
                     pathToken = resolver.ReadWinnerLeaf(donor.Value, map.Path);
                     if (pathToken is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — donor {donor.Value}'s '{map.Path}' unreadable; skipped."); return; }
                     note = $"model path copied from donor {donor.Value}";
@@ -971,8 +1149,13 @@ public static class SkyPatcherOverlay
             {
                 foreach (var v in seg.Values)
                 {
-                    var key = ResolveFormValue(v, map.FormType, resolver);
-                    if (key is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — form not resolvable ({FormHint(v, map)}); that item skipped."); continue; }
+                    var key = ResolveFormValue(v, map.LookupScope, resolver);
+                    if (key is null)
+                    {
+                        warnings.Add(HiddenOpValue(where, seg.Key, v, map.LookupScope, resolver)
+                            ?? $"{where}: '{seg.Key}={v.Raw}' — form not resolvable ({FormHint(v, map)}); that item skipped.");
+                        continue;
+                    }
                     var list = FormLinkList(record, segs) ?? throw new InvalidOperationException($"'{map.Path}' is not a formlink list");
                     bool present = list.Contains(key.Value);
                     string note;
@@ -998,8 +1181,8 @@ public static class SkyPatcherOverlay
                 {
                     var (aTok, bTok) = SplitPair(v, map.EqPacked);
                     if (aTok is null || bTok is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — expected two packed forms; skipped."); continue; }
-                    var a = ResolveFormToken(aTok, map.FormType, resolver);
-                    var b = ResolveFormToken(bTok, map.FormType, resolver);
+                    var a = ResolveFormToken(aTok, map.LookupScope, resolver);
+                    var b = ResolveFormToken(bTok, map.LookupScope, resolver);
                     if (a is null || b is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — form(s) not resolvable; skipped."); continue; }
                     int n = ReplaceInFormLinkList(record, fieldMap.RecordType, segs, a.Value, b.Value);
                     applied.Add(new SkyPatcherAppliedOp(line.File, line.LineNumber, seg.Key, opName, v.Raw, map.Path, null, null,
@@ -1090,8 +1273,13 @@ public static class SkyPatcherOverlay
                 string armType;
                 if (map.Semantic == SkyPatcherOpSemantic.TeachSpell)
                 {
-                    var spell = ResolveFormValue(v, map.FormType, resolver);
-                    if (spell is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — spell not resolvable; skipped."); return; }
+                    var spell = ResolveFormValue(v, map.LookupScope, resolver);
+                    if (spell is null)
+                    {
+                        warnings.Add(HiddenOpValue(where, seg.Key, v, map.LookupScope, resolver)
+                            ?? $"{where}: '{seg.Key}={v.Raw}' — spell not resolvable; skipped.");
+                        return;
+                    }
                     armType = "BookSpell";
                     armSet = new WriteRequest { RecordType = armType, Path = new[] { "Spell" }, Verb = "Set", Value = spell.Value.ToString() };
                 }
@@ -1164,20 +1352,24 @@ public static class SkyPatcherOverlay
 
         string token;
         if (v.IsNameLiteral) token = v.NameText!;                       // rename literal, wrapper stripped
-        else if (v.Address is { IsFormId: true } a && TryFormKey(a, out var fk1)) token = fk1.ToString();
+        else if (v.Address is { } a && RuntimeTargets.FormKeyOf(a) is { } fk1) token = fk1.ToString();
         else if (map.ValueMap is { } vm && vm.TryGetValue(v.Raw, out var mapped)) token = mapped;
         else if (map.FormType is not null)
         {
             // A form-valued target must resolve to a form: a bare non-form string reaching the engine throws "Malformed FormKey" and mislabels a VALID INI as broken.
-            if (ResolveFormValue(v, map.FormType, resolver) is { } rk) token = rk.ToString();
+            if (ResolveFormValue(v, map.LookupScope, resolver) is { } rk) token = rk.ToString();
             else
             {
                 // A value that fails as FormType but resolves as the op's donorType is a runtime donor-copy the static model does not cover — named honestly, never a thrown malformed-FormKey.
-                if (map.DonorType is { } dt && v.Address is not { IsFormId: true }
-                    && resolver.ResolveEditorId(v.Raw, dt) is not null)
+                bool byEid = RuntimeTargets.ByEditorId(v);
+                if (map.DonorType is { } dt && byEid && resolver.ResolveEditorId(v.Raw, dt) is not null)
                     warnings.Add($"{where}: '{opKey}={v.Raw}' — '{v.Raw}' is a {dt}, not a {map.FormType}. " +
                         $"'{opKey}=<donor {dt}>' copies the donor's {map.Path} at runtime — a donor-copy houseCARL does not " +
                         $"statically model (like copyVisualStyle); the INI line is valid, but its post-state is NOT computed here.");
+                else if (map.DonorType is { } hiddenDonor && byEid && resolver.EditorIdGap(hiddenDonor) is { } donorGap)
+                    warnings.Add($"{where}: '{opKey}={v.Raw}' — EditorID '{v.Raw}' finds nothing (neither {map.FormType} nor donor {hiddenDonor}): {donorGap}; not applied.");
+                else if (HiddenOpValue(where, opKey, v, map.LookupScope, resolver) is { } hidden)
+                    warnings.Add(hidden);
                 else
                     warnings.Add($"{where}: '{opKey}={v.Raw}' — does not resolve to a {map.FormType} in the active order; " +
                         $"not applied (named gap, never a malformed-form guess).");
@@ -1219,8 +1411,13 @@ public static class SkyPatcherOverlay
                         string valueToken = raw;
                         if (f.Path == el.KeyPath || LooksLikeForm(raw))
                         {
-                            var k = ResolveFormToken(raw, f.Path == el.KeyPath ? map.FormType : null, resolver);
-                            if (k is null && f.Path == el.KeyPath) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — entry form '{raw}' not resolvable; entry skipped."); bad = true; break; }
+                            var k = ResolveFormToken(raw, f.Path == el.KeyPath ? map.LookupScope : null, resolver);
+                            if (k is null && f.Path == el.KeyPath)
+                            {
+                                warnings.Add(HiddenOpValue(where, seg.Key, v.Raw, raw, map.LookupScope, resolver)
+                                    ?? $"{where}: '{seg.Key}={v.Raw}' — entry form '{raw}' not resolvable; entry skipped.");
+                                bad = true; break;
+                            }
                             if (k is not null) { valueToken = k.Value.ToString(); if (f.Path == el.KeyPath) keyForm = k; }
                         }
                         sets.Add(new WriteRequest { RecordType = el.Type, Path = SplitPath(f.Path), Verb = "Set", Value = valueToken });
@@ -1248,8 +1445,13 @@ public static class SkyPatcherOverlay
                         warnings.Add($"{where}: '{seg.Key}={v.Raw}' — conditional/qualified removal (extra ~sub-args) is not modeled in Wave 1; this removal was NOT applied (named gap, never an unconditional guess).");
                         continue;
                     }
-                    var k = ResolveFormToken(args[0], map.FormType, resolver);
-                    if (k is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — form not resolvable; skipped."); continue; }
+                    var k = ResolveFormToken(args[0], map.LookupScope, resolver);
+                    if (k is null)
+                    {
+                        warnings.Add(HiddenOpValue(where, seg.Key, v.Raw, args[0], map.LookupScope, resolver)
+                            ?? $"{where}: '{seg.Key}={v.Raw}' — form not resolvable; skipped.");
+                        continue;
+                    }
                     int n = RemoveEntriesByKey(record, fieldMap.RecordType, segs, el, k.Value);
                     applied.Add(new SkyPatcherAppliedOp(line.File, line.LineNumber, seg.Key, opName, v.Raw, map.Path, null, null,
                         n > 0 ? $"removed {n} entr(ies)" : "no matching entry — no change"));
@@ -1257,9 +1459,13 @@ public static class SkyPatcherOverlay
                 }
                 case SkyPatcherOpSemantic.RemoveEntryByCount:
                 {
-                    var k = ResolveFormToken(args[0], map.FormType, resolver);
+                    var k = ResolveFormToken(args[0], map.LookupScope, resolver);
                     if (k is null || args.Count < 2 || !int.TryParse(args[1], NumberStyles.Integer, CultureInfo.InvariantCulture, out var dec))
-                    { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — expected form~count; skipped."); continue; }
+                    {
+                        warnings.Add((k is null ? HiddenOpValue(where, seg.Key, v.Raw, args[0], map.LookupScope, resolver) : null)
+                            ?? $"{where}: '{seg.Key}={v.Raw}' — expected form~count; skipped.");
+                        continue;
+                    }
                     var countPath = el.CountPath ?? throw new InvalidOperationException($"'{seg.Key}' element has no countPath");
                     int touched = AdjustEntryCounts(record, fieldMap.RecordType, segs, el, k.Value, countPath, c => c - dec);
                     applied.Add(new SkyPatcherAppliedOp(line.File, line.LineNumber, seg.Key, opName, v.Raw, map.Path, null, null,
@@ -1269,9 +1475,14 @@ public static class SkyPatcherOverlay
                 case SkyPatcherOpSemantic.ReplaceEntry:
                 {
                     var (aTok, bTok) = SplitPair(v, map.EqPacked);
-                    var a = aTok is null ? null : ResolveFormToken(aTok, map.FormType, resolver);
-                    var b = bTok is null ? null : ResolveFormToken(bTok, map.FormType, resolver);
-                    if (a is null || b is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — expected formA{(map.EqPacked ? "=" : "~")}formB; skipped."); continue; }
+                    var a = aTok is null ? null : ResolveFormToken(aTok, map.LookupScope, resolver);
+                    var b = bTok is null ? null : ResolveFormToken(bTok, map.LookupScope, resolver);
+                    if (a is null || b is null)
+                    {
+                        warnings.Add(HiddenOpValue(where, seg.Key, v.Raw, a is null ? aTok : bTok, map.LookupScope, resolver)
+                            ?? $"{where}: '{seg.Key}={v.Raw}' — expected formA{(map.EqPacked ? "=" : "~")}formB; skipped.");
+                        continue;
+                    }
                     int n = RetargetEntriesByKey(record, segs, el, a.Value, b.Value);
                     applied.Add(new SkyPatcherAppliedOp(line.File, line.LineNumber, seg.Key, opName, v.Raw, map.Path, null, null,
                         n > 0 ? $"retargeted {n} entr(ies)" : "form A not present — no change"));
@@ -1284,9 +1495,13 @@ public static class SkyPatcherOverlay
                     double mult;
                     if (args.Count >= 2)
                     {
-                        scope = ResolveFormToken(args[0], map.FormType, resolver);
+                        scope = ResolveFormToken(args[0], map.LookupScope, resolver);
                         if (scope is null || !double.TryParse(args[1], NumberStyles.Float, CultureInfo.InvariantCulture, out mult))
-                        { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — expected form~mult or mult; skipped."); continue; }
+                        {
+                            warnings.Add((scope is null ? HiddenOpValue(where, seg.Key, v.Raw, args[0], map.LookupScope, resolver) : null)
+                                ?? $"{where}: '{seg.Key}={v.Raw}' — expected form~mult or mult; skipped.");
+                            continue;
+                        }
                     }
                     else if (!double.TryParse(args[0], NumberStyles.Float, CultureInfo.InvariantCulture, out mult))
                     { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — expected form~mult or mult; skipped."); continue; }
@@ -1306,8 +1521,13 @@ public static class SkyPatcherOverlay
                         idx = Enumerable.Range(0, ListAt(record, segs)?.Count ?? 0).ToList();
                     else
                     {
-                        var k = ResolveFormToken(args[0], map.FormType, resolver);
-                        if (k is null) { warnings.Add($"{where}: '{seg.Key}={v.Raw}' — form not resolvable; skipped."); continue; }
+                        var k = ResolveFormToken(args[0], map.LookupScope, resolver);
+                        if (k is null)
+                        {
+                            warnings.Add(HiddenOpValue(where, seg.Key, v.Raw, args[0], map.LookupScope, resolver)
+                                ?? $"{where}: '{seg.Key}={v.Raw}' — form not resolvable; skipped.");
+                            continue;
+                        }
                         idx = EntryIndicesByKey(record, segs, el, k.Value);
                     }
                     var list = ListAt(record, segs);
@@ -1394,25 +1614,28 @@ public static class SkyPatcherOverlay
     }
 
     static FormKey? ResolveFormValue(SkyPatcherValue v, string? formType, IFormResolver resolver)
-    {
-        if (v.Address is { IsFormId: true } a) return TryFormKey(a, out var fk) ? fk : null;
-        return v.IsNameLiteral ? null : resolver.ResolveEditorId(v.Raw, formType);
-    }
+        => RuntimeTargets.Resolve(v, formType, resolver);
 
     static FormKey? ResolveFormToken(string token, string? formType, IFormResolver resolver)
-    {
-        var a = SkyPatcherParse.TryParseAddress(token);
-        if (a is { IsFormId: true }) return TryFormKey(a, out var fk) ? fk : null;
-        return resolver.ResolveEditorId(token, formType);
-    }
+        => RuntimeTargets.Resolve(token, formType, resolver);
 
     /// <summary>A sub-arg that IS the unambiguous <c>Plugin|FormID</c> form, via <see cref="SkyPatcherParse.TryParseAddress"/> rather than a '|' sniff.</summary>
     static bool LooksLikeForm(string raw) => SkyPatcherParse.TryParseAddress(raw) is { IsFormId: true };
 
+    /// <summary>The warning for an op's form token that missed because the EditorID gap hides its typed op's names, or null when the gap is not why; every op miss asks it first.</summary>
+    static string? HiddenOpValue(string where, string opKey, string raw, string? token, string? formType, IFormResolver resolver)
+        => token is null || formType is null || SkyPatcherParse.TryParseAddress(token) is not null
+            || resolver.EditorIdGap(formType) is not { } gap
+            ? null
+            : $"{where}: '{opKey}={raw}' — EditorID '{token}' finds nothing: {gap}; not applied.";
+
+    static string? HiddenOpValue(string where, string opKey, SkyPatcherValue v, string? formType, IFormResolver resolver)
+        => RuntimeTargets.ByEditorId(v) ? HiddenOpValue(where, opKey, v.Raw, v.Raw, formType, resolver) : null;
+
     static string FormHint(SkyPatcherValue v, OpMap map)
-        => v.Address is { IsFormId: true }
-            ? "plugin name unparseable"
-            : $"EditorID '{v.Raw}' not found{(map.FormType is null ? "" : $" among {map.FormType} winners")}";
+        => v.Address is { IsMalformed: true } ? "not a FormID SkyPatcher can read after '|'"
+            : v.Address is not null ? "plugin name unparseable"
+            : $"EditorID '{v.Raw}' not found{(map.FormType is { } t ? $" among records of the {t} type or group" : map.EditorIdScope is { } g ? $" among the record types of the {g} group" : "")}";
 
     /// <summary>Sub-args of one comma-item: an '='-packed op splits on the FIRST '=' and both sides contribute; otherwise the tokenizer's ~-split sub-args are used as-is.</summary>
     static IReadOnlyList<string> UnpackArgs(SkyPatcherValue v, bool eqPacked)

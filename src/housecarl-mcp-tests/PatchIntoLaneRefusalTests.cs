@@ -62,7 +62,7 @@ public sealed class PatchIntoLaneRefusalTests
     {
         var dest = Path.Combine(W.Root, "hc-1061-" + Guid.NewGuid().ToString("N"));
 
-        var r = DecompileTools.DecompileScript(W.Svc, Path.Combine(W.ScriptsDir, ScriptsWorld.BaseScript + ".pex"),
+        var r = DecompileTools.DecompileScript(W.Svc, new[] { Path.Combine(W.ScriptsDir, ScriptsWorld.BaseScript + ".pex") },
                                                patch: "HcLaneA", into: "houseCARL_Scripts", out_path: dest);
 
         Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
@@ -75,7 +75,7 @@ public sealed class PatchIntoLaneRefusalTests
     {
         var before = Folders(W.ModsDir);
 
-        var r = DecompileTools.DecompileScript(W.Svc, Path.Combine(W.ScriptsDir, ScriptsWorld.BaseScript + ".pex"),
+        var r = DecompileTools.DecompileScript(W.Svc, new[] { Path.Combine(W.ScriptsDir, ScriptsWorld.BaseScript + ".pex") },
                                                patch: "HcLaneA", into: "houseCARL_Scripts");
 
         Assert.StartsWith("error:", r);
@@ -90,7 +90,7 @@ public sealed class PatchIntoLaneRefusalTests
         var before = Folders(w.ModsDir);
 
         var r = CopyTools.Copy(w.Svc, w.Fid(w.DonorNpc), new[] { "Donor.esp" }, new[] { "HeadParts" },
-                               new[] { "Race:refuse" }, null, "HcLaneClone", "HcLaneA", "HcLaneB.esp");
+                               Walks.Excl("Race:refuse"), null, "HcLaneClone", "HcLaneA", "HcLaneB.esp");
 
         Assert.StartsWith("error:", r);
         Assert.Contains("exclusive", r);
@@ -103,7 +103,7 @@ public sealed class PatchIntoLaneRefusalTests
         using var w = new TwoDisabledDonorsWorld();
 
         var r = CopyTools.Copy(w.Svc, w.Fid(w.DonorNpc), new[] { "Donor.esp" }, new[] { "HeadParts" },
-                               new[] { "Race:refuse" }, null, "HcTrimClone", "  ", null);
+                               Walks.Excl("Race:refuse"), null, "HcTrimClone", "  ", null);
 
         Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
         Assert.Single(Directory.EnumerateDirectories(w.ModsDir, "houseCARL - HcTrimClone"));
@@ -115,7 +115,7 @@ public sealed class PatchIntoLaneRefusalTests
         using var w = new TwoDisabledDonorsWorld();
 
         var r = CopyTools.Copy(w.Svc, w.Fid(w.DonorNpc), new[] { "Donor.esp" }, new[] { "HeadParts" },
-                               new[] { "Race:refuse" }, null, "MyClone", "  ", "");
+                               Walks.Excl("Race:refuse"), null, "MyClone", "  ", "");
 
         Assert.False(r.StartsWith("error:", StringComparison.Ordinal), r);
         Assert.Single(Directory.EnumerateDirectories(w.ModsDir, "houseCARL - MyClone"));
@@ -129,7 +129,7 @@ public sealed class PatchIntoLaneRefusalTests
         var mods = Path.Combine(own.Root, "inst", "mods");
         var before = Folders(mods);
 
-        var r = NifTools.NifSet(own.Svc, mesh_path: S.SoleRel, op: "set_flags", target: "GuardShape",
+        var r = NifTools.NifSet(own.Svc, paths: new[] { S.SoleRel }, op: "set_flags", target: "GuardShape",
                                 flags: "0x800000E", source_provider: S.SoleMod, patch: "HcLaneA", into: "HcLaneB",
                                 in_place: true);
 
@@ -145,7 +145,7 @@ public sealed class PatchIntoLaneRefusalTests
         var mods = Path.Combine(own.Root, "inst", "mods");
         var before = Folders(mods);
 
-        var r = NifTools.NifSet(own.Svc, mesh_path: S.SoleRel, op: "set_flags", target: "GuardShape",
+        var r = NifTools.NifSet(own.Svc, paths: new[] { S.SoleRel }, op: "set_flags", target: "GuardShape",
                                 flags: "0x800000E", source_provider: S.SoleMod, patch: "HcLaneA", into: "HcLaneB");
 
         Assert.StartsWith("error:", r);

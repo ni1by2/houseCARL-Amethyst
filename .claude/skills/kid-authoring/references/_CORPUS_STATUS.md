@@ -22,9 +22,14 @@ KID has **no Nexus "articles" tab** and its description tab partially filter-blo
 so the corpus draws on two complementary sources:
 
 - **Mod:** Keyword Item Distributor (KID) by powerofthree (powerof3) — Nexus SE #55728.
-  **Version: v3.5.0.rc1** (the latest release; repo frozen since 2024-04, so the grammar is stable).
-- **Grammar source of truth — the MIT GitHub source** (`powerof3/Keyword-Item-Distributor`, `master`,
-  **MIT License**). Authoritative for the line shape, the exact type-strings, the trait syntax, the
+  **Version: v4.1.0**, which reads its files as v4.0.6 does. The 4.0 rewrite changed the grammar
+  from v3.5.0.rc1 (each `+` entry its own group, `-` and `*` per group part, a keyword another KID
+  line creates found by a filter name); the parse files were re-read at v4.0.6 (`895df22`) and
+  diffed against v4.1.0 (`99adaaa`) on 2026-11-15. The `generated:kid.*` regions of
+  `grammar-core.md` are printed from that reading. The 2026-09-09 findings below cite 3.5's files,
+  tagged so; every other source path in this corpus is 4.0.6's.
+- **Grammar source of truth — the MIT GitHub source** (`powerof3/Keyword-Item-Distributor`, tag `v4.0.6`,
+  commit `895df22`, **MIT License**). Authoritative for the line shape, the exact type-strings, the trait syntax, the
   filter dispatch, file discovery, and `ExclusiveGroup`.
 - **User-facing docs + worked examples — the Nexus #55728 description.** Authoritative for the value
   tables (enum numbers), the per-type Form-filter list, and the copy-paste examples.
@@ -38,7 +43,7 @@ so the corpus draws on two complementary sources:
 
 | | |
 |---|---|
-| Line grammar (5 sections, keyword id, chance, file discovery, multi-key) | **complete** — `Defs.h`/`LookupConfigs.h`/`LookupConfigs.cpp` + description agree |
+| Line grammar (5 sections, keyword id, chance, file discovery, multi-key) | **complete** — `LookupConfigs.h`/`LookupConfigs.cpp` + description agree |
 | Item types | **19 / 19** with canonical strings + xEdit signatures (`types.md`) |
 | Trait classes | **10 / 10** (12 trait-bearing types; Spell/Ench/Scroll share one) (`traits.md`) |
 | Filters | String channels (name/archetype/AV/nif) + Form/EditorID + per-type Form filters + the 4 modifiers (`filters.md`) |
@@ -48,8 +53,9 @@ so the corpus draws on two complementary sources:
 
 ## Confidence
 
-- **High** for everything dual-confirmed: line grammar, the 19 type-strings (read straight from the
-  parser's `itemTypes`), the 10 trait classes and their token syntax (read from `Traits.h`), file
+- **High** for everything dual-confirmed: line grammar, the 19 type-strings (read straight from
+  `header_strings`, `include/Data/EnumDefs.h`), the 10 trait classes and their token syntax (read
+  from `include/Data/Traits.h`), file
   discovery, chance default, `ExclusiveGroup`, and the description's published value tables
   (archetypes, spell types, schools, soul/furniture/bench sizes).
 - **`[lib]`-marked values are byte-confirmed against CommonLibSSE** (`powerof3/CommonLibSSE@dev`, the
@@ -69,21 +75,24 @@ so the corpus draws on two complementary sources:
     actor-value names are exact-match channels and a wildcard never reaches them (`filters.md` §3).
 - **Minor residuals to confirm at the §8 review (or if a test line fails):**
   - The **per-type Form-filter** table (Location→music type, etc.) is from the description's own list;
-    not each entry was cross-checked against `LookupFilters.cpp`.
+    not each entry was cross-checked against `ItemData::FormFilter` (`src/Data/ItemData.cpp`, 4.0.6).
 
 ## Source-repo cross-check
 
-`powerof3/Keyword-Item-Distributor` (GitHub, `master`, **MIT License**) was read for grammar facts only
-— no code vendored (MIT would permit it; the corpus documents grammar, it doesn't embed source). Files
-consulted: `include/Defs.h` (line comment + `Filters<T>`), `include/Traits.h` (all 10 trait classes),
-`include/Cache.h` (`itemTypes`, archetype map, ActorValue map, FormType set), `include/LookupConfigs.h`
-(section enum, `Data` defaults), `src/LookupConfigs.cpp` (the parser — split, modifier dispatch, type
-switch, chance), `include/ExclusiveGroups.h` + `src/ExclusiveGroups.cpp` (the `ExclusiveGroup` feature), and — added
-2026-09-09 at tag `v3.5.0.rc1`, commit `a7a5589` — `src/LookupFilters.cpp` (`PassedFilters`,
-`HasFormOrStringFilter`, `HasFormFilter`, `HasStringFilter`, `ContainsStringFilter`) and
-`include/KeywordData.h` (`detail::formID_to_form`, where a plugin name becomes a `TESFile*` and a
-`.nif` wildcard is sanitized). `TESFile::IsFormInMod` and `BSFixedString::contains` were read in
-CommonLibSSE-NG (`src/RE/T/TESFile.cpp`, `include/RE/B/BSFixedString.h`).
+`powerof3/Keyword-Item-Distributor` (GitHub, **MIT License**) was read for grammar facts only — no code
+vendored (MIT would permit it; the corpus documents grammar, it doesn't embed source). Files consulted
+at tag `v4.0.6`, commit `895df22`: `include/Data/EnumDefs.h` (`header_strings`, the 19 type strings),
+`include/Data/Traits.h` (all 10 trait classes), `include/Cache.h` (archetype map, ActorValue map,
+`addedKeywords`), `include/LookupConfigs.h` (section enum, `Data` defaults), `src/LookupConfigs.cpp`
+(the parser — split, type, chance), `include/Data/BaseFilters.h` + `src/Data/BaseFilters.cpp` (the
+filter entries, `+` groups, `-` and `*`, `DistributableFilterSet::Pass`, the `.nif` path sanitized),
+`include/Data/FormData.h` + `src/Data/FormData.cpp` (`ResolvedFilter`: a form, a plugin as a
+`TESFile*`, or a string), `src/Data/ItemData.cpp` (`HasStringFilter`, `ContainsStringFilter`), and
+`include/ExclusiveGroups.h` + `src/ExclusiveGroups.cpp` (the `ExclusiveGroup` feature). The 2026-09-09
+findings above were read at tag `v3.5.0.rc1`, commit `a7a5589`, in `src/LookupFilters.cpp` and
+`include/KeywordData.h`; at 4.0.6 that code sits in the `Data/` files above. `TESFile::IsFormInMod` and
+`BSFixedString::contains` were read in CommonLibSSE-NG (`src/RE/T/TESFile.cpp`,
+`include/RE/B/BSFixedString.h`).
 
 The numeric enums KID forwards but doesn't define were confirmed against **`powerof3/CommonLibSSE@dev`**
 (the library KID builds on): `RE/M/MagicSystem.h` (Delivery, CastingType, SpellType), `RE/A/ActorValues.h`
@@ -112,8 +121,8 @@ references/
   project's no-guesswork gate.
 - **Layer 2 — DONE, rewritten 2026-09-08.** `SKILL.md` (procedural + bundled-or-warn; frontmatter is
   `name` / `description` / `compatibility`), `index.jsonl` (router, consistent with the siblings), and
-  `evals/evals.json` (the published eval shape: 26 trigger cases — 14 positive, 12 negative — plus one
-  output-quality case, each run in a with-skill and a without-skill arm from the packaged tree).
+  `evals/evals.json` (the published eval shape: 26 trigger cases — 14 positive, 12 negative —
+  each run in a with-skill and a without-skill arm from the packaged tree).
   Measured after the rewrite: `SKILL.md` **181 lines**, body **171 lines / 10,664 bytes**, `description`
   **441 characters**. The pre-rewrite file was 135 lines with a 383-character description; the
   "133 lines; 1029 chars" figures this row used to carry were wrong in both columns.

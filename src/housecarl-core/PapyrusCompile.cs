@@ -75,7 +75,7 @@ public static class PapyrusCompile
         string compilerExe, string objectName, IReadOnlyList<string> importDirs, string outputDir,
         string flagsFile = "TESV_Papyrus_Flags.flg", int timeoutMs = 120_000, SteamProtonSelection? proton = null)
     {
-        var pexPath = Path.Combine(outputDir, objectName + ".pex");
+        var pexPath = LooseListings.OnDisk(outputDir, objectName + ".pex");
         if (File.Exists(pexPath))
             return new CompileResult(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
                 $"refusing to compile because '{pexPath}' already exists; use a newly created empty output directory so stale output cannot be mistaken for this run.");
@@ -87,6 +87,7 @@ public static class PapyrusCompile
         if (FindSemicolonImport(importDirs) is { } badImport)
             return new CompileResult(false, objectName, null, Array.Empty<PapyrusDiagnostic>(), "", "", -1,
                 $"Papyrus import directory '{badImport}' contains ';', which the compiler treats as an import-path separator; refusing to split this path silently.");
+        DateTime? pexBeforeUtc = null;
 
         var effectiveFlags = proton?.TranslatePath(flagsFile) ?? flagsFile;
         var effectiveImports = proton is null ? importDirs : importDirs.Select(proton.TranslatePath).ToArray();

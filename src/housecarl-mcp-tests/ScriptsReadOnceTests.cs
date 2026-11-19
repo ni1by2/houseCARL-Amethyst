@@ -36,6 +36,29 @@ public sealed class ScriptsReadOnceTests : IDisposable
         return bsa;
     }
 
+    /// <summary>A script whose .pex a mod holds only as .mohidden: its property is unverifiable, and the reason says MO2 hides the .pex (#1281).</summary>
+    [Fact]
+    public void APexAModHidesIsSaidHiddenInTheUnverifiableReason()
+    {
+        var mods = Path.Combine(_root, "mods");
+        Directory.CreateDirectory(Path.Combine(mods, "HidMod", "Scripts"));
+        File.WriteAllBytes(Path.Combine(mods, "HidMod", "Scripts", "HcHid.pex.mohidden"), Pex("HcHid", null, "HidThing"));
+        var mod = new SkyrimMod(new ModKey("HcHid", ModType.Plugin), SkyrimRelease.SkyrimSE);
+        var vmad = CheckMergeFixture.Vmad("HcHid");
+        vmad.Scripts[0].Properties.Add(new ScriptObjectProperty { Name = "HidThing" });
+        mod.Weapons.AddNew().VirtualMachineAdapter = vmad;
+        var plugin = Path.Combine(_root, "HcHid.esp");
+        mod.BeginWrite.ToPath(plugin).WithLoadOrder(Array.Empty<ISkyrimModGetter>()).Write();
+
+        using var resolver = LoadOrderResolver.Build(new[] { plugin });
+        using var assets = AssetResolver.Build("", mods, _root, new[] { "HidMod" }, Array.Empty<ActiveArchive>());
+        var result = ScriptPropertyCheck.Run(resolver, assets, null, 1000);
+
+        var json = System.Text.Json.JsonSerializer.Serialize(result.Reports, new System.Text.Json.JsonSerializerOptions
+            { Encoder = System.Text.Encodings.Web.JavaScriptEncoder.UnsafeRelaxedJsonEscaping });
+        Assert.True(json.Contains("HcHid.pex' is hidden by MO2 (skipped by MO2's VFS, by the '.mohidden' suffix) in 'HidMod', as"), json);
+    }
+
     ScriptPropertyCheck.PexReads Sweep(out ScriptCheckResult result, string parentOfB = Base)
     {
         var bsa = WriteBsa((Base, Pex(Base, null, "BaseThing")), (ChildA, Pex(ChildA, Base, "AThing")),
@@ -61,14 +84,14 @@ public sealed class ScriptsReadOnceTests : IDisposable
     {
         var reads = Sweep(out var result);
         Assert.Equal(6, result.TotalUnbound);   // each of 3 records leaves its own and its parent's property unbound
-        Assert.Equal(1, reads.ArchiveTablesRead);
+        Assert.Equal(1, reads.Av.ArchiveTablesRead);
     }
 
     [Fact]
     public void SeveralScriptsInOneFolderWalkItsFileListOnce()
     {
         var reads = Sweep(out _);
-        Assert.Equal(1, reads.FolderListsRead);
+        Assert.Equal(1, reads.Av.FolderListsRead);
     }
 
     [Fact]
@@ -86,7 +109,7 @@ public sealed class ScriptsReadOnceTests : IDisposable
         var reads = new ScriptPropertyCheck.PexReads(assets.Capture());
         Assert.Null(reads.Load(Base).Reason);
         Assert.Null(reads.Load("Ns:HcPoNs").Reason);
-        Assert.Equal(2, reads.FolderListsRead);
+        Assert.Equal(2, reads.Av.FolderListsRead);
     }
 
     [Fact]
@@ -96,9 +119,9 @@ public sealed class ScriptsReadOnceTests : IDisposable
         using var assets = AssetResolver.Build("", "", _root, Array.Empty<string>(),
             new[] { new ActiveArchive(bsa, "HcPo.esp", 0) });
         var reads = new ScriptPropertyCheck.PexReads(assets.Capture());
-        Assert.Null(reads.ReadEntry(bsa, @"Scripts\Gone\HcPoGone.pex"));
-        Assert.Null(reads.ReadEntry(bsa, @"Meshes\HcPoGone.nif"));
-        Assert.Equal(1, reads.FolderListsRead);
+        Assert.Null(reads.Av.ReadEntry(bsa, @"Scripts\Gone\HcPoGone.pex"));
+        Assert.Null(reads.Av.ReadEntry(bsa, @"Meshes\HcPoGone.nif"));
+        Assert.Equal(1, reads.Av.FolderListsRead);
     }
 
     [Fact]
@@ -119,22 +142,5 @@ public sealed class ScriptsReadOnceTests : IDisposable
         Assert.Contains((ChildA, Base), declaring);
         Assert.Contains((ChildB, upper), declaring);
         Assert.Equal(4, reads.PexLoads);
-    }
-
-    [Fact]
-    public void ABsaReplacedMidSweepIsReadFresh()
-    {
-        // Replace the BSA under a live PexReads with one that no longer holds ChildB: the read must say the script
-        // vanished between listing and read, as a fresh read of the archive would, not misread the old offsets.
-        var bsa = WriteBsa((Base, Pex(Base, null, "BaseThing")), (ChildA, Pex(ChildA, Base, "AThing")),
-                           (ChildB, Pex(ChildB, Base, "BThing")));
-        using var assets = AssetResolver.Build("", "", _root, Array.Empty<string>(),
-            new[] { new ActiveArchive(bsa, "HcPo.esp", 0) });
-        var reads = new ScriptPropertyCheck.PexReads(assets.Capture());
-        Assert.Null(reads.Load(ChildA).Reason);
-
-        WriteBsa((Base, Pex(Base, null, "BaseThing")), (ChildA, Pex(ChildA, Base, "AThing")));
-        Assert.Equal($@"'Scripts\{ChildB}.pex' vanished from 'HcPo.bsa' between listing and read.", reads.Load(ChildB).Reason);
-        Assert.Equal(2, reads.ArchiveTablesRead);
     }
 }

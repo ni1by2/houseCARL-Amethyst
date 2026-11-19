@@ -70,7 +70,7 @@ public sealed class LoadOrderResolver : IDisposable
     readonly Dictionary<string, int> _nameToIdx;       // plugin filename → index (last copy of a duplicate name wins = priority)
     FileStamp[] _stamps;                               // last-write AND length at the last index build, per path (freshness baseline)
     readonly string? _dataDir;                         // real game-Data folder (Skyrim.esm's dir) — localized-strings fallback source (OpenOverlay)
-    ReverseReferenceIndex? _reverse;                   // lazy, held BESIDE the snapshot so a snapshot swap does not drop it
+    readonly System.Runtime.CompilerServices.StrongBox<ReverseReferenceIndex?> _reverse = new(null);   // lazy, held BESIDE the snapshot so a snapshot swap does not drop it; a frozen copy shares the slot
     readonly object _reverseGate = new();              // one build at a time; a second caller waits rather than walking the order twice
 
     /// <summary>The real game-Data folder this order resolved, for callers OUTSIDE the session that open a plugin through <see cref="OpenOverlay"/> and need the same strings resolution.</summary>
@@ -707,6 +707,9 @@ public sealed class LoadOrderResolver : IDisposable
 
         public int PluginCount => _r._paths.Length;
 
+        /// <summary>The counters of the resolver this view reads through.</summary>
+        public CostCounters Counters => _r.Counters;
+
         /// <summary>Every plugin this build indexed, in load order, MINUS the ones it excluded — the scope a whole-order walk can name plugin by plugin.</summary>
         public IReadOnlyList<string> ScannablePluginNames
         {
@@ -752,6 +755,32 @@ public sealed class LoadOrderResolver : IDisposable
              : FormKey.Factory((raw ?? "").Trim());
 
         public RuntimeAddress RuntimeAddressOf(FormKey fk) => _r.RuntimeAddressFor(_s, fk);
+
+        /// <summary>The record a runtime FormID names in this build, or the sentence saying why none does — the door's
+        /// refusal where the address names no slot, and a plain "no plugin defines it" where it names one that is
+        /// empty. For the runtime-layer resolver, which never throws on a line's token.</summary>
+        public (FormKey? Record, string? Why) FromRuntimeFormId(uint value)
+        {
+            FormKey fk;
+            try { fk = _r.RuntimeToFormKey(_s, value); }
+            catch (FormatException ex) { return (null, ex.Message); }
+            return ResolveWinner(fk) is null
+                ? (null, $"names {RuntimeFormId.Format(value)}, which no plugin in the active order defines, so it names nothing")
+                : (fk, null);
+        }
+
+        /// <summary>The runtime FormID a plugin's records are numbered from: its load index, or the light block plus its
+        /// light index. Null when the plugin is not in the active order, occupies no slot, or sits at or after a plugin
+        /// whose kind could not be read, where the base would be composed from a guessed light flag.</summary>
+        public uint? RuntimeBaseOf(string pluginName)
+        {
+            if (!_r._nameToIdx.TryGetValue(pluginName, out int p)) return null;
+            if (_s.FirstUnknownKind >= 0 && p >= _s.FirstUnknownKind) return null;
+            int slot = _s.Slots.Value.SlotOfPlugin[p];
+            // The base is the record's own id 0, composed the one way; object id 0 is inside the ESL window, so this never refuses.
+            if (slot < 0 || !RuntimeFormId.TryCompose(_s.Light[p], slot, 0, out uint b)) return null;
+            return b;
+        }
 
         /// <summary>Whether a plugin filename is in the indexed load order — a state the service must name DISTINCTLY from "in the order but defines no such record".</summary>
         public bool ContainsPlugin(string pluginName) => _r._nameToIdx.ContainsKey(pluginName);
@@ -846,6 +875,25 @@ public sealed class LoadOrderResolver : IDisposable
         public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(
             IReadOnlyList<Type> getterTypes, ICollection<PluginUnreadableException>? unreadable = null)
             => _r.WinnerRecordsOfType(getterTypes, _s, unreadable);
+
+        /// <summary>Every instance of every record of the given type(s), plugin by plugin in load order, with the plugin's load position and name, each plugin read in one pass over all the types; a plugin that cannot be read is collected and skipped.</summary>
+        public IEnumerable<(FormKey fk, IMajorRecordGetter body, int position, string plugin)> RecordVersionsOfType(
+            IReadOnlyList<Type> getterTypes, ICollection<PluginUnreadableException> unreadable)
+        {
+            var (r, names) = (_r, _r._names);
+            var props = getterTypes.Select(MutagenGroups.PropsOf).ToList();
+            var groups = props.Any(p => p is null) ? null : props.SelectMany(p => p!).Distinct().OrderBy(p => p.MetadataToken).ToList();
+            return _r.InOrder(_s, unreadable, winnersOnly: false, (ov, i) => r.OnePass(ov, i, getterTypes, groups))
+                .Select(x => (x.fk, x.body, x.plugin, names[x.plugin]));
+        }
+
+        /// <summary>Each of <paramref name="keys"/> the plugin at load position <paramref name="position"/> holds, by its
+        /// place among that file's records, read off the record headers alone (<see cref="RecordHeaderKeys.Places"/>).</summary>
+        public IReadOnlyDictionary<FormKey, int> FilePlaces(int position, IReadOnlySet<FormKey> keys)
+        {
+            _r.CheckUnchanged(position, _s);
+            return RecordHeaderKeys.Places(_r._paths[position], keys);
+        }
 
         public IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body, string source)> RecordsIn(
             IReadOnlyList<string> plugins, IReadOnlyList<Type>? getterTypes)
@@ -1093,6 +1141,39 @@ public sealed class LoadOrderResolver : IDisposable
 
     IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body)> WinnerRecordsOfType(
         IReadOnlyList<Type> getterTypes, IndexSnapshot s, ICollection<PluginUnreadableException>? unreadable)
+        => RecordsOfType(getterTypes, s, unreadable, winnersOnly: true).Select(x => (x.fk, x.depth, x.body));
+
+    /// <summary>Every record of the given type(s) plugin by plugin in load order: only the winning instance, or with <paramref name="winnersOnly"/> false every instance, each with the index of the plugin it was read from.</summary>
+    IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body, int plugin)> RecordsOfType(
+        IReadOnlyList<Type> getterTypes, IndexSnapshot s, ICollection<PluginUnreadableException>? unreadable, bool winnersOnly)
+        // RecordArms is the shared arm re-check: a typed enumeration seeks the GRUP, which for an abstract group holds every arm.
+        => InOrder(s, unreadable, winnersOnly, (ov, i) => RecordArms.OfTypes(getterTypes, t => Walk(ov, i, t, throwIfUnknown: true)));
+
+    /// <summary>Every record of any of <paramref name="types"/> in plugin <paramref name="idx"/>, each once: each of <paramref name="groups"/> the plugin has is read once, or the whole plugin once when null.</summary>
+    IEnumerable<IMajorRecordGetter> OnePass(ISkyrimModGetter ov, int idx, IReadOnlyList<Type> types, IReadOnlyList<System.Reflection.PropertyInfo>? groups)
+    {
+        var keep = new Dictionary<Type, bool>();
+        return (groups is null ? Walk(ov, idx, null) : Groups()).Where(rec =>
+        {
+            var runtime = rec.GetType();
+            if (!keep.TryGetValue(runtime, out var k)) keep[runtime] = k = types.Any(t => t.IsInstanceOfType(rec));
+            return k;
+        });
+
+        IEnumerable<IMajorRecordGetter> Groups()
+        {
+            foreach (var prop in groups!)
+            {
+                if (MutagenGroups.Present(prop, ov) is not { } group) continue;
+                Counters.CountGroupRead(_names[idx], prop.Name);
+                foreach (var rec in group.EnumerateMajorRecords()) yield return rec;
+            }
+        }
+    }
+
+    /// <summary>The records <paramref name="walk"/> yields from each plugin in load order that the index holds, as <see cref="RecordsOfType"/> describes.</summary>
+    IEnumerable<(FormKey fk, int depth, IMajorRecordGetter body, int plugin)> InOrder(IndexSnapshot s,
+        ICollection<PluginUnreadableException>? unreadable, bool winnersOnly, Func<ISkyrimModGetter, int, IEnumerable<IMajorRecordGetter>> walk)
     {
         for (int i = 0; i < _paths.Length; i++)
         {
@@ -1110,8 +1191,7 @@ public sealed class LoadOrderResolver : IDisposable
             }
             try
             {
-                // RecordArms is the shared arm re-check: a typed enumeration seeks the GRUP, which for an abstract group holds every arm.
-                using var recs = RecordArms.OfTypes(getterTypes, t => Walk(ov, i, t, throwIfUnknown: true)).GetEnumerator();
+                using var recs = walk(ov, i).GetEnumerator();
                 while (true)
                 {
                     IMajorRecordGetter rec;
@@ -1125,8 +1205,8 @@ public sealed class LoadOrderResolver : IDisposable
                         unreadable.Add(fault);
                         break;
                     }
-                    if (s.Index.TryGetValue(rec.FormKey, out var e) && e.winner == i)   // this overlay's instance wins
-                        yield return (rec.FormKey, e.count, rec);
+                    if (s.Index.TryGetValue(rec.FormKey, out var e) && (!winnersOnly || e.winner == i))   // this overlay's instance wins
+                        yield return (rec.FormKey, e.count, rec, i);
                 }
             }
             finally { (ov as IDisposable)?.Dispose(); }
@@ -1217,20 +1297,23 @@ public sealed class LoadOrderResolver : IDisposable
     {
         lock (_reverseGate)
         {
-            _reverse ??= new ReverseReferenceIndex();
-            return _reverse.Refresh(_names, _paths, s.BuiltStamps, i => CheckUnchanged(i, s), i => { CheckUnchanged(i, s); return OpenOverlay(_paths[i], _dataDir); }, s.Excluded);
+            _reverse.Value ??= new ReverseReferenceIndex();
+            return _reverse.Value.Refresh(_names, _paths, s.BuiltStamps, i => CheckUnchanged(i, s), i => { CheckUnchanged(i, s); return OpenOverlay(_paths[i], _dataDir); }, s.Excluded);
         }
     }
 
-    internal ReverseReferenceIndex? ReverseIndex { get { lock (_reverseGate) return _reverse; } }
+    internal ReverseReferenceIndex? ReverseIndex { get { lock (_reverseGate) return _reverse.Value; } }
 
     /// <summary>Take over the reverse index of the resolver this one replaces; partitions are keyed on (path, mtime), so the next refresh builds only the plugins this order added.</summary>
     public void AdoptReverseIndexFrom(LoadOrderResolver previous)
     {
         var carried = previous.ReverseIndex;
         if (carried is null) return;
-        lock (_reverseGate) _reverse ??= carried;
+        lock (_reverseGate) _reverse.Value ??= carried;
     }
+
+    /// <summary>A copy fixed to the current build: every view it captures answers off that build, whatever this one refreshes to later.</summary>
+    public LoadOrderResolver Frozen() => (LoadOrderResolver)MemberwiseClone();
 
     public void Dispose() { }
 }

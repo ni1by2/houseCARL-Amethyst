@@ -49,7 +49,7 @@ public sealed class CopyServiceRefusalTests : IDisposable
             CopyServiceWorld.StopHeadParts, null, "StopCloneEid", "StopClonePatch", null);
 
         CopyServiceWorld.Succeeded(o);
-        Assert.DoesNotContain("pruned by exclude_types", CopyTools.Render(o));
+        Assert.DoesNotContain("pruned by exclusions", CopyTools.Render(o));
         Assert.Contains(o.Stripped, s => s.Field.StartsWith("HeadParts", StringComparison.Ordinal));
     }
 
@@ -77,7 +77,7 @@ public sealed class CopyServiceRefusalTests : IDisposable
         var text = CopyTools.Render(Carried());
 
         Assert.Contains("seed_paths=", text);
-        Assert.DoesNotContain("'Type:refuse'", text);
+        Assert.DoesNotContain("exclusions=", text);
     }
 
     // probe arm 7d (a): a struct-element seed the donor carries NONE of still refuses by shape, naming the field

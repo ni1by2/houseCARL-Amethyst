@@ -20,6 +20,8 @@ namespace HousecarlMcpTests;
 /// <item><c>HcWalkTemplated</c> (Traits) → <c>HcWalkMid</c> (Traits) → <c>HcWalkHero</c>; <c>HcWalkLeveled</c>
 ///   (Traits) → a leveled list of <c>HcWalkHero</c> and <c>HcWalkBeast2</c>.</item>
 /// <item><c>HcWalkSge</c>, a start-game-enabled quest whose <c>Seq\HcWalk.seq</c> is absent; <c>HcWalkPlain</c>, not.</item>
+/// <item><c>HcWalkActorQuest</c>, whose alias's unique actor is <c>HcWalkHero</c>; <c>HcWalkNpcLoop</c>, a list naming
+///   <c>HcWalkLoopNpc</c>, whose script property names the list back.</item>
 /// <item><c>Cape</c>, an enabled mod with <see cref="CapeNif"/> naming <see cref="CapeXml"/>, which it also ships.</item>
 /// </list></summary>
 public sealed class AssetWalkWorld : IDisposable
@@ -45,13 +47,24 @@ public sealed class AssetWalkWorld : IDisposable
     public const string FaceTex = @"textures\hcwalk\face_d.dds";
     public const string FaceXml = @"SKSE\Plugins\hdtSkinnedMeshConfigs\hcwalk\face.xml";
     public const string AliasScript = "HcWalkAliasScript";
+    public const string LoopNpcScript = "HcWalkLoopNpcScript";
     public const string OtherPlugin = "HcWalkOther.esp";
-    public const string LatePlugin = "HcWalkLate.esp";
     public const string OffPlugin = "HcWalkOffSpeaker.esp";
     public const string OverridePlugin = "HcWalkOverride.esp";
     public const string OverrideMod = "HcWalkOverrideMod";
     public const string OvHairNif = @"meshes\hcwalk\ovhair.nif";
     public const string OvHairTex = @"textures\hcwalk\ovhair.dds";
+
+    /// <summary>A mesh whose texture slot and SMP string name the same string that is no Data path (bug 7).</summary>
+    public const string DupNif = @"meshes\hcwalkdup\dup.nif";
+    public const string DupBad = @"..\..\outside\dup.dds";
+
+    /// <summary>A script whose bytes are no .pex, so its parent class cannot be read (bug 7).</summary>
+    public const string BadPex = @"scripts\hcwalkbadpex.pex";
+
+    /// <summary>A script the Cape mod ships whose parent class, <see cref="ParentPex"/>, ships nowhere.</summary>
+    public const string ChildPex = @"scripts\hcwalkchild.pex";
+    public const string ParentPex = @"scripts\hcwalkparent.pex";
 
     /// <summary>Sixty textures only the donor ships: a place set whose array alone passes a small max_chars.</summary>
     public static readonly string[] ManyTex = Enumerable.Range(0, 60).Select(i => $@"textures\hcwalk\many\t{i:D2}.dds").ToArray();
@@ -151,6 +164,7 @@ public sealed class AssetWalkWorld : IDisposable
         var vq = mod.Quests.AddNew("HcWalkVoiceQuest");
         var topic = mod.DialogTopics.AddNew("HcWalkTopic");
         topic.Quest.SetTo(vq);
+        Keys["HcWalkTopic"] = topic.FormKey;
         DialogResponses Line(string key, bool spoken = true)
         {
             var info = new DialogResponses(mod.GetNextFormKey(), SkyrimRelease.SkyrimSE);
@@ -172,28 +186,6 @@ public sealed class AssetWalkWorld : IDisposable
         shared.ResponseData.SetTo(Keys["HcWalkLineSpeaker"]);
         Line("HcWalkLineSharedNoSpeaker", spoken: false).ResponseData.SetTo(Keys["HcWalkLineSpeaker"]);
         Line("HcWalkLineBare", spoken: false);
-        // Lines that link the speaker without it speaking them: a script property, a GetIsID run on the Target, a
-        // GetIsID == 0, a GetIsID >= 0 that any speaker passes; and a line whose winning override (HcWalkLate.esp) drops it as Speaker.
-        Line("HcWalkLineProp").VirtualMachineAdapter = new DialogResponsesAdapter
-        {
-            Scripts = { new ScriptEntry { Name = "HcWalkPropScript", Properties = { new ScriptObjectProperty { Name = "Who", Object = speaker.ToLink<ISkyrimMajorRecordGetter>() } } } },
-        };
-        foreach (var (key, runOn, op, value) in new[] { ("HcWalkLineTarget", Condition.RunOnType.Target, CompareOperator.EqualTo, 1f), ("HcWalkLineNotSpeaker", Condition.RunOnType.Subject, CompareOperator.EqualTo, 0f), ("HcWalkLineAnyone", Condition.RunOnType.Subject, CompareOperator.GreaterThanOrEqualTo, 0f) })
-        {
-            var id = new GetIsIDConditionData { RunOnType = runOn };
-            id.Object = new FormLinkOrIndex<IReferenceableObjectGetter>(id, speaker.FormKey);
-            Line(key).Conditions.Add(new ConditionFloat { CompareOperator = op, ComparisonValue = value, Data = id });
-        }
-        var dropped = Line("HcWalkLineDropped");
-        dropped.Speaker.SetTo(speaker);
-        var late = new SkyrimMod(ModKey.FromFileName(LatePlugin), SkyrimRelease.SkyrimSE);
-        var lateTopic = topic.DeepCopy();
-        lateTopic.Responses.Clear();
-        var droppedOverride = dropped.DeepCopy();
-        droppedOverride.Speaker.Clear();
-        lateTopic.Responses.Add(droppedOverride);
-        late.DialogTopics.Add(lateTopic);
-
         var sge = mod.Quests.AddNew("HcWalkSge");
         sge.Flags = Quest.Flag.StartGameEnabled;
         Keys["HcWalkSge"] = sge.FormKey;
@@ -206,6 +198,38 @@ public sealed class AssetWalkWorld : IDisposable
         adapter.Aliases.Add(alias);
         aliased.VirtualMachineAdapter = adapter;
         Keys["HcWalkAliased"] = aliased.FormKey;
+        // Two lists naming each other, a loop of two, and a list naming 201 lists that each name themselves.
+        var loopA = mod.FormLists.AddNew("HcWalkLoopA");
+        var loopB = mod.FormLists.AddNew("HcWalkLoopB");
+        loopA.Items.Add(new FormLink<ISkyrimMajorRecordGetter>(loopB.FormKey));
+        loopB.Items.Add(new FormLink<ISkyrimMajorRecordGetter>(loopA.FormKey));
+        Keys["HcWalkLoopA"] = loopA.FormKey;
+        Keys["HcWalkLoopB"] = loopB.FormKey;
+        var selves = mod.FormLists.AddNew("HcWalkSelves");
+        for (int i = 0; i < 201; i++)
+        {
+            var self = mod.FormLists.AddNew($"HcWalkSelf{i:D3}");
+            self.Items.Add(new FormLink<ISkyrimMajorRecordGetter>(self.FormKey));
+            selves.Items.Add(new FormLink<ISkyrimMajorRecordGetter>(self.FormKey));
+        }
+        Keys["HcWalkSelves"] = selves.FormKey;
+        // A list naming two records with scripts of their own, entered at depth 1 in list order.
+        var pair = mod.FormLists.AddNew("HcWalkPair");
+        foreach (var to in new[] { hero.FormKey, aliased.FormKey }) pair.Items.Add(new FormLink<ISkyrimMajorRecordGetter>(to));
+        Keys["HcWalkPair"] = pair.FormKey;
+        // A quest whose alias names the hero as its unique actor, so the hero is reached past the seed (#1371).
+        var actorQuest = mod.Quests.AddNew("HcWalkActorQuest");
+        actorQuest.Aliases.Add(new QuestAlias { Name = "HcWalkActor", UniqueActor = hero.ToNullableLink() });
+        Keys["HcWalkActorQuest"] = actorQuest.FormKey;
+        // A list naming an NPC whose script property names the list back: a loop through a reached NPC.
+        var npcLoop = mod.FormLists.AddNew("HcWalkNpcLoop");
+        var loopNpc = Add("HcWalkLoopNpc", race);
+        loopNpc.VirtualMachineAdapter = new VirtualMachineAdapter
+        {
+            Scripts = { new ScriptEntry { Name = LoopNpcScript, Properties = { new ScriptObjectProperty { Name = "List", Object = npcLoop.ToLink<ISkyrimMajorRecordGetter>() } } } },
+        };
+        npcLoop.Items.Add(new FormLink<ISkyrimMajorRecordGetter>(loopNpc.FormKey));
+        Keys["HcWalkNpcLoop"] = npcLoop.FormKey;
 
         var other = new SkyrimMod(ModKey.FromFileName(OtherPlugin), SkyrimRelease.SkyrimSE);
         var otherVoice = other.VoiceTypes.AddNew("HcWalkOtherVoice");
@@ -213,8 +237,6 @@ public sealed class AssetWalkWorld : IDisposable
              .NoCheckIfLowerRangeDisallowed().Write();
         mod.BeginWrite.ToPath(Path.Combine(pluginMod, Plugin)).WithLoadOrder(Array.Empty<ISkyrimModGetter>())
            .NoCheckIfLowerRangeDisallowed().Write();
-        late.BeginWrite.ToPath(Path.Combine(pluginMod, LatePlugin)).WithLoadOrder(new ISkyrimModGetter[] { mod, late })
-            .NoCheckIfLowerRangeDisallowed().Write();
 
         // A disabled override donor: HcWalkBeast2 given a head part the override plugin defines, and a link into a third plugin.
         var ov = new SkyrimMod(ModKey.FromFileName(OverridePlugin), SkyrimRelease.SkyrimSE);
@@ -222,6 +244,8 @@ public sealed class AssetWalkWorld : IDisposable
         ovHair.Model = new Model { File = OvHairNif };
         var ovNpc = beast2.DeepCopy();
         ovNpc.HeadParts.Add(ovHair);
+        // A head part the override does not hold: the walk reads it off the load order and says so.
+        ovNpc.HeadParts.Add(hair);
         ovNpc.Voice.SetTo(otherVoice);
         ov.Npcs.Add(ovNpc);
         ov.BeginWrite.ToPath(Path.Combine(overrideMod, OverridePlugin)).WithLoadOrder(new ISkyrimModGetter[] { other, mod, ov })
@@ -265,9 +289,13 @@ public sealed class AssetWalkWorld : IDisposable
         Write(cape, CapeNif, Mesh(new[] { @"data\textures\hcwalk\cape.dds" }, CapeXml));
         Write(cape, CapeXml, new byte[] { 1 });
         Write(cape, @"textures\hcwalk\cape.dds", new byte[] { 1 });
+        Write(cape, DupNif, Mesh(new[] { DupBad }, DupBad));
+        Write(cape, BadPex, new byte[] { 1, 2, 3 });
+        Directory.CreateDirectory(Path.Combine(cape, "scripts"));
+        PexWriter.WritePex(BethesdaPath.Under(cape, ChildPex), "HcWalkChild", "HcWalkParent");
 
-        File.WriteAllText(Path.Combine(profile, "loadorder.txt"), "# header\r\n" + OtherPlugin + "\r\n" + Plugin + "\r\n" + LatePlugin + "\r\n");
-        File.WriteAllText(Path.Combine(profile, "plugins.txt"), "*" + OtherPlugin + "\r\n*" + Plugin + "\r\n*" + LatePlugin + "\r\n");
+        File.WriteAllText(Path.Combine(profile, "loadorder.txt"), "# header\r\n" + OtherPlugin + "\r\n" + Plugin + "\r\n");
+        File.WriteAllText(Path.Combine(profile, "plugins.txt"), "*" + OtherPlugin + "\r\n*" + Plugin + "\r\n");
         // The donors are listed but switched off: their files are reachable only by naming them.
         File.WriteAllText(Path.Combine(profile, "modlist.txt"), "# header\r\n+Cape\r\n+HcWalkPlugin\r\n+" + BaseMod + "\r\n-" + DonorMod
                                                                 + "\r\n-" + OverrideMod + "\r\n");

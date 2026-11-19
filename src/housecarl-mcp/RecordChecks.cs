@@ -11,7 +11,7 @@ internal interface ICheckHost : ILoadOrderHost
     /// <summary>A FormID door for a sweep's <c>formids=</c> tokens, with no captured view of its own.</summary>
     FormIdDoor OpenFormIdDoor();
 
-    /// <summary>A pinned index, the four MO2 roots and the live asset resolver for that same profile, in one <c>_gate</c> hold; <paramref name="afterPin"/> runs after the pin.</summary>
+    /// <summary>A pinned index, the four MO2 roots and the asset resolver for that same profile (in a call, its frozen copy), in one <c>_gate</c> hold; <paramref name="afterPin"/> runs after the pin.</summary>
     (LoadOrderService.ViewPin Pin, Mo2Roots Roots, AssetResolver Assets) CapturePinRootsAndAssets(Action? afterPin);
 }
 
@@ -147,12 +147,13 @@ internal sealed class RecordChecks
 
         Mo2Composition comp;
         IReadOnlyCollection<string> installed;
+        var unopened = new List<string>();
         try
         {
             comp = readComposition();
             // The install's plugin-name set, read ONCE for the whole sweep: the answer does not depend on which
             // report asked, so neither does the read.
-            installed = Mo2LoadOrder.AllPluginFileNames(comp, roots.ModsDir, roots.DataDir, roots.OverwriteDir);
+            installed = Mo2LoadOrder.AllPluginFileNames(comp, roots.ModsDir, roots.DataDir, roots.OverwriteDir, unopened);
         }
         catch { return r; }
 
@@ -161,7 +162,8 @@ internal sealed class RecordChecks
             classified.Add(p.MissingMasters.Count == 0
                 ? p with { InstalledButInactiveMasters = Array.Empty<string>() }
                 : p with { InstalledButInactiveMasters =
-                               Mo2LoadOrder.SplitUnsatisfiedMasters(installed, p.MissingMasters).InstalledButInactive });
+                               Mo2LoadOrder.SplitUnsatisfiedMasters(installed, p.MissingMasters).InstalledButInactive,
+                           UnopenedFolders = unopened });
         return r with { Reports = classified };
     }
 

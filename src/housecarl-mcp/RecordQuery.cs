@@ -60,6 +60,8 @@ internal sealed partial class RecordReads
         bool hasPlugins = plugins is { Count: > 0 };
         bool hasType = typeSet is { Count: > 0 };
         bool hasWhere = where is { Count: > 0 };
+        // A reach term selects the records of its own line's type, so it bounds the scan itself.
+        var (whereFields, reachTerms) = ReachTerm.Split(where);
         bool hasReferences = references is { Count: > 0 };
         // The negated half of references=: a record is kept only when it links to NONE of these.
         var refNone = referencesNone is { Count: > 0 } ? new HashSet<FormKey>(referencesNone) : null;
@@ -73,7 +75,7 @@ internal sealed partial class RecordReads
         // needs a bound — the index knows links, not field values.
         string? reverseNote = null;
         bool indexUniverse = false;                                    // the scan universe came from the index, not from the caller
-        if (bodyFilter && !hasType && !hasPlugins && !hasFormidSet)
+        if (bodyFilter && !hasType && !hasPlugins && !hasFormidSet && reachTerms.Count == 0)
         {
             bool reverseOnly = !hasWhere && string.IsNullOrEmpty(editoridContains);
             if (!reverseOnly)
@@ -137,13 +139,15 @@ internal sealed partial class RecordReads
             groupBy = groupBy.Trim().ToLowerInvariant();
             if (groupBy is not ("winner" or "type" or "defined_in"))
                 return CrossQueryOutcome.Fail($"group_by='{groupBy}' is not a known aggregation key — use 'winner', 'type', or 'defined_in'.");
-            if (groupBy == "type" && !hasType && !hasPlugins && !hasFormidSet)
+            if (groupBy == "type" && !hasType && !hasPlugins && !hasFormidSet && reachTerms.Count == 0)
                 return CrossQueryOutcome.Fail("group_by=type needs each match's type, which requires a body-bearing scope — add type= or plugins= (winner/defined_in group without a body).");
         }
         var refSet = hasReferences ? new HashSet<FormKey>(references!) : null;
         bool multiTarget = references is { Count: >= 2 };
 
-        // where= becomes the field-value predicate set, parsed up front so a malformed predicate refuses the call.
+        // where= becomes the field-value predicate set, parsed up front so a malformed predicate refuses the call
+        // before any reach term is judged.
+        if (reachTerms.Count > 0) { where = whereFields; hasWhere = where.Count > 0; }
         FieldPredicateSet? predicate = null;
         if (hasWhere)
         {
@@ -152,6 +156,10 @@ internal sealed partial class RecordReads
             predicate = set;
         }
 
+        // The refusals that need no reach pass come before it: types= naming none of the reach lines' types, a stale
+        // artifact, an unknown type, a path no scanned type carries.
+        if (reachTerms.Count > 0 && hasType && ReachTypes(reachTerms) is { Count: > 0 } rtypes && ReachTypesRefusal(typeSet!, rtypes) is { } terr)
+            return CrossQueryOutcome.Fail(terr) with { Stamp = view.Stamp };
         // Artifact re-entry: checked HERE against the view this scan will answer from, not at the tool layer,
         // where a freshness rebuild between check and scan would let a stale artifact through.
         foreach (var demand in (artifactDemands ?? Array.Empty<ArtifactDemand>()).Concat(
@@ -165,6 +173,35 @@ internal sealed partial class RecordReads
 
         if (predicate is not null && SchemaPlanRefusal(hasType ? typeSet : null, predicate) is { } qerr)
             return CrossQueryOutcome.Fail(qerr) with { Stamp = view.Stamp };
+
+        // The reach terms are judged next, over this scan's view. The records no term says no to become the identity
+        // set; the scan's other terms run over them, the yes ones are the rows, and the open ones are only counted.
+        ReachSelection? reach = null;
+        if (reachTerms.Count > 0)
+        {
+            reach = Reach(reachTerms, view, ct);
+            if (reach.Refusal is not null) return CrossQueryOutcome.Fail(reach.Refusal) with { Stamp = view.Stamp };
+            // Any other term narrows the scan, so the note counts the buckets within it.
+            bool scoped = reachTerms.Count > 1 || hasType || hasPlugins || hasFormidSet || hasWhere || conflictsOnly || hasReferences
+                || refNone is not null || !string.IsNullOrEmpty(editoridContains);
+            if (scoped) reach.Scope();
+            // A scoped scan also runs over the already-held records, so the note counts those within it.
+            var candidates = scoped ? reach.Candidates.Concat(reach.Held).ToList() : reach.Candidates;
+            var keep = new HashSet<FormKey>(candidates);
+            var kept = hasFormidSet ? formidSet!.Where(keep.Contains).ToList() : candidates.ToList();
+            // An empty selection is still the bound: the identity set is the universe, so the scan answers 0, not every record.
+            formidSet = kept;
+            hasFormidSet = true;
+        }
+        // A record the scan keeps is counted into the reach tallies; true when it is not a row (some term left it open).
+        bool ReachOpen(FormKey fk)
+        {
+            if (reach is null) return false;
+            reach.Tally(fk);
+            return !reach.IsYes(fk);
+        }
+        // Whether a record can be a row: an identity in-list member only a reach term leaves open is not marked matched.
+        bool ReachRow(FormKey fk) => reach is null || reach.IsYes(fk);
 
         var keys = new List<FormKey>();
         var sources = new List<string?>();                                    // parallel to keys: the plugin whose body matched (null ⇒ winner), so the render displays the SAME body it filtered
@@ -277,7 +314,7 @@ internal sealed partial class RecordReads
                                 bool keep = ReferenceVerdict(body, refSet, refNone, references, multiTarget && groups is null,
                                                              out var hitTargets, out var lenientNote);
                                 judged[i] = new SetVerdict(SetKind.Judged, keep, lenientNote, body.GetType(), null);
-                                if (!keep || rows.Count >= cap && (cap == 0 || i > rows.Keys[^1])) continue;
+                                if (!keep || reach is not null && !reach.IsYes(fk) || rows.Count >= cap && (cap == 0 || i > rows.Keys[^1])) continue;
                                 RecordSummary? summary = null; Exception? fault = null;
                                 try
                                 {
@@ -328,6 +365,7 @@ internal sealed partial class RecordReads
                 // Count one kept row: bump its group_by key, or land it on the page if its summary builds.
                 void LandRow(FormKey fk, string winner, Type bodyType, Func<(List<FormKey>? Hit, RecordSummary Summary)> land)
                 {
+                    if (ReachOpen(fk)) return;
                     total++;
                     if (groups is not null)
                     {
@@ -370,7 +408,7 @@ internal sealed partial class RecordReads
                                 { NoteMissing(fk, w.Value.WinnerPlugin, faults.GetValueOrDefault(w.Value.WinnerPlugin)); continue; }
                                 var pre = BeforeWhere(body, touching: true);
                                 // A deleted record only another where= term drops still counts toward the 'in' list members.
-                                if (pre == PreWhere.NoLiveBody && refSet is null) predicate!.NoteMembers(body);
+                                if (pre == PreWhere.NoLiveBody && refSet is null && ReachRow(fk)) predicate!.NoteMembers(body);
                                 if (pre != PreWhere.Pass) continue;
                                 // The same one-read verdict the scoped lane makes, so the formids-as-universe lane —
                                 // where an unbounded references= also lands — answers identically.
@@ -378,7 +416,7 @@ internal sealed partial class RecordReads
                                                              out var hitTargets, out var lenientNote);
                                 NoteLenient(fk, lenientNote);
                                 if (!keep) continue;
-                                if (predicate is not null && !predicate.Matches(body))
+                                if (predicate is not null && !predicate.Matches(body, ReachRow(fk)))
                                 {
                                     if (predicate.FatalError is not null) { go = false; break; }
                                     continue;
@@ -557,18 +595,19 @@ internal sealed partial class RecordReads
                         // A deleted record only another where= term drops still counts toward the 'in' list members.
                         if (DeletedRecordRule.HasNoLiveBody(filterBody)
                             && (refSet is not null || predicate is { NeedsLiveBody: true }))
-                        { if (refSet is null) predicate!.NoteMembers(filterBody); return true; }
+                        { if (refSet is null && ReachRow(fk)) predicate!.NoteMembers(filterBody); return true; }
                         // references= is a list with OR semantics, and BOTH arms come off one link read, so a record
                         // cannot be judged twice on two walks.
                         if (!ReferenceVerdict(filterBody, refSet, refNone, references, multiTarget && groups is null,
                                               out var hitTargets, out var lenientNote))
                         { NoteLenient(fk, lenientNote); return true; }
                         NoteLenient(fk, lenientNote);
-                        if (predicate is not null && !predicate.Matches(filterBody))    // value filter on the same in-hand body, no extra fetch
+                        if (predicate is not null && !predicate.Matches(filterBody, ReachRow(fk)))    // value filter on the same in-hand body, no extra fetch
                         {
                             if (predicate.FatalError is not null) return false;   // e.g. a numeric op against a non-numeric field — abort and surface it
                             return true;
                         }
+                        if (ReachOpen(fk)) return true;
                         total++;
                         if (groups is not null)                                   // group_by=: aggregate over all matches, no keys or prefill, no limit cap
                         {
@@ -666,10 +705,26 @@ internal sealed partial class RecordReads
                                      matched, groupRows, groupBy, definedIn ? string.Join(", ", plugins!) : null, offset,
                                      whereWinner, whereSourceNote)
                { Stamp = view.Stamp, Pin = pin,
+                 ReachNote = reach?.Note(),
                  ReverseIndexNote = reverseNote,
                  UnreadPlugins = unreadablePlugins.Select(u => u.PluginName).ToList(),
                  Unmatched = predicate?.Unmatched ?? Array.Empty<string>(),
                  UnmatchedGap = UnjudgedClause((view.Stamp?.ExcludedPlugins.Count ?? 0) + unreadablePlugins.Count, unscannable) };
+    }
+
+    /// <summary>The refusal for a reach term on an off-order source=: a line reaches what the load order holds.</summary>
+    internal const string ReachOffOrderRefusal =
+        "a where= reach term judges the load order's winners, and this scan streams a file outside the load order. Drop source= to ask which winners the line reaches.";
+
+    /// <summary>The refusal for a types= naming none of the record types the reach terms select; null when one matches.</summary>
+    string? ReachTypesRefusal(IReadOnlyList<string> typeSet, IReadOnlyList<string> reachTypes)
+    {
+        IReadOnlyList<Type> asked;
+        try { asked = _host.Types.ResolveSet(typeSet); } catch (ArgumentException) { return null; }   // the scan's own type check names it
+        var getters = reachTypes.Select(SpidGrammar.Getter).OfType<Type>().ToList();
+        if (asked.Any(a => getters.Any(g => g.IsAssignableFrom(a) || a.IsAssignableFrom(g)))) return null;
+        return $"types=[{string.Join(", ", typeSet)}] names no {string.Join(" or ", reachTypes)} record, the type the where= reach term's line selects; " +
+               "drop types= (the reach term bounds the scan itself) or name that type.";
     }
 
     /// <summary>Why the scan left records unjudged (a plugin the build or the scan could not read, a record it could not scan), as one clause for the unmatched note; null when it judged everything.</summary>
@@ -783,6 +838,8 @@ internal sealed partial class RecordReads
             return CrossQueryOutcome.Fail(ReadSentences.NoOffsetOnCountTable("group_by="));
 
         FieldPredicateSet? predicate = null;
+        if (ReachTerm.AnyIn(where))
+            return CrossQueryOutcome.Fail(ReachOffOrderRefusal) with { Stamp = view.Stamp };
         if (where is { Count: > 0 })
         {
             var (set, perr) = FieldPredicateSet.Parse(where, FormIdDoor.On(view).Parse);
@@ -811,16 +868,24 @@ internal sealed partial class RecordReads
             return CrossQueryOutcome.Fail(qerr) with { Stamp = view.Stamp };
 
         // The same split the in-order scan makes: a name the active order does not carry costs that name's share
-        // of the scope, not the whole answer.
+        // of the scope, not the whole answer. The file's own filename names this file, not the active copy of that
+        // name: the file touches every record it holds, so with that name in the scope there is no scope test, and
+        // only the other names the order does not carry are named (docs/architecture/read-engine.md).
         string? scopeMissingNote = null;
         HashSet<string>? scopeSet = null;
-        if (scopePlugins is { Count: > 0 })
+        string ownName = Path.GetFileName(pole.Path!);
+        var split = scopePlugins is { Count: > 0 } ? ScopeSplit.Of(view, scopePlugins, ownName) : null;
+        if (split?.BlankRefusal is not null) return CrossQueryOutcome.Fail(split.BlankRefusal) with { Stamp = view.Stamp };
+        if (split is { OwnNamed: true })
         {
-            var split = ScopeSplit.Of(view, scopePlugins);
-            if (split.BlankRefusal is not null) return CrossQueryOutcome.Fail(split.BlankRefusal) with { Stamp = view.Stamp };
+            if (split.Missing.Count > 0) scopeMissingNote = split.OwnFileNote(view, ownName);
+        }
+        else if (split is not null)
+        {
             if (split.Missing.Count > 0)
             {
-                string meaning = " Over an out-of-load-order file the scope keeps the file's records that ACTIVE plugins also touch, so the scope names active plugins.";
+                string meaning = " Over an out-of-load-order file the scope keeps the file's records that ACTIVE plugins also touch, so the scope names active plugins, "
+                               + $"or the file's own name ('{ownName}') to keep every record it holds.";
                 if (split.Present.Count == 0)
                     return CrossQueryOutcome.Fail(split.NothingToScanRefusal(view) + meaning) with { Stamp = view.Stamp };
                 scopeMissingNote = split.ServedNote(view) + meaning;

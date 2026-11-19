@@ -155,12 +155,12 @@ internal static class WriteSentences
     [MustState("Consulted, in order:")]
     internal const string CopySourceMissConsulted = ". Consulted, in order: ";
 
-    [MustState("from_source=", "'winner'", "dangling link", "'Type:refuse'")]
+    [MustState("from_source=", "'winner'", "dangling link", "exclusions=[{\"match\": \"<Type>\", \"severity\": \"refuse\"}]")]
     internal const string CopySourceMissRemedy =
         ". Name the plugin that defines it in from_source=, or 'winner' for the active load order's winning version. " +
         "If the record exists NOWHERE — a dangling link, which is the typical cause — no source will produce it: " +
-        "exclude its record type instead, with 'Type:refuse' to stop the copy at it, or 'Type:stop' to prune the " +
-        "link and keep it (which needs its plugin in your active load order).";
+        "exclude its record type instead, with exclusions=[{\"match\": \"<Type>\", \"severity\": \"refuse\"}] to stop " +
+        "the copy at it, or \"severity\": \"stop\" to prune the link and keep it (which needs its plugin in your active load order).";
 
     [MustState("could not be read")]
     internal const string CopySourceFaultLead = " but it could not be read — ";
@@ -169,6 +169,12 @@ internal static class WriteSentences
     internal const string CopySourceFaultRemedy =
         ". This is not a missing record: adding another source will not help. Repair or replace that plugin, or " +
         "name a different one in from_source=.";
+
+    [MustState("could not be read whole", "cannot be copied", "exclusions=")]
+    internal const string CopyUnreadLinks = ": its links could not be read whole, so it cannot be copied. To copy past it, prune its type with exclusions=[{\"match\": \"";
+
+    [MustState("\"severity\": \"stop\"")]
+    internal const string CopyUnreadLinksStop = "\", \"severity\": \"stop\"}], which prunes every record of that type the walk reaches.";
 
     [MustState("MO2 mod folder")]
     internal const string CopyArmFolderLead = "MO2 mod folder ";
@@ -233,7 +239,7 @@ internal static class WriteSentences
     [MustState("was already in this patch", "this call did not create it", "enable the mod", "a NEW patch")]
     internal const string CopyPatchOffOrderRoute =
         " is not in your active load order, so this patch cannot be written at all until that link resolves. The " +
-        "reference was already in this patch before this call — this call did not create it, and no exclude_types " +
+        "reference was already in this patch before this call — this call did not create it, and no exclusions " +
         "setting affects it. Either enable the mod that provides that plugin, or write to a NEW patch instead of " +
         "extending this one with into=. Nothing was written.";
 
@@ -270,19 +276,19 @@ internal static class WriteSentences
 
     [MustState("still point INTO the source", "not standalone")]
     internal const string CopyKeptExcluded =
-        "link(s) were pruned by exclude_types and still point INTO the source — this artifact is not standalone " +
+        "link(s) were pruned by exclusions and still point INTO the source — this artifact is not standalone " +
         "for them, and masters the plugin they live in.";
 
-    [MustState("exclude_types", "this call wrote it")]
+    [MustState("exclusions", "this call wrote it")]
     internal const string CopyLeakFromExclusion =
-        " was pruned by exclude_types and then attached to the target unmapped — this call wrote it, so the target " +
+        " was pruned by exclusions and then attached to the target unmapped — this call wrote it, so the target " +
         "is not where to look. Either drop that exclusion so the record is internalized, or copy a field set that " +
         "does not reach it.";
 
-    [MustState("master a plugin the game does not load", "'Type:refuse'", "enable the mod")]
+    [MustState("master a plugin the game does not load", "severity 'refuse'", "enable the mod")]
     internal const string CopyStopOffOrderRoute =
-        " is not in your active load order, and 'Type:stop' KEEPS the link — so this patch would have to master a " +
-        "plugin the game does not load, which cannot be written at all. Either use 'Type:refuse' for that type, so " +
+        " is not in your active load order, and severity 'stop' KEEPS the link — so this patch would have to master a " +
+        "plugin the game does not load, which cannot be written at all. Either use severity 'refuse' for that type, so " +
         "the copy stops there and tells you, or enable the mod so the link can be mastered normally. Nothing was written.";
 
     [MustState("NESTED group", "target=")]
@@ -309,7 +315,7 @@ internal static class WriteSentences
     [MustState("walk=true")]
     internal const string CopyAssetPathsWalk =
         "these are the files the records name, not the files those files need: " + ToolNames.AssetStatus +
-        " walk=true with these as asset_paths= (and source_provider= the mod you read from) lists what they reach in " +
+        " walk=true with these as paths= (and source_provider= the mod you read from) lists what they reach in " +
         "turn — a mesh's textures and SMP XML, a script's parent.";
 
     // ---- dry run -------------------------------------------------------------------------------------
@@ -385,7 +391,8 @@ internal static class WriteSentences
         "Naming a mod folder MO2 is NOT currently loading reads that mod's own copy off disk — the loose file, then "
       + "that folder's own archives — and the result says so. Naming it is what reaches it: with source_provider= "
       + "omitted, only the mods MO2 loads are considered. For a mod MO2 IS loading, nothing changes: its loose files "
-      + "are reached by the mod's name and a file inside its archive by that archive's filename, as before.";
+      + "are reached by the mod's name and a file inside its archive by that archive's filename, as before. A loose "
+      + "file MO2 hides is not reached either way.";
 
     [MustState("MO2 mod folder of that name")]
     internal const string PlaceSourceDiskFolderSearched =
@@ -411,6 +418,9 @@ internal static class WriteSentences
     internal const string PlaceSourceFolderUnreadable =
         "houseCARL also looked in the MO2 mod folder of that name, and something there could not be read";
 
+    [MustState("ticked or not", "does not read a hidden file")]
+    internal const string PlaceSourceFolderHidden = "ticked or not, and houseCARL does not read a hidden file";
+
     [MustState("active load order already provides")]
     internal const string PlaceSourceReservedName =
         "that name is one the active load order already provides files under, and it names a layer rather than a mod folder";
@@ -418,20 +428,26 @@ internal static class WriteSentences
     internal static string PlaceSourceNamedAbsent(string provider, string rel, IReadOnlyList<string> providerNames,
                                                   OffOrderReason reason, string? unreadableName = null,
                                                   string? unreadableCause = null, string? pathHint = null,
-                                                  bool scanIncomplete = false) =>
-        $"'{provider}' does not supply '{rel}'"
+                                                  bool scanIncomplete = false, HiddenCopies? hidden = null)
+    {
+        string Lacks(string why) => $"'{provider}' does not supply '{rel}'{why}. ";
         // ONE sentence per reason, and a switch expression with NO default arm: CS8509 makes a new outcome a build diagnostic.
-      + reason switch
+        var head = reason switch
         {
-            OffOrderReason.NotConsulted     => ". ",          // nothing on disk was looked at; claim nothing about it
-            OffOrderReason.Found            => ". ",          // unreachable from a refusal, and silent if it ever is
-            OffOrderReason.ReservedName     => $" — {PlaceSourceReservedName}. ",
-            OffOrderReason.NotAFolderName   => $" — {PlaceSourceNotAFolderName}. ",
-            OffOrderReason.NoSuchFolder     => $" — {PlaceSourceNoSuchFolder}. ",
-            OffOrderReason.NoCopyInFolder   => $" — {PlaceSourceDiskFolderSearched}. ",
-            OffOrderReason.FolderUnreadable => $" — {PlaceSourceFolderUnreadable}. ",
-        }
-      + (unreadableName is null ? "" : $"NOTE: '{unreadableName}' could not be read ({unreadableCause}), so this may be unscanned rather than absent. ")
+            OffOrderReason.NotConsulted     => Lacks(""),     // nothing on disk was looked at; claim nothing about it
+            OffOrderReason.Found            => Lacks(""),     // unreachable from a refusal, and silent if it ever is
+            OffOrderReason.ReservedName     => Lacks($" — {PlaceSourceReservedName}"),
+            OffOrderReason.NotAFolderName   => Lacks($" — {PlaceSourceNotAFolderName}"),
+            OffOrderReason.NoSuchFolder     => Lacks($" — {PlaceSourceNoSuchFolder}"),
+            OffOrderReason.NoCopyInFolder   => Lacks($" — {PlaceSourceDiskFolderSearched}"),
+            OffOrderReason.FolderUnreadable => Lacks($" — {PlaceSourceFolderUnreadable}"),
+            // A folder that holds it hidden is said to hold it, the rule once, not to lack it.
+            OffOrderReason.Hidden           => $"'{provider}' holds '{rel}', {hidden?.Unnamed() ?? "hidden by MO2"}, {PlaceSourceFolderHidden}. ",
+        };
+        return head
+      + (unreadableName is null ? ""
+         : $"NOTE: '{unreadableName}' could not be read ({unreadableCause}), "
+         + (reason == OffOrderReason.Hidden ? "so any copy it holds is unscanned. " : "so this may be unscanned rather than absent. "))
       + (scanIncomplete ? PlaceSourceScanIncomplete + " " : "")
       + (pathHint is null ? "" : pathHint + " ")
       + (providerNames.Count > 0
@@ -439,6 +455,7 @@ internal static class WriteSentences
             + $"{string.Join("; ", providerNames)}. "
             : "")
       + PlaceSourcePoleSpelling;
+    }
 
     [MustState("NOT enabled in MO2")]
     internal const string OffOrderModFolder =
@@ -449,12 +466,22 @@ internal static class WriteSentences
         "a mod folder MO2 has NOT registered — nothing in MO2's list to switch on; refresh MO2 to pick it up. You "
         + "named the folder, so houseCARL read it off disk";
 
-    internal static string PlaceSourceOffOrder(string provider, bool ownerEnabled = false) => ownerEnabled
-        ? $"read from '{provider}', out of a root archive the engine does NOT load (no active plugin binds it) — you "
-        + "named the mod, so houseCARL looked inside its own archives; the bytes are that mod's, and nothing about "
-        + "that archive has to change for the copy just placed"
-        : $"read from '{provider}', {OffOrderModFolder}; the bytes are that mod's, and enabling it is not required "
-        + "for the copy just placed";
+    /// <summary>Where an off-order copy came from: an unticked folder, a ticked mod's archive no plugin loads, or a
+    /// ticked mod's loose file its folder's listing did not reach.</summary>
+    internal static string PlaceSourceOffOrder(string provider, bool ownerEnabled, AssetKind kind) => (ownerEnabled, kind) switch
+    {
+        (true, AssetKind.Bsa) =>
+            $"read from '{provider}', out of a root archive the engine does NOT load (no active plugin binds it) — you "
+          + "named the mod, so houseCARL looked inside its own archives; the bytes are that mod's, and nothing about "
+          + "that archive has to change for the copy just placed",
+        (true, _) =>
+            // Reached only through a folder that would not list, which a test world can stage only with an ACL deny.
+            $"read from '{provider}', a mod folder that IS enabled in MO2, but whose folder did not read this build — "
+          + "you named it, so houseCARL read the file off disk; the bytes are that mod's",
+        _ =>
+            $"read from '{provider}', {OffOrderModFolder}; the bytes are that mod's, and enabling it is not required "
+          + "for the copy just placed",
+    };
 
     [MustState("only when source= is omitted")]
     internal const string PlaceBothSlotsPoleConstraint =

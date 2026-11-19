@@ -4,7 +4,7 @@ using Xunit;
 
 namespace HousecarlMcpTests;
 
-/// <summary>housecarl_skypatcher_layer's notes after the report sections: they take a bounded share of max_chars charged
+/// <summary>housecarl_layer's notes after the report sections: they take a bounded share of max_chars charged
 /// before the body, a list that fits it is shown whole, and a cut note is counted, never dropped without a word (#894).</summary>
 [Trait("tier", "unit")]
 public sealed class SkyPatcherLayerNotesCutTests
@@ -32,7 +32,7 @@ public sealed class SkyPatcherLayerNotesCutTests
         return new SkyPatcherLayerData(
             new SkyPatcherDiscovery.LayerScan(new[] { folder },
                 Enumerable.Range(1, 5).Select(i => Note("scan note " + i)).ToArray(),
-                ReadIncomplete: false, new Dictionary<string, bool>()),
+                ReadIncomplete: false, new SkyPatcherDiscovery.Switches(new Dictionary<string, bool>(), null)),
             Conflicts: n.Select(i => new SkyPatcherConflicts.SkyPatcherConflict("npc", "health", Target + i,
                 new[] { Entry(i, "100"), Entry(i + 1, "200") })).ToList(),
             Itms: n.Select(i => new SkyPatcherConflicts.SkyPatcherItm("npc", "health", "Patch" + i + ".ini",

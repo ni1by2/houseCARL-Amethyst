@@ -35,7 +35,7 @@ public enum CopyRefusalKind
     DonorLeak,
     /// <summary>A seed path names a field whose SHAPE the attach lane does not support, refused by name.</summary>
     UnsupportedSeedShape,
-    /// <summary>A <c>Type:stop</c> exclusion pruned a record living OFF the active load order, which cannot be mastered.</summary>
+    /// <summary>A stop exclusion (severity <c>stop</c>) pruned a record living OFF the active load order, which cannot be mastered.</summary>
     StopOffOrder,
     /// <summary>The target record lives in a NESTED group (a placed reference, a cell, a dialog response).</summary>
     UnsupportedTargetShape,
@@ -492,7 +492,7 @@ public static class ClosureCopy
                 .ToList();
             if (targetKey is null && patch.EnumerateMajorRecords().FirstOrDefault(r => r.FormKey == newKey) is { } cloneBody)
                 copiedBodies.Add(cloneBody);
-            assetPaths = AssetLinkHarvest.HarvestAssetPaths(copiedBodies);
+            assetPaths = AssetLinkHarvest.HarvestAssetPaths(copiedBodies, out _);
         }
         catch { /* an unreadable asset link is not a reason to fail a written copy; the list is a report */ }
 

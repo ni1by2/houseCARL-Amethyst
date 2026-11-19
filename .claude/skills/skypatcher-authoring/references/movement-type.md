@@ -27,3 +27,7 @@ rotateWhileMovingRun
 ```ini
 filterByMovementTypes=Skyrim.esm|123:walkLeft=35
 ```
+
+## Keys from the 8.0.1 articles
+
+- Filters: `filterByModNames`.

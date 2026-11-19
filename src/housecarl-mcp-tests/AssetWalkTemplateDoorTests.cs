@@ -107,17 +107,18 @@ public sealed class AssetWalkTemplateDoorTests : IDisposable
 
     AssetWalkData Walk() => Walk(_npcs);
 
-    AssetWalkData Walk(IReadOnlyList<FormKey> seeds) => _svc.AssetWalk(Array.Empty<string>(), seeds, new[] { SourcePoles.Winner }, null);
+    AssetWalkData Walk(IReadOnlyList<FormKey> seeds, WalkGrammar.Values? values = null)
+        => _svc.AssetWalk(Array.Empty<string>(), seeds, new[] { SourcePoles.Winner }, null, values: values ?? Walks.EveryLink());
 
     /// <summary>NPC group walks of a second walk over <paramref name="seeds"/>, the first paying the walk's one-time reads.</summary>
-    int NpcReads(IReadOnlyList<FormKey> seeds) => GroupReads(seeds, "Npcs");
+    int NpcReads(IReadOnlyList<FormKey> seeds, WalkGrammar.Values? values = null) => GroupReads(seeds, "Npcs", values);
 
     /// <summary><paramref name="group"/> walks of a second walk over <paramref name="seeds"/>.</summary>
-    int GroupReads(IReadOnlyList<FormKey> seeds, string group)
+    int GroupReads(IReadOnlyList<FormKey> seeds, string group, WalkGrammar.Values? values = null)
     {
-        Walk(seeds);
+        Walk(seeds, values);
         var before = _svc.Counters.GroupReads.GetValueOrDefault((A.FileName.String, group));
-        Walk(seeds);
+        Walk(seeds, values);
         return _svc.Counters.GroupReads.GetValueOrDefault((A.FileName.String, group)) - before;
     }
 
@@ -126,7 +127,7 @@ public sealed class AssetWalkTemplateDoorTests : IDisposable
     [Fact]
     public void ATemplateSharedByManyNpcsIsReadOncePerHop()
     {
-        Walk();   // the reverse index and the voice cache's own reads, paid once
+        Walk();   // the walk's one-time reads, paid once
         var before = new Dictionary<(string Plugin, string Group), int>(_svc.Counters.GroupReads);
         var seeks = _svc.Counters.BodySeeks;
         var walk = Walk();
@@ -134,7 +135,7 @@ public sealed class AssetWalkTemplateDoorTests : IDisposable
         Assert.Equal(0, _svc.Counters.BodySeeks - seeks);
         var name = A.FileName.String;
         Assert.Equal(2, reads[(name, "LeveledNpcs")]);   // the faces' round, then the walk entering the list
-        Assert.Equal(3, reads[(name, "Npcs")]);          // the seeds, the members' round, the walk entering them
+        Assert.Equal(3, reads[(name, "Npcs")]);          // the seeds, the members' round, the walk reading them as boundaries
         foreach (var member in _members)
             Assert.Contains(walk.Nodes, n => n.Edge == "facegen" && n.PulledBy.Contains(FormIdToken.Of(_npcs[0]))
                                              && n.Note == $"the face of template root {FormIdToken.Of(member)}, one of 2");
@@ -148,19 +149,21 @@ public sealed class AssetWalkTemplateDoorTests : IDisposable
 
     /// <summary>A Traits chain is read no further than FaceRoots' cap, so a chain of 100 reads as many NPC walks as one
     /// of 70, both past it: the count is set by the cap and the walk's depths, not by how the hops are grouped into
-    /// rounds, which ATemplateSharedByManyNpcsIsReadOncePerHop and ANestedTemplateChainIsReadToItsLastHop pin.</summary>
+    /// rounds, which ATemplateSharedByManyNpcsIsReadOncePerHop and ANestedTemplateChainIsReadToItsLastHop pin. Only the
+    /// seed's chain is read for a face (#1278), and the walk reads the seed's depth and its template's, a reached NPC
+    /// it keeps as a boundary and does not go past (#1371).</summary>
     [Fact]
     public void ATemplateChainIsReadNoFurtherThanTheCap()
     {
-        Assert.Equal(AssetWalkEdges.TemplateChainCap - 1 + AssetLayers.RecordDepth + (AssetLayers.RecordDepth + 1), NpcReads(new[] { _chains[0] }));
+        Assert.Equal(NpcFace.TemplateChainCap - 1 + 2, NpcReads(new[] { _chains[0] }));
         Assert.Equal(NpcReads(new[] { _chains[1] }), NpcReads(new[] { _chains[0] }));
     }
 
     /// <summary>A chain three hops deep is read a round per hop to its leveled list's members, not the members one at a
-    /// time when FaceRoots asks: the seed, the middle NPC's round, the members' round, and the walk entering the middle
-    /// NPC and then the members.</summary>
+    /// time when FaceRoots asks: the seed, the middle NPC's round, the members' round, and the walk reading the middle
+    /// NPC, a boundary it does not go past (#1371).</summary>
     [Fact]
-    public void ANestedTemplateChainIsReadToItsLastHop() => Assert.Equal(5, NpcReads(new[] { _nested }));
+    public void ANestedTemplateChainIsReadToItsLastHop() => Assert.Equal(4, NpcReads(new[] { _nested }));
 
     /// <summary>Pins the faces' round reading the entered NPCs' own races: two plain NPCs on two races read both races in
     /// that one round, then once more when the walk enters them, not each in a round of its own when FaceGenOf asks.</summary>
@@ -169,23 +172,17 @@ public sealed class AssetWalkTemplateDoorTests : IDisposable
 
     /// <summary>Pins the faces' round reading each template root's race: two NPCs on one race, templated on two roots on
     /// two more, read their own race with the roots, then both roots' races in one round, then the walk enters their own
-    /// race and, a depth later, the roots' races.</summary>
+    /// race; the roots are boundaries, so the walk reads no race past them (#1371).</summary>
     [Fact]
-    public void ATemplateRootsRaceIsReadInTheFacesRound() => Assert.Equal(4, GroupReads(_rooted, "Races"));
+    public void ATemplateRootsRaceIsReadInTheFacesRound() => Assert.Equal(3, GroupReads(_rooted, "Races"));
 
     /// <summary>An NPC past the record cap is not entered, so its template is not read: the walk reads the seeds' NPC
     /// group once.</summary>
     [Fact]
     public void AnNpcPastTheRecordCapHasNoTemplateRead()
     {
-        var area = _svc.AssetArea;
-        var prior = area.MaxWalkRecords;
-        area.MaxWalkRecords = 1;
-        try
-        {
-            Assert.True(Walk(new[] { _plain, _templated }).Truncated);
-            Assert.Equal(1, NpcReads(new[] { _plain, _templated }));
-        }
-        finally { area.MaxWalkRecords = prior; }
+        var one = WalkGrammar.Values.Defaults(WalkGrammar.AssetDefaultDepth) with { MaxNodes = 1 };
+        Assert.True(Walk(new[] { _plain, _templated }, one).Truncated);
+        Assert.Equal(1, NpcReads(new[] { _plain, _templated }, one));
     }
 }

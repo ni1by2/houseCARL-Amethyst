@@ -24,9 +24,13 @@ public static class ResultArtifact
         readonly Dictionary<string, int> _typeCounts = new(StringComparer.Ordinal);
         int _rowCount;
 
-        /// <summary>Append one row, newline-terminated, counting <paramref name="type"/> into the manifest; the artifact passes an unreachable cap, because an artifact row is NEVER truncated.</summary>
-        public void WriteRow(Action<Utf8JsonWriter, CharCountedStream> write, string? type = null)
+        /// <summary>The rows whose read was cut at its line budget; a row writer whose read is not a <see cref="RecordFields"/> counts its own here.</summary>
+        public RecordCuts Cuts { get; } = new();
+
+        /// <summary>Append one row, newline-terminated, counting <paramref name="type"/> into the manifest, and <paramref name="read"/> when its deep read was cut; the artifact passes an unreachable cap, so no row is cut at max_chars, and a cut read is counted into the manifest.</summary>
+        public void WriteRow(Action<Utf8JsonWriter, CharCountedStream> write, string? type = null, RecordFields? read = null)
         {
+            Cuts.Add(read);
             using (var w = new Utf8JsonWriter(_rows, JsonTextEncoder.OneLine))   // deliberately NOT indented — one row, one line
             {
                 write(w, _rows);
@@ -39,6 +43,9 @@ public static class ResultArtifact
 
         public int RowCount => _rowCount;
 
+        /// <summary>How many cut records the manifest's statement names; <c>cut_records</c> lists them all.</summary>
+        const int ManifestNames = 10;
+
         /// <summary>Write the finished artifact, returning the manifest it stamped or a named error; never throws for an IO failure. <paramref name="total"/> exceeds <see cref="RowCount"/> only when the producing lane windowed.</summary>
         /// <param name="notes">Response-level statements the ROWS depend on for their meaning, stated once here rather than per row.</param>
         /// <param name="epochUncovered">The verdict classes <paramref name="epoch"/> does NOT describe (SPEC §2.1); non-empty stamps <c>epoch_covers_all_inputs: false</c>.</param>
@@ -49,6 +56,8 @@ public static class ResultArtifact
             IReadOnlyList<string>? notes = null, IReadOnlyList<string>? epochUncovered = null,
             IReadOnlyList<string>? excludedPlugins = null)
         {
+            // The cut rows' statement rides line 1 with the rest, since line 1 is all a caller reads before trusting the file.
+            if (Cuts.Sentence(ManifestNames) is { } cut) notes = (notes ?? Array.Empty<string>()).Append(cut).ToList();
             var manifest = new Manifest(tool, query, identity, rowSchema, sort, _rowCount, total,
                                         _typeCounts.Count > 0 ? _typeCounts : null, epoch,
                                         DateTime.UtcNow.ToString("yyyy-MM-dd'T'HH:mm:ss'Z'"),
@@ -56,7 +65,8 @@ public static class ResultArtifact
                                         // Empty included: null is "no coverage claim", empty is "the stamp covers everything".
                                         epochUncovered,
                                         excludedPlugins is { Count: > 0 } ? excludedPlugins : null,
-                                        AmethystSnapshotContext.Current?.Provenance);
+                                        Cuts.Count, Cuts.Count > 0 ? Cuts.Budget : null, Cuts.Count > 0 ? Cuts.FormIds : null, AmethystSnapshotContext.Current?.Provenance)
+                           { CutNote = Cuts.Sentence() };
             target.EnsureUnwritten();   // a target is single-use; writing one twice is a bug, not an IO failure
             try
             {
@@ -97,8 +107,15 @@ public static class ResultArtifact
         IReadOnlyList<string>? Notes = null,
         IReadOnlyList<string>? EpochUncovered = null,
         IReadOnlyList<string>? ExcludedPlugins = null,
+        int RecordsCut = 0,
+        int? CutBudget = null,
+        IReadOnlyList<string>? CutRecords = null,
         AmethystSnapshotProvenance? AmethystSnapshot = null)
     {
+        /// <summary>The short statement over the cut rows a response shows beside this manifest; set by the writer and
+        /// not written to the file, whose <see cref="Notes"/> carry the longer one.</summary>
+        public string? CutNote { get; init; }
+
         /// <summary>Does <see cref="Epoch"/> describe everything these rows were read off? Null when the producing lane made no coverage claim.</summary>
         public bool? EpochCoversAllInputs => EpochUncovered is null ? null : EpochUncovered.Count == 0;
 
@@ -120,6 +137,15 @@ public static class ResultArtifact
             w.WriteString("sort", Sort);
             w.WriteNumber("row_count", RowCount);
             w.WriteNumber("total", Total);
+            // Beside the row counts: rows that are all here but not whole.
+            if (RecordsCut > 0)
+            {
+                w.WriteNumber("records_cut", RecordsCut);
+                if (CutBudget is { } b) w.WriteNumber("cut_budget", b);
+                w.WriteStartArray("cut_records");
+                foreach (var c in CutRecords ?? Array.Empty<string>()) w.WriteStringValue(c);
+                w.WriteEndArray();
+            }
             if (TypeCounts is not null)
             {
                 w.WriteStartObject("type_counts");
@@ -175,7 +201,8 @@ public static class ResultArtifact
     }
 
     /// <summary>Parse an artifact's manifest and extract its identity-column tokens in row order, or return a named error; error rows are skipped, not identity-bearing — re-entry contract in docs/architecture/output-and-artifacts.md.</summary>
-    public static (Manifest? Manifest, List<string>? Tokens, string? Error) ReadIdentity(string path, string content)
+    /// <param name="noRowsIsEmpty">An artifact with no rows is an empty list, not a refusal: a set subtracted, where nothing is a real answer.</param>
+    public static (Manifest? Manifest, List<string>? Tokens, string? Error) ReadIdentity(string path, string content, bool noRowsIsEmpty = false)
     {
         Manifest? manifest;
         {
@@ -185,7 +212,7 @@ public static class ResultArtifact
         }
         if (manifest!.Identity is null)
             return (null, null, $"artifact '{path}' (from {manifest.Tool}) declares NO identity column — its rows are " +
-                                $"aggregate/count rows, not per-record rows, so there is no formid list to re-enter with. " +
+                                $"aggregate/count rows, not per-record rows, so there is no list to re-enter with. " +
                                 $"Re-run the producing query without group_by= (or with to_file=) to get a per-record artifact.");
 
         var tokens = new List<string>(manifest.RowCount);
@@ -197,7 +224,8 @@ public static class ResultArtifact
             try
             {
                 using var doc = JsonDocument.Parse(line);
-                if (doc.RootElement.TryGetProperty("error", out _)) { errorRows++; continue; }   // not identity-bearing — see the doc
+                // Not identity-bearing — see the doc. A null error is no error: the walk's rows carry the column on every node.
+                if (doc.RootElement.TryGetProperty("error", out var errProp) && errProp.ValueKind != JsonValueKind.Null) { errorRows++; continue; }
                 if (!doc.RootElement.TryGetProperty(manifest.Identity, out var idProp) || idProp.ValueKind != JsonValueKind.String)
                     return (null, null, $"artifact '{path}': row on line {lineNo} carries no '{manifest.Identity}' identity value — " +
                                         $"the file does not match its own manifest (was it edited?). Regenerate it from the producing query.");
@@ -209,9 +237,9 @@ public static class ResultArtifact
                                     $"the file does not match its own manifest (was it edited?). Regenerate it from the producing query.");
             }
         }
-        if (tokens.Count == 0)
+        if (tokens.Count == 0 && (errorRows > 0 || !noRowsIsEmpty))
             return (null, null, errorRows > 0
-                ? $"artifact '{path}': all {errorRows} row(s) are ERROR rows (failed inputs of the producing call) — nothing resolved, so there is no formid list to re-enter with."
+                ? $"artifact '{path}': all {errorRows} row(s) are ERROR rows (failed inputs of the producing call) — nothing resolved, so there is no {manifest.Identity} list to re-enter with."
                 : $"artifact '{path}' has a manifest but no rows — the producing query matched nothing; there is no list to re-enter with.");
         return (manifest, tokens, null);
     }
@@ -266,7 +294,7 @@ public static class ResultArtifact
                         typeCounts,
                         r.TryGetProperty("epoch", out var e) ? e.GetString() ?? "?" : "?",
                         r.TryGetProperty("created", out var cr) ? cr.GetString() ?? "?" : "?",
-                        notes, uncovered, excluded, AmethystSnapshotProvenance.Read(r)),
+                        notes, uncovered, excluded, AmethystSnapshot: AmethystSnapshotProvenance.Read(r)),
                     null);
         }
         catch (Exception ex) when (ex is JsonException or FormatException or InvalidOperationException)
@@ -408,4 +436,4 @@ public sealed class ArtifactTarget : IDisposable
 }
 
 /// <summary>An epoch obligation carried by an artifact-backed list input: the consuming call must compare <see cref="Epoch"/> against the build it captures, AFTER its own Capture() and inside the service.</summary>
-public sealed record ArtifactDemand(string Path, string Epoch);
+public sealed record ArtifactDemand(string Path, string Epoch, IReadOnlyList<string>? Notes = null);
