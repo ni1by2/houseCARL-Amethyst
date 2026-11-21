@@ -14,6 +14,9 @@ internal interface IAssetHost : ILoadOrderHost
     /// <summary>The installed game runtime version, or null.</summary>
     string? InstalledGameRuntime();
 
+    /// <summary>Exact provider plugins from the saved capture, or null for the ordinary filesystem adapter.</summary>
+    IReadOnlyList<string>? SavedProviderPluginPaths(string provider);
+
     /// <summary>A walk's ordered record source universe (the from_source= pole list), off-order overlays appended to <paramref name="overlays"/> open.</summary>
     SourceChain? BuildWalkSources(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, Mo2Roots roots,
                                   IReadOnlyList<string> poles, List<IDisposable> overlays, out string? error, string param = "from_source");
@@ -246,6 +249,8 @@ internal sealed partial class AssetLayers
     public FaceSources? ProviderFaceSources(string? provider)
     {
         if (string.IsNullOrWhiteSpace(provider)) return null;
+        if (_host.SavedProviderPluginPaths(provider.Trim()) is { } saved)
+            return PluginSources(saved, "source_provider", $"source_provider '{provider.Trim()}'");
         try { return PluginSources(LooseListings.OnDisk(_host.ConfiguredRoots().Roots.ModsDir, provider.Trim()), "source_provider", $"source_provider '{provider.Trim()}'"); }
         catch (Exception) { return null; }
     }
@@ -257,9 +262,11 @@ internal sealed partial class AssetLayers
         var plugins = Directory.EnumerateFiles(folder)
             .Where(f => Path.GetExtension(f).ToLowerInvariant() is ".esp" or ".esm" or ".esl")
             .Order(StringComparer.OrdinalIgnoreCase).ToList();
-        return plugins.Count == 0 ? null
-             : new FaceSources(plugins.Prepend(SourcePoles.Winner).ToList(), param, $"no plugin in this order or {named} defines it");
+        return PluginSources(plugins, param, named);
     }
+
+    static FaceSources? PluginSources(IReadOnlyList<string> plugins, string param, string named) => plugins.Count == 0 ? null
+        : new FaceSources(plugins.Prepend(SourcePoles.Winner).ToList(), param, $"no plugin in this order or {named} defines it");
 
     // ---- SKSE-plugin-layer visibility: the DLLs, configs, winning provider and each DLL's declared manifest ----
 

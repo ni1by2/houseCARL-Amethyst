@@ -9,7 +9,7 @@ internal static class PluginPaths
     /// <summary>Do two paths denote the same plugin file? A full-path compare, never a filename one, since a backup and the live copy share a name.</summary>
     internal static bool SamePluginFile(string a, string b)
     {
-        try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), StringComparison.OrdinalIgnoreCase); }
+        try { return string.Equals(Path.GetFullPath(a), Path.GetFullPath(b), OperatingSystem.IsWindows() ? StringComparison.OrdinalIgnoreCase : StringComparison.Ordinal); }
         catch { return false; }
     }
 

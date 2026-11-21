@@ -1387,6 +1387,11 @@ public sealed partial class LoadOrderService : IDisposable, IAssetHost, ICheckHo
 
     string? IAssetHost.InstalledGameRuntime() => InstalledGameRuntime();
 
+    IReadOnlyList<string>? IAssetHost.SavedProviderPluginPaths(string provider)
+    {
+        lock (_gate) return UsesSavedSnapshot ? CurrentSavedSnapshot().ProviderPluginPaths(provider) : null;
+    }
+
     SourceChain? IAssetHost.BuildWalkSources(LoadOrderResolver.IndexView view, LoadOrderResolver.OverlaySession session, Mo2Roots roots,
                                             IReadOnlyList<string> poles, List<IDisposable> overlays, out string? error, string param)
         => _writes.BuildSourceChain(view, session, roots, poles, param, overlays, out error);

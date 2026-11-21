@@ -868,6 +868,19 @@ public sealed class AmethystSavedSnapshot
         return copies;
     }
 
+    /// <summary>Root-level Data plugins from a named saved provider, retaining exact source identities and stamps.</summary>
+    public IReadOnlyList<string> ProviderPluginPaths(string provider)
+    {
+        if (!HasSavedProvider(provider))
+            return [];
+        return _candidates.Values.Where(c => c.Kind != 3 && c.Deployable && c.Target == "game" && Named(c, provider)
+                && c.Destination.StartsWith("Data/", StringComparison.OrdinalIgnoreCase) && !c.Destination[5..].Contains('/')
+                && Path.GetExtension(c.Destination).ToLowerInvariant() is ".esp" or ".esm" or ".esl")
+            .GroupBy(c => (c.Mod, c.Source)).Select(g => g.First())
+            .OrderBy(c => Path.GetFileName(c.Destination), StringComparer.OrdinalIgnoreCase)
+            .ThenBy(c => c.Source, StringComparer.Ordinal).Select(SourcePath).ToArray();
+    }
+
     /// <summary>Locate an inactive source from the saved inventory, without rescanning staging priorities.</summary>
     public string? LocatePlugin(string filename, string? mod = null)
     {
