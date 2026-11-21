@@ -1,2 +1,3 @@
 - **Integrate the houseCARL 2.2 tool API while retaining Linux and Amethyst support.** File tools share `paths=`, `layer` reads SkyPatcher/SPID/KID/BOS/FLM, and decompilation can select multiple scripts from saved providers.
 - **Preserve guarded Linux output in the expanded decompiler.** Native Champollion and captured-input checks also cover batches, whose successful files publish through Amethyst staging transactions.
+- **Read donor FaceGen from the saved inventory.** NPC mesh inspection preserves disabled and case-distinct donor plugin sources, rejects changed recorded inputs and keeps winner/Data selectors available. Batch decompilation also reads siblings in case-distinct Linux directories.
