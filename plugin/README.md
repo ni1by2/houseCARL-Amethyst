@@ -6,7 +6,7 @@ The server uses .NET 10 and exposes 34 MCP tools over stdio. Record coverage is 
 
 ## Install or upgrade on Linux
 
-Use the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md). Download the archive, checksum and standalone installer from [2.1.5 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.1.5). Linux x64 and Python 3.12 or newer are required; the guide lists the operating-system libraries.
+Use the [Linux installation guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/amethyst-main/docs/linux-install.md). Download the archive, checksum and standalone installer from [2.2.0 — Linux preview](https://github.com/ni1by2/houseCARL-Amethyst/releases/tag/v2.2.0). Linux x64 and Python 3.12 or newer are required; the guide lists the operating-system libraries.
 
 The Linux archive includes the .NET 10 and ASP.NET Core runtimes. You do not need to install a system .NET runtime or SDK to run it.
 
@@ -35,7 +35,7 @@ Review staged writes, then Refresh, enable and deploy through Amethyst. A later 
 
 ## Test a newer Amethyst version
 
-Use the [compatibility test guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.1.5/docs/amethyst-compatibility-testing.md) for GitHub Actions or local synthetic-profile comparisons. This evaluates new upstream revisions without opening your live modlist. Reports separate native-reader results from runtime admission and never automatically approve a new contract.
+Use the [compatibility test guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.2.0/docs/amethyst-compatibility-testing.md) for GitHub Actions or local synthetic-profile comparisons. This evaluates new upstream revisions without opening your live modlist. Reports separate native-reader results from runtime admission and never automatically approve a new contract.
 
 ## Licence
 
@@ -57,4 +57,4 @@ You can run the program and make private changes without publishing your source.
 
 The grammar, the predicate language, coverage, the runtime layers and the internals are in the [repository README](https://github.com/ni1by2/houseCARL-Amethyst#readme).
 
-The development branch targets upstream 2.2.0. Its `layer` tool and shared file selectors differ from published 2.1.5; read the [migration guide](../docs/upstream-220-linux-integration.md) before using development builds. Linux support remains maintained by this fork.
+Version 2.2.0 integrates upstream 2.2.0. Its `layer` tool and shared file selectors differ from 2.1.5; read the [migration guide](https://github.com/ni1by2/houseCARL-Amethyst/blob/v2.2.0/docs/upstream-220-linux-integration.md) before upgrading. Linux support remains maintained by this fork.
