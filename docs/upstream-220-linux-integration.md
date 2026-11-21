@@ -1,6 +1,6 @@
 # Upstream 2.2 integration and Linux compatibility
 
-This development branch integrates [houseCARL 2.2.0](https://github.com/Avick3110/houseCARL/releases/tag/v2.2.0), commit `21ae5f19ae6ed796a7931c1ce786011551c9ee52`, over our previous upstream pin `a4dc3ebee6ce2a0b2f8672eb5bb77fcd75206a0f`. Publication requires a separate release decision. The published Linux package remains 2.1.5.
+Version 2.2.0 integrates [houseCARL 2.2.0](https://github.com/Avick3110/houseCARL/releases/tag/v2.2.0), commit `21ae5f19ae6ed796a7931c1ce786011551c9ee52`, over our previous upstream pin `a4dc3ebee6ce2a0b2f8672eb5bb77fcd75206a0f`. It is distributed as a Linux preview prerelease; see the [installation and upgrade guide](linux-install.md).
 
 ## Linux remains a fork responsibility
 
