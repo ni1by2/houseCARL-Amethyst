@@ -9,6 +9,35 @@ namespace HousecarlMcpTests;
 public sealed class Amethyst220IntegrationTests
 {
     [Fact]
+    public void BatchDecompileReportsUnreadableSiblingsInCaseDistinctHostFolders()
+    {
+        if (OperatingSystem.IsWindows()) return;
+        using var fixture = new AmethystWireFixture();
+        var root = Directory.CreateTempSubdirectory("hc-case-batch-").FullName;
+        try
+        {
+            var inputs = new List<string>();
+            foreach (var (folder, name) in new[] { ("Donor", "HcUpper"), ("donor", "HcLower") })
+            {
+                var dir = Directory.CreateDirectory(Path.Combine(root, folder)).FullName;
+                var path = Path.Combine(dir, name + ".pex");
+                PexWriter.WritePex(path, name, null);
+                inputs.Add(path);
+            }
+            File.WriteAllBytes(Path.Combine(root, "donor", "Broken.pex"), [1, 2, 3, 4]);
+            var result = fixture.Server.Call(ToolNames.DecompileScript, JsonSerializer.Serialize(new
+            {
+                paths = inputs, out_path = Path.Combine(root, "sources"), format = "json"
+            }));
+            Assert.False(result.IsError, result.Describe());
+            Assert.Contains("could not be read", result.Text);
+            Assert.Contains(Path.Combine(root, "donor"), result.Text);
+            Assert.Equal(2, Directory.GetFiles(Path.Combine(root, "sources"), "*.psc").Length);
+        }
+        finally { Directory.Delete(root, true); }
+    }
+
+    [Fact]
     public void BatchDecompilePublishesCapturedScriptsAsOneStagedGroup()
     {
         using var fixture = new AmethystWireFixture();

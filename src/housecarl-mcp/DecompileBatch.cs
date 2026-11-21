@@ -109,7 +109,7 @@ internal static class DecompileBatch
         }
         var thin = new List<string>();
         foreach (var dir in window.Where(r => r.OnDisk && r.Error is null).Select(r => Path.GetDirectoryName(r.Path)!)
-                                     .Distinct(StringComparer.OrdinalIgnoreCase))
+                                     .Distinct(OperatingSystem.IsWindows() ? StringComparer.OrdinalIgnoreCase : StringComparer.Ordinal))
         {
             var saved = AmethystSnapshotContext.Current;
             var scan = saved is null ? PapyrusClassParents.AddFromPexFolder(edges, dir)
