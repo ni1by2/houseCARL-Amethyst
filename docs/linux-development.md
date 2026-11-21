@@ -1,8 +1,8 @@
 # Linux / Amethyst development
 
-The source build and CI target Ubuntu 24.04 x64. Version 2.1.5 supports API 13, engine 1, schema 9/rules 13 and schema 10/rules 14, 15, 18 and 19. CI builds four separately pinned readers. All four modules are required to assemble the package. Amethyst 2.6.3/rules 18 reuses the rules-15 reader; 2.6.4-beta.1/rules 19 requires its matching reader. The [compatibility policy](architecture/amethyst-shared-reader-compatibility.md) explains the mappings.
+The source build and CI target Ubuntu 24.04 x64. Version 2.2.0 supports API 13, engine 1, schema 9/rules 13 and schema 10/rules 14, 15, 18 and 19. CI builds four separately pinned readers. All four modules are required to assemble the package. Amethyst 2.6.3/rules 18 reuses the rules-15 reader; stable 2.6.4/rules 19 requires its matching reader. The [compatibility policy](architecture/amethyst-shared-reader-compatibility.md) explains the mappings.
 
-For the 2.1.5 Linux preview downloads, use the [installation guide](linux-install.md). The [release record](testing/release-215-2026-11-17.md) and [runtime verification](testing/amethyst-runtime-compatibility-2026-11-10.md) list the completed checks. Source builds require the .NET 10 SDK; the Linux archive bundles its runtime. Asset Walk remains included.
+For the 2.2.0 Linux preview downloads, use the [installation guide](linux-install.md). The [integration and release record](upstream-220-linux-integration.md) and [runtime verification](testing/amethyst-runtime-compatibility-2026-11-10.md) list the completed checks. Source builds require the .NET 10 SDK; the Linux archive bundles its runtime. Asset Walk remains included.
 
 ## Requirements
 
@@ -72,7 +72,7 @@ python3 scripts/probes/check_linux_package.py dist/housecarl-amethyst-linux-x64.
 
 This validates the payload hashes, extracts it to a temporary directory, and checks MCP initialization, package version and the published tool list. It uses temporary server configuration and does not register hosts or connect to Amethyst. Add `--installed-prefix /path/to/install` to check an existing installation's active version against the same archive. Installation itself also changes host registrations in the current user's home; custom `--prefix` and `--state-root` paths alone do not isolate those registrations. Use a disposable user or container for installation tests.
 
-## Upgrade using a locally built 2.1.5 package
+## Upgrade using a locally built 2.2.0 package
 
 After building and verifying the archive above, keep a separate terminal open and quit every MCP host running houseCARL. From the repository root, enter the output directory and install the built package as your normal user:
 
@@ -82,6 +82,6 @@ sha256sum -c housecarl-amethyst-linux-x64.tar.gz.sha256 &&
   python3 install-linux.py install --archive housecarl-amethyst-linux-x64.tar.gz
 ```
 
-The source manifest assigns version 2.1.5, so the installer can preserve an installed 2.1.4 as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.1.5 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
+The source manifest assigns version 2.2.0, so the installer can preserve an installed earlier release as the previous package. Do not relabel or overwrite an existing version directory. Reopen Codex or Claude Code and verify the server reports 2.2.0 and the intended saved Amethyst connection. The Linux archive bundles .NET 10; the SDK is needed for building it, not for running it.
 
 Configuration and transaction state remain outside the program directory. Installation does not refresh, enable or deploy mods. Use the [installation guide](linux-install.md#install-update-and-remove) for pending transactions and rollback.
